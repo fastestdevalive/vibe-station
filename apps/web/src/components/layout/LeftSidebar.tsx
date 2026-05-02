@@ -4,9 +4,9 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
-import type { WSEvent } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
+import { useSubscription } from "@/hooks/useSubscription";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { ModesMenuDialog } from "@/components/dialogs/ModesMenuDialog";
@@ -56,9 +56,15 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   const [projects, setProjects] = useState<Project[]>([]);
   const [worktreeMap, setWorktreeMap] = useState<Record<string, Worktree[]>>({});
   const [sessionMap, setSessionMap] = useState<Record<string, Session[]>>({});
-  const [openProj, setOpenProj] = useState<Set<string>>(() => new Set(["proj-a"]));
+  const [openProj, setOpenProj] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("sidebar:openProj");
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
 
-  const { activeWorktreeId, setActiveWorktree } = useLayout();
+  const { activeWorktreeId, activeProjectId, setActiveWorktree } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
@@ -104,14 +110,51 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   );
 
   useEffect(() => {
-    if (!sessionIdKey) return undefined;
-    const ids = sessionIdKey.split(",").filter(Boolean);
-    return api.subscribe(ids, (ev: WSEvent) => {
+    const off = api.on("session:state", (ev) => {
       if (ev.type === "session:state") {
         patchSessionState(ev.sessionId, ev.state);
       }
     });
-  }, [api, patchSessionState, sessionIdKey]);
+    return off;
+  }, [api, patchSessionState]);
+
+  useSubscription(sessionIdKey ? sessionIdKey.split(",").filter(Boolean) : [], api);
+
+  useEffect(() => {
+    return api.on("*", (ev) => {
+      if (ev.type === "project:created") {
+        setProjects((prev) => [...prev, ev.project]);
+      }
+      if (ev.type === "project:deleted") {
+        setProjects((prev) => prev.filter((p) => p.id !== ev.projectId));
+        setWorktreeMap((prev) => {
+          const next = { ...prev };
+          delete next[ev.projectId];
+          return next;
+        });
+      }
+      if (ev.type === "worktree:created") {
+        setWorktreeMap((prev) => ({
+          ...prev,
+          [ev.worktree.projectId]: [...(prev[ev.worktree.projectId] ?? []), ev.worktree],
+        }));
+      }
+      if (ev.type === "worktree:deleted") {
+        setWorktreeMap((prev) => {
+          const next: Record<string, Worktree[]> = {};
+          for (const [projectId, list] of Object.entries(prev)) {
+            next[projectId] = list.filter((w) => w.id !== ev.worktreeId);
+          }
+          return next;
+        });
+        setSessionMap((prev) => {
+          const next = { ...prev };
+          delete next[ev.worktreeId];
+          return next;
+        });
+      }
+    });
+  }, [api]);
 
   /** Close-on-outside must attach after the opening click finishes (same tap was closing the menu / breaking UI). */
   useEffect(() => {
@@ -153,6 +196,22 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
       /* surface errors later */
     }
   }
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebar:openProj", JSON.stringify([...openProj]));
+    } catch { /* ignore */ }
+  }, [openProj]);
+
+  useEffect(() => {
+    if (!activeProjectId) return;
+    setOpenProj((prev) => {
+      if (prev.has(activeProjectId)) return prev;
+      const next = new Set(prev);
+      next.add(activeProjectId);
+      return next;
+    });
+  }, [activeProjectId]);
 
   function toggleProj(id: string) {
     setOpenProj((prev) => {
@@ -255,19 +314,19 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
                         }}
                         role="button"
                         tabIndex={0}
-                        aria-label={`Select worktree ${w.name}`}
-                        title={collapsed ? `${w.name} — select worktree` : undefined}
+                        aria-label={`Select worktree ${w.branch}`}
+                        title={collapsed ? `${w.branch} — select worktree` : undefined}
                       >
                         <span className="wt-align-gutter" aria-hidden />
                         <span className="wt-row__label">
-                          {collapsed ? disambiguatedAbbrev(w.name, w.id, wtList) : w.name}
+                          {collapsed ? disambiguatedAbbrev(w.branch, w.id, wtList.map((x) => ({ id: x.id, name: x.branch }))) : w.branch}
                         </span>
                         {!collapsed ? (
                           <button
                             type="button"
                             data-wt-menu-trigger
                             className="icon-btn wt-menu-trigger tree-row__action"
-                            aria-label={`Worktree actions for ${w.name}`}
+                            aria-label={`Worktree actions for ${w.branch}`}
                             aria-expanded={wtMenu?.worktree.id === w.id}
                             aria-haspopup="menu"
                             title="Worktree menu"
@@ -355,7 +414,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
         title="Delete worktree?"
         message={
           pendingDelete
-            ? `Remove “${pendingDelete.name}” from this workspace? Sessions attached to this worktree will be removed from the UI.`
+            ? `Remove “${pendingDelete.branch}” from this workspace? Sessions attached to this worktree will be removed from the UI.`
             : ""
         }
         confirmLabel="Delete"

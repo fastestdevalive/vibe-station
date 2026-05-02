@@ -25,7 +25,6 @@ export interface WorkspaceState {
   activeSessionId: string | null;
   activeFilePath: string | null;
   showDotFiles: boolean;
-  daemonDown: boolean;
   /** Live session.state mirror for WS + list payloads */
   sessionStates: Record<string, SessionState>;
   /** Last selected tab per worktree (persisted) */
@@ -55,7 +54,6 @@ export interface WorkspaceState {
   toggleInactiveWorktreesFilter: () => void;
   clearWorkspaceSelection: () => void;
   toggleDotFiles: () => void;
-  setDaemonDown: (v: boolean) => void;
   patchSessionState: (sessionId: string, state: SessionState) => void;
   syncSessionsFromApi: (sessions: Session[]) => void;
 }
@@ -78,7 +76,6 @@ const initial = {
   activeSessionId: null as string | null,
   activeFilePath: null as string | null,
   showDotFiles: true,
-  daemonDown: false,
   sessionStates: {} as Record<string, SessionState>,
   lastSessionByWorktree: {} as Record<string, string>,
   diffScopeByWorktree: {} as Record<string, DiffScope>,
@@ -173,7 +170,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           activeFilePath: null,
         }),
       toggleDotFiles: () => set((s) => ({ showDotFiles: !s.showDotFiles })),
-      setDaemonDown: (v) => set({ daemonDown: v }),
       patchSessionState: (sessionId, state) =>
         set((s) => ({
           sessionStates: { ...s.sessionStates, [sessionId]: state },

@@ -7,7 +7,7 @@ import ora from "ora";
 
 interface WorktreeCreateResponse {
   id: string;
-  name: string;
+  branch: string;
   projectId: string;
 }
 
@@ -65,7 +65,7 @@ export function registerWorktreeCreate(worktree: Command): void {
             die(result.error, result.status === 404 ? 2 : 1);
           }
 
-          console.log(`Created worktree: ${result.data.name}`);
+          console.log(`Created worktree: ${result.data.branch}`);
           console.log(result.data.id);
         } catch (err) {
           spinner.fail();

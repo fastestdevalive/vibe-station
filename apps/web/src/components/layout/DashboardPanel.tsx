@@ -94,7 +94,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
                     </span>
                     <span className="dashboard-card__primary">{s.label}</span>
                     <span className="dashboard-card__secondary">
-                      {proj?.name}{wt ? ` / ${wt.name}` : ""}
+                      {proj?.name}{wt ? ` / ${wt.branch}` : ""}
                     </span>
                   </button>
                 );

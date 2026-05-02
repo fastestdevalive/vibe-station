@@ -19,34 +19,34 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
   useEffect(() => {
     if (!ready || urlConsumed.current) return;
     urlConsumed.current = true;
-    if (isDashboard) return; // never restore worktree on the dashboard route
+    if (isDashboard) return;
     const wtParam = searchParams.get(WT);
     const sessParam = searchParams.get(SESS);
     if (wtParam) {
       const w = worktrees.find((x) => x.id === wtParam);
       if (w) {
+        const wtSessions = sessions.filter((s) => s.worktreeId === w.id);
+        const lastSessionId = useWorkspaceStore.getState().lastSessionByWorktree[w.id];
+
+        // Prefer explicit ?session= param, then last-used, then main slot, then first.
+        let pickedSessionId: string | null = null;
         if (sessParam) {
-          const sess = sessions.find((s) => s.id === sessParam);
-          if (sess && sess.worktreeId === w.id) {
-            useWorkspaceStore.setState({
-              activeProjectId: w.projectId,
-              activeWorktreeId: w.id,
-              activeSessionId: sess.id,
-            });
-          } else {
-            useWorkspaceStore.setState({
-              activeProjectId: w.projectId,
-              activeWorktreeId: w.id,
-              activeSessionId: null,
-            });
-          }
-        } else {
-          useWorkspaceStore.setState({
-            activeProjectId: w.projectId,
-            activeWorktreeId: w.id,
-            activeSessionId: null,
-          });
+          const explicit = wtSessions.find((s) => s.id === sessParam);
+          pickedSessionId = explicit?.id ?? null;
         }
+        if (!pickedSessionId) {
+          pickedSessionId =
+            (lastSessionId && wtSessions.some((s) => s.id === lastSessionId) ? lastSessionId : null) ??
+            wtSessions.find((s) => s.slot === "m")?.id ??
+            wtSessions[0]?.id ??
+            null;
+        }
+
+        useWorkspaceStore.setState({
+          activeProjectId: w.projectId,
+          activeWorktreeId: w.id,
+          activeSessionId: pickedSessionId,
+        });
       }
     }
   }, [ready, isDashboard, worktrees, sessions, searchParams]);
