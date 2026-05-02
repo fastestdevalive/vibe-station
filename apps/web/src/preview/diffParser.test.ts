@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
-import { parseUnifiedDiff } from "./diffParser";
+import { parseUnifiedDiff, summarizeDiffLines } from "./diffParser";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -32,5 +32,10 @@ describe("parseUnifiedDiff", () => {
     const hunks = parseUnifiedDiff(load("mixed.diff"));
     expect(hunks.length).toBe(1);
     expect(hunks[0]?.lines.length).toBeGreaterThan(3);
+  });
+
+  it("summarizeDiffLines counts additions and deletions", () => {
+    const hunks = parseUnifiedDiff(load("mixed.diff"));
+    expect(summarizeDiffLines(hunks)).toEqual({ additions: 2, deletions: 1 });
   });
 });

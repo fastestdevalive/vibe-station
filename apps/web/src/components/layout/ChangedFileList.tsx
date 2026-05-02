@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
-import { useCallback, useState } from "react";
+import { File, FileText } from "lucide-react";
+import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
 import type { ChangedPathEntry, GitStatusChar } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
@@ -50,13 +50,15 @@ function groupFiles(files: FlatFile[]): Group[] {
   const groupMap = new Map<string, FlatFile[]>();
   for (const file of files) {
     const existing = groupMap.get(file.dir);
-    if (existing) {
-      existing.push(file);
-    } else {
-      groupMap.set(file.dir, [file]);
-    }
+    if (existing) existing.push(file);
+    else groupMap.set(file.dir, [file]);
   }
-  return [...groupMap.entries()].map(([dir, groupFiles]) => ({ dir, files: groupFiles }));
+  return [...groupMap.entries()].map(([dir, groupFilesInner]) => ({ dir, files: groupFilesInner }));
+}
+
+function textLike(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ["md", "txt", "json", "yaml", "yml", "ts", "tsx", "js", "jsx", "css", "html", "py", "go", "rs"].includes(ext);
 }
 
 interface ChangedFileListProps {
@@ -68,10 +70,16 @@ interface ChangedFileListProps {
 export function ChangedFileList({ entries, loading, error }: ChangedFileListProps) {
   const activePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
+  const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
-  const flatFiles = flattenChanged(entries);
-  const groups = groupFiles(flatFiles);
+  const flatFiles = useMemo(() => flattenChanged(entries), [entries]);
+  const groups = useMemo(() => groupFiles(flatFiles), [flatFiles]);
+
+  const visibleFiles = useMemo(
+    () => groups.flatMap((g) => (collapsedDirs.has(g.dir) ? [] : g.files)),
+    [groups, collapsedDirs],
+  );
 
   const toggleDir = useCallback((dir: string) => {
     setCollapsedDirs((prev) => {
@@ -81,6 +89,29 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
       return next;
     });
   }, []);
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent, path: string) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        setActiveFile(path);
+        ensurePaneVisible(1);
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const idx = visibleFiles.findIndex((f) => f.path === path);
+        if (idx < 0) return;
+        const next = e.key === "ArrowDown" ? visibleFiles[idx + 1] : visibleFiles[idx - 1];
+        if (next) setActiveFile(next.path);
+      }
+    },
+    [visibleFiles, setActiveFile, ensurePaneVisible],
+  );
+
+  function selectFile(path: string) {
+    setActiveFile(path);
+    ensurePaneVisible(1);
+  }
 
   if (error) {
     return <div className="changed-file-list-empty">Error: {error}</div>;
@@ -96,45 +127,61 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
 
   return (
     <div className="changed-file-list" role="tree" aria-label="Changed files">
-      {groups.map((g) => (
-        <div key={g.dir || "__root__"}>
-          {g.dir ? (
+      {groups.map((group) => {
+        const isCollapsed = collapsedDirs.has(group.dir);
+        const dirLabel = group.dir || "(root)";
+        return (
+          <div key={group.dir || "__root__"} role="group">
             <button
               type="button"
-              className="changed-file-list__dir"
-              onClick={() => toggleDir(g.dir)}
+              className="changed-file-list-dir-header"
+              onClick={() => toggleDir(group.dir)}
+              aria-expanded={!isCollapsed}
+              title={dirLabel}
             >
-              <span className="changed-file-list__chev" aria-hidden>
-                {collapsedDirs.has(g.dir) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              <span className="changed-file-list-dir-chevron" aria-hidden>
+                {isCollapsed ? "▶" : "▼"}
               </span>
-              <span>{g.dir || "/"}</span>
+              <span className="changed-file-list-dir-name">{dirLabel}</span>
+              <span className="changed-file-list-dir-count">{group.files.length}</span>
             </button>
-          ) : null}
-          {!g.dir || !collapsedDirs.has(g.dir)
-            ? g.files.map((f) => (
-                <div
-                  key={f.path}
-                  className="tree-row changed-file-list__row"
-                  role="treeitem"
-                  data-active={activePath === f.path}
-                  tabIndex={0}
-                  onClick={() => setActiveFile(f.path)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setActiveFile(f.path);
-                    }
-                  }}
-                >
-                  <span className="changed-file-list__status" title={f.status}>
-                    {statusLabel(f.status)}
-                  </span>
-                  <span style={{ flex: 1, minWidth: 0 }}>{f.name}</span>
-                </div>
-              ))
-            : null}
-        </div>
-      ))}
+            {!isCollapsed && (
+              <div>
+                {group.files.map((file) => {
+                  const isSelected = activePath === file.path;
+                  return (
+                    <div
+                      key={file.path}
+                      role="treeitem"
+                      tabIndex={0}
+                      aria-selected={isSelected}
+                      aria-label={file.path}
+                      className={`changed-file-list-file${isSelected ? " changed-file-list-file--selected" : ""}`}
+                      onClick={() => selectFile(file.path)}
+                      onKeyDown={(e) => handleKeyDown(e, file.path)}
+                    >
+                      <span className="changed-file-list-file-icon" aria-hidden>
+                        {textLike(file.name) ? (
+                          <FileText size={14} strokeWidth={1.5} />
+                        ) : (
+                          <File size={14} strokeWidth={1.5} />
+                        )}
+                      </span>
+                      <span className="changed-file-list-file-name">{file.name}</span>
+                      <span
+                        className={`changed-file-list-file-status changed-file-list-file-status--${file.status === "?" ? "A" : file.status}`}
+                        aria-label={`status: ${file.status}`}
+                      >
+                        {statusLabel(file.status)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

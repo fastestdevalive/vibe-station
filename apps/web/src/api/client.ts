@@ -252,8 +252,20 @@ export function createClientApi() {
       const res = await fetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/diff/${path}?${q}`,
       );
-      if (!res.ok) throw new ApiError(await res.text(), res.status);
-      return res.text();
+      const text = await res.text();
+      if (!res.ok) {
+        if (res.status === 422) {
+          try {
+            const j = JSON.parse(text) as { message?: string; error?: string };
+            throw new ApiError(j.message ?? j.error ?? text, 422);
+          } catch (e) {
+            if (e instanceof ApiError) throw e;
+            throw new ApiError(text, 422);
+          }
+        }
+        throw new ApiError(text || res.statusText, res.status);
+      }
+      return text;
     },
 
     async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
@@ -265,12 +277,15 @@ export function createClientApi() {
       return parseJson<TreeEntry[]>(res);
     },
 
-    async listChangedPaths(worktreeId: string): Promise<ChangedPathEntry[]> {
+    async listChangedPaths(
+      worktreeId: string,
+      scope: "local" | "branch" = "local",
+    ): Promise<ChangedPathEntry[]> {
+      const q = new URLSearchParams({ scope });
       const root = baseUrl();
       const res = await fetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths`,
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths?${q}`,
       );
-      if (!res.ok) throw new ApiError(await res.text(), res.status);
       return parseJson<ChangedPathEntry[]>(res);
     },
 

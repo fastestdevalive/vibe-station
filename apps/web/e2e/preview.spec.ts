@@ -8,9 +8,9 @@ test("markdown file preview shows heading", async ({ page }) => {
 
 test("branch diff scope shows diff markers", async ({ page }) => {
   await page.goto("/workspace");
-  const tree = page.getByRole("tree", { name: /Worktree files/i });
-  await tree.getByRole("button", { name: /Expand folder/i }).click();
-  await tree.getByText("App.tsx").click();
-  await page.getByRole("radio", { name: /^branch$/i }).check();
+  await page.getByRole("button", { name: /Diff view off/i }).click();
+  await page.getByRole("button", { name: /^src$/ }).click();
+  await page.getByText("App.tsx").click();
+  await page.getByRole("button", { name: /^branch$/i }).click();
   await expect(page.locator("pre").filter({ hasText: "+" }).first()).toBeVisible();
 });

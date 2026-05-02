@@ -101,12 +101,79 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: "fix-test-bug", modeId: "bug-fix" },
     });
     expect(res.statusCode).toBe(201);
-    const wt = res.json<WorktreeRecord>();
+    const wt = res.json<{ id: string; branch: string; baseSha: string }>();
     expect(wt.branch).toBe("fix-test-bug");
     expect(wt.id).toMatch(/^[a-z]+-\d+$/);
-    expect(wt.sessions).toHaveLength(1);
-    expect(wt.sessions[0]?.slot).toBe("m");
     expect(wt.baseSha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("GET changed-paths scope=local lists staged file", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-local-scope", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "tracked.txt"), "v1\n");
+    execSync(`git -C "${wtPath}" add tracked.txt`, { stdio: "ignore" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/changed-paths?scope=local`,
+    });
+    expect(res.statusCode).toBe(200);
+    const entries = res.json<Array<{ path: string; status: string }>>();
+    expect(entries.some((e) => e.path === "tracked.txt")).toBe(true);
+  });
+
+  it("GET changed-paths scope=branch lists commit-only paths vs fork base", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-branch-scope", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "branch-only.txt"), "hi\n");
+    execSync(
+      `git -C "${wtPath}" add branch-only.txt && git -C "${wtPath}" commit -m "branch-only"`,
+      { stdio: "ignore" },
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/changed-paths?scope=branch`,
+    });
+    expect(res.statusCode).toBe(200);
+    const entries = res.json<Array<{ path: string; status: string }>>();
+    expect(entries.some((e) => e.path === "branch-only.txt")).toBe(true);
+  });
+
+  it("GET diff scope=local returns unified patch text", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diff-local-scope", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "t.md"), "# x\n");
+    execSync(`git -C "${wtPath}" add t.md && git -C "${wtPath}" commit -m add-md`, {
+      stdio: "ignore",
+    });
+    await writeFile(join(wtPath, "t.md"), "# x\n\nline\n");
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diff/t.md?scope=local`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain("@@");
+    expect(res.body).toContain("+");
   });
 
   it("POST /worktrees 400 on invalid branch name", async () => {

@@ -411,7 +411,10 @@ export function createMockApi() {
       return structuredClone(entries);
     },
 
-    async listChangedPaths(worktreeId: string): Promise<ChangedPathEntry[]> {
+    async listChangedPaths(
+      worktreeId: string,
+      _scope: "local" | "branch" = "local",
+    ): Promise<ChangedPathEntry[]> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (worktreeId === "wt-1") {
         return Object.keys(unifiedDiffs).map((path) => ({ path, status: "M" as const }));
