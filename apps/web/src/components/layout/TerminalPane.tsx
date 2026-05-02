@@ -6,7 +6,7 @@ import type { ApiInstance } from "@/api";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
-import { ideThemeToXterm } from "./terminalTheme";
+import { ideThemeToXterm, terminalMinimumContrastRatio } from "./terminalTheme";
 
 interface TerminalPaneProps {
   api: ApiInstance;
@@ -53,6 +53,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         scrollback: 10000,
         allowProposedApi: true,
         theme: ideThemeToXterm(ideTheme),
+        minimumContrastRatio: terminalMinimumContrastRatio(ideTheme),
       });
     termRef.current = term;
 
@@ -246,6 +247,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
     const term = termRef.current;
     if (!term?.options) return;
     term.options.theme = ideThemeToXterm(ideTheme);
+    term.options.minimumContrastRatio = terminalMinimumContrastRatio(ideTheme);
     term.clearTextureAtlas?.();
     try {
       term.refresh(0, term.rows - 1);
