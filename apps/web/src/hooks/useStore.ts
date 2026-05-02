@@ -14,7 +14,7 @@ export interface WorktreeLayout {
 
 export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
   terminalPosition: "left",
-  paneCollapsed: [false, false, false],
+  paneCollapsed: [true, true, false],
 };
 
 export interface WorkspaceState {
@@ -43,7 +43,7 @@ export interface WorkspaceState {
   togglePaneCollapsed: (index: 0 | 1 | 2) => void;
   /** Expand pane if hidden (e.g. quick-open file selects preview) */
   ensurePaneVisible: (index: 0 | 1 | 2) => void;
-  setActiveWorktree: (projectId: string, worktreeId: string) => void;
+  setActiveWorktree: (projectId: string, worktreeId: string, sessions?: Session[]) => void;
   setActiveSession: (sessionId: string) => void;
   setActiveFile: (path: string | null) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
@@ -128,12 +128,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           c[index] = false;
           return { layoutByWorktree: { ...s.layoutByWorktree, [s.activeWorktreeId]: { ...cur, paneCollapsed: c } } };
         }),
-      setActiveWorktree: (projectId, worktreeId) =>
-        set({
-          activeProjectId: projectId,
-          activeWorktreeId: worktreeId,
-          activeSessionId: null,
-          activeFilePath: null,
+      setActiveWorktree: (projectId, worktreeId, sessions) =>
+        set((s) => {
+          // Idempotency: if re-tapping the same worktree with an active session, no-op
+          if (worktreeId === s.activeWorktreeId && s.activeSessionId != null) {
+            return s;
+          }
+
+          // Compute default session: lastSessionByWorktree → main slot → first → null
+          let defaultSessionId: string | null = null;
+          const lastInWorktree = s.lastSessionByWorktree[worktreeId];
+          if (lastInWorktree && sessions?.some((ss) => ss.id === lastInWorktree)) {
+            defaultSessionId = lastInWorktree;
+          } else if (sessions) {
+            const mainSlot = sessions.find((ss) => ss.slot === "m");
+            defaultSessionId = mainSlot?.id ?? sessions[0]?.id ?? null;
+          }
+
+          return {
+            activeProjectId: projectId,
+            activeWorktreeId: worktreeId,
+            activeSessionId: defaultSessionId,
+            activeFilePath: null,
+          };
         }),
       setActiveSession: (sessionId) =>
         set((s) => {

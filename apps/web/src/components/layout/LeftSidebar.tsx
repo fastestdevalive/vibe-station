@@ -64,7 +64,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
     return new Set<string>();
   });
 
-  const { activeWorktreeId, activeProjectId, setActiveWorktree } = useLayout();
+  const { activeWorktreeId, activeProjectId, activeSessionId, setActiveWorktree } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
@@ -223,7 +223,12 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   }
 
   function selectWorktree(projectId: string, w: Worktree) {
-    setActiveWorktree(projectId, w.id);
+    // Early-return if re-tapping the same worktree with an active session (defense-in-depth)
+    if (w.id === activeWorktreeId && activeSessionId != null) {
+      onWorktreeSelected?.();
+      return;
+    }
+    setActiveWorktree(projectId, w.id, sessionMap[w.id]);
     onWorktreeSelected?.();
   }
 

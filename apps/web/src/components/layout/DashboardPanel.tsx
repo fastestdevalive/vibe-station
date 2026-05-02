@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { HealthResponse, Project, Session, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -28,6 +29,7 @@ interface DashboardPanelProps {
 }
 
 export function DashboardPanel({ api }: DashboardPanelProps) {
+  const navigate = useNavigate();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
@@ -84,7 +86,13 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
                     key={s.id}
                     type="button"
                     className="dashboard-card dashboard-card--session"
-                    onClick={() => wt && setActiveWorktree(wt.projectId, wt.id)}
+                    onClick={() => {
+                      if (wt) {
+                        const sessionsForWorktree = sessions.filter((ss) => ss.worktreeId === wt.id);
+                        setActiveWorktree(wt.projectId, wt.id, sessionsForWorktree);
+                        void navigate("/workspace");
+                      }
+                    }}
                   >
                     <span
                       className="dashboard-card__dot"
