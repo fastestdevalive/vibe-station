@@ -1,22 +1,31 @@
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen, FolderTree, GitCompare } from "lucide-react";
-import { useEffect, useState } from "react";
+import { File, FileText, Folder, FolderOpen, FolderTree, GitCompare } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { ChangedPathEntry, DiffScope, TreeEntry } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
+import { useTreeWatch } from "@/hooks/useSubscription";
+
+/** Sort folders before files, then alphabetical (case-insensitive). */
+function sortEntries(entries: TreeEntry[]): TreeEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+}
 
 interface NodeProps {
   api: ApiInstance;
-  sessionId: string | null;
+  worktreeId: string | null;
   entry: TreeEntry;
   level: number;
   expanded: Set<string>;
   toggle: (path: string) => void;
-  showDots: boolean;
 }
 
-function TreeNode({ api, sessionId, entry, level, expanded, toggle, showDots }: NodeProps) {
+function TreeNode({ api, worktreeId, entry, level, expanded, toggle }: NodeProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
+  const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
   const activePath = useWorkspaceStore((s) => s.activeFilePath);
   const [children, setChildren] = useState<TreeEntry[] | null>(null);
 
@@ -24,20 +33,22 @@ function TreeNode({ api, sessionId, entry, level, expanded, toggle, showDots }: 
   const isOpen = expanded.has(entry.path);
 
   useEffect(() => {
-    if (!isDir || !isOpen || !sessionId) return;
+    if (!isDir || !isOpen || !worktreeId) return;
     let cancelled = false;
     void (async () => {
-      const list = await api.tree(sessionId, entry.path);
-      if (!cancelled) setChildren(list);
+      const list = await api.tree(worktreeId, entry.path);
+      if (!cancelled) setChildren(sortEntries(list));
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, sessionId, entry.path, isDir, isOpen]);
+  }, [api, worktreeId, entry.path, isDir, isOpen]);
 
-  const hideDotfile = !showDots && entry.name.startsWith(".");
-
-  if (hideDotfile) return null;
+  function openFile() {
+    if (!worktreeId) return;
+    setActiveFile(entry.path);
+    ensurePaneVisible(1);
+  }
 
   return (
     <div role="tree">
@@ -47,45 +58,26 @@ function TreeNode({ api, sessionId, entry, level, expanded, toggle, showDots }: 
         aria-expanded={isDir ? isOpen : undefined}
         tabIndex={0}
         data-active={activePath === entry.path}
-        style={{ paddingLeft: `calc(${level} * var(--space-4))` }}
-        onClick={() => {
-          if (isDir) {
-            toggle(entry.path);
-          } else if (sessionId) {
-            setActiveFile(entry.path);
-          }
-        }}
+        style={{ paddingLeft: `calc(${level} * var(--space-4) + var(--space-2))` }}
+        onClick={() => (isDir ? toggle(entry.path) : openFile())}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             if (isDir) toggle(entry.path);
-            else if (sessionId) setActiveFile(entry.path);
+            else openFile();
           }
         }}
       >
-        {isDir ? (
-          <button
-            type="button"
-            className="icon-btn tree-row__chevron"
-            aria-label={isOpen ? "Collapse folder" : "Expand folder"}
-            onClick={(ev) => {
-              ev.stopPropagation();
-              toggle(entry.path);
-            }}
-          >
-            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </button>
-        ) : (
-          <span className="tree-row__chevron-spacer" aria-hidden />
-        )}
         <span className="tree-row__kind-icon" aria-hidden>
           {isDir ? (
             isOpen ? (
-              <FolderOpen size={14} strokeWidth={1.75} />
+              <FolderOpen size={15} strokeWidth={1.5} fill="currentColor" fillOpacity={0.18} />
             ) : (
-              <Folder size={14} strokeWidth={1.75} />
+              <Folder size={15} strokeWidth={1.5} fill="currentColor" fillOpacity={0.18} />
             )
+          ) : isTextLikeFile(entry.name) ? (
+            <FileText size={14} strokeWidth={1.5} />
           ) : (
-            <File size={14} strokeWidth={1.75} />
+            <File size={14} strokeWidth={1.5} />
           )}
         </span>
         <span className="tree-row__label">{entry.name}</span>
@@ -95,12 +87,11 @@ function TreeNode({ api, sessionId, entry, level, expanded, toggle, showDots }: 
             <TreeNode
               key={ch.path}
               api={api}
-              sessionId={sessionId}
+              worktreeId={worktreeId}
               entry={ch}
               level={level + 1}
               expanded={expanded}
               toggle={toggle}
-              showDots={showDots}
             />
           ))
         : null}
@@ -108,15 +99,18 @@ function TreeNode({ api, sessionId, entry, level, expanded, toggle, showDots }: 
   );
 }
 
+function isTextLikeFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ["md", "txt", "json", "yaml", "yml", "ts", "tsx", "js", "jsx", "css", "html", "py", "go", "rs", "java", "kt", "swift", "rb", "sh", "toml", "xml"].includes(ext);
+}
+
 interface FileTreeSidebarProps {
   api: ApiInstance;
 }
 
 export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
-  const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
-  const showDotFiles = useWorkspaceStore((s) => s.showDotFiles);
-  const toggleDotFiles = useWorkspaceStore((s) => s.toggleDotFiles);
+  const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
 
   const scopeRaw = useWorkspaceStore((s) =>
@@ -129,24 +123,54 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
   const [changed, setChanged] = useState<ChangedPathEntry[]>([]);
   const [changedLoading, setChangedLoading] = useState(false);
   const [changedError, setChangedError] = useState<string | null>(null);
+  const { lastChanged } = useTreeWatch(api, activeWorktreeId);
 
   useEffect(() => {
-    if (!activeSessionId || !activeWorktreeId) {
+    if (!activeWorktreeId) {
       setRoot([]);
       return;
     }
     let cancelled = false;
     void (async () => {
-      const list = await api.tree(activeSessionId, "");
-      if (!cancelled) setRoot(list);
+      const list = await api.tree(activeWorktreeId, "");
+      if (!cancelled) setRoot(sortEntries(list));
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, activeSessionId, activeWorktreeId]);
+  }, [api, activeWorktreeId, lastChanged]);
+
+  // Auto-expand all parent dirs of the active file so it's visible in the tree.
+  const parentsOfActive = useMemo(() => {
+    if (!activeFilePath) return [];
+    const parts = activeFilePath.split("/").filter(Boolean);
+    parts.pop(); // drop file name
+    const out: string[] = [];
+    let acc = "";
+    for (const p of parts) {
+      acc = acc ? `${acc}/${p}` : p;
+      out.push(acc);
+    }
+    return out;
+  }, [activeFilePath]);
 
   useEffect(() => {
-    if (!activeSessionId || scope === "none") {
+    if (parentsOfActive.length === 0) return;
+    setExpanded((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const p of parentsOfActive) {
+        if (!next.has(p)) {
+          next.add(p);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [parentsOfActive]);
+
+  useEffect(() => {
+    if (!activeWorktreeId || scope === "none") {
       setChanged([]);
       setChangedError(null);
       return;
@@ -156,7 +180,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     setChangedError(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(activeSessionId);
+        const list = await api.listChangedPaths(activeWorktreeId);
         if (!cancelled) {
           setChanged(list);
           setChangedLoading(false);
@@ -171,7 +195,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     return () => {
       cancelled = true;
     };
-  }, [api, activeSessionId, scope]);
+  }, [api, activeWorktreeId, scope]);
 
   function toggle(path: string) {
     setExpanded((prev) => {
@@ -257,12 +281,6 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
               </button>
             </div>
           ) : null}
-          {!diffMode ? (
-            <label className="file-tree-dotfiles">
-              <input type="checkbox" checked={showDotFiles} onChange={toggleDotFiles} />
-              dots
-            </label>
-          ) : null}
         </div>
       </div>
       <div
@@ -281,12 +299,11 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
             <TreeNode
               key={e.path}
               api={api}
-              sessionId={activeSessionId}
+              worktreeId={activeWorktreeId}
               entry={e}
               level={0}
               expanded={expanded}
               toggle={toggle}
-              showDots={showDotFiles}
             />
           ))
         )}

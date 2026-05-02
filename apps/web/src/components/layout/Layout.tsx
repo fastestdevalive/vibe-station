@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
 
@@ -38,6 +38,24 @@ export function Layout({
   onMobileSidebarClose,
 }: LayoutProps) {
   const { terminalPosition, treePaneVisible, previewPaneVisible, terminalPaneVisible } = useLayout();
+
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(1200);
+
+  useEffect(() => {
+    const el = mainContentRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const w = entry.contentRect.width;
+      if (w > 0) setContainerWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const treeMaxPct = Math.min(99, (400 / containerWidth) * 100);
 
   const sidebarInner = (
     <div
@@ -143,7 +161,7 @@ export function Layout({
   }
   if (vTree) {
     leftSplitNodes.push(
-      <Panel key="tree" defaultSize={33.3} minSize={14} maxSize={50}>
+      <Panel key="tree" defaultSize={33.3} minSize={14} maxSize={treeMaxPct}>
         {ideFileTree}
       </Panel>,
     );
@@ -161,7 +179,7 @@ export function Layout({
     );
 
   const leftSplit = (
-    <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div ref={mainContentRef} style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
       {leftSplitInner}
     </div>
   );
@@ -174,7 +192,7 @@ export function Layout({
           {idePreviewPane}
         </Panel>
         <PanelResizeHandle className="resize-handle resize-handle--col" />
-        <Panel defaultSize={28} minSize={14}>
+        <Panel defaultSize={28} minSize={14} maxSize={treeMaxPct}>
           {ideFileTree}
         </Panel>
       </PanelGroup>
@@ -204,7 +222,7 @@ export function Layout({
     );
 
   const bottomSplit = (
-    <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div ref={mainContentRef} style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
       {bottomSplitInner}
     </div>
   );

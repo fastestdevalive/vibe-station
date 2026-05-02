@@ -16,11 +16,17 @@ import type {
 import { ApiError } from "./errors";
 
 function baseUrl() {
-  return import.meta.env.VITE_DAEMON_URL ?? "http://127.0.0.1:7421";
+  const raw = import.meta.env.VITE_DAEMON_URL ?? "";
+  return raw.trim() || "/api";
 }
 
 function wsUrl() {
-  const u = new URL(baseUrl());
+  const base = baseUrl();
+  // Relative base (e.g. "/api") — connect to /ws on the same origin (Vite proxies it).
+  if (base.startsWith("/")) {
+    return `${window.location.origin.replace(/^http/, "ws")}/ws`;
+  }
+  const u = new URL(base);
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
   u.pathname = "/ws";
   u.search = "";
@@ -35,48 +41,120 @@ async function parseJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export type ConnectionState = "online" | "connecting" | "offline";
+
+const INITIAL_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 15000;
+
 export function createClientApi() {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  const pendingSubs = new Set<string>();
-  let eventCallback: ((e: WSEvent) => void) | null = null;
+  let backoffMs = INITIAL_BACKOFF_MS;
+  /** Ref-counted subs: multiple components can sub to the same sessionId without
+   *  one cleanup tearing down the others. */
+  const subRefs = new Map<string, number>();
+  let wsReadyPromise: Promise<void> | null = null;
+  const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
-  function ensureWs() {
-    if (ws?.readyState === WebSocket.OPEN) return;
-    ws = new WebSocket(wsUrl());
-    ws.onmessage = (ev) => {
+  let connState: ConnectionState = "offline";
+  const connListeners = new Set<(s: ConnectionState) => void>();
+  function setConnState(s: ConnectionState) {
+    if (connState === s) return;
+    connState = s;
+    for (const h of connListeners) h(s);
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    const delay = backoffMs;
+    backoffMs = Math.min(MAX_BACKOFF_MS, Math.round(backoffMs * 1.7));
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void ensureWs();
+    }, delay);
+  }
+
+  function emit(ev: WSEvent) {
+    const star = listeners.get("*");
+    if (star) for (const h of star) h(ev);
+    const typed = listeners.get(ev.type);
+    if (typed) for (const h of typed) h(ev);
+  }
+
+  function ensureWs(): Promise<void> {
+    if (ws?.readyState === WebSocket.OPEN) return Promise.resolve();
+    if (wsReadyPromise) return wsReadyPromise;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    setConnState("connecting");
+    wsReadyPromise = new Promise<void>((resolve) => {
+      let socket: WebSocket;
       try {
-        const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
-        if (msg.type && eventCallback) {
-          eventCallback(msg as WSEvent);
-        }
+        socket = new WebSocket(wsUrl());
       } catch {
-        /* ignore */
+        wsReadyPromise = null;
+        setConnState("offline");
+        scheduleReconnect();
+        resolve();
+        return;
       }
-    };
-    ws.onopen = () => {
-      if (pendingSubs.size > 0 && ws) {
-        ws.send(JSON.stringify({ type: "subscribe", sessionIds: [...pendingSubs] }));
-      }
-    };
-    ws.onclose = () => {
-      reconnectTimer = setTimeout(ensureWs, 1000);
-    };
+      ws = socket;
+      socket.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
+          if (msg.type) emit(msg as WSEvent);
+        } catch {
+          /* ignore */
+        }
+      };
+      socket.onopen = () => {
+        backoffMs = INITIAL_BACKOFF_MS;
+        setConnState("online");
+        if (subRefs.size > 0) {
+          socket.send(JSON.stringify({ type: "subscribe", sessionIds: [...subRefs.keys()] }));
+        }
+        wsReadyPromise = null;
+        resolve();
+      };
+      socket.onerror = () => {
+        // close handler will follow and own the reconnect
+      };
+      socket.onclose = () => {
+        if (ws === socket) ws = null;
+        wsReadyPromise = null;
+        setConnState("offline");
+        scheduleReconnect();
+        resolve();
+      };
+    });
+    return wsReadyPromise;
+  }
+
+  async function sendWs(payload: Record<string, unknown>) {
+    await ensureWs();
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
   }
 
   const api = {
     async health(): Promise<HealthResponse> {
-      const res = await fetch(`${baseUrl()}/health`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/health`);
       return parseJson<HealthResponse>(res);
     },
 
     async listProjects(): Promise<Project[]> {
-      const res = await fetch(`${baseUrl()}/projects`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/projects`);
       return parseJson<Project[]>(res);
     },
 
     async deleteProject(id: string): Promise<{ ok: true }> {
-      const res = await fetch(`${baseUrl()}/projects/${encodeURIComponent(id)}`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/projects/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -84,12 +162,14 @@ export function createClientApi() {
 
     async listWorktrees(projectId: string): Promise<Worktree[]> {
       const q = new URLSearchParams({ project: projectId });
-      const res = await fetch(`${baseUrl()}/worktrees?${q}`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/worktrees?${q}`);
       return parseJson<Worktree[]>(res);
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
-      const res = await fetch(`${baseUrl()}/worktrees`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/worktrees`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -98,7 +178,9 @@ export function createClientApi() {
     },
 
     async deleteWorktree(id: string): Promise<{ ok: true }> {
-      const res = await fetch(`${baseUrl()}/worktrees/${encodeURIComponent(id)}`, {
+      const root = baseUrl();
+      // UI always purges (removes files from disk)
+      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}?purge=true`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -106,12 +188,14 @@ export function createClientApi() {
 
     async listSessions(worktreeId: string): Promise<Session[]> {
       const q = new URLSearchParams({ worktree: worktreeId });
-      const res = await fetch(`${baseUrl()}/sessions?${q}`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/sessions?${q}`);
       return parseJson<Session[]>(res);
     },
 
     async createSession(body: CreateSessionBody): Promise<Session> {
-      const res = await fetch(`${baseUrl()}/sessions`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -120,22 +204,25 @@ export function createClientApi() {
     },
 
     async deleteSession(id: string): Promise<{ ok: true }> {
-      const res = await fetch(`${baseUrl()}/sessions/${encodeURIComponent(id)}`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/sessions/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
     },
 
     async resumeSession(id: string): Promise<Session> {
-      const res = await fetch(`${baseUrl()}/sessions/${encodeURIComponent(id)}/resume`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/sessions/${encodeURIComponent(id)}/resume`, {
         method: "POST",
       });
       return parseJson<Session>(res);
     },
 
     async sendInput(sessionId: string, body: SendInputBody): Promise<{ ok: true }> {
+      const root = baseUrl();
       const res = await fetch(
-        `${baseUrl()}/sessions/${encodeURIComponent(sessionId)}/input`,
+        `${root}/sessions/${encodeURIComponent(sessionId)}/input`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -145,51 +232,57 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
-    async getFile(sessionId: string, filePath: string): Promise<string> {
+    async getFile(worktreeId: string, filePath: string): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
-      const res = await fetch(`${baseUrl()}/sessions/${encodeURIComponent(sessionId)}/files/${path}`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
       if (res.status === 422) throw new ApiError("File too large to preview", 422);
       if (!res.ok) throw new ApiError(await res.text(), res.status);
       return res.text();
     },
 
     async getDiff(
-      sessionId: string,
+      worktreeId: string,
       filePath: string,
       scope: "local" | "branch",
     ): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const q = new URLSearchParams({ scope });
+      const root = baseUrl();
       const res = await fetch(
-        `${baseUrl()}/sessions/${encodeURIComponent(sessionId)}/diff/${path}?${q}`,
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/diff/${path}?${q}`,
       );
       if (!res.ok) throw new ApiError(await res.text(), res.status);
       return res.text();
     },
 
-    async tree(sessionId: string, path: string): Promise<TreeEntry[]> {
+    async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
       const q = new URLSearchParams({ path: path.replace(/^\/+/, "") });
+      const root = baseUrl();
       const res = await fetch(
-        `${baseUrl()}/sessions/${encodeURIComponent(sessionId)}/tree?${q}`,
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/tree?${q}`,
       );
       return parseJson<TreeEntry[]>(res);
     },
 
-    async listChangedPaths(sessionId: string): Promise<ChangedPathEntry[]> {
+    async listChangedPaths(worktreeId: string): Promise<ChangedPathEntry[]> {
+      const root = baseUrl();
       const res = await fetch(
-        `${baseUrl()}/sessions/${encodeURIComponent(sessionId)}/changed-paths`,
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths`,
       );
       if (!res.ok) throw new ApiError(await res.text(), res.status);
       return parseJson<ChangedPathEntry[]>(res);
     },
 
     async listModes(): Promise<Mode[]> {
-      const res = await fetch(`${baseUrl()}/modes`);
+      const root = baseUrl();
+      const res = await fetch(`${root}/modes`);
       return parseJson<Mode[]>(res);
     },
 
     async createMode(body: CreateModeBody): Promise<Mode> {
-      const res = await fetch(`${baseUrl()}/modes`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/modes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -198,7 +291,8 @@ export function createClientApi() {
     },
 
     async updateMode(id: string, body: UpdateModeBody): Promise<Mode> {
-      const res = await fetch(`${baseUrl()}/modes/${encodeURIComponent(id)}`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/modes/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -207,37 +301,99 @@ export function createClientApi() {
     },
 
     async deleteMode(id: string): Promise<{ ok: true }> {
-      const res = await fetch(`${baseUrl()}/modes/${encodeURIComponent(id)}`, {
+      const root = baseUrl();
+      const res = await fetch(`${root}/modes/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
     },
 
-    subscribe(sessionIds: string[], onEvent: (e: WSEvent) => void): () => void {
-      eventCallback = onEvent;
+    async send(message: {
+      type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";
+      worktreeId?: string;
+      path?: string;
+    }): Promise<void> {
+      await sendWs(message);
+    },
+
+    async openSession(sessionId: string, cols: number, rows: number): Promise<void> {
+      await sendWs({ type: "session:open", sessionId, cols, rows });
+    },
+
+    async closeSession(sessionId: string): Promise<void> {
+      await sendWs({ type: "session:close", sessionId });
+    },
+
+    async sendKeystroke(sessionId: string, data: string): Promise<void> {
+      await sendWs({ type: "session:input", sessionId, data });
+    },
+
+    async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
+      await sendWs({ type: "session:resize", sessionId, cols, rows });
+    },
+
+    subscribe(sessionIds: string[]): () => void {
+      const newlyAdded: string[] = [];
       for (const id of sessionIds) {
-        pendingSubs.add(id);
+        const prev = subRefs.get(id) ?? 0;
+        if (prev === 0) newlyAdded.push(id);
+        subRefs.set(id, prev + 1);
       }
-      ensureWs();
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "subscribe", sessionIds }));
+      if (newlyAdded.length > 0) {
+        void ensureWs().then(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "subscribe", sessionIds: newlyAdded }));
+          }
+        });
       }
       return () => {
+        const removed: string[] = [];
         for (const id of sessionIds) {
-          pendingSubs.delete(id);
-        }
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "unsubscribe", sessionIds }));
-        }
-        if (pendingSubs.size === 0) {
-          eventCallback = null;
-          ws?.close();
-          ws = null;
-          if (reconnectTimer) {
-            clearTimeout(reconnectTimer);
-            reconnectTimer = null;
+          const prev = subRefs.get(id) ?? 0;
+          if (prev <= 1) {
+            subRefs.delete(id);
+            removed.push(id);
+          } else {
+            subRefs.set(id, prev - 1);
           }
         }
+        if (removed.length > 0 && ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "unsubscribe", sessionIds: removed }));
+        }
+        // Keep WS alive for the lifetime of the API instance — closing/reopening
+        // on every transient sub change caused message loss + connection thrash.
+      };
+    },
+
+    on(type: WSEvent["type"] | "*", handler: (e: WSEvent) => void): () => void {
+      const key = type;
+      if (!listeners.has(key)) listeners.set(key, new Set());
+      listeners.get(key)!.add(handler);
+      return () => {
+        const set = listeners.get(key);
+        if (!set) return;
+        set.delete(handler);
+        if (set.size === 0) listeners.delete(key);
+      };
+    },
+
+    /** Open the WS eagerly so we observe online/offline transitions even before
+     *  the first subscription. */
+    startConnection(): void {
+      void ensureWs();
+    },
+
+    getConnectionState(): ConnectionState {
+      return connState;
+    },
+
+    /** Subscribe to connection-state changes. Calls handler immediately with the
+     *  current state, then on every transition. Returns an unsubscribe fn. */
+    subscribeConnection(handler: (s: ConnectionState) => void): () => void {
+      connListeners.add(handler);
+      handler(connState);
+      return () => {
+        connListeners.delete(handler);
       };
     },
   };

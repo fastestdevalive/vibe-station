@@ -19,12 +19,13 @@ describe("Dialog", () => {
   it("clicking overlay closes the dialog", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    const { container } = render(
+    render(
       <Dialog open title="T" onClose={onClose}>
         <p>Body</p>
       </Dialog>,
     );
-    const overlay = container.querySelector(".dialog-overlay");
+    // Dialog uses createPortal — query from document.body
+    const overlay = document.body.querySelector(".dialog-overlay");
     expect(overlay).toBeTruthy();
     await user.click(overlay!);
     expect(onClose).toHaveBeenCalled();

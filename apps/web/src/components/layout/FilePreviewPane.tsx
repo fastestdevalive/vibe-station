@@ -1,4 +1,4 @@
-import { Minus, Plus } from "lucide-react";
+import { Minus, Plus, X } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope } from "@/api/types";
@@ -6,27 +6,13 @@ import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useFileWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { CodeView } from "@/components/preview/CodeView";
 import { DiffView } from "@/components/preview/DiffView";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
-
-function langFromPath(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase();
-  const map: Record<string, string> = {
-    ts: "typescript",
-    tsx: "tsx",
-    js: "javascript",
-    jsx: "jsx",
-    json: "json",
-    md: "markdown",
-    css: "css",
-    html: "html",
-    go: "go",
-  };
-  return map[ext ?? ""] ?? "typescript";
-}
+import { languageForFilePath } from "@/components/preview/codeHighlight";
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
@@ -42,17 +28,20 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   const scope: DiffScope = scopeFromStore ?? "none";
   const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
+  const togglePaneCollapsed = useWorkspaceStore((s) => s.togglePaneCollapsed);
 
   const { theme } = useTheme();
   const themeMode = theme;
 
   const [fileBody, setFileBody] = useState<string | null>(null);
+  const { lastChanged } = useFileWatch(api, worktreeId, path);
+
   const [diffBody, setDiffBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
 
   useEffect(() => {
-    if (!sessionId || !path) {
+    if (!worktreeId || !path) {
       setFileBody(null);
       setDiffBody(null);
       setError(null);
@@ -65,22 +54,22 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     void (async () => {
       try {
         if (scope === "none") {
-          const text = await api.getFile(sessionId, path);
+          const text = await api.getFile(worktreeId, path);
           if (!cancelled) {
             setFileBody(text);
             setDiffBody(null);
           }
         } else if (scope === "local") {
           const [text, d] = await Promise.all([
-            api.getFile(sessionId, path),
-            api.getDiff(sessionId, path, "local"),
+            api.getFile(worktreeId, path),
+            api.getDiff(worktreeId, path, "local"),
           ]);
           if (!cancelled) {
             setFileBody(text);
             setDiffBody(d);
           }
         } else {
-          const d = await api.getDiff(sessionId, path, "branch");
+          const d = await api.getDiff(worktreeId, path, "branch");
           if (!cancelled) {
             setFileBody(null);
             setDiffBody(d);
@@ -101,7 +90,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     return () => {
       cancelled = true;
     };
-  }, [api, sessionId, path, scope]);
+  }, [api, worktreeId, path, scope, lastChanged]);
 
   if (!worktreeId) {
     return (
@@ -117,6 +106,19 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   const previewScaleStyle: CSSProperties = {
     fontSize: `calc(var(--font-size-base) * ${previewFontScale})`,
   };
+
+  const closeBtn = (
+    <button
+      type="button"
+      className="tab tab--icon"
+      aria-label="Close preview"
+      title="Close preview (⌘⇧P)"
+      onClick={() => togglePaneCollapsed(1)}
+      style={{ marginRight: 4 }}
+    >
+      <X size={13} />
+    </button>
+  );
 
   const zoomControls = (
     <div className="preview-header__zoom">
@@ -136,6 +138,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         <div className="preview-header">
           <span className="preview-header__title">Preview</span>
           {zoomControls}
+          {closeBtn}
         </div>
         <div className="empty-state">Select a file from the tree</div>
       </div>
@@ -146,6 +149,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     <div className="preview-header">
       <span className="preview-header__path">{path}</span>
       {zoomControls}
+      {closeBtn}
     </div>
   );
 
@@ -192,13 +196,15 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         </div>
       );
     }
-    return <CodeView code={fileBody} language={langFromPath(path)} themeMode={themeMode} />;
+    return <CodeView code={fileBody} language={languageForFilePath(path)} />;
   })();
+
+  const isCode = !isMd && scope === "none";
 
   return (
     <div className="pane pane-stack">
       {header}
-      <div className="preview-body" style={previewScaleStyle}>
+      <div className={`preview-body${isCode ? " preview-body--code" : ""}`} style={previewScaleStyle}>
         {body}
       </div>
     </div>

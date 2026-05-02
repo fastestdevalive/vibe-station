@@ -30,8 +30,6 @@ export function Workspace() {
 
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
-  const daemonDown = useWorkspaceStore((s) => s.daemonDown);
-  const setDaemonDown = useWorkspaceStore((s) => s.setDaemonDown);
   const leftSidebarCollapsed = useWorkspaceStore((s) => s.leftSidebarCollapsed);
   const toggleLeftSidebarCollapsed = useWorkspaceStore((s) => s.toggleLeftSidebarCollapsed);
   const mobileSidebarOpen = useWorkspaceStore((s) => s.mobileSidebarOpen);
@@ -44,16 +42,11 @@ export function Workspace() {
   useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions, isDashboard);
   useWorkspaceKeyboardShortcuts(setQuickOpen, !isDashboard);
 
+  // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
+  // even before the first session subscription. The api client owns reconnects.
   useEffect(() => {
-    void (async () => {
-      try {
-        await api.health();
-        setDaemonDown(false);
-      } catch {
-        setDaemonDown(true);
-      }
-    })();
-  }, [setDaemonDown]);
+    api.startConnection();
+  }, []);
 
   useEffect(() => {
     void (async () => {
@@ -86,13 +79,8 @@ export function Workspace() {
 
   return (
     <div className="workspace-route">
-      {daemonDown ? (
-        <div className="daemon-banner">
-          Daemon not running. Run <code>viberun daemon start</code> and reload.
-        </div>
-      ) : null}
       {!isDashboard ? (
-        <QuickOpen api={api} sessionId={activeSessionId} open={quickOpen} onClose={() => setQuickOpen(false)} />
+        <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
       ) : null}
       <Layout
         topBar={

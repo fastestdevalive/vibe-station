@@ -1,7 +1,14 @@
 import { Command } from "commander";
+import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getDaemonUrl } from "../../lib/daemon-url.js";
 import { die, warn } from "../../lib/output.js";
 import ora from "ora";
+
+const here = dirname(fileURLToPath(import.meta.url));
+// dist/commands/daemon/start.js → ../../daemon/main.js
+const DAEMON_MAIN = join(here, "..", "..", "daemon", "main.js");
 
 export function registerDaemonStart(daemon: Command): void {
   daemon
@@ -24,10 +31,37 @@ export function registerDaemonStart(daemon: Command): void {
       const spinner = ora("Starting daemon...").start();
 
       try {
-        // For now, we'll just note that the daemon should be started separately
-        // In a real implementation, this would spawn the daemon server process
-        spinner.fail("Daemon server not yet implemented");
-        die("Daemon server binary not found", 1);
+        const child = spawn(process.execPath, [DAEMON_MAIN], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.unref();
+
+        // Poll until /health responds (up to 5 s)
+        const deadline = Date.now() + 5000;
+        let started = false;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 200));
+          const url = getDaemonUrl();
+          if (!url) continue;
+          try {
+            const res = await fetch(`${url}/health`);
+            if (res.ok) {
+              started = true;
+              break;
+            }
+          } catch {
+            // not ready yet
+          }
+        }
+
+        if (started) {
+          const url = getDaemonUrl() ?? "";
+          spinner.succeed(`Daemon started at ${url}`);
+        } else {
+          spinner.fail("Daemon did not become healthy within 5 s");
+          die("Daemon start timed out", 1);
+        }
       } catch (err) {
         spinner.fail();
         throw err;

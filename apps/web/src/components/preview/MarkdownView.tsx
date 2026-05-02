@@ -1,21 +1,32 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import { CodeBlock } from "./CodeBlock";
 
-marked.use({ gfm: true });
+const markdownComponents = {
+  pre({ children }: { children?: ReactNode }) {
+    return <CodeBlock>{children}</CodeBlock>;
+  },
+  code({ className, children, ...props }: ComponentPropsWithoutRef<"code">) {
+    return <code className={className} {...props}>{children}</code>;
+  },
+};
 
 interface MarkdownViewProps {
   source: string;
 }
 
 export function MarkdownView({ source }: MarkdownViewProps) {
-  const raw = marked.parse(source, { async: false }) as string;
-  const html = DOMPurify.sanitize(raw, {
-    USE_PROFILES: { html: true },
-  });
   return (
-    <div
-      className="workspace-markdown-preview"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="workspace-markdown-preview">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={markdownComponents}
+      >
+        {source}
+      </ReactMarkdown>
+    </div>
   );
 }

@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import {
   Columns2,
-  FileText,
   PanelLeft,
   PanelRight,
   Search,
@@ -10,6 +9,7 @@ import {
 import { useLayout } from "@/hooks/useLayout";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import type { Project, Session, Worktree } from "@/api/types";
+import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
@@ -84,7 +84,7 @@ export function TopBar({
     crumbParts.push({ label: "Dashboard" });
   } else {
     if (project) crumbParts.push({ label: project.name });
-    if (wt) crumbParts.push({ label: wt.name, highlight: true });
+    if (wt) crumbParts.push({ label: wt.branch, highlight: true });
     if (session) crumbParts.push({ label: session.label });
   }
 
@@ -122,6 +122,7 @@ export function TopBar({
         {crumbNode}
       </div>
       <div className="top-bar__end">
+        <ConnectionStatus />
         <div className="top-bar__actions">
           {layoutMode === "workspace" ? (
             <button
@@ -157,17 +158,7 @@ export function TopBar({
               >
                 <SquareTerminal size={17} />
               </button>
-              <button
-                type="button"
-                className={`top-bar__pane-btn ${previewOn ? "top-bar__pane-btn--on" : ""}`}
-                aria-pressed={previewOn}
-                aria-label="Toggle file preview"
-                title={`Toggle preview (${hints.preview})`}
-                onClick={() => togglePaneCollapsed(1)}
-              >
-                <FileText size={17} />
-              </button>
-              <button
+<button
                 type="button"
                 className={`top-bar__pane-btn ${treeOn ? "top-bar__pane-btn--on" : ""}`}
                 aria-pressed={treeOn}

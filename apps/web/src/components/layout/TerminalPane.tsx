@@ -1,11 +1,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { ApiInstance } from "@/api";
-import type { WSEvent } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { useSubscription } from "@/hooks/useSubscription";
+import { useSessionOutput } from "@/hooks/useSubscription";
 
 interface TerminalPaneProps {
   api: ApiInstance;
@@ -22,24 +21,19 @@ export function TerminalPane({ api }: TerminalPaneProps) {
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
 
   const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
-
-  const onWs = useCallback(
-    (ev: WSEvent) => {
-      if (ev.type === "session:output" && ev.sessionId === activeSessionId && termRef.current) {
-        termRef.current.write(ev.chunk);
-      }
-      if (ev.type === "session:state" && ev.sessionId === activeSessionId) {
-        patchSessionState(ev.sessionId, ev.state);
-      }
-    },
-    [activeSessionId, patchSessionState],
-  );
-
-  useSubscription(activeSessionId ? [activeSessionId] : [], onWs, (ids, cb) => api.subscribe(ids, cb));
+  // useSessionOutput registers event listeners + WS subscription.
+  // It does NOT call openSession — we do that below after fit.fit() so the
+  // backend receives the actual terminal dimensions before replaying scrollback.
+  const { lastChunk, sessionState } = useSessionOutput(api, activeSessionId);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return undefined;
+
+    // mounted flag — guards async callbacks that run after a potential teardown
+    let mounted = true;
+    let rafId: number | null = null;
+    let settleTimerId: ReturnType<typeof setTimeout> | null = null;
 
     const initialScale = useWorkspaceStore.getState().terminalFontScale;
     const term =
@@ -48,6 +42,9 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         cursorBlink: true,
         fontSize: Math.round(14 * initialScale),
         fontFamily: "JetBrains Mono, monospace",
+        lineHeight: 1.2,
+        scrollback: 10000,
+        allowProposedApi: true,
         theme: {
           background: "#0f0f0f",
           foreground: "#e5e5e5",
@@ -75,45 +72,193 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       });
     }
 
+    // Clear previous session output
+    term.reset();
+
+    // RO tracks pending rAF so splitter-drag bursts coalesce to one per frame.
+    let roPendingRaf: number | null = null;
     const ro = new ResizeObserver(() => {
-      fit.fit();
+      if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
+      roPendingRaf = requestAnimationFrame(() => {
+        roPendingRaf = null;
+        if (!mounted) return;
+        try {
+          fit.fit();
+          if (activeSessionId) {
+            void api.resizeSession(activeSessionId, term.cols, term.rows);
+          }
+        } catch {
+          // ignore fit errors during teardown
+        }
+      });
     });
     ro.observe(host);
-    fit.fit();
+
+    // window resize is a safety net for DPR/zoom changes that may not fire RO.
+    const handleWindowResize = () => {
+      if (!mounted) return;
+      try {
+        fit.fit();
+        if (activeSessionId) {
+          void api.resizeSession(activeSessionId, term.cols, term.rows);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    window.addEventListener("resize", handleWindowResize);
+
+    // Fonts.ready gate: defer first open until the browser has loaded fonts so
+    // xterm measures cell metrics against JetBrains Mono, not the fallback.
+    // Feature-detect: jsdom does not implement document.fonts.
+    const fontsReadyPromise: Promise<void> =
+      typeof document !== "undefined" && document.fonts?.ready
+        ? document.fonts.ready.then(() => undefined)
+        : Promise.resolve();
+
+    void fontsReadyPromise.then(() => {
+      if (!mounted) return;
+
+      // Attach loadingdone listener for late font-swap (font-display:swap).
+      // Feature-detect: jsdom's document.fonts mock lacks addEventListener.
+      const fontsFace = typeof document !== "undefined" ? document.fonts : undefined;
+      const fontsListenerAttached =
+        !!fontsFace && typeof fontsFace.addEventListener === "function";
+
+      const handleFontsLoadingDone = () => {
+        if (!mounted || !fitRef.current || !termRef.current) return;
+        try {
+          termRef.current.clearTextureAtlas?.();
+          fitRef.current.fit();
+          if (activeSessionId) {
+            void api.resizeSession(activeSessionId, termRef.current.cols, termRef.current.rows);
+          }
+        } catch {
+          // ignore
+        }
+      };
+
+      if (fontsListenerAttached) {
+        fontsFace!.addEventListener("loadingdone", handleFontsLoadingDone);
+      }
+
+      // Initial rAF fit — let panel layout settle one frame.
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (!mounted) return;
+        try {
+          fit.fit();
+        } catch {
+          // ignore
+        }
+
+        // Deferred-settle: react-resizable-panels sometimes finalises
+        // flex-basis after the first rAF. 100ms gives it time to land.
+        settleTimerId = setTimeout(() => {
+          settleTimerId = null;
+          if (!mounted) return;
+          try {
+            fit.fit();
+            if (activeSessionId) {
+              void api.openSession(activeSessionId, term.cols, term.rows);
+            }
+          } catch {
+            // ignore
+          }
+        }, 100);
+      });
+
+      return () => {
+        if (fontsListenerAttached) {
+          fontsFace!.removeEventListener("loadingdone", handleFontsLoadingDone);
+        }
+      };
+    });
 
     const d = term.onData((data) => {
       if (activeSessionId) {
-        void api.sendInput(activeSessionId, { data });
+        void api.sendKeystroke(activeSessionId, data);
+      }
+    });
+    // Keep onResize as a secondary path; we also always call resizeSession
+    // explicitly after fit so col/row drift is avoided.
+    const r = term.onResize(({ cols, rows }) => {
+      if (activeSessionId) {
+        void api.resizeSession(activeSessionId, cols, rows);
       }
     });
 
     return () => {
+      mounted = false;
       d.dispose();
+      r.dispose();
       ro.disconnect();
+      window.removeEventListener("resize", handleWindowResize);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (settleTimerId !== null) clearTimeout(settleTimerId);
+      if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
+      if (activeSessionId) {
+        void api.closeSession(activeSessionId);
+      }
     };
   }, [activeSessionId, api]);
 
   useEffect(() => {
+    if (activeSessionId && sessionState) {
+      patchSessionState(activeSessionId, sessionState);
+    }
+  }, [activeSessionId, patchSessionState, sessionState]);
+
+  useEffect(() => {
+    if (lastChunk && termRef.current) {
+      termRef.current.write(lastChunk);
+    }
+  }, [lastChunk]);
+
+  // Fix 3: font-size effect — correct order, no pre-fit refresh(), plus
+  // clearTextureAtlas() so stale atlas glyphs are dropped immediately.
+  useEffect(() => {
     const term = termRef.current;
     if (!term?.options) return;
     term.options.fontSize = Math.round(14 * terminalFontScale);
-    term.refresh(0, term.rows - 1);
+    term.clearTextureAtlas?.();
     fitRef.current?.fit();
-  }, [terminalFontScale]);
+    if (activeSessionId) {
+      void api.resizeSession(activeSessionId, term.cols, term.rows);
+    }
+  }, [terminalFontScale, activeSessionId, api]);
 
+  // Re-open the active session when the daemon WS reconnects so scrollback
+  // gets replayed at the current terminal dimensions.
   useEffect(() => {
-    const term = termRef.current;
-    if (!term || !activeSessionId) return;
-    term.reset();
-    term.writeln(`\x1b[90m— session ${activeSessionId}\x1b[0m`);
-  }, [activeSessionId]);
+    let prev = api.getConnectionState();
+    return api.subscribeConnection((s) => {
+      if (s === "online" && prev !== "online" && activeSessionId && termRef.current) {
+        termRef.current.reset();
+        void api.openSession(activeSessionId, termRef.current.cols, termRef.current.rows);
+      }
+      prev = s;
+    });
+  }, [api, activeSessionId]);
 
   async function resume() {
     if (!activeSessionId) return;
     await api.resumeSession(activeSessionId);
+    // Daemon spawned a fresh tmux pane. Clear the exited marker in the
+    // store, wipe stale scrollback, and re-attach the WS stream so output
+    // from the new pane flows into this terminal. We must close first to
+    // unregister the daemon-side stream that's still pointed at the dead pane.
+    patchSessionState(activeSessionId, "working");
+    const term = termRef.current;
+    if (term) {
+      term.reset();
+      // Daemon's sessionOpen handler auto-detaches any stale stream pointing
+      // at the dead pane, so this just attaches to the new one.
+      void api.openSession(activeSessionId, term.cols, term.rows);
+    }
   }
 
-  const showBanner = state === "exited";
+  const showBanner = state === "exited" || sessionState === "exited";
 
   return (
     <div className="pane-stack" style={{ flex: 1, minHeight: 0, background: "var(--bg-primary)" }}>

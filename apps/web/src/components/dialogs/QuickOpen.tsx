@@ -4,12 +4,12 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 
 async function collectFiles(
   api: ApiInstance,
-  sessionId: string,
+  worktreeId: string,
 ): Promise<{ path: string; name: string }[]> {
   const out: { path: string; name: string }[] = [];
 
   async function walk(dir: string) {
-    const entries = await api.tree(sessionId, dir);
+    const entries = await api.tree(worktreeId, dir);
     for (const e of entries) {
       if (e.type === "dir") {
         await walk(e.path);
@@ -25,12 +25,12 @@ async function collectFiles(
 
 interface QuickOpenProps {
   api: ApiInstance;
-  sessionId: string | null;
+  worktreeId: string | null;
   open: boolean;
   onClose: () => void;
 }
 
-export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
+export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
 
@@ -43,7 +43,7 @@ export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open || !sessionId) {
+    if (!open || !worktreeId) {
       setAllFiles([]);
       setError(null);
       return;
@@ -53,7 +53,7 @@ export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
     setError(null);
     void (async () => {
       try {
-        const files = await collectFiles(api, sessionId);
+        const files = await collectFiles(api, worktreeId);
         if (!cancelled) {
           setAllFiles(files);
           setLoading(false);
@@ -68,7 +68,7 @@ export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
     return () => {
       cancelled = true;
     };
-  }, [api, open, sessionId]);
+  }, [api, open, worktreeId]);
 
   useEffect(() => {
     if (open) {
@@ -141,7 +141,7 @@ export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
 
   if (!open) return null;
 
-  if (!sessionId) {
+  if (!worktreeId) {
     return (
       <div className="quick-open-overlay" role="dialog" aria-modal aria-labelledby="quick-open-need-session">
         <button type="button" className="quick-open-backdrop" aria-label="Close" onClick={onClose} />
@@ -150,7 +150,7 @@ export function QuickOpen({ api, sessionId, open, onClose }: QuickOpenProps) {
             Open file
           </h2>
           <p className="quick-open-empty" style={{ padding: 0 }}>
-            Select a worktree and session first.
+            Select a worktree first.
           </p>
         </div>
       </div>

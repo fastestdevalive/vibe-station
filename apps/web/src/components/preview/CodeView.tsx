@@ -1,55 +1,43 @@
-import { useEffect, useState } from "react";
-import { createHighlighter, type BundledLanguage, type Highlighter } from "shiki";
+import { useMemo } from "react";
+import { highlightFileContentByLines, languageForFilePath } from "./codeHighlight";
 
 interface CodeViewProps {
   code: string;
-  language: BundledLanguage | string;
-  themeMode: "dark" | "light";
+  language?: string;
+  /** kept for API compat, unused — hljs always matches tokens to CSS vars */
+  themeMode?: "dark" | "light";
+  /** When true, renders without gutter (e.g. inside a markdown code block) */
+  noGutter?: boolean;
 }
 
-let highlighterPromise: Promise<Highlighter> | null = null;
+export function CodeView({ code, language, noGutter }: CodeViewProps) {
+  const lines = useMemo(() => code.split("\n"), [code]);
+  const gutterWidth = String(lines.length).length;
 
-function getHighlighter() {
-  if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      themes: ["github-dark", "github-light"],
-      langs: ["typescript", "javascript", "tsx", "jsx", "json", "markdown", "css", "html", "go"],
-    });
-  }
-  return highlighterPromise;
-}
-
-function themeId(mode: "dark" | "light") {
-  return mode === "dark" ? "github-dark" : "github-light";
-}
-
-export function CodeView({ code, language, themeMode }: CodeViewProps) {
-  const [html, setHtml] = useState<string>("");
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const hi = await getHighlighter();
-      const langs = hi.getLoadedLanguages();
-      const lang = langs.includes(language as BundledLanguage)
-        ? (language as BundledLanguage)
-        : "typescript";
-      const out = hi.codeToHtml(code, {
-        lang,
-        theme: themeId(themeMode),
-      });
-      if (!cancelled) setHtml(out);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [code, language, themeMode]);
+  const highlightedLines = useMemo(() => {
+    if (!language) return null;
+    return highlightFileContentByLines(code, language);
+  }, [code, language]);
 
   return (
-    <div
-      className="shiki-host"
-      style={{ fontSize: "var(--font-size-sm)" }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <pre className="workspace-code-viewer">
+      {lines.map((line, i) => (
+        <div key={i} className="workspace-code-line">
+          {!noGutter && (
+            <span className="workspace-code-gutter" style={{ minWidth: `${gutterWidth + 2}ch` }}>
+              {i + 1}
+            </span>
+          )}
+          {highlightedLines ? (
+            <span
+              className="workspace-code-content"
+              dangerouslySetInnerHTML={{ __html: highlightedLines[i] ?? "" }}
+            />
+          ) : (
+            <span className="workspace-code-content">{line}</span>
+          )}
+        </div>
+      ))}
+    </pre>
   );
 }

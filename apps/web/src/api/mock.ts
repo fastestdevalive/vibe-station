@@ -15,8 +15,6 @@ import type {
 } from "./types";
 import { ApiError } from "./errors";
 
-type Listener = (ev: WSEvent) => void;
-
 function nowIso() {
   return new Date().toISOString();
 }
@@ -31,12 +29,16 @@ export function createMockApi() {
       id: "proj-a",
       name: "Proj A",
       path: "/home/dev/proj-a",
+      prefix: "pa",
+      defaultBranch: "main",
       createdAt: nowIso(),
     },
     {
       id: "proj-b",
       name: "Proj B",
       path: "/home/dev/proj-b",
+      prefix: "pb",
+      defaultBranch: "develop",
       createdAt: nowIso(),
     },
   ];
@@ -45,22 +47,25 @@ export function createMockApi() {
     {
       id: "wt-1",
       projectId: "proj-a",
-      name: "wt-1",
+      branch: "wt-1",
       baseBranch: "main",
+      baseSha: "abc123",
       createdAt: nowIso(),
     },
     {
       id: "wt-2",
       projectId: "proj-a",
-      name: "wt-2",
+      branch: "wt-2",
       baseBranch: "main",
+      baseSha: "def456",
       createdAt: nowIso(),
     },
     {
       id: "wt-3",
       projectId: "proj-b",
-      name: "wt-main",
+      branch: "wt-main",
       baseBranch: "develop",
+      baseSha: "fed789",
       createdAt: nowIso(),
     },
   ];
@@ -91,6 +96,8 @@ export function createMockApi() {
       label: "main",
       slot: "m",
       state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-main",
       createdAt: nowIso(),
     },
     {
@@ -101,6 +108,8 @@ export function createMockApi() {
       label: "agent-2",
       slot: "a1",
       state: "idle",
+      lifecycleState: "idle",
+      tmuxName: "sess-agent2",
       createdAt: nowIso(),
     },
     {
@@ -111,6 +120,8 @@ export function createMockApi() {
       label: "term-1",
       slot: "t1",
       state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-term1",
       createdAt: nowIso(),
     },
     {
@@ -121,6 +132,8 @@ export function createMockApi() {
       label: "main",
       slot: "m",
       state: "done",
+      lifecycleState: "done",
+      tmuxName: "sess-wt2-main",
       createdAt: nowIso(),
     },
     {
@@ -131,6 +144,8 @@ export function createMockApi() {
       label: "main",
       slot: "m",
       state: "idle",
+      lifecycleState: "idle",
+      tmuxName: "sess-wt3-main",
       createdAt: nowIso(),
     },
   ];
@@ -172,14 +187,13 @@ export function createMockApi() {
     "README.md": `diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n # Demo\n+added line\n`,
   };
 
-  const listeners = new Set<Listener>();
+  const listeners = new Map<string, Set<(ev: WSEvent) => void>>();
   const outputTimers = new Map<string, ReturnType<typeof setInterval>>();
   const subscribed = new Set<string>();
 
   function emit(ev: WSEvent) {
-    for (const l of listeners) {
-      l(ev);
-    }
+    for (const l of listeners.get("*") ?? []) l(ev);
+    for (const l of listeners.get(ev.type) ?? []) l(ev);
   }
 
   function startOutputSimulation(sessionId: string) {
@@ -206,6 +220,7 @@ export function createMockApi() {
     const s = sessions.find((x) => x.id === sessionId);
     if (!s) return;
     s.state = "exited";
+    s.lifecycleState = "exited";
     emit({ type: "session:exited", sessionId, exitCode: 1 });
     emit({ type: "session:state", sessionId, state: "exited" });
   }
@@ -215,6 +230,7 @@ export function createMockApi() {
   const api = {
     __test: {
       simulateExit,
+      emit,
       setDaemonDown(v: boolean) {
         daemonDown = v;
       },
@@ -232,6 +248,7 @@ export function createMockApi() {
     },
 
     async deleteProject(_id: string): Promise<{ ok: true }> {
+      emit({ type: "project:deleted", projectId: _id });
       return { ok: true };
     },
 
@@ -243,14 +260,16 @@ export function createMockApi() {
       const wt: Worktree = {
         id: `wt-${Date.now()}`,
         projectId: body.projectId,
-        name: body.name,
-        baseBranch: body.baseBranch,
+        branch: body.branch,
+        baseBranch: body.baseBranch ?? "main",
+        baseSha: "mock-base-sha",
         createdAt: nowIso(),
       };
       worktrees.push(wt);
       treeStore[wt.id] = {
         "": [],
       };
+      emit({ type: "worktree:created", worktree: wt });
       return structuredClone(wt);
     },
 
@@ -262,6 +281,7 @@ export function createMockApi() {
         if (sessions[i]!.worktreeId === id) sessions.splice(i, 1);
       }
       delete treeStore[id];
+      emit({ type: "worktree:deleted", worktreeId: id });
       return { ok: true };
     },
 
@@ -283,6 +303,8 @@ export function createMockApi() {
         label: body.type === "terminal" ? `term-${nextTerm}` : `agent-${nextAgent}`,
         slot,
         state: "working",
+        lifecycleState: "working",
+        tmuxName: `tmux-${Date.now()}`,
         createdAt: nowIso(),
       };
       sessions.push(sess);
@@ -311,6 +333,7 @@ export function createMockApi() {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("not found", 404);
       s.state = "working";
+      s.lifecycleState = "working";
       emit({ type: "session:state", sessionId: id, state: "working" });
       emit({ type: "session:resumed", sessionId: id, restoredFromHistory: false });
       if (subscribed.has(id)) {
@@ -330,9 +353,39 @@ export function createMockApi() {
       return { ok: true };
     },
 
-    async getFile(sessionId: string, filePath: string): Promise<string> {
+    async send(message: {
+      type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";
+      worktreeId?: string;
+      path?: string;
+    }): Promise<void> {
+      if (message.type === "ping") {
+        emit({ type: "pong" });
+      }
+    },
+
+    async openSession(sessionId: string, _cols?: number, _rows?: number): Promise<void> {
+      subscribed.add(sessionId);
+      emit({ type: "session:opened", sessionId });
       const s = sessions.find((x) => x.id === sessionId);
-      if (!s) throw new ApiError("not found", 404);
+      if (s?.state === "working") {
+        startOutputSimulation(sessionId);
+      }
+    },
+
+    async closeSession(sessionId: string): Promise<void> {
+      subscribed.delete(sessionId);
+    },
+
+    async sendKeystroke(sessionId: string, data: string): Promise<void> {
+      setTimeout(() => {
+        emit({ type: "session:output", sessionId, chunk: data });
+      }, 50);
+    },
+
+    async resizeSession(_sessionId: string, _cols: number, _rows: number): Promise<void> {},
+
+    async getFile(worktreeId: string, filePath: string): Promise<string> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (filePath === "HUGE.bin") {
         throw new ApiError("File too large to preview", 422);
       }
@@ -341,31 +394,26 @@ export function createMockApi() {
     },
 
     async getDiff(
-      sessionId: string,
+      worktreeId: string,
       filePath: string,
       _scope: "local" | "branch",
     ): Promise<string> {
-      const s = sessions.find((x) => x.id === sessionId);
-      if (!s) throw new ApiError("not found", 404);
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const key = filePath.replace(/^\/+/, "");
       return unifiedDiffs[key] ?? "";
     },
 
-    async tree(sessionId: string, path: string): Promise<TreeEntry[]> {
-      const s = sessions.find((x) => x.id === sessionId);
-      if (!s) throw new ApiError("not found", 404);
-      const wt = s.worktreeId;
+    async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const norm = path.replace(/^\/+/, "").replace(/\/$/, "");
-      const entries = treeStore[wt]?.[norm];
+      const entries = treeStore[worktreeId]?.[norm];
       if (!entries) return [];
       return structuredClone(entries);
     },
 
-    async listChangedPaths(sessionId: string): Promise<ChangedPathEntry[]> {
-      const s = sessions.find((x) => x.id === sessionId);
-      if (!s) throw new ApiError("not found", 404);
-      const wt = s.worktreeId;
-      if (wt === "wt-1") {
+    async listChangedPaths(worktreeId: string): Promise<ChangedPathEntry[]> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      if (worktreeId === "wt-1") {
         return Object.keys(unifiedDiffs).map((path) => ({ path, status: "M" as const }));
       }
       return [];
@@ -385,6 +433,7 @@ export function createMockApi() {
         presetId: body.presetId,
       };
       modes.push(m);
+      emit({ type: "mode:created", mode: m });
       return structuredClone(m);
     },
 
@@ -394,6 +443,7 @@ export function createMockApi() {
       if (body.name !== undefined) m.name = body.name;
       if (body.cli !== undefined) m.cli = body.cli;
       if (body.context !== undefined) m.context = body.context;
+      emit({ type: "mode:updated", mode: m });
       return structuredClone(m);
     },
 
@@ -401,11 +451,11 @@ export function createMockApi() {
       const idx = modes.findIndex((m) => m.id === id);
       if (idx === -1) throw new ApiError("not found", 404);
       modes.splice(idx, 1);
+      emit({ type: "mode:deleted", modeId: id });
       return { ok: true };
     },
 
-    subscribe(sessionIds: string[], onEvent: Listener): () => void {
-      listeners.add(onEvent);
+    subscribe(sessionIds: string[]): () => void {
       for (const id of sessionIds) {
         subscribed.add(id);
         const s = sessions.find((x) => x.id === id);
@@ -414,7 +464,6 @@ export function createMockApi() {
         }
       }
       return () => {
-        listeners.delete(onEvent);
         for (const id of sessionIds) {
           subscribed.delete(id);
           const t = outputTimers.get(id);
@@ -424,6 +473,26 @@ export function createMockApi() {
           }
         }
       };
+    },
+
+    on(type: WSEvent["type"] | "*", handler: (e: WSEvent) => void): () => void {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(handler);
+      return () => {
+        const set = listeners.get(type);
+        if (!set) return;
+        set.delete(handler);
+        if (set.size === 0) listeners.delete(type);
+      };
+    },
+
+    startConnection(): void {},
+    getConnectionState(): "online" | "connecting" | "offline" {
+      return "online";
+    },
+    subscribeConnection(handler: (s: "online" | "connecting" | "offline") => void): () => void {
+      handler("online");
+      return () => {};
     },
   };
 

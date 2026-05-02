@@ -26,7 +26,7 @@ export function NewSessionDialog({
   const [wtChoice, setWtChoice] = useState<"new" | "existing">("new");
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [existingWtId, setExistingWtId] = useState("");
-  const [newWtName, setNewWtName] = useState("");
+  const [newWtBranch, setNewWtBranch] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
@@ -50,20 +50,18 @@ export function NewSessionDialog({
   async function submit() {
     setError(null);
     if (wtChoice === "new") {
-      if (!newWtName.trim() || !baseBranch.trim()) {
-        setError("New worktree requires name and base branch.");
+      if (!newWtBranch.trim()) {
+        setError("New worktree requires branch.");
         return;
       }
-      const wt = await api.createWorktree({
+      // POST /worktrees already spawns the main `m` agent session with the
+      // selected mode + prompt. No additional createSession needed.
+      await api.createWorktree({
         projectId,
-        name: newWtName.trim(),
-        baseBranch: baseBranch.trim(),
-      });
-      await api.createSession({
-        worktreeId: wt.id,
-        modeId: modeId || null,
-        type: "agent",
-        initialPrompt: initialPrompt.trim() || undefined,
+        branch: newWtBranch.trim(),
+        modeId: modeId || "mode-1",
+        baseBranch: baseBranch.trim() || undefined,
+        prompt: initialPrompt.trim() || undefined,
       });
     } else {
       if (!existingWtId) {
@@ -112,7 +110,7 @@ export function NewSessionDialog({
         >
           {worktrees.map((w) => (
             <option key={w.id} value={w.id}>
-              {w.name}
+              {w.branch}
             </option>
           ))}
         </Select>
@@ -125,11 +123,11 @@ export function NewSessionDialog({
       />
       {wtChoice === "new" ? (
         <>
-          <div className="field-label">Name</div>
+          <div className="field-label">Branch</div>
           <Input
-            aria-label="New worktree name"
-            value={newWtName}
-            onChange={(e) => setNewWtName(e.target.value)}
+            aria-label="New worktree branch"
+            value={newWtBranch}
+            onChange={(e) => setNewWtBranch(e.target.value)}
           />
           <div className="field-label">Base branch</div>
           <Input
