@@ -66,7 +66,6 @@ export function TopBar({
   const wt = worktrees.find((w) => w.id === activeWorktreeId);
   const session = sessions.find((s) => s.id === activeSessionId);
 
-  const crumb = [project?.name, wt?.name, session?.label].filter(Boolean).join(" › ");
   const hints = shortcutHints();
 
   function goHome() {
@@ -80,10 +79,29 @@ export function TopBar({
 
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
 
-  const crumbDisplay =
-    layoutMode === "dashboard" && !crumb ? "Dashboard" : crumb || "—";
-  const crumbTitle =
-    layoutMode === "dashboard" && !crumb ? "Dashboard" : crumb || undefined;
+  const crumbParts: { label: string; highlight?: boolean }[] = [];
+  if (layoutMode === "dashboard") {
+    crumbParts.push({ label: "Dashboard" });
+  } else {
+    if (project) crumbParts.push({ label: project.name });
+    if (wt) crumbParts.push({ label: wt.name, highlight: true });
+    if (session) crumbParts.push({ label: session.label });
+  }
+
+  const crumbTitle = crumbParts.map((p) => p.label).join(" › ") || undefined;
+
+  const crumbNode = crumbParts.length === 0 ? (
+    <span className="top-bar__crumb-seg">—</span>
+  ) : (
+    crumbParts.map((part, i) => (
+      <span key={i} style={{ display: "contents" }}>
+        {i > 0 && <span className="top-bar__crumb-sep">›</span>}
+        <span className={`top-bar__crumb-seg${part.highlight ? " top-bar__crumb-seg--highlight" : ""}`}>
+          {part.label}
+        </span>
+      </span>
+    ))
+  );
 
   return (
     <header className="top-bar">
@@ -101,7 +119,7 @@ export function TopBar({
         viberun
       </button>
       <div className="top-bar__crumb" title={crumbTitle}>
-        {crumbDisplay}
+        {crumbNode}
       </div>
       <div className="top-bar__end">
         <div className="top-bar__actions">
