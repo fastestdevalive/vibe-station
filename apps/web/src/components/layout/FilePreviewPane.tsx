@@ -1,5 +1,5 @@
 import { Minus, Plus, X } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope } from "@/api/types";
 import { ApiError } from "@/api/errors";
@@ -13,6 +13,7 @@ import { CodeView } from "@/components/preview/CodeView";
 import { DiffView } from "@/components/preview/DiffView";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
+import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
@@ -92,6 +93,20 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     };
   }, [api, worktreeId, path, scope, lastChanged]);
 
+  const diffStats = useMemo(() => {
+    if (scope !== "local" && scope !== "branch") return null;
+    const diffText = diffBody ?? "";
+    const trimmed = diffText.trim();
+    const hunks =
+      trimmed.length > 0
+        ? parseUnifiedDiff(diffText)
+        : fileBody
+          ? syntheticUntrackedHunks(fileBody)
+          : [];
+    if (hunks.length === 0) return null;
+    return summarizeDiffLines(hunks);
+  }, [scope, diffBody, fileBody]);
+
   if (!worktreeId) {
     return (
       <div className="pane pane-stack">
@@ -147,7 +162,20 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
 
   const header = (
     <div className="preview-header">
-      <span className="preview-header__path">{path}</span>
+      <div className="preview-header__main">
+        <span className="preview-header__path">{path}</span>
+        {(scope === "local" || scope === "branch") && diffStats ? (
+          <span className="preview-header__diff-stats" aria-label="Diff line counts">
+            <span className="preview-header__diff-stats-plus">+{diffStats.additions}</span>{" "}
+            <span className="preview-header__diff-stats-minus">−{diffStats.deletions}</span>
+          </span>
+        ) : null}
+        {scope === "local" || scope === "branch" ? (
+          <span className="preview-header__diff-scope">
+            {scope === "branch" ? "Compared to fork base" : "Compared to HEAD"}
+          </span>
+        ) : null}
+      </div>
       {zoomControls}
       {closeBtn}
     </div>
@@ -196,7 +224,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         </div>
       );
     }
-    return <CodeView code={fileBody} language={languageForFilePath(path)} />;
+    return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
   })();
 
   const isCode = !isMd && scope === "none";

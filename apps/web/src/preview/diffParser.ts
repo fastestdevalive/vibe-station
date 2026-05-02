@@ -102,6 +102,19 @@ export function parseUnifiedDiff(diff: string): DiffHunk[] {
   return hunks;
 }
 
+/** Count added / removed lines across parsed hunks (for UI summaries). */
+export function summarizeDiffLines(hunks: DiffHunk[]): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const h of hunks) {
+    for (const line of h.lines) {
+      if (line.type === "added") additions += 1;
+      else if (line.type === "removed") deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
 export function syntheticUntrackedHunks(content: string): DiffHunk[] {
   const rawLines = content.split(/\r?\n/);
   const lines: DiffLine[] = rawLines.map((text, idx) => ({

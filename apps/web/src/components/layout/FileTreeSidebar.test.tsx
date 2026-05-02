@@ -28,10 +28,9 @@ describe("FileTreeSidebar", () => {
     const spy = vi.spyOn(api, "tree");
     render(<FileTreeSidebar api={api} />);
     await screen.findByText("src");
-    const expand = screen.getByRole("button", { name: /Expand folder/i });
-    await user.click(expand);
+    await user.click(screen.getByRole("treeitem", { name: "src" }));
     await waitFor(() => {
-      expect(spy).toHaveBeenCalledWith("sess-main", "src");
+      expect(spy).toHaveBeenCalledWith("wt-1", "src");
     });
   });
 
@@ -43,12 +42,4 @@ describe("FileTreeSidebar", () => {
     expect(useWorkspaceStore.getState().activeFilePath).toBe("README.md");
   });
 
-  it("dotfiles toggle hides dotfiles when off", async () => {
-    const user = userEvent.setup();
-    render(<FileTreeSidebar api={api} />);
-    await screen.findByText(".env.local");
-    const cb = screen.getByRole("checkbox", { name: /dots/i });
-    await user.click(cb);
-    expect(screen.queryByText(".env.local")).toBeNull();
-  });
 });

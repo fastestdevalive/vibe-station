@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { spawnSync } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
@@ -15,6 +16,68 @@ import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../plugins/registry.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
+
+const MAX_DIFF_BYTES = 512 * 1024;
+
+/** Parse `git status -z --porcelain=v1`; handles rename/copy second path record. */
+function parsePorcelainZ(stdout: string): { path: string; status: string }[] {
+  const entries: { path: string; status: string }[] = [];
+  const records = stdout.split("\0");
+  let i = 0;
+  while (i < records.length) {
+    const rec = records[i] ?? "";
+    if (!rec || rec.length < 3) {
+      i += 1;
+      continue;
+    }
+    const x = rec[0]!;
+    const y = rec[1]!;
+    const pathPart = rec.slice(3);
+    if (!pathPart) {
+      i += 1;
+      continue;
+    }
+    const status = x === "?" ? "?" : x !== " " ? x : y;
+    entries.push({ path: pathPart, status });
+    if (x === "R" || x === "C") {
+      i += 2;
+    } else {
+      i += 1;
+    }
+  }
+  return entries;
+}
+
+/** Parse `git diff -z --name-status <mergeBase>` into path entries. */
+function parseBranchNameStatus(stdout: string): { path: string; status: string }[] {
+  const result: { path: string; status: string }[] = [];
+  const tokens = stdout.split("\0").filter(Boolean);
+  let i = 0;
+  while (i < tokens.length) {
+    const statusToken = tokens[i] ?? "";
+    const statusChar = statusToken[0];
+    if (!statusChar) {
+      i += 1;
+      continue;
+    }
+    if (statusChar === "R" || statusChar === "C") {
+      const newPath = tokens[i + 2];
+      if (newPath) {
+        result.push({ path: newPath, status: statusChar === "C" ? "M" : "R" });
+      }
+      i += 3;
+    } else {
+      const pathPart = tokens[i + 1];
+      if (pathPart) {
+        const mapped =
+          statusChar === "T" ? "M" : statusChar === "U" ? "M" : statusChar;
+        result.push({ path: pathPart, status: mapped });
+      }
+      i += 2;
+    }
+  }
+  return result;
+}
 
 /** Map internal WorktreeRecord to API shape (adds projectId, drops nested sessions). */
 function serializeWorktree(projectId: string, w: WorktreeRecord) {
@@ -371,59 +434,137 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
     const wtPath = getWorktreePath(project.id, wtId);
 
-    const { exec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execAsync = promisify(exec);
+    const gitArgs =
+      scope === "branch"
+        ? ([
+            "-c",
+            "color.diff=false",
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            worktree.baseSha,
+            "--",
+            filePath,
+          ] as const)
+        : ([
+            "-c",
+            "color.diff=false",
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "HEAD",
+            "--",
+            filePath,
+          ] as const);
 
-    let diffCmd: string;
-    if (scope === "branch") {
-      diffCmd = `git diff "${worktree.baseSha}...HEAD" -- "${filePath}"`;
-    } else {
-      // local: working tree vs HEAD
-      diffCmd = `git diff HEAD -- "${filePath}"`;
-    }
+    const diffResult = spawnSync("git", [...gitArgs], {
+      cwd: wtPath,
+      encoding: "utf-8",
+      maxBuffer: 600 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
 
-    try {
-      const { stdout } = await execAsync(diffCmd, { cwd: wtPath });
-
-      // ETag for diff output
-      const etag = `"${createHash("md5").update(stdout).digest("hex")}"`;
-      const ifNoneMatch = req.headers["if-none-match"];
-      if (ifNoneMatch === etag) {
-        return reply.status(304).send();
+    if (diffResult.error) {
+      const msg = diffResult.error.message ?? "";
+      if (msg.includes("maxBuffer") || msg.includes("ENOBUFS")) {
+        return reply.status(422).send({
+          error: "diff_too_large",
+          message: "Diff too large to display",
+          path: filePath,
+        });
       }
-
-      return reply.header("ETag", etag).type("text/plain").send(stdout);
-    } catch (err) {
-      return reply.status(500).send({ error: `git diff failed: ${String(err)}` });
+      return reply.status(500).send({
+        error: `git diff failed: ${diffResult.error.message}`,
+      });
     }
+
+    if (diffResult.status !== 0 && diffResult.status !== 1) {
+      const stderr = (diffResult.stderr ?? "").trim();
+      return reply.status(500).send({
+        error: stderr || `git diff exited with status ${diffResult.status}`,
+      });
+    }
+
+    const stdout = diffResult.stdout ?? "";
+    if (stdout.includes("Binary files ") && stdout.includes(" differ")) {
+      return reply.status(422).send({
+        error: "binary",
+        message: "Binary file diff is not supported",
+        path: filePath,
+      });
+    }
+    if (stdout.length > MAX_DIFF_BYTES) {
+      return reply.status(422).send({
+        error: "diff_too_large",
+        message: "Diff too large to display",
+        path: filePath,
+      });
+    }
+
+    const etag = `"${createHash("md5").update(stdout).digest("hex")}"`;
+    const ifNoneMatch = req.headers["if-none-match"];
+    if (ifNoneMatch === etag) {
+      return reply.status(304).send();
+    }
+
+    return reply.header("ETag", etag).type("text/plain").send(stdout);
   });
 
-  // GET /worktrees/:id/changed-paths
+  // GET /worktrees/:id/changed-paths?scope=local|branch
   app.get("/worktrees/:id/changed-paths", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
+    const { scope = "local" } = req.query as { scope?: string };
+
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
 
+    const worktree = project.worktrees.find((w) => w.id === wtId)!;
     const wtPath = getWorktreePath(project.id, wtId);
-    const { exec } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execAsync = promisify(exec);
 
     try {
-      const { stdout } = await execAsync(`git status --porcelain=v1 -z`, { cwd: wtPath });
-      const entries: { path: string; status: string }[] = [];
-      for (const rec of stdout.split("\0")) {
-        if (!rec) continue;
-        const xy = rec.slice(0, 2);
-        const path = rec.slice(3);
-        if (!path) continue;
-        const ch = xy.includes("?") ? "?" : (xy.trim()[0] ?? "M");
-        entries.push({ path, status: ch });
+      if (scope === "branch") {
+        const ns = spawnSync(
+          "git",
+          ["-c", "core.quotepath=false", "diff", "-z", "--name-status", worktree.baseSha],
+          {
+            cwd: wtPath,
+            encoding: "utf-8",
+            maxBuffer: 4 * 1024 * 1024,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          },
+        );
+        if (ns.error) {
+          return reply.status(500).send({ error: `git diff --name-status failed: ${ns.error.message}` });
+        }
+        if (ns.status !== 0 && ns.status !== 1) {
+          return reply.status(500).send({
+            error: (ns.stderr ?? "").trim() || "git diff --name-status failed",
+          });
+        }
+        return reply.send(parseBranchNameStatus(ns.stdout ?? ""));
       }
-      return reply.send(entries);
+
+      const st = spawnSync(
+        "git",
+        ["status", "--porcelain=v1", "-z", "-uall"],
+        {
+          cwd: wtPath,
+          encoding: "utf-8",
+          maxBuffer: 4 * 1024 * 1024,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        },
+      );
+      if (st.error) {
+        return reply.status(500).send({ error: `git status failed: ${st.error.message}` });
+      }
+      if (st.status !== 0) {
+        return reply.status(500).send({
+          error: (st.stderr ?? "").trim() || "git status failed",
+        });
+      }
+      return reply.send(parsePorcelainZ(st.stdout ?? ""));
     } catch (err) {
-      return reply.status(500).send({ error: `git status failed: ${String(err)}` });
+      return reply.status(500).send({ error: `changed-paths failed: ${String(err)}` });
     }
   });
 }

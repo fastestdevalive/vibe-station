@@ -102,7 +102,9 @@ export function TerminalPane({ api }: TerminalPaneProps) {
     });
     try { fit.fit(); } catch { /* ignore if not yet attached */ }
     term.clearTextureAtlas?.();
-    console.log('[term] sync-fit', { host_w: host.clientWidth, host_h: host.clientHeight, cols: term.cols, rows: term.rows, session: activeSessionId });
+    // Force a full canvas repaint — reset() clears the buffer but doesn't
+    // repaint the canvas, leaving stale pixels from the previous session.
+    try { term.refresh(0, term.rows - 1); } catch { /* ignore */ }
 
     // RO tracks pending rAF so splitter-drag bursts coalesce to one per frame.
     let roPendingRaf: number | null = null;
@@ -178,7 +180,6 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         try {
           termRef.current?.clearTextureAtlas?.();
           fit.fit();
-          console.log('[term] raf-fit', { host_w: host.clientWidth, host_h: host.clientHeight, cols: term.cols, rows: term.rows });
         } catch {
           // ignore
         }
@@ -190,7 +191,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           if (!mounted) return;
           try {
             fit.fit();
-            console.log('[term] settle-fit → openSession', { cols: term.cols, rows: term.rows, session: activeSessionId });
+            term.refresh(0, term.rows - 1);
             if (activeSessionId) {
               void api.openSession(activeSessionId, term.cols, term.rows);
             }

@@ -1,10 +1,10 @@
 import { File, FileText, Folder, FolderOpen, FolderTree, GitCompare } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { ChangedPathEntry, DiffScope, TreeEntry } from "@/api/types";
+import type { ChangedPathEntry, DiffScope, GitStatusChar, TreeEntry } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { ChangedFileList } from "@/components/layout/ChangedFileList";
 import { useTreeWatch } from "@/hooks/useSubscription";
+import { ChangedFileList } from "@/components/layout/ChangedFileList";
 
 /** Sort folders before files, then alphabetical (case-insensitive). */
 function sortEntries(entries: TreeEntry[]): TreeEntry[] {
@@ -14,6 +14,47 @@ function sortEntries(entries: TreeEntry[]): TreeEntry[] {
   });
 }
 
+function gitStatusBadgeChar(status: GitStatusChar): string {
+  switch (status) {
+    case "?":
+      return "A";
+    case "A":
+      return "A";
+    case "M":
+      return "M";
+    case "D":
+      return "D";
+    case "R":
+      return "R";
+    default:
+      return "?";
+  }
+}
+
+/** Aggregate git tint for a directory from descendant paths (ao-142-style). */
+function dirAggregateStatus(dirPath: string, m: Map<string, GitStatusChar>): GitStatusChar | undefined {
+  const prefix = `${dirPath}/`;
+  let hasMod = false;
+  let hasNew = false;
+  for (const [p, s] of m) {
+    if (p === dirPath || p.startsWith(prefix)) {
+      if (s === "M" || s === "D" || s === "R") hasMod = true;
+      if (s === "A" || s === "?") hasNew = true;
+    }
+  }
+  if (hasMod) return "M";
+  if (hasNew) return "A";
+  return undefined;
+}
+
+function rowGitModifier(entry: TreeEntry, m: Map<string, GitStatusChar>): string {
+  const st =
+    entry.type === "dir" ? dirAggregateStatus(entry.path, m) : m.get(entry.path);
+  if (!st) return "";
+  const token = st === "?" ? "U" : st;
+  return ` tree-row--git-${token}`;
+}
+
 interface NodeProps {
   api: ApiInstance;
   worktreeId: string | null;
@@ -21,9 +62,18 @@ interface NodeProps {
   level: number;
   expanded: Set<string>;
   toggle: (path: string) => void;
+  gitStatusByPath: Map<string, GitStatusChar>;
 }
 
-function TreeNode({ api, worktreeId, entry, level, expanded, toggle }: NodeProps) {
+function TreeNode({
+  api,
+  worktreeId,
+  entry,
+  level,
+  expanded,
+  toggle,
+  gitStatusByPath,
+}: NodeProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
   const activePath = useWorkspaceStore((s) => s.activeFilePath);
@@ -50,14 +100,20 @@ function TreeNode({ api, worktreeId, entry, level, expanded, toggle }: NodeProps
     ensurePaneVisible(1);
   }
 
+  const gitRowClass = rowGitModifier(entry, gitStatusByPath);
+  const fileStatus = !isDir ? gitStatusByPath.get(entry.path) : undefined;
+  const dirStatus = isDir ? dirAggregateStatus(entry.path, gitStatusByPath) : undefined;
+  const badgeStatus = fileStatus ?? dirStatus;
+
   return (
-    <div role="tree">
+    <>
       <div
-        className="tree-row"
+        className={`tree-row${gitRowClass}`}
         role="treeitem"
         aria-expanded={isDir ? isOpen : undefined}
         tabIndex={0}
         data-active={activePath === entry.path}
+        data-git-status={badgeStatus ?? undefined}
         style={{ paddingLeft: `calc(${level} * var(--space-4) + var(--space-2))` }}
         onClick={() => (isDir ? toggle(entry.path) : openFile())}
         onKeyDown={(e) => {
@@ -81,6 +137,11 @@ function TreeNode({ api, worktreeId, entry, level, expanded, toggle }: NodeProps
           )}
         </span>
         <span className="tree-row__label">{entry.name}</span>
+        {badgeStatus ? (
+          <span className={`tree-row__git-badge tree-row__git-badge--${badgeStatus === "?" ? "U" : badgeStatus}`} aria-hidden>
+            {gitStatusBadgeChar(badgeStatus)}
+          </span>
+        ) : null}
       </div>
       {isDir && isOpen && children
         ? children.map((ch) => (
@@ -92,10 +153,11 @@ function TreeNode({ api, worktreeId, entry, level, expanded, toggle }: NodeProps
               level={level + 1}
               expanded={expanded}
               toggle={toggle}
+              gitStatusByPath={gitStatusByPath}
             />
           ))
         : null}
-    </div>
+    </>
   );
 }
 
@@ -120,10 +182,28 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
 
   const [root, setRoot] = useState<TreeEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [changed, setChanged] = useState<ChangedPathEntry[]>([]);
-  const [changedLoading, setChangedLoading] = useState(false);
-  const [changedError, setChangedError] = useState<string | null>(null);
+  const [localChanged, setLocalChanged] = useState<ChangedPathEntry[]>([]);
+  const [branchChanged, setBranchChanged] = useState<ChangedPathEntry[]>([]);
+  const [localLoading, setLocalLoading] = useState(false);
+  const [branchLoading, setBranchLoading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const { lastChanged } = useTreeWatch(api, activeWorktreeId);
+
+  const gitStatusByPath = useMemo(() => {
+    const m = new Map<string, GitStatusChar>();
+    for (const e of localChanged) {
+      m.set(e.path, e.status);
+    }
+    return m;
+  }, [localChanged]);
+
+  const diffMode = scope !== "none";
+  const groupedEntries =
+    scope === "branch" ? branchChanged : scope === "local" ? localChanged : [];
+  const scopedLoading = scope === "branch" ? branchLoading : localLoading;
+  const groupedLoading = scopedLoading && groupedEntries.length === 0;
+  const groupedError = scope === "branch" ? branchError : localError;
 
   useEffect(() => {
     if (!activeWorktreeId) {
@@ -140,11 +220,10 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     };
   }, [api, activeWorktreeId, lastChanged]);
 
-  // Auto-expand all parent dirs of the active file so it's visible in the tree.
   const parentsOfActive = useMemo(() => {
     if (!activeFilePath) return [];
     const parts = activeFilePath.split("/").filter(Boolean);
-    parts.pop(); // drop file name
+    parts.pop();
     const out: string[] = [];
     let acc = "";
     for (const p of parts) {
@@ -157,45 +236,75 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
   useEffect(() => {
     if (parentsOfActive.length === 0) return;
     setExpanded((prev) => {
-      let changed = false;
+      let nextChanged = false;
       const next = new Set(prev);
       for (const p of parentsOfActive) {
         if (!next.has(p)) {
           next.add(p);
-          changed = true;
+          nextChanged = true;
         }
       }
-      return changed ? next : prev;
+      return nextChanged ? next : prev;
     });
   }, [parentsOfActive]);
 
   useEffect(() => {
-    if (!activeWorktreeId || scope === "none") {
-      setChanged([]);
-      setChangedError(null);
+    if (!activeWorktreeId) {
+      setLocalChanged([]);
+      setLocalError(null);
+      setLocalLoading(false);
       return;
     }
     let cancelled = false;
-    setChangedLoading(true);
-    setChangedError(null);
+    setLocalLoading(true);
+    setLocalError(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(activeWorktreeId);
+        const list = await api.listChangedPaths(activeWorktreeId, "local");
         if (!cancelled) {
-          setChanged(list);
-          setChangedLoading(false);
+          setLocalChanged(list);
+          setLocalLoading(false);
         }
       } catch (e) {
         if (!cancelled) {
-          setChangedError(e instanceof Error ? e.message : "Failed to load changes");
-          setChangedLoading(false);
+          setLocalError(e instanceof Error ? e.message : "Failed to load git status");
+          setLocalLoading(false);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, scope]);
+  }, [api, activeWorktreeId, lastChanged]);
+
+  useEffect(() => {
+    if (!activeWorktreeId || scope !== "branch") {
+      setBranchChanged([]);
+      setBranchError(null);
+      setBranchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBranchLoading(true);
+    setBranchError(null);
+    void (async () => {
+      try {
+        const list = await api.listChangedPaths(activeWorktreeId, "branch");
+        if (!cancelled) {
+          setBranchChanged(list);
+          setBranchLoading(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setBranchError(e instanceof Error ? e.message : "Failed to load branch changes");
+          setBranchLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, activeWorktreeId, scope, lastChanged]);
 
   function toggle(path: string) {
     setExpanded((prev) => {
@@ -243,14 +352,34 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     );
   }
 
-  const diffMode = scope !== "none";
-
   return (
     <div className="pane pane-stack">
       {rightSidebarTabs}
       <div className="pane-header pane-header--compact file-tree-sidebar-header">
         <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>
-        <div className="file-tree-sidebar-header__controls">
+        <div className="file-tree-sidebar-header__tail">
+          <div className="file-tree-scope-slot" aria-hidden={!diffMode}>
+            {diffMode ? (
+              <div className="file-tree-scope-chips" role="group" aria-label="Diff scope">
+                <button
+                  type="button"
+                  className={`file-tree-scope-chip ${scope === "local" ? "file-tree-scope-chip--active" : ""}`}
+                  aria-pressed={scope === "local"}
+                  onClick={() => setScope("local")}
+                >
+                  local
+                </button>
+                <button
+                  type="button"
+                  className={`file-tree-scope-chip ${scope === "branch" ? "file-tree-scope-chip--active" : ""}`}
+                  aria-pressed={scope === "branch"}
+                  onClick={() => setScope("branch")}
+                >
+                  branch
+                </button>
+              </div>
+            ) : null}
+          </div>
           <button
             type="button"
             className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
@@ -261,26 +390,6 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
           >
             <GitCompare size={15} strokeWidth={2} />
           </button>
-          {diffMode ? (
-            <div className="file-tree-scope-chips" role="group" aria-label="Diff scope">
-              <button
-                type="button"
-                className={`file-tree-scope-chip ${scope === "local" ? "file-tree-scope-chip--active" : ""}`}
-                aria-pressed={scope === "local"}
-                onClick={() => setScope("local")}
-              >
-                local
-              </button>
-              <button
-                type="button"
-                className={`file-tree-scope-chip ${scope === "branch" ? "file-tree-scope-chip--active" : ""}`}
-                aria-pressed={scope === "branch"}
-                onClick={() => setScope("branch")}
-              >
-                branch
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
       <div
@@ -289,11 +398,27 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
           overflow: "auto",
           padding: "var(--space-2)",
         }}
-        role="tree"
-        aria-label={diffMode ? "Changed files" : "Worktree files"}
+        role={diffMode ? undefined : "tree"}
+        aria-label={
+          diffMode
+            ? undefined
+            : localLoading
+              ? "Worktree files, git markers loading"
+              : "Worktree files"
+        }
       >
+        {!diffMode && localLoading ? (
+          <div className="file-tree-git-loading" aria-live="polite">
+            Loading git markers…
+          </div>
+        ) : null}
+        {!diffMode && localError ? (
+          <div className="file-tree-git-error" role="alert">
+            {localError}
+          </div>
+        ) : null}
         {diffMode ? (
-          <ChangedFileList entries={changed} loading={changedLoading} error={changedError} />
+          <ChangedFileList entries={groupedEntries} loading={groupedLoading} error={groupedError} />
         ) : (
           root.map((e) => (
             <TreeNode
@@ -304,6 +429,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
               level={0}
               expanded={expanded}
               toggle={toggle}
+              gitStatusByPath={gitStatusByPath}
             />
           ))
         )}
