@@ -29,6 +29,7 @@ export interface SessionRecord {
   tmuxName: string;
   lifecycle: SessionLifecycle;
   transcriptRef?: TranscriptRef;
+  agentChatId?: string;
 }
 
 export interface WorktreeRecord {

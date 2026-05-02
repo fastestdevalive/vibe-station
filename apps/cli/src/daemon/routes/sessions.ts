@@ -7,7 +7,7 @@ import {
   buildTmuxName,
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer } from "../services/tmux.js";
-import { spawnSession } from "../services/spawn.js";
+import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../plugins/registry.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
@@ -279,8 +279,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const { project, worktree, session } = ctx;
 
-    // For v1, we always do a fresh launch (no restore command support yet)
-    // If the session is an agent type, spawn it fresh
+    let restoredFromHistory = false;
+
+    // If the session is an agent type, ask plugin for restore strategy
     if (session.type === "agent" && session.modeId) {
       try {
         const modes = await (await import("../routes/modes.js")).loadModes();
@@ -291,27 +292,57 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
         const plugin = resolvePlugin(mode.cli);
 
-        // Build prompt (no user prompt for resume, just mode context)
-        const { buildPrompt } = await import("../services/promptBuilder.js");
-        const builtPrompt = await buildPrompt({
-          project,
-          worktree,
-          modeContext: mode.context,
-        });
-
-        // Get daemon port
-        const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-
-        // Spawn a fresh session
-        await spawnSession({
-          project,
-          worktree,
+        // Ask plugin for restore argv
+        const restoreArgv = await plugin.getRestoreCommand?.({
           session,
-          plugin,
-          daemonPort,
-          systemPrompt: builtPrompt.systemPrompt,
-          taskPrompt: builtPrompt.taskPrompt,
+          project,
+          worktree,
         });
+
+        if (restoreArgv) {
+          // Resume path: spawn from explicit restore argv
+          restoredFromHistory = true;
+          const launchCfg = { project, worktree, session, daemonPort: 0 };
+          const env: Record<string, string> = {
+            VR_SESSION: session.id,
+            VR_WORKTREE: worktree.id,
+            VR_PROJECT: project.id,
+            VR_DATA_DIR: `${process.env.HOME ?? "~"}/.viberun/projects/${project.id}`,
+            VR_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
+            ...plugin.getEnvironment(launchCfg),
+          };
+
+          await spawnSessionFromArgv({
+            project,
+            worktree,
+            session,
+            argv: restoreArgv,
+            env,
+            fallbackMs: plugin.getReadySignal().fallbackMs,
+          });
+        } else {
+          // Fresh launch path: build prompt and spawn normally
+          const { buildPrompt } = await import("../services/promptBuilder.js");
+          const builtPrompt = await buildPrompt({
+            project,
+            worktree,
+            modeContext: mode.context,
+          });
+
+          // Get daemon port
+          const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+
+          // Spawn a fresh session
+          await spawnSession({
+            project,
+            worktree,
+            session,
+            plugin,
+            daemonPort,
+            systemPrompt: builtPrompt.systemPrompt,
+            taskPrompt: builtPrompt.taskPrompt,
+          });
+        }
       } catch (err) {
         return reply.status(500).send({
           error: `Failed to resume session: ${String(err)}`,
@@ -348,7 +379,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       ),
     }));
 
-    notifySession(id, { type: "session:resumed", sessionId: id, restoredFromHistory: false });
+    notifySession(id, {
+      type: "session:resumed",
+      sessionId: id,
+      restoredFromHistory,
+    });
     return reply.send(serializeSession(worktree.id, updatedSession));
   });
 

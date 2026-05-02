@@ -28,6 +28,12 @@ export interface AgentPlugin {
     taskPrompt?: string;
   }): { launchArgs?: string[]; postLaunchInput?: string };
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
+  /** Return argv for resuming a prior session, or null for fresh launch. */
+  getRestoreCommand?(args: {
+    session: SessionRecord;
+    project: ProjectRecord;
+    worktree: WorktreeRecord;
+  }): Promise<string[] | null>;
 }
 
 export interface LaunchConfig {
@@ -45,6 +51,47 @@ export interface SpawnOptions {
   daemonPort: number;
   systemPrompt: string;
   taskPrompt?: string;
+}
+
+export interface SpawnSessionFromArgvOptions {
+  project: ProjectRecord;
+  worktree: WorktreeRecord;
+  session: SessionRecord;
+  argv: string[];
+  env: Record<string, string>;
+  fallbackMs: number;
+}
+
+/**
+ * Spawn a tmux session with an explicit argv (no prompt composition).
+ * Used by resume path to spawn from restore argv directly.
+ * Step sequence: spawn tmux → wait fallbackMs (no sentinel, no post-launch input).
+ */
+export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): Promise<void> {
+  const { project, worktree, session, argv, env, fallbackMs } = opts;
+
+  const wtPath = getWorktreePath(project.id, worktree.id);
+
+  // Spawn tmux with the explicit argv
+  try {
+    await newSession({
+      name: session.tmuxName,
+      cwd: wtPath,
+      env,
+      command: argv,
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        "tmux is not installed or not on PATH. Install tmux to launch agent sessions.",
+      );
+    }
+    throw err;
+  }
+
+  // Wait for fallback timeout (no sentinel check, no post-launch input)
+  await sleep(fallbackMs);
 }
 
 /**
