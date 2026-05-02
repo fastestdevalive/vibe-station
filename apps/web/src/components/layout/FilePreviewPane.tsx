@@ -205,7 +205,9 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     if (scope === "local" || scope === "branch") {
       const diffText = diffBody ?? "";
       const fallback = fileBody ?? undefined;
-      return <DiffView diffText={diffText} fileContentFallback={fallback} />;
+      return (
+        <DiffView diffText={diffText} fileContentFallback={fallback} filePath={path} themeMode={themeMode} />
+      );
     }
     if (!fileBody) {
       return <div className="empty-state">Loading…</div>;
@@ -227,12 +229,12 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
   })();
 
-  const isCode = !isMd && scope === "none";
+  const useCodeChrome = scope === "local" || scope === "branch" || (!isMd && scope === "none");
 
   return (
     <div className="pane pane-stack">
       {header}
-      <div className={`preview-body${isCode ? " preview-body--code" : ""}`} style={previewScaleStyle}>
+      <div className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`} style={previewScaleStyle}>
         {body}
       </div>
     </div>
