@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
 import { languageForFilePath } from "./codeHighlight";
+import { pickShikiLang } from "./previewLang";
+import { escapeHtml, getShikiHighlighter, innerFromShikiHtml } from "./shikiHighlighter";
 
 interface CodeViewProps {
   code: string;
@@ -10,71 +12,6 @@ interface CodeViewProps {
   themeMode?: "dark" | "light";
   /** When true, renders without gutter (e.g. inside a markdown code block) */
   noGutter?: boolean;
-}
-
-function pickShikiLang(filePath: string | undefined, hljsLang: string | undefined): string {
-  const ext = filePath?.includes(".") ? filePath.slice(filePath.lastIndexOf(".")).toLowerCase() : "";
-  if (ext === ".tsx") return "tsx";
-  if (ext === ".jsx") return "jsx";
-  if (hljsLang === "xml") return "html";
-  if (hljsLang === "bash") return "shellscript";
-
-  const map: Record<string, string> = {
-    javascript: "javascript",
-    typescript: "typescript",
-    python: "python",
-    json: "json",
-    css: "css",
-    yaml: "yaml",
-    rust: "rust",
-    go: "go",
-  };
-  return map[hljsLang ?? ""] ?? "plaintext";
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function innerFromShikiHtml(html: string): string {
-  const m = html.match(/<code[^>]*>([\s\S]*?)<\/code>/);
-  return m?.[1] ?? "";
-}
-
-type Highlighter = import("shiki").Highlighter;
-
-let highlighterPromise: Promise<Highlighter> | null = null;
-
-async function getHighlighter(): Promise<Highlighter> {
-  if (!highlighterPromise) {
-    highlighterPromise = (async () => {
-      const { createHighlighter } = await import("shiki");
-      return createHighlighter({
-        themes: ["dark-plus", "light-plus"],
-        langs: [
-          "javascript",
-          "typescript",
-          "tsx",
-          "jsx",
-          "json",
-          "css",
-          "html",
-          "yaml",
-          "shellscript",
-          "python",
-          "rust",
-          "go",
-          "xml",
-          "plaintext",
-        ],
-      });
-    })();
-  }
-  return highlighterPromise;
 }
 
 export function CodeView({ code, language: languageProp, filePath, themeMode, noGutter }: CodeViewProps) {
@@ -98,7 +35,7 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
     let cancelled = false;
     void (async () => {
       try {
-        const h = await getHighlighter();
+        const h = await getShikiHighlighter();
         const split = code.split("\n");
         const out: string[] = [];
         for (const line of split) {
