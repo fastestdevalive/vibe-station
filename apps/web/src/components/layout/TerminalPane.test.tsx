@@ -11,7 +11,8 @@ let mockRows = 24;
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
-    options: { fontSize: number } = { fontSize: 14 };
+    options: { fontSize: number; theme?: object } = { fontSize: 14 };
+    buffer = { active: { viewportY: 0, length: 100 } };
     get cols() { return mockCols; }
     get rows() { return mockRows; }
     element = null;
@@ -27,6 +28,9 @@ vi.mock("@xterm/xterm", () => ({
       return { dispose: () => {} };
     }
     onResize(_cb: (s: { cols: number; rows: number }) => void) {
+      return { dispose: () => {} };
+    }
+    onScroll(_cb: () => void) {
       return { dispose: () => {} };
     }
     dispose() {}
