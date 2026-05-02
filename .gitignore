@@ -1,0 +1,77 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+
+# Build outputs
+apps/web/dist-node/
+dist/
+build/
+out/
+.next/
+.nuxt/
+.svelte-kit/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+*.egg
+target/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime / cache
+.cache/
+.parcel-cache/
+.turbo/
+.vite/
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Claude Code
+.claude/
+
+# Package manager locks (keep only one — uncomment your preference)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml

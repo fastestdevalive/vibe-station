@@ -1,0 +1,9 @@
+diff --git a/c.txt b/c.txt
+--- a/c.txt
++++ b/c.txt
+@@ -2,4 +2,5 @@
+ ctx1
+- old
++ new
+ ctx2
++plus

@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "types": ["vitest/globals", "@testing-library/jest-dom"]
+  },
+  "include": ["src", "e2e", "vitest.config.ts", "playwright.config.ts"]
+}

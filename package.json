@@ -1,0 +1,25 @@
+{
+  "name": "viberun-ide",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Web-based orchestrator for parallel AI coding agents.",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm --filter @viberun/web dev",
+    "build": "pnpm -r build",
+    "lint": "eslint apps/web/src apps/web/e2e",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @viberun/web test:e2e",
+    "ci": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "typescript-eslint": "^8.15.0"
+  }
+}
