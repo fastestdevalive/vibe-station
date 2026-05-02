@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
@@ -14,11 +14,14 @@ export function TerminalPane({ api }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const lastTouchY = useRef<number>(0);
 
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+
+  const [atBottom, setAtBottom] = useState(true);
 
   const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
   // useSessionOutput registers event listeners + WS subscription.
@@ -54,6 +57,20 @@ export function TerminalPane({ api }: TerminalPaneProps) {
 
     const fit = fitRef.current ?? new FitAddon();
     fitRef.current = fit;
+    // Phase 1: touch scroll handlers — re-attached every session switch
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches[0]) lastTouchY.current = e.touches[0].clientY;
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!e.touches[0]) return;
+      const delta = lastTouchY.current - e.touches[0].clientY;
+      term.scrollLines(Math.round(delta / ((term.options.lineHeight ?? 1.2) * (term.options.fontSize ?? 14)) * 1.5));
+      lastTouchY.current = e.touches[0].clientY;
+      e.preventDefault();
+    };
+    host.addEventListener("touchstart", handleTouchStart, { passive: false });
+    host.addEventListener("touchmove", handleTouchMove, { passive: false });
+
     if (!term.element) {
       term.loadAddon(fit);
       term.open(host);
@@ -72,8 +89,20 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       });
     }
 
-    // Clear previous session output
+    // Clear previous session output. Immediately re-fit and clear the glyph
+    // atlas so the canvas is at correct dimensions before any content arrives —
+    // reset() triggers a redraw, and the deferred RAF fit is too late to stop
+    // that first bad paint.
     term.reset();
+    setAtBottom(true);
+    // Phase 2: scroll-to-bottom subscription
+    const scrollSub = term.onScroll(() => {
+      const b = term.buffer.active;
+      setAtBottom(b.viewportY >= b.length - term.rows);
+    });
+    try { fit.fit(); } catch { /* ignore if not yet attached */ }
+    term.clearTextureAtlas?.();
+    console.log('[term] sync-fit', { host_w: host.clientWidth, host_h: host.clientHeight, cols: term.cols, rows: term.rows, session: activeSessionId });
 
     // RO tracks pending rAF so splitter-drag bursts coalesce to one per frame.
     let roPendingRaf: number | null = null;
@@ -149,6 +178,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         try {
           termRef.current?.clearTextureAtlas?.();
           fit.fit();
+          console.log('[term] raf-fit', { host_w: host.clientWidth, host_h: host.clientHeight, cols: term.cols, rows: term.rows });
         } catch {
           // ignore
         }
@@ -160,6 +190,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           if (!mounted) return;
           try {
             fit.fit();
+            console.log('[term] settle-fit → openSession', { cols: term.cols, rows: term.rows, session: activeSessionId });
             if (activeSessionId) {
               void api.openSession(activeSessionId, term.cols, term.rows);
             }
@@ -193,8 +224,13 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       mounted = false;
       d.dispose();
       r.dispose();
+      scrollSub.dispose();
       ro.disconnect();
       window.removeEventListener("resize", handleWindowResize);
+      if (host) {
+        host.removeEventListener("touchstart", handleTouchStart);
+        host.removeEventListener("touchmove", handleTouchMove);
+      }
       if (rafId !== null) cancelAnimationFrame(rafId);
       if (settleTimerId !== null) clearTimeout(settleTimerId);
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
@@ -262,7 +298,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
   const showBanner = state === "exited" || sessionState === "exited";
 
   return (
-    <div className="pane-stack" style={{ flex: 1, minHeight: 0, background: "var(--bg-primary)" }}>
+    <div className="pane-stack" style={{ flex: 1, minHeight: 0, background: "var(--bg-primary)", position: "relative" }}>
       {showBanner ? (
         <div className="terminal-resume-banner">
           Session exited.
@@ -270,6 +306,18 @@ export function TerminalPane({ api }: TerminalPaneProps) {
             Resume
           </button>
         </div>
+      ) : null}
+      {!atBottom ? (
+        <button
+          type="button"
+          className="terminal-scroll-btn"
+          onClick={() => {
+            termRef.current?.scrollToBottom();
+            setAtBottom(true);
+          }}
+        >
+          ↓
+        </button>
       ) : null}
       <div className="terminal-wrap">
         <div ref={hostRef} className="terminal-host" />

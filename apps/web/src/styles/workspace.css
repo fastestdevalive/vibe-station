@@ -110,6 +110,7 @@
   flex-direction: column;
   min-height: 0;
   height: 100%;
+  position: relative;
 }
 
 .pane-header {
@@ -910,13 +911,16 @@
   padding: var(--space-2);
   background: var(--bg-primary);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: none;
 }
 
 .terminal-host {
-  height: 100%;
-  width: 100%;
+  flex: 1;
   min-height: 0;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .terminal-resume-banner {
@@ -927,6 +931,28 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.terminal-scroll-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.terminal-scroll-btn:hover {
+  opacity: 1;
 }
 
 .preview-body {
