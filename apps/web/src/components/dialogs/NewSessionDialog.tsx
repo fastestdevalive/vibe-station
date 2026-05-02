@@ -30,6 +30,7 @@ export function NewSessionDialog({
   const [baseBranch, setBaseBranch] = useState("main");
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
+  const [initialPrompt, setInitialPrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,6 +63,7 @@ export function NewSessionDialog({
         worktreeId: wt.id,
         modeId: modeId || null,
         type: "agent",
+        initialPrompt: initialPrompt.trim() || undefined,
       });
     } else {
       if (!existingWtId) {
@@ -72,6 +74,7 @@ export function NewSessionDialog({
         worktreeId: existingWtId,
         modeId: modeId || null,
         type: "agent",
+        initialPrompt: initialPrompt.trim() || undefined,
       });
     }
     onCreated?.();
@@ -147,6 +150,15 @@ export function NewSessionDialog({
       <button type="button" style={{ alignSelf: "flex-start", marginTop: "var(--space-2)" }}>
         + New mode
       </button>
+      <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Initial prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
+      <textarea
+        className="field-textarea"
+        aria-label="Initial prompt"
+        placeholder="Describe what you want the agent to do…"
+        rows={4}
+        value={initialPrompt}
+        onChange={(e) => setInitialPrompt(e.target.value)}
+      />
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
   );
