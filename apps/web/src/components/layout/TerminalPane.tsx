@@ -147,6 +147,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         rafId = null;
         if (!mounted) return;
         try {
+          termRef.current?.clearTextureAtlas?.();
           fit.fit();
         } catch {
           // ignore

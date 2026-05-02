@@ -58,11 +58,20 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
         const next = new URLSearchParams(prev);
         if (activeWorktreeId) next.set(WT, activeWorktreeId);
         else next.delete(WT);
-        if (activeSessionId) next.set(SESS, activeSessionId);
-        else next.delete(SESS);
+        // Omit ?session= if the active session is the main slot (slot === "m")
+        if (activeSessionId) {
+          const activeSession = sessions.find((s) => s.id === activeSessionId);
+          if (activeSession?.slot === "m") {
+            next.delete(SESS);
+          } else {
+            next.set(SESS, activeSessionId);
+          }
+        } else {
+          next.delete(SESS);
+        }
         return next;
       },
       { replace: true },
     );
-  }, [ready, activeWorktreeId, activeSessionId, setSearchParams]);
+  }, [ready, activeWorktreeId, activeSessionId, sessions, setSearchParams]);
 }
