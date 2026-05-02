@@ -7,6 +7,8 @@
  */
 
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
+import { worktreePath as getWorktreePath } from "../services/paths.js";
+import { findLatestChatUuid } from "./claudeRestore.js";
 
 export function createClaudePlugin(): AgentPlugin {
   return {
@@ -48,6 +50,20 @@ export function createClaudePlugin(): AgentPlugin {
 
     async setupWorkspaceHooks(): Promise<void> {
       // No-op for v1; hooks are implemented in v1.1
+    },
+
+    async getRestoreCommand(args: {
+      session: any;
+      project: any;
+      worktree: any;
+    }): Promise<string[] | null> {
+      const { project, worktree } = args;
+      const wtPath = getWorktreePath(project.id, worktree.id);
+      const uuid = await findLatestChatUuid(wtPath);
+      if (uuid) {
+        return ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+      }
+      return null;
     },
   };
 }

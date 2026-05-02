@@ -3,7 +3,14 @@
  * Implements AgentPlugin interface for the `cursor agent` headless CLI.
  *
  * Delivery: post-launch — system and task prompts are sent to stdin after launch.
- * Ready signal: no sentinel; just wait 5 seconds for agent startup.
+ * Ready signal: no sentinel; just wait 8 seconds for agent startup.
+ *
+ * Launch flags rationale (aligned with ao-142):
+ * - `--workspace <path>`: required; specifies project root
+ * - `--force`: skip workspace-trust prompt
+ * - `--sandbox disabled`: allows vrun-controlled execution; required for daemon spawn
+ * - `--approve-mcps`: auto-accept MCP permission requests (no interactive gates)
+ * Removed `--print` (causes immediate exit on EOF; we want interactive REPL)
  */
 
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
@@ -16,7 +23,15 @@ export function createCursorPlugin(): AgentPlugin {
 
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
-      return ["cursor-agent", "--print", "--workspace", wtPath];
+      return [
+        "cursor-agent",
+        "--workspace",
+        wtPath,
+        "--force",
+        "--sandbox",
+        "disabled",
+        "--approve-mcps",
+      ];
     },
 
     getEnvironment(): Record<string, string> {
@@ -26,7 +41,7 @@ export function createCursorPlugin(): AgentPlugin {
     getReadySignal() {
       return {
         sentinel: undefined,
-        fallbackMs: 5_000,
+        fallbackMs: 8_000,
       };
     },
 
@@ -43,6 +58,11 @@ export function createCursorPlugin(): AgentPlugin {
 
     async setupWorkspaceHooks(): Promise<void> {
       // No-op for v1
+    },
+
+    async getRestoreCommand(): Promise<null> {
+      // Cursor does not support chat resume; always fresh launch
+      return null;
     },
   };
 }

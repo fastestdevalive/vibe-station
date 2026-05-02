@@ -42,6 +42,9 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
     spawnSession: vi.fn(async () => {
       // Mock: do nothing
     }),
+    spawnSessionFromArgv: vi.fn(async () => {
+      // Mock: do nothing
+    }),
   };
 });
 
@@ -190,8 +193,8 @@ describe("Session routes", () => {
 
     const res = await app.inject({ method: "POST", url: `/sessions/${mainId}/resume` });
     expect(res.statusCode).toBe(200);
-    const session = res.json<SessionRecord>();
-    expect(session.lifecycle.state).toBe("working");
+    const session = res.json<any>();
+    expect(session.state).toBe("working");
   });
 
   it("assigns sequential slots for multiple sessions", async () => {

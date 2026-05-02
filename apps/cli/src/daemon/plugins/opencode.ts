@@ -42,5 +42,19 @@ export function createOpencodePlugin(): AgentPlugin {
     async setupWorkspaceHooks(): Promise<void> {
       // No-op for v1
     },
+
+    async getRestoreCommand(args: { session: any }): Promise<string[] | null> {
+      const { session } = args;
+      // KNOWN LIMITATION: agentChatId is not yet captured at launch time.
+      // ao-142 queries `opencode session list --format json` and matches by
+      // title (e.g. AO:<id>); we don't do that yet. Until either (a) we parse
+      // sessionId from the opencode startup banner, or (b) we shell out to
+      // `opencode session list`, this restore path is effectively dead — it
+      // always falls through to fresh launch. Tracked as Phase-2 follow-up.
+      if (session.agentChatId) {
+        return ["opencode", "--session", session.agentChatId];
+      }
+      return null;
+    },
   };
 }
