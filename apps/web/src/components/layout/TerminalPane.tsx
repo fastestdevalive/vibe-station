@@ -3,8 +3,10 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
+import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
+import { ideThemeToXterm } from "./terminalTheme";
 
 interface TerminalPaneProps {
   api: ApiInstance;
@@ -15,6 +17,8 @@ export function TerminalPane({ api }: TerminalPaneProps) {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const lastTouchY = useRef<number>(0);
+
+  const { theme: ideTheme } = useTheme();
 
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
@@ -48,10 +52,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         lineHeight: 1.2,
         scrollback: 10000,
         allowProposedApi: true,
-        theme: {
-          background: "#0f0f0f",
-          foreground: "#e5e5e5",
-        },
+        theme: ideThemeToXterm(ideTheme),
       });
     termRef.current = term;
 
@@ -240,6 +241,18 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       }
     };
   }, [activeSessionId, api]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term?.options) return;
+    term.options.theme = ideThemeToXterm(ideTheme);
+    term.clearTextureAtlas?.();
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      /* ignore */
+    }
+  }, [ideTheme]);
 
   useEffect(() => {
     if (activeSessionId && sessionState) {
