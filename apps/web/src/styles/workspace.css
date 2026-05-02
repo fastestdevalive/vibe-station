@@ -1195,10 +1195,29 @@
   overflow: auto;
   min-height: 0;
   padding: var(--space-3);
+  /* Isolate from global UI font toggle (--font-family on :root) */
+  font-family: var(--font-sans);
 }
 
 .preview-body--code {
   padding: 0;
+}
+
+.preview-diff-root {
+  margin: 0;
+  padding: 12px 0;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.45;
+  background: var(--bg-primary);
+  min-height: 100%;
+}
+
+.preview-diff-hunk-header {
+  padding: 6px 16px 4px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
 }
 
 /* ── Code viewer (non-markdown files) ─────────────────── */
@@ -1233,6 +1252,9 @@
 .workspace-code-content {
   flex: 1;
   white-space: pre;
+}
+
+.workspace-code-content:not(.workspace-code-content--shiki) {
   color: var(--fg-primary);
 }
 
@@ -1652,8 +1674,25 @@
   display: grid;
   grid-template-columns: 48px 48px 16px 1fr;
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: inherit;
   line-height: 1.45;
+  padding: 0 16px;
+}
+
+.diff-marker {
+  text-align: center;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.diff-line-text {
+  white-space: pre;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.diff-line-text:not(.diff-line-text--shiki) {
+  color: var(--fg-primary);
 }
 
 .diff-line--added {
