@@ -16,9 +16,16 @@ import { newSession, hasSession, capturePane, pasteBuffer } from "./tmux.js";
 import { worktreePath as getWorktreePath } from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
+/** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
+export function promptVerificationNeedle(sessionId: string): string {
+  return `VRPRMT:${sessionId}`;
+}
+
 export interface AgentPlugin {
   readonly name: string;
   readonly promptDelivery: "inline" | "post-launch";
+  /** Extra settle time after ready sentinel (or fallback delay), before stdin paste. */
+  readonly postSentinelDelayMs?: number;
   /** Return argv (binary + flags) — tmux execs this directly, no shell. */
   getLaunchCommand(cfg: LaunchConfig): string[];
   getEnvironment(cfg: LaunchConfig): Record<string, string>;
@@ -26,6 +33,7 @@ export interface AgentPlugin {
   composeLaunchPrompt(prompt: {
     systemPrompt: string;
     taskPrompt?: string;
+    sessionId: string;
   }): { launchArgs?: string[]; postLaunchInput?: string };
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
   /** Return argv for resuming a prior session, or null for fresh launch. */
@@ -116,7 +124,11 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   }
 
   // Compose launch prompt
-  const { launchArgs, postLaunchInput } = plugin.composeLaunchPrompt({ systemPrompt, taskPrompt });
+  const { launchArgs, postLaunchInput } = plugin.composeLaunchPrompt({
+    systemPrompt,
+    taskPrompt,
+    sessionId: session.id,
+  });
 
   // Step 4: Resolve env
   const baseEnv: Record<string, string> = {
@@ -157,6 +169,8 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
     await sleep(fallbackMs);
   }
 
+  await sleep(plugin.postSentinelDelayMs ?? 0);
+
   // Step 7: Send postLaunchInput if any — use paste-buffer to avoid shell arg-length limits
   if (postLaunchInput) {
     // The agent process may have already exited (waiting on an interactive
@@ -174,6 +188,23 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
       return;
     }
     await pasteBuffer(session.tmuxName, `vr-prompt-${session.id}`, postLaunchInput);
+
+    const needle = promptVerificationNeedle(session.id);
+    if (postLaunchInput.includes(needle)) {
+      await sleep(500);
+      let pane = await capturePane(session.tmuxName, { lines: 50 });
+      let ok = pane.includes(needle);
+      if (!ok) {
+        await sleep(1500);
+        pane = await capturePane(session.tmuxName, { lines: 50 });
+        ok = pane.includes(needle);
+      }
+      if (!ok) {
+        console.warn(
+          `[spawn] prompt-injection unverified for ${session.id} (${plugin.name})`,
+        );
+      }
+    }
   }
 }
 

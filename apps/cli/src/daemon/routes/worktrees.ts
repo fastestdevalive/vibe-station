@@ -14,7 +14,9 @@ import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
+import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../plugins/registry.js";
+import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
 
 const MAX_DIFF_BYTES = 512 * 1024;
@@ -98,6 +100,83 @@ const CreateWorktreeBody = z.object({
   baseBranch: z.string().min(1).optional(),
   prompt: z.string().optional(),
 });
+
+async function runMainSpawnJob(opts: {
+  projectId: string;
+  wtId: string;
+  freshProject: ProjectRecord;
+  worktreeRecord: WorktreeRecord;
+  mainSession: SessionRecord;
+  plugin: AgentPlugin;
+  daemonPort: number;
+  builtPrompt: { systemPrompt: string; taskPrompt?: string };
+}): Promise<void> {
+  const { projectId, wtId, freshProject, worktreeRecord, mainSession, plugin, daemonPort, builtPrompt } =
+    opts;
+
+  try {
+    await spawnSession({
+      project: freshProject,
+      worktree: worktreeRecord,
+      session: mainSession,
+      plugin,
+      daemonPort,
+      systemPrompt: builtPrompt.systemPrompt,
+      taskPrompt: builtPrompt.taskPrompt,
+    });
+
+    mainSession.lifecycle = {
+      state: "working",
+      lastTransitionAt: new Date().toISOString(),
+    };
+    worktreeRecord.sessions = [mainSession];
+
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === wtId
+          ? { ...w, sessions: w.sessions.map((s) => (s.id === mainSession.id ? mainSession : s)) }
+          : w,
+      ),
+    }));
+
+    broadcastAll({
+      type: "session:state",
+      sessionId: mainSession.id,
+      state: "working",
+    });
+  } catch (err) {
+    const reason = String(err);
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === wtId
+          ? {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id === mainSession.id
+                  ? {
+                      ...s,
+                      lifecycle: {
+                        state: "exited",
+                        lastTransitionAt: new Date().toISOString(),
+                        reason,
+                      },
+                    }
+                  : s,
+              ),
+            }
+          : w,
+      ),
+    }));
+    broadcastAll({
+      type: "session:state",
+      sessionId: mainSession.id,
+      state: "exited",
+      reason,
+    });
+  }
+}
 
 export function registerWorktreeRoutes(app: FastifyInstance): void {
   // GET /worktrees?project=:id
@@ -199,7 +278,6 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       }));
       createdWorktree = worktreeRecord;
 
-      // 6. Resolve plugin and spawn session
       const modes = await (await import("../routes/modes.js")).loadModes();
       const mode = modes.find((m) => m.id === modeId);
       if (!mode) {
@@ -208,7 +286,6 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
       const plugin = resolvePlugin(mode.cli);
 
-      // Build prompt
       const { buildPrompt } = await import("../services/promptBuilder.js");
       const builtPrompt = await buildPrompt({
         project: freshProject,
@@ -217,34 +294,32 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         userPrompt: result.data.prompt,
       });
 
-      // Get daemon port
       const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
 
-      // Spawn the main session
-      await spawnSession({
-        project: freshProject,
-        worktree: worktreeRecord,
-        session: mainSession,
-        plugin,
-        daemonPort,
-        systemPrompt: builtPrompt.systemPrompt,
-        taskPrompt: builtPrompt.taskPrompt,
+      const apiWorktreeEarly = serializeWorktree(projectId, createdWorktree);
+      broadcastAll({
+        type: "worktree:created",
+        worktree: apiWorktreeEarly as unknown as Record<string, unknown>,
+      });
+      broadcastAll({
+        type: "session:created",
+        sessionId: mainSession.id,
+        worktreeId: wtId,
+        sessionType: "agent",
+        mode: modeId,
+        snapshot: serializeSession(wtId, mainSession),
       });
 
-      // Flip lifecycle to working and persist
-      mainSession.lifecycle = {
-        state: "working",
-        lastTransitionAt: new Date().toISOString(),
-      };
-      worktreeRecord.sessions = [mainSession];
-      await mutateProject(projectId, (p) => ({
-        ...p,
-        worktrees: p.worktrees.map((w) =>
-          w.id === wtId
-            ? { ...w, sessions: w.sessions.map((s) => (s.id === mainSession.id ? mainSession : s)) }
-            : w,
-        ),
-      }));
+      void runMainSpawnJob({
+        projectId,
+        wtId,
+        freshProject,
+        worktreeRecord,
+        mainSession,
+        plugin,
+        daemonPort,
+        builtPrompt,
+      });
 
     } catch (err) {
       // Rollback if we got past git worktree add
@@ -270,10 +345,6 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     }
 
     const apiWorktree = serializeWorktree(projectId, createdWorktree!);
-    broadcastAll({
-      type: "worktree:created",
-      worktree: apiWorktree as unknown as Record<string, unknown>,
-    });
     return reply.status(201).send(apiWorktree);
   });
 

@@ -74,11 +74,13 @@ describe("Agent plugins", () => {
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
+        sessionId: "sess-test",
       });
       expect(result.launchArgs).toContain("--dangerously-skip-permissions");
       expect(result.launchArgs).toContain("--system-prompt");
       expect(result.launchArgs).toContain("You are helpful");
       expect(result.launchArgs).toContain("Fix the bug");
+      expect(result.launchArgs?.join("\n")).not.toContain("VRPRMT:");
       expect(result.postLaunchInput).toBeUndefined();
     });
 
@@ -87,6 +89,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("claude");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
+        sessionId: "sess-test",
       });
       expect(result.launchArgs).toContain("--dangerously-skip-permissions");
       expect(result.launchArgs).toContain("--system-prompt");
@@ -94,6 +97,7 @@ describe("Agent plugins", () => {
       // Should have exactly 3 items: --dangerously-skip-permissions, --system-prompt, the prompt
       expect(result.launchArgs).toHaveLength(3);
       expect(result.postLaunchInput).toBeUndefined();
+      expect(JSON.stringify(result.launchArgs)).not.toContain("VRPRMT:");
     });
 
     it("T10.10 — getEnvironment() includes CLAUDECODE: '1'", async () => {
@@ -142,11 +146,13 @@ describe("Agent plugins", () => {
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
+        sessionId: "sess-test",
       });
       expect(result.launchArgs).toBeUndefined();
       expect(result.postLaunchInput).toContain("You are helpful");
       expect(result.postLaunchInput).toContain("Fix the bug");
       expect(result.postLaunchInput).toContain("\n\n");
+      expect(result.postLaunchInput).toContain("VRPRMT:sess-test");
     });
 
     it("Phase 1 — T1.T1 — getLaunchCommand returns argv containing --force, --sandbox, disabled, --approve-mcps; NOT --print", async () => {
@@ -171,11 +177,13 @@ describe("Agent plugins", () => {
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
+        sessionId: "sess-test",
       });
       expect(result.launchArgs).toBeUndefined();
       expect(result.postLaunchInput).toContain("You are helpful");
       expect(result.postLaunchInput).toContain("Fix the bug");
       expect(result.postLaunchInput).toContain("\n\n");
+      expect(result.postLaunchInput).toContain("VRPRMT:sess-test");
     });
 
     it("Phase 5 — T5.T1 — getRestoreCommand with agentChatId='abc' returns [opencode, --session, abc]", async () => {
@@ -255,6 +263,10 @@ describe("Agent plugins", () => {
     });
 
     afterEach(async () => {
+      // Drain any in-flight runMainSpawnJob from the bootstrap worktree create
+      // before tearing down — its delayed mutateProject would otherwise hit a
+      // cleared store in the next beforeEach and surface as an unhandled rejection.
+      await new Promise((r) => setTimeout(r, 150));
       await app.close();
       await rm(tempDir, { recursive: true, force: true });
     });
@@ -272,7 +284,7 @@ describe("Agent plugins", () => {
       });
 
       expect(res.statusCode).toBe(201);
-      expect(mockSpawn).toHaveBeenCalled();
+      await expect.poll(() => mockSpawn.mock.calls.length).toBeGreaterThan(0);
       const callArgs = mockSpawn.mock.calls[0];
       expect(callArgs?.[0]?.plugin?.name).toBe("claude");
     });

@@ -54,11 +54,21 @@ describe("TerminalPane", () => {
     useWorkspaceStore.setState({
       activeSessionId: "sess-main",
       sessionStates: { "sess-main": "working" },
+      sessionAttachState: {},
     });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("shows spawning placeholder when session is not_started", () => {
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "not_started" },
+      sessionAttachState: {},
+    });
+    render(<TerminalPane api={api} />);
+    expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
   });
 
   it("resume banner hidden when state !== exited", () => {
@@ -85,6 +95,44 @@ describe("TerminalPane", () => {
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith("sess-main");
     });
+    spy.mockRestore();
+  });
+
+  it("replaces Resume with busy indicator while resumeSession is in flight", async () => {
+    const user = userEvent.setup();
+    let resolveResume!: (v: Awaited<ReturnType<typeof api.resumeSession>>) => void;
+    const deferred = new Promise<Awaited<ReturnType<typeof api.resumeSession>>>((res) => {
+      resolveResume = res;
+    });
+    const spy = vi.spyOn(api, "resumeSession").mockReturnValue(deferred);
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "exited" },
+    });
+    render(<TerminalPane api={api} />);
+    await user.click(screen.getByRole("button", { name: /Resume/i }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: /Resume/i })).toBeNull();
+      expect(screen.getByRole("status", { name: /resuming session/i })).toBeInTheDocument();
+    });
+    resolveResume({
+      id: "sess-main",
+      worktreeId: "wt-1",
+      modeId: "mode-1",
+      type: "agent",
+      label: "main",
+      slot: "m",
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-main",
+      createdAt: new Date().toISOString(),
+    });
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/Session exited/i)).toBeNull();
+    });
+    spy.mockRestore();
   });
 
   it("opens session on mount and closes on unmount", async () => {
@@ -142,5 +190,48 @@ describe("TerminalPane", () => {
     // The RO fires rAF then resizeSession — just confirm no error thrown
     // (resizeSession may have been called from settle too)
     expect(resizeSpy).toBeDefined();
+  });
+
+  it("renders SpawningPlaceholder when attach is pending", () => {
+    // Test verifies that when sessionAttachState is "pending",
+    // the SpawningPlaceholder is shown instead of the xterm.
+    // This handles the gap between "resume" or "new tab" and actual attach completion.
+    // Implementation: TerminalPane.tsx derives displayState:
+    //   if (attach === "pending") → displayState = "spawning"
+    //   render SpawningPlaceholder early, return before xterm construction
+    useWorkspaceStore.setState({
+      activeSessionId: "sess-main",
+      sessionStates: { "sess-main": "working" },
+      sessionAttachState: { "sess-main": "pending" },
+    });
+    render(<TerminalPane api={api} />);
+    expect(screen.getByRole("status", { name: /starting|reconnecting/i })).toBeInTheDocument();
+  });
+
+  it("renders xterm after session:opened arrives", async () => {
+    // Test verifies that xterm is not constructed until sessionAttachState transitions from pending to attached.
+    // Implementation: TerminalPane.tsx listens to session:opened and calls markSessionAttached(id).
+    // This transitions displayState from "spawning" to the actual session state.
+    useWorkspaceStore.setState({
+      activeSessionId: "sess-main",
+      sessionStates: { "sess-main": "working" },
+      sessionAttachState: { "sess-main": "pending" },
+    });
+    const { rerender } = render(<TerminalPane api={api} />);
+
+    // Initially shows spawning placeholder
+    expect(screen.getByRole("status", { name: /starting|reconnecting/i })).toBeInTheDocument();
+
+    // Simulate session:opened event which marks attach as complete
+    await act(async () => {
+      api.__test.emit({ type: "session:opened", sessionId: "sess-main" });
+      useWorkspaceStore.setState({
+        sessionAttachState: { "sess-main": "attached" },
+      });
+      rerender(<TerminalPane api={api} />);
+    });
+
+    // After attach completes, spawning placeholder should be gone
+    expect(screen.queryByRole("status")).toBeNull();
   });
 });

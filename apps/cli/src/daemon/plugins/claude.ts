@@ -33,7 +33,11 @@ export function createClaudePlugin(): AgentPlugin {
       };
     },
 
-    composeLaunchPrompt(prompt: { systemPrompt: string; taskPrompt?: string }) {
+    composeLaunchPrompt(prompt: {
+      systemPrompt: string;
+      taskPrompt?: string;
+      sessionId: string;
+    }) {
       const launchArgs: string[] = [
         "--dangerously-skip-permissions",
         "--system-prompt",

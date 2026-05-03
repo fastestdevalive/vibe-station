@@ -99,7 +99,16 @@ export function Workspace() {
             onOpenQuickOpen={() => setQuickOpen(true)}
           />
         }
-        leftSidebar={<LeftSidebar api={api} collapsed={!isMobile && leftSidebarCollapsed} onWorktreeSelected={() => { if (isDashboard) navigate("/workspace"); }} />}
+        leftSidebar={
+          <LeftSidebar
+            api={api}
+            collapsed={!isMobile && leftSidebarCollapsed}
+            onWorktreeSelected={() => {
+              if (isMobile) setMobileSidebarOpen(false);
+              if (isDashboard) navigate("/worktree");
+            }}
+          />
+        }
         dashboardPane={isDashboard ? <DashboardPanel api={api} /> : undefined}
         leftColumnPx={leftColumnPx}
         isMobile={isMobile}

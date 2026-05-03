@@ -34,8 +34,20 @@ export function useSessionOutput(
 
   useEffect(() => {
     if (!sessionId) return undefined;
+    // Log D: first session:output event
+    let firstOutput = true;
     const offOutput = api.on("session:output", (ev) => {
-      if (ev.type === "session:output" && ev.sessionId === sessionId) setLastChunk(ev.chunk);
+      if (ev.type === "session:output" && ev.sessionId === sessionId) {
+        if (firstOutput) {
+          firstOutput = false;
+          console.log('[term] first session:output', {
+            ts: Date.now(),
+            session: sessionId,
+            len: ev.chunk.length,
+          });
+        }
+        setLastChunk(ev.chunk);
+      }
     });
     const offState = api.on("session:state", (ev) => {
       if (ev.type === "session:state" && ev.sessionId === sessionId) setSessionState(ev.state);

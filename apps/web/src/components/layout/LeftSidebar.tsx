@@ -7,6 +7,8 @@ import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useSubscription } from "@/hooks/useSubscription";
+import { StatusDot } from "@/components/layout/StatusDot";
+import { worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { ModesMenuDialog } from "@/components/dialogs/ModesMenuDialog";
@@ -138,6 +140,23 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
           ...prev,
           [ev.worktree.projectId]: [...(prev[ev.worktree.projectId] ?? []), ev.worktree],
         }));
+        setSessionMap((prev) => ({
+          ...prev,
+          [ev.worktree.id]: prev[ev.worktree.id] ?? [],
+        }));
+      }
+      if (ev.type === "session:created") {
+        const snap = ev.snapshot;
+        if (!snap) return;
+        setSessionMap((prev) => {
+          const list = prev[snap.worktreeId] ?? [];
+          const exists = list.some((s) => s.id === snap.id);
+          const nextList = exists
+            ? list.map((s) => (s.id === snap.id ? snap : s))
+            : [...list, snap];
+          return { ...prev, [snap.worktreeId]: nextList };
+        });
+        patchSessionState(snap.id, snap.state);
       }
       if (ev.type === "worktree:deleted") {
         setWorktreeMap((prev) => {
@@ -154,7 +173,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
         });
       }
     });
-  }, [api]);
+  }, [api, patchSessionState]);
 
   /** Close-on-outside must attach after the opening click finishes (same tap was closing the menu / breaking UI). */
   useEffect(() => {
@@ -322,31 +341,44 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
                         aria-label={`Select worktree ${w.branch}`}
                         title={collapsed ? `${w.branch} — select worktree` : undefined}
                       >
-                        <span className="wt-align-gutter" aria-hidden />
-                        <span className="wt-row__label">
-                          {collapsed ? disambiguatedAbbrev(w.branch, w.id, wtList.map((x) => ({ id: x.id, name: x.branch }))) : w.branch}
-                        </span>
+                        <div className="wt-row__expand">
+                          {!collapsed ? (
+                            <span className="wt-leading-slot" aria-hidden>
+                              <StatusDot
+                                status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
+                              />
+                            </span>
+                          ) : null}
+                          <span className="wt-row__label">
+                            {collapsed ? disambiguatedAbbrev(w.branch, w.id, wtList.map((x) => ({ id: x.id, name: x.branch }))) : w.branch}
+                          </span>
+                        </div>
                         {!collapsed ? (
-                          <button
-                            type="button"
-                            data-wt-menu-trigger
-                            className="icon-btn wt-menu-trigger tree-row__action"
-                            aria-label={`Worktree actions for ${w.branch}`}
-                            aria-expanded={wtMenu?.worktree.id === w.id}
-                            aria-haspopup="menu"
-                            title="Worktree menu"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const rect = e.currentTarget.getBoundingClientRect();
-                              setWtMenu((prev) =>
-                                prev?.worktree.id === w.id
-                                  ? null
-                                  : { projectId: p.id, worktree: w, rect },
-                              );
-                            }}
-                          >
-                            <MoreHorizontal size={16} />
-                          </button>
+                          <div className="wt-row__trail">
+                            <span className="wt-row__id" title={w.id}>
+                              {w.id}
+                            </span>
+                            <button
+                              type="button"
+                              data-wt-menu-trigger
+                              className="icon-btn wt-menu-trigger tree-row__action"
+                              aria-label={`Worktree actions for ${w.branch}`}
+                              aria-expanded={wtMenu?.worktree.id === w.id}
+                              aria-haspopup="menu"
+                              title="Worktree menu"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                setWtMenu((prev) =>
+                                  prev?.worktree.id === w.id
+                                    ? null
+                                    : { projectId: p.id, worktree: w, rect },
+                                );
+                              }}
+                            >
+                              <MoreHorizontal size={16} />
+                            </button>
+                          </div>
                         ) : null}
                       </div>
                     </div>

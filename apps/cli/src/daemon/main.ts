@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
 import { loadAll } from "./state/project-store.js";
+import { recoverNotStartedSessions } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
 
 const VRUN_HOME = join(homedir(), ".viberun");
@@ -89,6 +90,8 @@ async function main() {
 
   // Load all project manifests into memory before serving requests
   await loadAll();
+
+  await recoverNotStartedSessions();
 
   const port = await findFreePort(DEFAULT_PORT);
   await writeConfig(port);

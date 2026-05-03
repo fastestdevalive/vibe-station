@@ -5,7 +5,8 @@ export function App() {
   return (
     <Routes>
       <Route path="/" element={<Workspace />} />
-      <Route path="/workspace" element={<Workspace />} />
+      <Route path="/worktree" element={<Workspace />} />
+      <Route path="/workspace" element={<Navigate to="/worktree" replace />} />
       <Route path="/dashboard" element={<Navigate to="/" replace />} />
     </Routes>
   );

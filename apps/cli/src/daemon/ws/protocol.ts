@@ -90,12 +90,26 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
  */
 
 // Per-session events (subscribers / open streams)
+const SessionCreatedSnapshot = z.object({
+  id: z.string(),
+  worktreeId: z.string(),
+  slot: z.string(),
+  type: z.enum(["agent", "terminal"]),
+  modeId: z.string().nullable(),
+  label: z.string(),
+  tmuxName: z.string(),
+  state: z.enum(["not_started", "working", "idle", "done", "exited"]),
+  lifecycleState: z.enum(["not_started", "working", "idle", "done", "exited"]),
+  createdAt: z.string(),
+});
+
 const SessionCreatedEvent = z.object({
   type: z.literal("session:created"),
   sessionId: z.string(),
   worktreeId: z.string(),
   sessionType: z.string(),
   mode: z.string().optional(),
+  snapshot: SessionCreatedSnapshot.optional(),
 });
 
 const SessionStateEvent = z.object({

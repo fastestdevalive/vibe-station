@@ -104,6 +104,10 @@ describe("Session routes", () => {
   });
 
   afterEach(async () => {
+    // Drain any in-flight runMainSpawnJob from the bootstrap worktree create
+    // before tearing down — its delayed mutateProject would otherwise hit a
+    // cleared store in the next beforeEach and surface as an unhandled rejection.
+    await new Promise((r) => setTimeout(r, 150));
     await app.close();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -152,11 +156,32 @@ describe("Session routes", () => {
     expect(session.type).toBe("terminal");
   });
 
+  it("POST /sessions creates terminal session with modeId explicitly null", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "terminal", modeId: null },
+    });
+    expect(res.statusCode).toBe(201);
+    const session = res.json<SessionRecord>();
+    expect(session.type).toBe("terminal");
+    expect(session.slot).toBe("t1");
+  });
+
   it("POST /sessions 400 when agent missing modeId", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/sessions",
       payload: { worktreeId, type: "agent" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /sessions 400 when agent has modeId null", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: null },
     });
     expect(res.statusCode).toBe(400);
   });
