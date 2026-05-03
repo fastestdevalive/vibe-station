@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Columns2,
@@ -38,6 +39,7 @@ interface TopBarProps {
   leftSidebarCollapsed: boolean;
   mobileSidebarOpen: boolean;
   onOpenQuickOpen: () => void;
+  leftColumnPx?: number;
 }
 
 export function TopBar({
@@ -50,6 +52,7 @@ export function TopBar({
   leftSidebarCollapsed,
   mobileSidebarOpen,
   onOpenQuickOpen,
+  leftColumnPx,
 }: TopBarProps) {
   const navigate = useNavigate();
   const {
@@ -78,6 +81,19 @@ export function TopBar({
   const terminalOn = !paneCollapsed[2];
 
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
+
+  // Measure the brand button so we can align the crumb to the sidebar's right edge.
+  const brandRef = useRef<HTMLButtonElement>(null);
+  const [brandWidth, setBrandWidth] = useState(0);
+  useEffect(() => {
+    if (brandRef.current) setBrandWidth(brandRef.current.offsetWidth);
+  }, []);
+
+  // padding-left(12) + toggle(36) + gap(8) + brand + gap(8) = offset already consumed before crumb.
+  const crumbMarginLeft =
+    !isMobile && !leftSidebarCollapsed && leftColumnPx != null && brandWidth > 0
+      ? Math.max(8, leftColumnPx - 12 - 36 - 8 - brandWidth - 8)
+      : undefined;
 
   const crumbParts: { label: string; highlight?: boolean }[] = [];
   if (layoutMode === "dashboard") {
@@ -122,10 +138,14 @@ export function TopBar({
       </button>
       {!isMobile ? (
         <>
-          <button type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
+          <button ref={brandRef} type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
             vibe-station
           </button>
-          <div className="top-bar__crumb" title={crumbTitle}>
+          <div
+            className="top-bar__crumb"
+            title={crumbTitle}
+            style={crumbMarginLeft != null ? { marginLeft: crumbMarginLeft, transition: "margin-left 150ms ease" } : undefined}
+          >
             {crumbNode}
           </div>
         </>
