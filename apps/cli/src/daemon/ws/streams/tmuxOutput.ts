@@ -1,21 +1,45 @@
-import { exec, execSync } from "node:child_process";
-import { mkdtemp, unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { execSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { createReadStream } from "node:fs";
-
-const execAsync = promisify(exec);
+import { spawn as ptySpawn, type IPty } from "node-pty";
+import type { SessionStream } from "./sessionStream.js";
 
 /**
- * Manages tmux pane attachment and output streaming.
- * Handles scrollback capture and live stream via tmux pipe-pane + FIFO.
+ * Manages a tmux session attachment via a real PTY (node-pty + `tmux
+ * attach-session`). tmux drives the terminal via cursor escape sequences
+ * flowing over the PTY byte stream — same model as a user attaching from
+ * a real terminal — so xterm receives a faithful, in-sync byte stream and
+ * never has to re-render a static snapshot.
+ *
+ * Why this instead of capture-pane + pipe-pane:
+ * - capture-pane returns rendered text only; it loses cursor position,
+ *   attribute state, mode flags, scrolling regions, alternate-screen
+ *   state, etc. Replaying that text into xterm produces "shifted lines"
+ *   and cursor desync that no patching can fully fix.
+ * - With node-pty + attach-session, tmux uses the same protocol it would
+ *   use against any interactive client; xterm just renders what arrives.
+ *
+ * UX choices:
+ * - We enable tmux mouse mode (`set-option mouse on`) so the wheel auto-
+ *   enters tmux's copy-mode for scrollback. With `tmux attach-session`,
+ *   TUI agents like claude run in xterm's alternate buffer where xterm-
+ *   native wheel scroll has nothing to scroll. Mouse mode delegates wheel
+ *   events to tmux which gives the user real scrollback. (The previous
+ *   FIFO/capture-pane path put everything in xterm's normal buffer, so
+ *   wheel scrolling worked there without mouse mode — that reasoning
+ *   doesn't apply here.)
+ * - We disable the tmux status bar so it doesn't eat a row at the bottom.
+ *
+ * Persistence: killing the PTY (SIGHUP) detaches this client without
+ * touching the underlying tmux session — same as a user closing their
+ * terminal window. The session keeps running for the next attach.
+ *
+ * SessionStream implementation: single-subscriber per instance (one per WSConnection).
+ * The subscriberId parameter is ignored because each TmuxOutputStream is owned by
+ * one WSConnection, not shared across subscribers.
  */
-export class TmuxOutputStream extends EventEmitter {
+export class TmuxOutputStream extends EventEmitter implements SessionStream {
   private tmuxName: string;
-  private fifoPath: string | null = null;
-  private readStream: any = null;
+  private pty: IPty | null = null;
   private closed = false;
 
   constructor(tmuxName: string) {
@@ -24,139 +48,137 @@ export class TmuxOutputStream extends EventEmitter {
   }
 
   /**
-   * Attach to a tmux pane, resize it, capture scrollback, and start live stream.
-   * Emits:
-   * - 'opened': after successful attachment and scrollback
-   * - 'chunk': for each output chunk (scrollback + live)
-   * - 'error': on attachment failure
-   * - 'close': when the stream is closed
+   * Attach to the tmux session. Emits:
+   * - 'opened' once the PTY has been spawned
+   * - 'chunk' for every byte chunk from the PTY (live + initial redraw)
+   * - 'error' on attach failure
+   * - 'close' when the PTY exits
+   *
+   * subscriberId: ignored (single-subscriber per instance)
    */
-  async attach(cols: number, rows: number): Promise<void> {
+  async attach(cols: number, rows: number, subscriberId: string): Promise<void> {
     try {
-      // Resize the tmux window
+      // Hide tmux's status line for this session — keeps the visible area
+      // equal to the requested rows. Best-effort: a failure here just costs
+      // us one row of green status bar, not a broken session.
       try {
-        execSync(`tmux resize-window -t ${this.tmuxName} -x ${cols} -y ${rows}`, { timeout: 5000 });
+        execSync(`tmux set-option -t ${this.tmuxName} status off`, { timeout: 5000 });
       } catch (err) {
-        // Log but don't fail — resize is best-effort
-        console.warn(`[TmuxStream] Failed to resize window ${this.tmuxName}:`, err);
+        console.warn(`[TmuxStream] Failed to disable status bar for ${this.tmuxName}:`, err);
       }
 
-      // Capture scrollback (~10k lines)
-      const { stdout: scrollback } = await execAsync(
-        `tmux capture-pane -t ${this.tmuxName} -p -S -10000 -e`,
-        { timeout: 5000 },
-      );
-
-      // Emit initial scrollback chunk
-      if (scrollback) {
-        this.emit("chunk", scrollback);
+      // Enable tmux mouse mode so wheel events trigger copy-mode scrolling.
+      // Best-effort — failure here just means the user loses wheel scroll.
+      try {
+        execSync(`tmux set-option -t ${this.tmuxName} mouse on`, { timeout: 5000 });
+      } catch (err) {
+        console.warn(`[TmuxStream] Failed to enable mouse for ${this.tmuxName}:`, err);
       }
+
+      // Force the pane to match the client size BEFORE attach. We can't rely
+      // on the attach-client SIGWINCH alone — tmux's `window-size` option
+      // can be `smallest` or `manual`, in which case the pane keeps the
+      // size from a prior client attach (often 80x24). resize-window is
+      // unconditional and works regardless of `window-size` mode.
+      this.forceWindowSize(cols, rows);
+
+      // Filter undefined env values for node-pty's stricter signature.
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) {
+        if (typeof v === "string") env[k] = v;
+      }
+      env.TERM = "xterm-256color";
+
+      const pty = ptySpawn("tmux", ["attach-session", "-t", this.tmuxName], {
+        name: "xterm-256color",
+        cols,
+        rows,
+        cwd: env.HOME || "/",
+        env,
+      });
+
+      this.pty = pty;
+
+      pty.onData((data: string) => {
+        if (this.closed) return;
+        this.emit("chunk", data);
+      });
+
+      pty.onExit(({ exitCode }) => {
+        if (this.closed) return;
+        this.closed = true;
+        // Exit code 0 from `tmux attach-session` is a clean detach (the
+        // session itself is fine); anything else is an attach failure
+        // (most commonly: session was killed while we were attached).
+        if (exitCode !== 0) {
+          this.emit("error", `tmux attach-session exited with code ${exitCode}`);
+        } else {
+          this.emit("close");
+        }
+      });
 
       this.emit("opened");
-
-      // Start live stream via pipe-pane
-      this._startLiveStream();
     } catch (err) {
       this.closed = true;
       this.emit("error", err instanceof Error ? err.message : String(err));
     }
   }
 
-  /**
-   * Start live stream via tmux pipe-pane using a temporary FIFO.
-   */
-  private async _startLiveStream(): Promise<void> {
-    try {
-      // Create a temporary FIFO using mkdtemp + mkfifo workaround
-      // For now, use a simple approach: spawn a subshell that tails the fifo
-      const tmpDir = await mkdtemp(join(tmpdir(), "vst-tmux-"));
-      this.fifoPath = join(tmpDir, "output.fifo");
+  /** Forward keystrokes from the client to the attached tmux pane. */
+  write(data: string): void {
+    if (this.pty && !this.closed) {
+      this.pty.write(data);
+    }
+  }
 
-      // Create the FIFO
-      execSync(`mkfifo ${this.fifoPath}`, { timeout: 5000 });
-
-      // Start pipe-pane to write to the FIFO
-      // Use 'cat > fifo' as the command
+  /** Resize the PTY (and through it, tmux's pane) to match the client. subscriberId ignored (single subscriber). */
+  resize(cols: number, rows: number, _subscriberId?: string): void {
+    if (this.pty && !this.closed) {
       try {
-        execSync(`tmux pipe-pane -t ${this.tmuxName} -O "cat > ${this.fifoPath}"`, {
-          timeout: 5000,
-        });
+        this.pty.resize(cols, rows);
       } catch (err) {
-        // pipe-pane may return non-zero — that's okay
-        console.warn(`[TmuxStream] pipe-pane returned error (expected):`, err);
+        // Common transient causes: PTY just exited, fd already closed.
+        // Surfacing these as warnings clutters logs without helping.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/EBADF|ENOTTY|ioctl|not open/.test(msg)) {
+          console.warn(`[TmuxStream] resize failed for ${this.tmuxName}:`, err);
+        }
       }
-
-      // Open the FIFO for reading
-      this.readStream = createReadStream(this.fifoPath, { encoding: "utf8" });
-
-      this.readStream.on("data", (chunk: string) => {
-        if (!this.closed) {
-          this.emit("chunk", chunk);
-        }
-      });
-
-      this.readStream.on("error", (err: Error) => {
-        if (!this.closed) {
-          console.error(`[TmuxStream] Read stream error:`, err);
-          this.emit("error", err.message);
-        }
-      });
-
-      this.readStream.on("close", () => {
-        if (!this.closed) {
-          this.closed = true;
-          this._cleanup();
-        }
-      });
-
-      this.readStream.on("end", () => {
-        if (!this.closed) {
-          this.closed = true;
-          this._cleanup();
-        }
-      });
-    } catch (err) {
-      this.closed = true;
-      this.emit("error", err instanceof Error ? err.message : String(err));
+      // Belt-and-braces: also issue an explicit resize-window. pty.resize
+      // alone is sufficient when `window-size` is `latest` (the default),
+      // but does nothing under `manual` or when our client isn't the
+      // smallest under `smallest`. resize-window is unconditional.
+      this.forceWindowSize(cols, rows);
     }
   }
 
-  /**
-   * Detach from the pane and stop streaming.
-   */
-  async detach(): Promise<void> {
-    if (this.closed) return;
+  private forceWindowSize(cols: number, rows: number): void {
+    try {
+      execSync(`tmux resize-window -t ${this.tmuxName} -x ${cols} -y ${rows}`, {
+        timeout: 5000,
+      });
+    } catch (err) {
+      console.warn(`[TmuxStream] resize-window failed for ${this.tmuxName}:`, err);
+    }
+  }
 
+  /** Detach this client. Underlying tmux session keeps running. subscriberId is ignored. */
+  async detach(subscriberId: string): Promise<void> {
+    if (this.closed) return;
     this.closed = true;
 
-    // Stop the pipe-pane
-    try {
-      execSync(`tmux pipe-pane -t ${this.tmuxName}`, { timeout: 5000 });
-    } catch (err) {
-      console.warn(`[TmuxStream] Failed to stop pipe-pane:`, err);
-    }
-
-    // Close the read stream
-    if (this.readStream) {
+    if (this.pty) {
       try {
-        this.readStream.destroy();
+        // SIGHUP — the same signal a user's terminal sends on close.
+        // tmux interprets this as the client going away and detaches
+        // without killing the session.
+        this.pty.kill();
       } catch (err) {
-        // best-effort
+        console.warn(`[TmuxStream] Error killing pty for ${this.tmuxName}:`, err);
       }
+      this.pty = null;
     }
 
-    this._cleanup();
     this.emit("close");
-  }
-
-  private async _cleanup(): Promise<void> {
-    if (this.fifoPath) {
-      try {
-        await unlink(this.fifoPath);
-      } catch (err) {
-        // best-effort
-      }
-      this.fifoPath = null;
-    }
   }
 }

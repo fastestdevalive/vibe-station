@@ -64,6 +64,7 @@ describe("spawnSession prompt verification", () => {
       type: "agent",
       modeId: "m1",
       tmuxName: "tmux-verify-1",
+      useTmux: true,
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
     };
     tmux.capturePane.mockResolvedValue(`x VSTPRMT:${session.id} y`);
@@ -89,6 +90,7 @@ describe("spawnSession prompt verification", () => {
       type: "agent",
       modeId: "m1",
       tmuxName: "tmux-verify-2",
+      useTmux: true,
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
     };
     tmux.capturePane
@@ -116,6 +118,7 @@ describe("spawnSession prompt verification", () => {
       type: "agent",
       modeId: "m1",
       tmuxName: "tmux-verify-3",
+      useTmux: true,
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
     };
     tmux.capturePane.mockResolvedValue("still nothing");

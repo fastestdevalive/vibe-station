@@ -3,6 +3,7 @@
  * Implements the rollback sequence from HIGH-LEVEL-DESIGN.md §5.
  */
 import { killSession } from "./tmux.js";
+import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { worktreeRemove, deleteBranch } from "./git.js";
 import { worktreePath as getWorktreePath } from "./paths.js";
 import type { ProjectRecord, WorktreeRecord } from "../types.js";
@@ -23,12 +24,17 @@ export async function rollbackWorktreeCreate(
 ): Promise<string[]> {
   const errors: string[] = [];
 
-  // 1. Kill tmux sessions
+  // 1. Kill sessions (tmux or direct-pty)
   for (const session of worktree.sessions) {
-    try {
-      await killSession(session.tmuxName);
-    } catch (err) {
-      errors.push(`tmux kill-session '${session.tmuxName}': ${String(err)}`);
+    if (!session.useTmux) {
+      // Direct-pty: kill via registry stream (public kill() method).
+      directPtyRegistry.get(session.id)?.kill?.();
+    } else {
+      try {
+        await killSession(session.tmuxName);
+      } catch (err) {
+        errors.push(`tmux kill-session '${session.tmuxName}': ${String(err)}`);
+      }
     }
   }
 

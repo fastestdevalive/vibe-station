@@ -1,9 +1,11 @@
 import { Command } from "commander";
 import { spawn } from "node:child_process";
+import { mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDaemonUrl } from "../../lib/daemon-url.js";
 import { die, warn } from "../../lib/output.js";
+import { daemonLogPath } from "../../daemon/services/paths.js";
 import ora from "ora";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -31,9 +33,15 @@ export function registerDaemonStart(daemon: Command): void {
       const spinner = ora("Starting daemon...").start();
 
       try {
+        // Open the log file (append) and redirect daemon stdout + stderr there
+        // so post-mortem and live debugging are possible (`tail -f`).
+        const logPath = daemonLogPath();
+        mkdirSync(dirname(logPath), { recursive: true });
+        const logFd = openSync(logPath, "a");
+
         const child = spawn(process.execPath, [DAEMON_MAIN], {
           detached: true,
-          stdio: "ignore",
+          stdio: ["ignore", logFd, logFd],
         });
         child.unref();
 
@@ -58,9 +66,10 @@ export function registerDaemonStart(daemon: Command): void {
         if (started) {
           const url = getDaemonUrl() ?? "";
           spinner.succeed(`Daemon started at ${url}`);
+          console.log(`  Logs: ${logPath}`);
         } else {
           spinner.fail("Daemon did not become healthy within 5 s");
-          die("Daemon start timed out", 1);
+          die(`Daemon start timed out. Check ${logPath} for details.`, 1);
         }
       } catch (err) {
         spinner.fail();

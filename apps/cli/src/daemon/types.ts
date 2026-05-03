@@ -27,6 +27,7 @@ export interface SessionRecord {
   type: SessionType;
   modeId?: string;
   tmuxName: string;
+  useTmux: boolean;
   lifecycle: SessionLifecycle;
   transcriptRef?: TranscriptRef;
   agentChatId?: string;

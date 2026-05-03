@@ -6,7 +6,8 @@
  * 2. Persist record at not_started (done by caller)
  * 3. Setup workspace hooks (plugin.setupWorkspaceHooks)
  * 4. Resolve env (VST_*)
- * 5. tmux new-session
+ * 5a. For useTmux=true: tmux new-session
+ * 5b. For useTmux=false: DirectPtyBackend.spawn
  * 6. Wait for ready signal (getReadySignal) — if sentinel not found, fallback after ms
  * 7. Send postLaunchInput if any
  * 8. Flip state to working (caller persists)
@@ -14,6 +15,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { newSession, hasSession, capturePane, pasteBuffer } from "./tmux.js";
+import { DirectPtyBackend } from "./directPty.js";
 import { worktreePath as getWorktreePath, sessionDataDir, systemPromptPath } from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
@@ -74,16 +76,33 @@ export interface SpawnSessionFromArgvOptions {
 }
 
 /**
- * Spawn a tmux session with an explicit argv (no prompt composition).
+ * Spawn a session with an explicit argv (no prompt composition).
  * Used by resume path to spawn from restore argv directly.
- * Step sequence: spawn tmux → wait fallbackMs (no sentinel, no post-launch input).
+ * Branches on useTmux: direct-pty spawns via DirectPtyBackend, tmux via newSession.
  */
 export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): Promise<void> {
   const { project, worktree, session, argv, env, fallbackMs } = opts;
-
   const wtPath = getWorktreePath(project.id, worktree.id);
 
-  // Spawn tmux with the explicit argv
+  if (!session.useTmux) {
+    // Direct-pty spawn
+    await DirectPtyBackend.spawn({
+      command: argv[0]!,
+      args: argv.slice(1),
+      cwd: wtPath,
+      env,
+      cols: 80,
+      rows: 24,
+      sessionId: session.id,
+      projectId: project.id,
+      worktreeId: worktree.id,
+    });
+
+    await sleep(fallbackMs);
+    return;
+  }
+
+  // Tmux spawn (existing code)
   try {
     await newSession({
       name: session.tmuxName,
@@ -101,17 +120,16 @@ export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): P
     throw err;
   }
 
-  // Wait for fallback timeout (no sentinel check, no post-launch input)
   await sleep(fallbackMs);
 }
 
 /**
- * Spawn the tmux session for an agent session.
+ * Spawn a session from plugin configuration.
  * Assumes the session record is already in memory + on disk at not_started state.
+ * Branches on session.useTmux.
  */
 export async function spawnSession(opts: SpawnOptions): Promise<void> {
   const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt } = opts;
-
   const wtPath = getWorktreePath(project.id, worktree.id);
 
   const launchCfg: LaunchConfig = {
@@ -152,13 +170,57 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   };
 
   // Build launch command (binary + flags)
-  // When the plugin signals useShell, wrap in `sh -lc <shellLine>` so that
-  // shell substitutions like $(cat <file>) are evaluated at exec time.
   const commandParts: string[] = useShell && shellLine
     ? ["sh", "-lc", shellLine]
     : [...plugin.getLaunchCommand(launchCfg), ...(launchArgs ?? [])];
 
-  // Step 5: Spawn tmux
+  // Step 5: Spawn (branch on useTmux)
+  if (!session.useTmux) {
+    // Direct-pty path
+    let stream = null;
+    try {
+      stream = await DirectPtyBackend.spawn({
+        command: commandParts[0]!,
+        args: commandParts.slice(1),
+        cwd: wtPath,
+        env: baseEnv,
+        cols: 80,
+        rows: 24,
+        sessionId: session.id,
+        projectId: project.id,
+        worktreeId: worktree.id,
+      });
+
+      // Step 6: Wait for ready signal
+      const { sentinel, fallbackMs } = plugin.getReadySignal();
+      if (sentinel) {
+        const ready = await stream.waitForOutput(sentinel, fallbackMs);
+        if (!ready) {
+          console.warn(
+            `[spawn] Ready sentinel not found for ${session.id} (${plugin.name}); proceeding anyway`,
+          );
+        }
+      } else {
+        await sleep(fallbackMs);
+      }
+
+      await sleep(plugin.postSentinelDelayMs ?? 0);
+
+      // Step 7: Send postLaunchInput
+      if (postLaunchInput) {
+        stream.write(postLaunchInput);
+      }
+    } catch (err) {
+      // Clean up the stream on error
+      if (stream) {
+        stream.kill();
+      }
+      throw err;
+    }
+    return;
+  }
+
+  // Tmux path (existing logic)
   try {
     await newSession({
       name: session.tmuxName,
@@ -188,13 +250,6 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
 
   // Step 7: Send postLaunchInput if any — use paste-buffer to avoid shell arg-length limits
   if (postLaunchInput) {
-    // The agent process may have already exited (waiting on an interactive
-    // prompt like `cursor-agent`'s workspace-trust gate, missing binary,
-    // crash at startup, etc.). Skip the paste so worktree creation still
-    // succeeds — the lifecycle poller will detect the dead pane within ~1s
-    // and the UI will surface a Resume button. The user can resolve the
-    // underlying issue (accept trust prompt, install the CLI, etc.) and
-    // resume from there.
     if (!(await hasSession(session.tmuxName))) {
       const binary = commandParts[0] ?? plugin.name;
       console.warn(

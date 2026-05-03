@@ -77,6 +77,47 @@ describe("manifest read/write", () => {
     const loaded = await readManifest("overwrite-test");
     expect(loaded.defaultBranch).toBe("develop");
   });
+
+  it("1.T3 — SessionRecord without useTmux field deserializes with useTmux === true", async () => {
+    const { writeManifest, readManifest } = await import("../services/manifest.js");
+    const { writeFile, mkdir: mkdirFs } = await import("node:fs/promises");
+    const { manifestPath, projectDir } = await import("../services/paths.js");
+
+    // Write a manifest that lacks useTmux on the session (pre-feature format)
+    const projectId = "legacy-project";
+    const rawManifest = JSON.stringify({
+      id: projectId,
+      absolutePath: "/fake/path",
+      prefix: "legp",
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      worktrees: [
+        {
+          id: "wt-1",
+          branch: "main",
+          baseBranch: "main",
+          baseSha: "abc123",
+          createdAt: new Date().toISOString(),
+          sessions: [
+            {
+              id: "sess-1",
+              slot: "m",
+              type: "agent",
+              tmuxName: "vst-abc-1-m",
+              // useTmux intentionally absent
+              lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+            },
+          ],
+        },
+      ],
+    });
+
+    await mkdirFs(projectDir(projectId), { recursive: true });
+    await writeFile(manifestPath(projectId), rawManifest, "utf8");
+
+    const loaded = await readManifest(projectId);
+    expect(loaded.worktrees[0]!.sessions[0]!.useTmux).toBe(true);
+  });
 });
 
 describe("project-store", () => {

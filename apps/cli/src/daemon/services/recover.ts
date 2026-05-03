@@ -3,6 +3,7 @@
  */
 
 import { hasSession } from "./tmux.js";
+import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { getAllProjects, mutateProject } from "../state/project-store.js";
 import type { SessionLifecycle } from "../types.js";
 
@@ -13,6 +14,28 @@ export async function recoverNotStartedSessions(): Promise<void> {
     for (const wt of project.worktrees) {
       for (const session of wt.sessions) {
         if (session.lifecycle.state !== "not_started") continue;
+
+        if (session.useTmux === false) {
+          // Direct-pty sessions can't survive a daemon restart.
+          // The registry will be empty on boot, so treat as exited.
+          const alive = directPtyRegistry.has(session.id);
+          if (alive) {
+            console.log(`[recover] ${session.id}: direct-pty stream alive → promote to working`);
+            decisions.set(session.id, {
+              state: "working",
+              reason: "recovered-from-not-started",
+              lastTransitionAt: new Date().toISOString(),
+            });
+          } else {
+            console.log(`[recover] ${session.id}: direct-pty not found → mark exited`);
+            decisions.set(session.id, {
+              state: "exited",
+              reason: "daemon-restart-during-spawn",
+              lastTransitionAt: new Date().toISOString(),
+            });
+          }
+          continue;
+        }
 
         const alive = await hasSession(session.tmuxName);
         if (alive) {

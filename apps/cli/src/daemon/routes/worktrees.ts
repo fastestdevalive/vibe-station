@@ -10,12 +10,14 @@ import { validateBranch, branchExistsInRepo } from "../services/branchValidator.
 import { reserveNextWorktreeNum, buildTmuxName } from "../services/sessionId.js";
 import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists } from "../services/git.js";
 import { killSession } from "../services/tmux.js";
+import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../plugins/registry.js";
+import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
 
@@ -99,6 +101,7 @@ const CreateWorktreeBody = z.object({
   branch: z.string().min(1),
   baseBranch: z.string().min(1).optional(),
   prompt: z.string().optional(),
+  useTmux: z.boolean().optional(),
 });
 
 async function runMainSpawnJob(opts: {
@@ -198,7 +201,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { projectId, branch, baseBranch: baseBranchInput, modeId } = result.data;
+    const { projectId, branch, baseBranch: baseBranchInput, modeId, useTmux: rawUseTmux } = result.data;
+    const useTmux = resolveUseTmux(rawUseTmux);
 
     const project = getProject(projectId);
     if (!project) return reply.status(404).send({ error: `Project '${projectId}' not found` });
@@ -249,13 +253,14 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       worktreeAdded = true;
 
       // Build the main session record
-      const mainTmuxName = buildTmuxName(freshProject.prefix, wtNum, "m");
+      const mainTmuxName = useTmux ? buildTmuxName(freshProject.prefix, wtNum, "m") : `__direct__-${wtId}-m`;
       const mainSession: SessionRecord = {
         id: `${wtId}-m`,
         slot: "m",
         type: "agent",
         modeId,
         tmuxName: mainTmuxName,
+        useTmux,
         lifecycle: {
           state: "not_started",
           lastTransitionAt: new Date().toISOString(),
@@ -360,12 +365,16 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
 
-    // Kill all tmux sessions (always)
+    // Kill all sessions (tmux or direct-pty)
     for (const session of worktree.sessions) {
-      try {
-        await killSession(session.tmuxName);
-      } catch {
-        // best-effort
+      if (!session.useTmux) {
+        directPtyRegistry.get(session.id)?.kill?.();
+      } else {
+        try {
+          await killSession(session.tmuxName);
+        } catch {
+          // best-effort
+        }
       }
       // Best-effort cleanup of per-session data dir
       cleanupSessionDataDir(project.id, wtId, session.id);

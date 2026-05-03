@@ -1,7 +1,10 @@
 import type { WSConnection } from "../connection.js";
+import type { OpenStreamEntry } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import { TmuxOutputStream } from "../streams/tmuxOutput.js";
-import { findTmuxNameForSession } from "./sessionLookup.js";
+import { findSessionRecord } from "./sessionLookup.js";
+import { directPtyRegistry } from "../../state/directPtyRegistry.js";
+import type { SessionStream } from "../streams/sessionStream.js";
 
 export async function handleSessionOpen(
   conn: WSConnection,
@@ -12,16 +15,19 @@ export async function handleSessionOpen(
   // If a stale stream is still registered (e.g. user clicked Resume after the
   // tmux pane died — the FIFO close didn't unregister), tear it down so this
   // open can attach to the freshly-spawned pane.
-  if (conn.hasOpenStream(sessionId)) {
-    const stale = conn.openStreams.get(sessionId) as TmuxOutputStream | undefined;
-    if (stale) {
-      try { await stale.detach(); } catch { /* best-effort */ }
+  const stale = conn.openStreams.get(sessionId);
+  if (stale) {
+    try {
+      stale.stream.off("chunk", stale.onChunk);
+      await stale.stream.detach(stale.subscriberId);
+    } catch { /* best-effort */ }
+    if (conn.openStreams.get(sessionId) === stale) {
+      conn.unregisterOpenStream(sessionId);
     }
-    conn.unregisterOpenStream(sessionId);
   }
 
-  const tmuxName = findTmuxNameForSession(sessionId);
-  if (!tmuxName) {
+  const result = findSessionRecord(sessionId);
+  if (!result) {
     conn.send({
       type: "session:error",
       sessionId,
@@ -30,12 +36,49 @@ export async function handleSessionOpen(
     return;
   }
 
+  const { session } = result;
+  const subscriberId = `${conn.id}:${sessionId}`;
+
   try {
+    let stream: SessionStream;
 
-    const stream = new TmuxOutputStream(tmuxName);
-    conn.registerOpenStream(sessionId, stream);
+    if (session.useTmux) {
+      // Tmux mode: one PTY per connection
+      stream = new TmuxOutputStream(session.tmuxName);
+    } else {
+      // Direct-pty mode: shared stream from registry
+      const existing = directPtyRegistry.get(sessionId);
+      if (!existing) {
+        conn.send({
+          type: "session:error",
+          sessionId,
+          message: `Session '${sessionId}' not running`,
+        });
+        return;
+      }
+      stream = existing;
+    }
 
-    // Set up event listeners
+    const onChunk = (chunk: string) => {
+      conn.send({
+        type: "session:output",
+        sessionId,
+        chunk,
+      });
+    };
+
+    const entry: OpenStreamEntry = {
+      kind: session.useTmux ? "tmux" : "direct",
+      stream,
+      subscriberId,
+      onChunk,
+    };
+    conn.registerOpenStream(sessionId, entry);
+
+    // Set up event listeners. The unregister-on-close/error guards check that
+    // the openStreams entry still points at THIS stream — under StrictMode
+    // dev or a fullscreen-toggle remount, a follow-up open can replace the
+    // entry, and we must not clobber it when this stream finally closes.
     stream.once("opened", () => {
       conn.send({
         type: "session:opened",
@@ -43,16 +86,13 @@ export async function handleSessionOpen(
       });
     });
 
-    stream.on("chunk", (chunk: string) => {
-      conn.send({
-        type: "session:output",
-        sessionId,
-        chunk,
-      });
-    });
+    stream.on("chunk", onChunk);
 
     stream.once("error", (message: string) => {
-      conn.unregisterOpenStream(sessionId);
+      stream.off("chunk", onChunk);
+      if (conn.openStreams.get(sessionId) === entry) {
+        conn.unregisterOpenStream(sessionId);
+      }
       conn.send({
         type: "session:error",
         sessionId,
@@ -61,11 +101,14 @@ export async function handleSessionOpen(
     });
 
     stream.once("close", () => {
-      conn.unregisterOpenStream(sessionId);
+      stream.off("chunk", onChunk);
+      if (conn.openStreams.get(sessionId) === entry) {
+        conn.unregisterOpenStream(sessionId);
+      }
     });
 
     // Start attachment
-    await stream.attach(cols, rows);
+    await stream.attach(cols, rows, subscriberId);
   } catch (err) {
     conn.send({
       type: "session:error",

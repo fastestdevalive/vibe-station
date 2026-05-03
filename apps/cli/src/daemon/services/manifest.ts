@@ -6,10 +6,17 @@
 import { readFile, writeFile, rename, open, mkdir } from "node:fs/promises";
 import type { ProjectRecord } from "../types.js";
 import { manifestPath, manifestTmpPath, projectDir } from "./paths.js";
+import { resolveUseTmux } from "./resolveUseTmux.js";
 
 export async function readManifest(projectId: string): Promise<ProjectRecord> {
   const content = await readFile(manifestPath(projectId), "utf8");
-  return JSON.parse(content) as ProjectRecord;
+  const record = JSON.parse(content) as ProjectRecord;
+  for (const worktree of record.worktrees) {
+    for (const session of worktree.sessions) {
+      session.useTmux = resolveUseTmux(session.useTmux);
+    }
+  }
+  return record;
 }
 
 export async function writeManifest(record: ProjectRecord): Promise<void> {

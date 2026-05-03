@@ -30,13 +30,27 @@ function serializeProject(p: ProjectRecord) {
 const CreateProjectBody = z.object({
   path: z.string().min(1),
   name: z.string().min(1).max(64).optional(),
-  prefix: z.string().min(1).max(6).optional(),
+  // Constrained to lowercase alphanumerics — `prefix` flows into shell-
+  // interpolated `tmux` commands (e.g. `tmux send-keys -t ${tmuxName}`)
+  // via session.tmuxName, so any non-alphanumeric byte would be a shell
+  // injection vector. Daemon binds to 127.0.0.1 (local-only), but defense
+  // in depth.
+  prefix: z.string().regex(/^[a-z0-9]{1,6}$/).optional(),
 });
 
 export function registerProjectRoutes(app: FastifyInstance): void {
   // GET /projects
+  // Order newest-first by `createdAt`, breaking ties on `id`. The in-memory
+  // store is a Map whose iteration order tracks insertion, but daemon-boot
+  // load is `Promise.all` over `readdir`, so the same on-disk projects can
+  // appear in different orders across restarts. Stable sort here gives
+  // clients a deterministic listing.
   app.get("/projects", async (_req, reply) => {
-    return reply.send(getAllProjects().map(serializeProject));
+    const sorted = [...getAllProjects()].sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      return a.id < b.id ? -1 : 1;
+    });
+    return reply.send(sorted.map(serializeProject));
   });
 
   // POST /projects

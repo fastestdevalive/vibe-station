@@ -11,17 +11,24 @@ export function useSubscription(sessionIds: string[], api: ApiInstance) {
 }
 
 /**
- * Subscribes to session events and returns the latest output chunk + state.
+ * Subscribes to session lifecycle events and returns the current state.
+ * Does NOT forward output chunks — TerminalPane subscribes to
+ * "session:output" directly and writes to xterm synchronously, because
+ * routing chunks through React state drops them: identical consecutive
+ * chunks (e.g. repeated backspace echoes "\b \b") cause React to bail out
+ * of the re-render, and chunks arriving in the same tick get coalesced
+ * to the last value.
+ *
  * Does NOT call openSession — the caller (TerminalPane) must call
- * api.openSession(sessionId, cols, rows) after the terminal is properly sized,
- * so the backend resizes the pty and replays scrollback at the right dimensions.
+ * api.openSession(sessionId, cols, rows) after the terminal is properly
+ * sized, so the backend resizes the pty and replays scrollback at the
+ * right dimensions.
  */
 export function useSessionOutput(
   api: ApiInstance,
   sessionId: string | null,
 ) {
   const [sessionState, setSessionState] = useState<SessionState | null>(null);
-  const [lastChunk, setLastChunk] = useState<string | null>(null);
 
   useSubscription(sessionId ? [sessionId] : [], api);
 
@@ -29,26 +36,10 @@ export function useSessionOutput(
   // leak into the newly-selected session's banner.
   useEffect(() => {
     setSessionState(null);
-    setLastChunk(null);
   }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) return undefined;
-    // Log D: first session:output event
-    let firstOutput = true;
-    const offOutput = api.on("session:output", (ev) => {
-      if (ev.type === "session:output" && ev.sessionId === sessionId) {
-        if (firstOutput) {
-          firstOutput = false;
-          console.log('[term] first session:output', {
-            ts: Date.now(),
-            session: sessionId,
-            len: ev.chunk.length,
-          });
-        }
-        setLastChunk(ev.chunk);
-      }
-    });
     const offState = api.on("session:state", (ev) => {
       if (ev.type === "session:state" && ev.sessionId === sessionId) setSessionState(ev.state);
     });
@@ -75,7 +66,6 @@ export function useSessionOutput(
       }
     });
     return () => {
-      offOutput();
       offState();
       offExited();
       offError();
@@ -84,7 +74,7 @@ export function useSessionOutput(
     };
   }, [api, sessionId]);
 
-  return { lastChunk, sessionState };
+  return { sessionState };
 }
 
 export function useFileWatch(api: ApiInstance, worktreeId: string | null, path: string | null) {
