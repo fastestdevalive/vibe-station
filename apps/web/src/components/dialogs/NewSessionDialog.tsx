@@ -74,7 +74,7 @@ export function NewSessionDialog({
         worktreeId: existingWtId,
         modeId: modeId || null,
         type: "agent",
-        initialPrompt: initialPrompt.trim() || undefined,
+        prompt: initialPrompt.trim() || undefined,
       });
     }
     onCreated?.();

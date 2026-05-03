@@ -39,7 +39,7 @@ export function NewTabDialog({
       worktreeId,
       modeId: tabType === "agent" ? modeId || null : null,
       type: tabType === "agent" ? "agent" : "terminal",
-      initialPrompt: tabType === "agent" ? prompt.trim() || undefined : undefined,
+      prompt: tabType === "agent" ? prompt.trim() || undefined : undefined,
     });
     onCreated?.();
     onClose();

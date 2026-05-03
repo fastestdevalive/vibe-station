@@ -179,7 +179,7 @@ export interface CreateSessionBody {
   worktreeId: string;
   modeId: string | null;
   type: SessionType;
-  initialPrompt?: string;
+  prompt?: string;
 }
 
 export interface SendInputBody {
