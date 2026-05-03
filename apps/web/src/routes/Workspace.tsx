@@ -97,6 +97,7 @@ export function Workspace() {
             leftSidebarCollapsed={leftSidebarCollapsed}
             mobileSidebarOpen={mobileSidebarOpen}
             onOpenQuickOpen={() => setQuickOpen(true)}
+            leftColumnPx={leftColumnPx}
           />
         }
         leftSidebar={

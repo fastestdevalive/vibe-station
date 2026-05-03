@@ -657,6 +657,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: var(--font-weight-light);
+  color: var(--fg-secondary);
 }
 
 .wt-row__trail {
@@ -1094,6 +1096,11 @@
 
 .tree-row[data-active="true"] {
   background: var(--bg-active);
+}
+
+.tree-row[data-active="true"] .wt-row__label {
+  color: var(--fg-primary);
+  font-weight: var(--font-weight-normal);
 }
 
 .tree-row__git-badge {
