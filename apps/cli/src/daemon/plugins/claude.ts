@@ -43,7 +43,7 @@ export function createClaudePlugin(): AgentPlugin {
     }) {
       // Shell-line launch: $(cat '<file>') reads the prompt at exec time, avoiding
       // ARG_MAX limits for long prompts. spawn.ts wraps this in `sh -lc <shellLine>`.
-      const filePart = `$(cat ${sq(prompt.systemPromptFile)})`;
+      const filePart = `"$(cat ${sq(prompt.systemPromptFile)})"`;
       let shellLine = `claude --dangerously-skip-permissions --system-prompt ${filePart}`;
       if (prompt.taskPrompt) {
         shellLine += ` ${sq(prompt.taskPrompt)}`;
