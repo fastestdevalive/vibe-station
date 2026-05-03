@@ -967,6 +967,30 @@
   flex-shrink: 0;
 }
 
+.top-bar__crumb--mobile-stack {
+  flex-direction: column;
+  align-items: stretch;
+  align-self: center;
+  gap: 0;
+  margin-left: 0;
+  font-size: calc(var(--font-size-sm) - 2px);
+  white-space: normal;
+}
+
+.top-bar__mobile-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.top-bar__mobile-wt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .top-bar__pane-toggles {
   display: flex;
   align-items: center;
