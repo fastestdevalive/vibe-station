@@ -69,7 +69,7 @@ export class TmuxOutputStream extends EventEmitter {
     try {
       // Create a temporary FIFO using mkdtemp + mkfifo workaround
       // For now, use a simple approach: spawn a subshell that tails the fifo
-      const tmpDir = await mkdtemp(join(tmpdir(), "vrun-tmux-"));
+      const tmpDir = await mkdtemp(join(tmpdir(), "vst-tmux-"));
       this.fifoPath = join(tmpDir, "output.fifo");
 
       // Create the FIFO

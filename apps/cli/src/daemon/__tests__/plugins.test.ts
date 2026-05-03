@@ -13,22 +13,22 @@ let tempDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir || "/tmp/vrun-test",
-    projectDir: (id: string) => pathJoin(tempDir || "/tmp/vrun-test", "projects", id),
-    manifestPath: (id: string) => pathJoin(tempDir || "/tmp/vrun-test", "projects", id, "manifest.json"),
-    manifestTmpPath: (id: string) => pathJoin(tempDir || "/tmp/vrun-test", "projects", id, "manifest.json.tmp"),
+    vstHome: () => tempDir || "/tmp/vst-test",
+    projectDir: (id: string) => pathJoin(tempDir || "/tmp/vst-test", "projects", id),
+    manifestPath: (id: string) => pathJoin(tempDir || "/tmp/vst-test", "projects", id, "manifest.json"),
+    manifestTmpPath: (id: string) => pathJoin(tempDir || "/tmp/vst-test", "projects", id, "manifest.json.tmp"),
     worktreePath: (id: string, wtId: string) =>
-      pathJoin(tempDir || "/tmp/vrun-test", "projects", id, "worktrees", wtId),
-    configPath: () => pathJoin(tempDir || "/tmp/vrun-test", "config.json"),
-    modesPath: () => pathJoin(tempDir || "/tmp/vrun-test", "modes.json"),
-    daemonLogPath: () => pathJoin(tempDir || "/tmp/vrun-test", "logs", "daemon.log"),
+      pathJoin(tempDir || "/tmp/vst-test", "projects", id, "worktrees", wtId),
+    configPath: () => pathJoin(tempDir || "/tmp/vst-test", "config.json"),
+    modesPath: () => pathJoin(tempDir || "/tmp/vst-test", "modes.json"),
+    daemonLogPath: () => pathJoin(tempDir || "/tmp/vst-test", "logs", "daemon.log"),
     cleanupSessionDataDir: () => {},
     sessionDataDir: (p: string, w: string, s: string) =>
-      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s),
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s),
     systemPromptPath: (p: string, w: string, s: string) =>
-      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s, "system-prompt.md"),
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s, "system-prompt.md"),
     opencodeConfigPath: (p: string, w: string, s: string) =>
-      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s, "opencode-config.json"),
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s, "opencode-config.json"),
   };
 });
 
@@ -92,7 +92,7 @@ describe("Agent plugins", () => {
       expect(result.shellLine).toContain("$(cat ");
       expect(result.shellLine).toContain("/tmp/system-prompt.md");
       expect(result.shellLine).toContain("Fix the bug");
-      expect(result.shellLine).not.toContain("VRPRMT:");
+      expect(result.shellLine).not.toContain("VSTPRMT:");
       expect(result.postLaunchInput).toBeUndefined();
     });
 
@@ -110,7 +110,7 @@ describe("Agent plugins", () => {
       expect(result.shellLine).toContain("--system-prompt");
       expect(result.shellLine).toContain("$(cat ");
       expect(result.postLaunchInput).toBeUndefined();
-      expect(result.shellLine).not.toContain("VRPRMT:");
+      expect(result.shellLine).not.toContain("VSTPRMT:");
     });
 
     it("T10.10 — getEnvironment() includes CLAUDECODE: '1'", async () => {
@@ -193,7 +193,7 @@ describe("Agent plugins", () => {
   });
 
   describe("OpenCode plugin", () => {
-    it("T10.9 — composeLaunchPrompt: system prompt NOT in postLaunchInput; task prompt IS; VRPRMT needle present", async () => {
+    it("T10.9 — composeLaunchPrompt: system prompt NOT in postLaunchInput; task prompt IS; VSTPRMT needle present", async () => {
       const { resolvePlugin } = await import("../plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       const result = plugin.composeLaunchPrompt({
@@ -212,7 +212,7 @@ describe("Agent plugins", () => {
       // System prompt is delivered via OPENCODE_CONFIG env, not postLaunchInput
       expect(result.postLaunchInput).not.toContain("You are helpful");
       expect(result.postLaunchInput).toContain("Fix the bug");
-      expect(result.postLaunchInput).toContain("VRPRMT:sess-test");
+      expect(result.postLaunchInput).toContain("VSTPRMT:sess-test");
     });
 
     it("Phase 5 — T5.T1 — getRestoreCommand with agentChatId='abc' returns [opencode, --session, abc]", async () => {
@@ -244,7 +244,7 @@ describe("Agent plugins", () => {
     let projectId: string;
 
     beforeEach(async () => {
-      tempDir = await mkdtemp(join(tmpdir(), "vrun-plugins-test-"));
+      tempDir = await mkdtemp(join(tmpdir(), "vst-plugins-test-"));
       repoDir = join(tempDir, "my-repo");
 
       execSync(
@@ -346,7 +346,7 @@ describe("Agent plugins", () => {
       });
 
       expect(sesRes.statusCode).toBe(201);
-      expect(mockSpawn).toHaveBeenCalled();
+      await expect.poll(() => mockSpawn.mock.calls.length).toBeGreaterThan(0);
       const callArgs = mockSpawn.mock.calls[0];
       expect(callArgs?.[0]?.plugin?.name).toBe("cursor");
     });

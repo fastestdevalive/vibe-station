@@ -1,16 +1,16 @@
 {
-  "name": "viberun-ide",
+  "name": "vibe-station",
   "version": "0.0.0",
   "private": true,
   "description": "Web-based orchestrator for parallel AI coding agents.",
   "packageManager": "pnpm@9.0.0",
   "scripts": {
-    "dev": "pnpm --filter @viberun/web dev",
+    "dev": "pnpm --filter @vibestation/web dev",
     "build": "pnpm -r build",
     "lint": "eslint apps/web/src apps/web/e2e",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "test:e2e": "pnpm --filter @viberun/web test:e2e",
+    "test:e2e": "pnpm --filter @vibestation/web test:e2e",
     "ci": "pnpm typecheck && pnpm lint && pnpm test"
   },
   "engines": {

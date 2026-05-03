@@ -1,15 +1,15 @@
 ---
-name: viberun
-description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vrun daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
+name: vibestation
+description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vst daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
 ---
 
-# viberun — External-Agent Interop Skill
+# vibe-station — External-Agent Interop Skill
 
-## 1. What vrun is
+## 1. What vst is
 
-`vrun` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes. The daemon exposes a REST API and a WebSocket endpoint for real-time pane streaming.
+`vst` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes. The daemon exposes a REST API and a WebSocket endpoint for real-time pane streaming.
 
-**This skill is for agents OUTSIDE vrun.** If you are an agent spawned BY vrun, your system prompt is `apps/cli/src/daemon/assets/agent-system-prompt.md` — do not load this skill. This file describes how external agents (Claude Code, Cursor users in their own project, OpenClaw bots, GitHub Action runners, MCP consumers, etc.) drive vrun from the outside.
+**This skill is for agents OUTSIDE vst.** If you are an agent spawned BY vst, your system prompt is `apps/cli/src/daemon/assets/agent-system-prompt.md` — do not load this skill. This file describes how external agents (Claude Code, Cursor users in their own project, OpenClaw bots, GitHub Action runners, MCP consumers, etc.) drive vst from the outside.
 
 ---
 
@@ -17,20 +17,20 @@ description: Spawn isolated git-worktree coding sessions (claude, cursor, openco
 
 ```bash
 # Check if the daemon is running and get its port
-vrun daemon status
+vst daemon status
 
 # Start the daemon (if not running)
-vrun daemon start
+vst daemon start
 
 # Start headless (no UI, for CI / GitHub Actions)
-vrun daemon start --headless
+vst daemon start --headless
 
 # Read daemon config (port is here)
-cat ~/.viberun/config.json
+cat ~/.vibe-station/config.json
 # → { "port": 7421 }
 ```
 
-All HTTP API calls use `http://127.0.0.1:<port>` (port from `~/.viberun/config.json`, default 7421).
+All HTTP API calls use `http://127.0.0.1:<port>` (port from `~/.vibe-station/config.json`, default 7421).
 
 ---
 
@@ -38,10 +38,10 @@ All HTTP API calls use `http://127.0.0.1:<port>` (port from `~/.viberun/config.j
 
 ```bash
 # List all registered projects
-vrun project ls --json
+vst project ls --json
 
 # List worktrees in a project
-vrun worktree ls --project=<projectId> --json
+vst worktree ls --project=<projectId> --json
 
 # Or via HTTP:
 curl http://127.0.0.1:7421/projects
@@ -59,7 +59,7 @@ curl "http://127.0.0.1:7421/worktrees?project=my-app"
 
 ```bash
 # CLI — creates worktree + main agent session in one shot
-vrun worktree create <projectId> \
+vst worktree create <projectId> \
   --branch=feat/my-task \
   --base=main \
   --agent=claude \
@@ -91,7 +91,7 @@ curl -X POST http://127.0.0.1:7421/worktrees \
 }
 ```
 
-**Modes** (`GET /modes` returns the list) bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. Use `vrun mode ls --json` to discover available modes.
+**Modes** (`GET /modes` returns the list) bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. Use `vst mode ls --json` to discover available modes.
 
 **Slots** — the main session is slot `m`; additional sessions in the same worktree get slots `a2`, `a3`, … for agents and `t2`, `t3`, … for terminals.
 
@@ -101,10 +101,10 @@ curl -X POST http://127.0.0.1:7421/worktrees \
 
 ```bash
 # CLI — send message and wait for agent to go idle
-vrun send <sessionId> "Add tests for the login handler" --wait
+vst send <sessionId> "Add tests for the login handler" --wait
 
 # Send from a file
-vrun send <sessionId> --file=./instructions.md --wait
+vst send <sessionId> --file=./instructions.md --wait
 
 # HTTP — POST /sessions/:id/input
 curl -X POST "http://127.0.0.1:7421/sessions/<sessionId>/input" \
@@ -127,10 +127,10 @@ curl -X POST "http://127.0.0.1:7421/sessions/<sessionId>/input" \
 
 ```bash
 # CLI — capture last N lines of pane output
-vrun session output <sessionId> --lines=200
+vst session output <sessionId> --lines=200
 
 # Follow live (streams until Ctrl-C)
-vrun session output <sessionId> --follow
+vst session output <sessionId> --follow
 ```
 
 TODO(api): There is no REST endpoint for `GET /sessions/:id/output` at this time; use the CLI command or the WebSocket pane stream (§7) instead.
@@ -139,7 +139,7 @@ TODO(api): There is no REST endpoint for `GET /sessions/:id/output` at this time
 
 ## 7. HTTP API reference
 
-Base URL: `http://127.0.0.1:<port>` (port from `~/.viberun/config.json`).
+Base URL: `http://127.0.0.1:<port>` (port from `~/.vibe-station/config.json`).
 
 ### GET /projects
 Returns all registered projects.
@@ -257,7 +257,7 @@ Single multiplexed WebSocket endpoint. Connect once, send/receive JSON frames.
 
 ```bash
 # 1. Ensure daemon is running
-vrun daemon status || vrun daemon start
+vst daemon status || vst daemon start
 
 # 2. Get the project ID
 PROJECT_ID=$(curl -s http://127.0.0.1:7421/projects | jq -r '.[0].id')
@@ -283,7 +283,7 @@ while true; do
 done
 
 # 5. Capture output via CLI
-OUTPUT=$(vrun session output "$SESSION_ID" --lines=500)
+OUTPUT=$(vst session output "$SESSION_ID" --lines=500)
 
 # 6. Post output back via OpenClaw notifier
 # TODO(openclaw): exact notifier-callback shape depends on your OpenClaw version.
@@ -308,20 +308,20 @@ on:
 
 jobs:
   agent:
-    runs-on: ubuntu-latest   # or a self-hosted runner with vrun installed
+    runs-on: ubuntu-latest   # or a self-hosted runner with vst installed
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start vrun daemon (headless)
-        run: vrun daemon start --headless
+      - name: Start vst daemon (headless)
+        run: vst daemon start --headless
 
       - name: Register project
-        run: vrun project add ${{ github.workspace }}
+        run: vst project add ${{ github.workspace }}
 
       - name: Spawn agent session
         id: spawn
         run: |
-          SESSION=$(vrun worktree create my-project \
+          SESSION=$(vst worktree create my-project \
             --branch ci-review-${{ github.run_id }} \
             --mode <modeId> \
             --prompt "Review PR #${{ github.event.number }}" \
@@ -330,16 +330,16 @@ jobs:
 
       - name: Wait for agent to finish
         run: |
-          until [ "$(vrun session info ${{ steps.spawn.outputs.session }} --json | jq -r '.state')" = "exited" ]; do
+          until [ "$(vst session info ${{ steps.spawn.outputs.session }} --json | jq -r '.state')" = "exited" ]; do
             sleep 10
           done
 
       - name: Capture output
-        run: vrun session output ${{ steps.spawn.outputs.session }} --lines=500
+        run: vst session output ${{ steps.spawn.outputs.session }} --lines=500
 
       - name: Teardown
         if: always()
-        run: vrun worktree rm ${{ steps.spawn.outputs.session }} --purge
+        run: vst worktree rm ${{ steps.spawn.outputs.session }} --purge
 ```
 
 ---
@@ -357,9 +357,9 @@ curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>"
 curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>?purge=true"
 
 # CLI equivalents
-vrun session kill <sessionId>
-vrun worktree rm <worktreeId>
-vrun worktree rm <worktreeId> --purge
+vst session kill <sessionId>
+vst worktree rm <worktreeId>
+vst worktree rm <worktreeId> --purge
 ```
 
 When to use each:
@@ -371,11 +371,11 @@ When to use each:
 ## 11. Conventions to honour
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
-- **Respect `AGENTS.md` / `.viberun/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
+- **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
 - **Sessions are co-tenants** — only kill sessions or worktrees that your integration created. Never call `DELETE /worktrees/:id` on worktrees owned by the developer's interactive session.
 - **Set a meaningful `prompt`** when spawning sessions. The clearer the task description, the better the agent's output.
 - **Poll `state`, don't spin.** Check `GET /sessions/:id` every 5–10 s rather than hammering the endpoint.
 
 ---
 
-*Cross-reference: the agent-side system prompt that vrun injects into spawned workers lives at `apps/cli/src/daemon/assets/agent-system-prompt.md`. That file is for vrun's own workers. This file (`skill/SKILL.md`) is for external agents and bots that drive vrun from outside.*
+*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `apps/cli/src/daemon/assets/agent-system-prompt.md`. That file is for vst's own workers. This file (`skill/SKILL.md`) is for external agents and bots that drive vst from outside.*

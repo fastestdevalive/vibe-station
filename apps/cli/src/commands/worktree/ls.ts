@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { daemonGet } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { getVRProject } from "../../lib/env.js";
+import { getVSTProject } from "../../lib/env.js";
 import { printJson, printTable, die } from "../../lib/output.js";
 
 interface Worktree {
@@ -21,7 +21,7 @@ export function registerWorktreeLs(worktree: Command): void {
     .action(async (opts: { project?: string; json?: boolean }) => {
       await preflight();
 
-      const projectId = opts.project || getVRProject();
+      const projectId = opts.project || getVSTProject();
       const query = projectId ? `?project=${projectId}` : "";
 
       const result = await daemonGet<Worktree[]>(`/worktrees${query}`);

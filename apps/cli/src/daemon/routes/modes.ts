@@ -1,12 +1,12 @@
 /**
  * Mode routes — CRUD for agent modes.
- * Stored in ~/.viberun/modes.json (max 10 modes).
+ * Stored in ~/.vibe-station/modes.json (max 10 modes).
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
-import { modesPath, vrunHome } from "../services/paths.js";
+import { modesPath, vstHome } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { getAllProjects } from "../state/project-store.js";
 import type { CliId } from "../types.js";
@@ -37,7 +37,7 @@ export async function loadModes(): Promise<Mode[]> {
 }
 
 async function saveModes(modes: Mode[]): Promise<void> {
-  await mkdir(vrunHome(), { recursive: true });
+  await mkdir(vstHome(), { recursive: true });
   await writeFile(modesPath(), JSON.stringify(modes, null, 2), "utf8");
   modesCache = modes;
 }

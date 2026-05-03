@@ -5,7 +5,7 @@
  * 1. Reserve identity (done by caller before invoking)
  * 2. Persist record at not_started (done by caller)
  * 3. Setup workspace hooks (plugin.setupWorkspaceHooks)
- * 4. Resolve env (VR_*)
+ * 4. Resolve env (VST_*)
  * 5. tmux new-session
  * 6. Wait for ready signal (getReadySignal) — if sentinel not found, fallback after ms
  * 7. Send postLaunchInput if any
@@ -19,7 +19,7 @@ import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
 export function promptVerificationNeedle(sessionId: string): string {
-  return `VRPRMT:${sessionId}`;
+  return `VSTPRMT:${sessionId}`;
 }
 
 export interface AgentPlugin {
@@ -143,11 +143,11 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
 
   // Step 4: Resolve env
   const baseEnv: Record<string, string> = {
-    VR_SESSION: session.id,
-    VR_WORKTREE: worktree.id,
-    VR_PROJECT: project.id,
-    VR_DATA_DIR: `${process.env.HOME ?? "~"}/.viberun/projects/${project.id}`,
-    VR_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    VST_SESSION: session.id,
+    VST_WORKTREE: worktree.id,
+    VST_PROJECT: project.id,
+    VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
+    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
     ...plugin.getEnvironment(launchCfg),
   };
 
@@ -202,7 +202,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
       );
       return;
     }
-    await pasteBuffer(session.tmuxName, `vr-prompt-${session.id}`, postLaunchInput);
+    await pasteBuffer(session.tmuxName, `vst-prompt-${session.id}`, postLaunchInput);
 
     const needle = promptVerificationNeedle(session.id);
     if (postLaunchInput.includes(needle)) {

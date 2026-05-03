@@ -1,4 +1,4 @@
-# viberun-ide — Tech Stack Analysis
+# vibe-station — Tech Stack Analysis
 
 ## Context Reminder
 - Bottleneck: tmux/pty I/O + WebSocket streaming.

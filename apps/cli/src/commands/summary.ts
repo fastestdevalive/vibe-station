@@ -2,7 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { daemonGet } from "../lib/daemon-client.js";
 import { preflight } from "../lib/preflight.js";
-import { getVRProject } from "../lib/env.js";
+import { getVSTProject } from "../lib/env.js";
 import { printJson, die } from "../lib/output.js";
 
 interface DaemonWorktree {
@@ -85,7 +85,7 @@ export function registerSummary(program: Command): void {
       const sessRes = await daemonGet<DaemonSession[]>("/sessions");
       if (!sessRes.ok) die(sessRes.error ?? "Failed to list sessions", 1);
 
-      const filterProject = opts.project ?? getVRProject();
+      const filterProject = opts.project ?? getVSTProject();
 
       let worktrees = wtRes.data;
       if (filterProject) {

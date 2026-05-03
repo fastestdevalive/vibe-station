@@ -8,7 +8,7 @@
  * Launch flags rationale (aligned with ao-142):
  * - `--workspace <path>`: required; specifies project root
  * - `--force`: skip workspace-trust prompt
- * - `--sandbox disabled`: allows vrun-controlled execution; required for daemon spawn
+ * - `--sandbox disabled`: allows vst-controlled execution; required for daemon spawn
  * - `--approve-mcps`: auto-accept MCP permission requests (no interactive gates)
  * Removed `--print` (causes immediate exit on EOF; we want interactive REPL)
  */
@@ -93,7 +93,7 @@ export function createCursorPlugin(): AgentPlugin {
       // local chat-history DB, which already includes the original system prompt as
       // part of the saved transcript. So we hand back the resume argv as-is — no
       // shell-line, no system-prompt re-injection. Tradeoff: a resumed session will
-      // NOT pick up edits to AGENTS.md / .viberun/rules.md made between runs;
+      // NOT pick up edits to AGENTS.md / .vibe-station/rules.md made between runs;
       // those only land on a fresh spawn.
       const { project, worktree } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);

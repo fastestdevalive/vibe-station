@@ -10,8 +10,8 @@ describe("useTheme", () => {
   });
 
   it("ignores invalid stored theme / font", () => {
-    localStorage.setItem("viberun:theme", "");
-    localStorage.setItem("viberun:font", "comic-sans");
+    localStorage.setItem("vibestation:theme", "");
+    localStorage.setItem("vibestation:font", "comic-sans");
     const { result } = renderHook(() => useTheme());
     expect(result.current.theme).toBe("dark");
     expect(result.current.font).toBe("mono");
@@ -39,7 +39,7 @@ describe("useTheme", () => {
       result.current.toggleTheme();
       result.current.toggleFont();
     });
-    expect(localStorage.getItem("viberun:theme")).toBe("light");
-    expect(localStorage.getItem("viberun:font")).toBe("sans");
+    expect(localStorage.getItem("vibestation:theme")).toBe("light");
+    expect(localStorage.getItem("vibestation:font")).toBe("sans");
   });
 });

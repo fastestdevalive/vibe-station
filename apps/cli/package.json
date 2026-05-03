@@ -1,10 +1,10 @@
 {
-  "name": "@viberun/cli",
+  "name": "@vibestation/cli",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "vrun": "./dist/main.js"
+    "vst": "./dist/main.js"
   },
   "scripts": {
     "build": "tsc -b && node -e \"require('fs').cpSync('src/daemon/assets','dist/daemon/assets',{recursive:true})\"",

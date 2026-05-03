@@ -11,7 +11,7 @@ let tempDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir,
+    vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
     manifestPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json"),
     manifestTmpPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json.tmp"),
@@ -31,7 +31,7 @@ describe("recoverNotStartedSessions", () => {
   const tmux = vi.mocked(tmuxNs);
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-recover-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-recover-test-"));
     await mkdir(join(tempDir, "projects", "proj-r"), { recursive: true });
     await mkdir(join(tempDir, "repo"), { recursive: true });
     const { _clearStoreForTest, addProject } = await import("../state/project-store.js");

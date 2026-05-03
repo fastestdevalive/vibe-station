@@ -2,8 +2,8 @@
  * Daemon entry point.
  * Usage: node dist/daemon/main.js
  *
- * Acquires ~/.viberun/.daemon.lock, starts Fastify on port 7421 (or next free),
- * writes pid + port to ~/.viberun/config.json.
+ * Acquires ~/.vibe-station/.daemon.lock, starts Fastify on port 7421 (or next free),
+ * writes pid + port to ~/.vibe-station/config.json.
  */
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -14,9 +14,9 @@ import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
 
-const VRUN_HOME = join(homedir(), ".viberun");
-const CONFIG_PATH = join(VRUN_HOME, "config.json");
-const LOCK_PATH = join(VRUN_HOME, ".daemon.lock");
+const VST_HOME = join(homedir(), ".vibe-station");
+const CONFIG_PATH = join(VST_HOME, "config.json");
+const LOCK_PATH = join(VST_HOME, ".daemon.lock");
 const DEFAULT_PORT = 7421;
 
 /** Try to bind to a port. Returns the port on success, null if in use. */
@@ -40,7 +40,7 @@ async function findFreePort(start: number): Promise<number> {
 }
 
 async function acquireLock(): Promise<void> {
-  await mkdir(VRUN_HOME, { recursive: true });
+  await mkdir(VST_HOME, { recursive: true });
   const fh = await open(LOCK_PATH, "wx").catch(async () => {
     // File exists — check if the pid inside is still alive
     const fhExisting = await open(LOCK_PATH, "r+");
@@ -53,7 +53,7 @@ async function acquireLock(): Promise<void> {
       try {
         process.kill(storedPid, 0);
         throw new Error(
-          `Daemon is already running (pid ${storedPid}). Use \`vrun daemon stop\` first.`,
+          `Daemon is already running (pid ${storedPid}). Use \`vst daemon stop\` first.`,
         );
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code === "ESRCH") {
@@ -71,7 +71,7 @@ async function acquireLock(): Promise<void> {
 }
 
 async function writeConfig(port: number): Promise<void> {
-  await mkdir(VRUN_HOME, { recursive: true });
+  await mkdir(VST_HOME, { recursive: true });
   const config = { port, pid: process.pid, startedAt: new Date().toISOString() };
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
 }
@@ -114,7 +114,7 @@ async function main() {
 
   try {
     await app.listen({ port, host: "127.0.0.1" });
-    console.log(`vrun daemon listening on http://127.0.0.1:${port}`);
+    console.log(`vst daemon listening on http://127.0.0.1:${port}`);
   } catch (err) {
     console.error("Failed to start daemon:", err);
     await releaseLock();

@@ -1,5 +1,5 @@
 /**
- * Core domain types for the viberun-ide daemon.
+ * Core domain types for the vibe-station daemon.
  * These mirror the manifest.json schema from HIGH-LEVEL-DESIGN.md §2.
  */
 

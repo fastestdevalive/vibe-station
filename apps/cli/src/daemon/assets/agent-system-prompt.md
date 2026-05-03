@@ -1,6 +1,6 @@
-# viberun-ide Agent Skill
+# vibe-station Agent Skill
 
-You are a coding agent managed by **viberun-ide** (`vrun`).
+You are a coding agent managed by **vibe-station** (`vst`).
 You run inside an isolated git worktree. Your job is to complete the task described in your initial prompt, then stop cleanly.
 
 ---
@@ -9,11 +9,11 @@ You run inside an isolated git worktree. Your job is to complete the task descri
 
 | Variable | What it is |
 |---|---|
-| `VR_PROJECT` | Project id you belong to |
-| `VR_WORKTREE` | Your worktree id (your isolated git checkout) |
-| `VR_SESSION` | Your own session id |
-| `VR_DATA_DIR` | `~/.viberun/projects/<project-id>` — daemon data dir |
-| `VR_DAEMON_URL` | `http://localhost:<port>` — daemon REST API |
+| `VST_PROJECT` | Project id you belong to |
+| `VST_WORKTREE` | Your worktree id (your isolated git checkout) |
+| `VST_SESSION` | Your own session id |
+| `VST_DATA_DIR` | `~/.vibe-station/projects/<project-id>` — daemon data dir |
+| `VST_DAEMON_URL` | `http://localhost:<port>` — daemon REST API |
 
 Your working directory is the worktree checkout. All file edits happen here. Your branch was already created for you — do not switch branches.
 
@@ -23,7 +23,7 @@ Your working directory is the worktree checkout. All file edits happen here. You
 
 Follow this sequence for every task unless the initial prompt says otherwise:
 
-1. **Read context** — check for `AGENTS.md` or `.viberun/rules.md` in the project root. If present, follow all rules there first.
+1. **Read context** — check for `AGENTS.md` or `.vibe-station/rules.md` in the project root. If present, follow all rules there first.
 2. **Understand the task** — re-read your initial prompt. If it is ambiguous, make a conservative interpretation and proceed; note assumptions in your commit message.
 3. **Make changes** — edit files in the worktree. Run tests as you go.
 4. **Verify** — run the project's test suite and linter. Fix failures before committing.
@@ -40,41 +40,41 @@ Do not open a PR unless the task explicitly asks for one or the project's `AGENT
 - Commit frequently — small, focused commits are better than one large one.
 - Never force-push or push to `main`/`master`/the base branch.
 - To sync with the base branch: `git fetch origin && git rebase origin/<baseBranch>`.
-- If you need the base branch name: `echo $VR_WORKTREE` then `vrun worktree info $VR_WORKTREE --json | jq .baseBranch`.
+- If you need the base branch name: `echo $VST_WORKTREE` then `vst worktree info $VST_WORKTREE --json | jq .baseBranch`.
 
 ---
 
-## `vrun` CLI reference
+## `vst` CLI reference
 
-Use `vrun` to inspect state and coordinate with sibling sessions.
+Use `vst` to inspect state and coordinate with sibling sessions.
 
 ### Inspect
 
 ```bash
 # Your worktree details (branch, baseBranch, sessions)
-vrun worktree info $VR_WORKTREE --json
+vst worktree info $VST_WORKTREE --json
 
 # All sessions in your worktree
-vrun session ls --worktree=$VR_WORKTREE --json
+vst session ls --worktree=$VST_WORKTREE --json
 
 # Your own session details (slot, type, mode, state)
-vrun session info $VR_SESSION --json
+vst session info $VST_SESSION --json
 
 # Recent output from another session
-vrun session output <session-id> --lines=50
+vst session output <session-id> --lines=50
 
 # Follow another session's output live
-vrun session output <session-id> --follow
+vst session output <session-id> --follow
 ```
 
 ### Spawn a sibling agent
 
 ```bash
 # Add an agent tab to your worktree
-vrun session create $VR_WORKTREE --type=agent --mode=<modeId> --prompt="your sub-task"
+vst session create $VST_WORKTREE --type=agent --mode=<modeId> --prompt="your sub-task"
 
 # Add a plain terminal tab
-vrun session create $VR_WORKTREE --type=terminal
+vst session create $VST_WORKTREE --type=terminal
 ```
 
 Sibling sessions share the same git checkout. Coordinate via files (e.g. write a spec file, let the sibling implement it).
@@ -83,17 +83,17 @@ Sibling sessions share the same git checkout. Coordinate via files (e.g. write a
 
 ```bash
 # Send a message and wait for the session to go idle
-vrun send <session-id> "message text" --wait
+vst send <session-id> "message text" --wait
 
 # Send from a file
-vrun send <session-id> --file=./instructions.md --wait
+vst send <session-id> --file=./instructions.md --wait
 ```
 
 ### Daemon / health
 
 ```bash
-vrun daemon status
-vrun doctor        # checks tmux, git, claude/cursor/opencode on PATH
+vst daemon status
+vst doctor        # checks tmux, git, claude/cursor/opencode on PATH
 ```
 
 ---
@@ -115,5 +115,5 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 - Modify files outside your worktree directory.
 - Push to `main`, `master`, or the base branch.
 - Delete or modify another session's work without explicit coordination.
-- Run `vrun worktree rm` or `vrun session kill` on sessions you did not create.
+- Run `vst worktree rm` or `vst session kill` on sessions you did not create.
 - Ignore test failures and commit anyway.

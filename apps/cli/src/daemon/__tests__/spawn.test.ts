@@ -5,9 +5,9 @@ import type { AgentPlugin } from "../services/spawn.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
 vi.mock("../services/paths.js", () => ({
-  worktreePath: () => "/tmp/vrun-spawn-test-wt",
-  sessionDataDir: () => "/tmp/vrun-spawn-test-data",
-  systemPromptPath: () => "/tmp/vrun-spawn-test-data/system-prompt.md",
+  worktreePath: () => "/tmp/vst-spawn-test-wt",
+  sessionDataDir: () => "/tmp/vst-spawn-test-data",
+  systemPromptPath: () => "/tmp/vst-spawn-test-data/system-prompt.md",
   cleanupSessionDataDir: () => {},
 }));
 
@@ -46,7 +46,7 @@ describe("spawnSession prompt verification", () => {
       getEnvironment: () => ({}),
       getReadySignal: () => ({ fallbackMs: 0 }),
       composeLaunchPrompt: ({ sessionId }) => ({
-        postLaunchInput: `system\n\n<!-- VRPRMT:${sessionId} -->`,
+        postLaunchInput: `system\n\n<!-- VSTPRMT:${sessionId} -->`,
         launchArgs: undefined,
         useShell: undefined,
         shellLine: undefined,
@@ -57,7 +57,7 @@ describe("spawnSession prompt verification", () => {
   const project = { id: "p1" } as unknown as ProjectRecord;
   const worktree = { id: "w1" } as unknown as WorktreeRecord;
 
-  it("succeeds when first capture contains VRPRMT marker", async () => {
+  it("succeeds when first capture contains VSTPRMT marker", async () => {
     const session: SessionRecord = {
       id: "s-verify-1",
       slot: "m",
@@ -66,7 +66,7 @@ describe("spawnSession prompt verification", () => {
       tmuxName: "tmux-verify-1",
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
     };
-    tmux.capturePane.mockResolvedValue(`x VRPRMT:${session.id} y`);
+    tmux.capturePane.mockResolvedValue(`x VSTPRMT:${session.id} y`);
 
     await spawnSession({
       project,
@@ -93,7 +93,7 @@ describe("spawnSession prompt verification", () => {
     };
     tmux.capturePane
       .mockResolvedValueOnce("no marker yet")
-      .mockResolvedValueOnce(`ok VRPRMT:${session.id}`);
+      .mockResolvedValueOnce(`ok VSTPRMT:${session.id}`);
 
     await spawnSession({
       project,

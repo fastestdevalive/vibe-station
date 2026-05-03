@@ -16,16 +16,16 @@ import { join } from "node:path";
 import type { ProjectRecord } from "../types.js";
 import { readManifest, writeManifest } from "../services/manifest.js";
 import { withProjectLock } from "../services/mutex.js";
-import { vrunHome } from "../services/paths.js";
+import { vstHome } from "../services/paths.js";
 
 const store = new Map<string, ProjectRecord>();
 
 /**
- * Walk ~/.viberun/projects/[id]/manifest.json and load each into memory.
+ * Walk ~/.vibe-station/projects/[id]/manifest.json and load each into memory.
  * Called once at daemon boot.
  */
 export async function loadAll(): Promise<void> {
-  const projectsDir = join(vrunHome(), "projects");
+  const projectsDir = join(vstHome(), "projects");
 
   let entries: string[];
   try {

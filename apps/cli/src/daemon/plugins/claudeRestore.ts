@@ -6,9 +6,9 @@
  *   ~/.claude/projects/<project-slug>/<uuid>.jsonl
  *
  * Project slug is derived from the absolute worktree path with `/` → `-`
- * AND any `.` stripped (so `/home/gb/.viberun/...` → `-home-gb--viberun-...`).
- * Example: `/home/gb/.viberun/projects/console-home/worktrees/ch-2`
- *       → `-home-gb--viberun-projects-console-home-worktrees-ch-2`
+ * AND any `.` stripped (so `/home/gb/.vibe-station/...` → `-home-gb--vibe-station-...`).
+ * Example: `/home/gb/.vibe-station/projects/console-home/worktrees/ch-2`
+ *       → `-home-gb--vibe-station-projects-console-home-worktrees-ch-2`
  *
  * To resume, we find the newest *.jsonl file for that slug and extract its UUID.
  */
@@ -22,8 +22,8 @@ import { homedir } from "node:os";
  * Returns the UUID (filename without .jsonl) or null if no chats exist for this worktree.
  */
 export async function findLatestChatUuid(worktreePath: string): Promise<string | null> {
-  // Build slug: /home/gb/.viberun/projects/.../ch-2
-  //          → -home-gb--viberun-projects-...-ch-2
+  // Build slug: /home/gb/.vibe-station/projects/.../ch-2
+  //          → -home-gb--vibe-station-projects-...-ch-2
   // Claude Code's convention: replace BOTH `/` and `.` with `-` (so `.foo`
   // between two slashes becomes `--foo`).
   const slug = worktreePath.replaceAll("/", "-").replaceAll(".", "-");

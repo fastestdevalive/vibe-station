@@ -1,4 +1,4 @@
-# viberun-ide — API Contract
+# vibe-station — API Contract
 
 > Complete surface area: CLI commands, REST endpoints, WebSocket events. Brief by design — exact request/response types live in `apps/cli/src/types.ts` once implemented.
 
@@ -6,76 +6,76 @@
 
 ## CLI Commands
 
-User-facing binary: `vrun`. Subcommand groups follow the noun-verb pattern (`vrun project add`, `vrun worktree create`).
+User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst project add`, `vst worktree create`).
 
 ### Projects
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun project add` | `<path> [--name=<id>] [--prefix=<prefix>]` | Register a project. Validates git repo + name/prefix uniqueness. |
-| `vrun project rm` | `<id>` | Remove project (interactive confirm; cascades to sessions + worktrees + dirs). |
-| `vrun project ls` | `[--json]` | List projects: name · path · #worktrees · #sessions. |
-| `vrun project info` | `<id> [--json]` | Project details + worktree summary. |
+| `vst project add` | `<path> [--name=<id>] [--prefix=<prefix>]` | Register a project. Validates git repo + name/prefix uniqueness. |
+| `vst project rm` | `<id>` | Remove project (interactive confirm; cascades to sessions + worktrees + dirs). |
+| `vst project ls` | `[--json]` | List projects: name · path · #worktrees · #sessions. |
+| `vst project info` | `<id> [--json]` | Project details + worktree summary. |
 
 ### Worktrees
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. Prints the new worktree id on the last line of stdout. |
-| `vrun worktree rm` | `<worktree-id>` | Remove worktree (terminates all sessions, removes git worktree dir). |
-| `vrun worktree ls` | `[--project=<id>] [--json]` | List worktrees. `--project` defaults to `$VR_PROJECT` if set. |
-| `vrun worktree info` | `<worktree-id> [--json]` | Worktree details + all sessions. |
+| `vst worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. Prints the new worktree id on the last line of stdout. |
+| `vst worktree rm` | `<worktree-id>` | Remove worktree (terminates all sessions, removes git worktree dir). |
+| `vst worktree ls` | `[--project=<id>] [--json]` | List worktrees. `--project` defaults to `$VST_PROJECT` if set. |
+| `vst worktree info` | `<worktree-id> [--json]` | Worktree details + all sessions. |
 
 ### Sessions (= tabs)
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). Prints new session id. `<worktree-id>` defaults to `$VR_WORKTREE`. |
-| `vrun session ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions. `--worktree` defaults to `$VR_WORKTREE`. |
-| `vrun session info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
-| `vrun session kill` | `<session-id>` | Terminate session. Rejected for `m` slot. |
-| `vrun session attach` | `<session-id>` | Drop into the tmux session interactively. |
-| `vrun session restore` | `<session-id>` | Resume an `exited` session (calls plugin's restore). |
-| `vrun session output` | `<session-id> [--lines=<n>] [--follow]` | Print recent pty output (default last 100 lines). `--follow` streams new bytes until Ctrl-C. |
+| `vst session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
+| `vst session ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions. `--worktree` defaults to `$VST_WORKTREE`. |
+| `vst session info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
+| `vst session kill` | `<session-id>` | Terminate session. Rejected for `m` slot. |
+| `vst session attach` | `<session-id>` | Drop into the tmux session interactively. |
+| `vst session restore` | `<session-id>` | Resume an `exited` session (calls plugin's restore). |
+| `vst session output` | `<session-id> [--lines=<n>] [--follow]` | Print recent pty output (default last 100 lines). `--follow` streams new bytes until Ctrl-C. |
 
 ### Send
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun send` | `<session-id> [message...] [--file=<path>] [--wait]` | Send a message to a session with busy-detect + retry (mirrors AO's `ao send`). `--file` reads from file. `--wait` blocks until target session reports `idle`. |
+| `vst send` | `<session-id> [message...] [--file=<path>] [--wait]` | Send a message to a session with busy-detect + retry (mirrors AO's `ao send`). `--file` reads from file. `--wait` blocks until target session reports `idle`. |
 
 ### Modes
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun mode ls` | `[--json]` | List agent modes. |
-| `vrun mode add` | `--name=<n> --cli=<claude\|cursor\|opencode> (--context=<text> \| --context-file=<path>) [--preset=<id>]` | Create a mode. |
-| `vrun mode rm` | `<id>` | Delete a mode. |
+| `vst mode ls` | `[--json]` | List agent modes. |
+| `vst mode add` | `--name=<n> --cli=<claude\|cursor\|opencode> (--context=<text> \| --context-file=<path>) [--preset=<id>]` | Create a mode. |
+| `vst mode rm` | `<id>` | Delete a mode. |
 
 ### Daemon
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun daemon start` | — | Forks daemon. Writes PID + port to `~/.viberun/config.json`. Auto-picks free port if 7421 is taken. |
-| `vrun daemon stop` | — | Graceful shutdown. |
-| `vrun daemon status` | `[--json]` | Running/stopped, port, version, uptime. |
-| `vrun daemon restart` | — | Stop then start. |
+| `vst daemon start` | — | Forks daemon. Writes PID + port to `~/.vibe-station/config.json`. Auto-picks free port if 7421 is taken. |
+| `vst daemon stop` | — | Graceful shutdown. |
+| `vst daemon status` | `[--json]` | Running/stopped, port, version, uptime. |
+| `vst daemon restart` | — | Stop then start. |
 
 ### Browser / status / doctor
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun open` | `[target]` | Open browser. `target` = session id, worktree id, project id, or `all`. |
-| `vrun status` | `[--project=<id>] [--json]` | Cross-cutting view of sessions + states across projects. |
-| `vrun doctor` | — | Health checks (tmux, git, claude/cursor/opencode on PATH). |
+| `vst open` | `[target]` | Open browser. `target` = session id, worktree id, project id, or `all`. |
+| `vst status` | `[--project=<id>] [--json]` | Cross-cutting view of sessions + states across projects. |
+| `vst doctor` | — | Health checks (tmux, git, claude/cursor/opencode on PATH). |
 
 ### Meta
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vrun --version` | — | Print version. |
-| `vrun --help` | — | Print help. |
-| `vrun completion` | `<shell>` | Print shell completion script (bash/zsh/fish). |
+| `vst --version` | — | Print version. |
+| `vst --help` | — | Print help. |
+| `vst completion` | `<shell>` | Print shell completion script (bash/zsh/fish). |
 
 ### Agent-context env vars
 
@@ -83,10 +83,10 @@ When the daemon spawns an agent into a session, it sets these env vars in the ag
 
 | Var | Set to | Used as default for |
 |---|---|---|
-| `VR_PROJECT` | project id of the agent's worktree | `--project` flags |
-| `VR_WORKTREE` | worktree id | `--worktree` flags + `<worktree-id>` arg in `session create` |
-| `VR_SESSION` | the agent's own session id | (informational; not used as a default to avoid self-targeting bugs) |
-| `VR_DAEMON_URL` | `http://localhost:<port>` | daemon endpoint for the CLI to talk to |
+| `VST_PROJECT` | project id of the agent's worktree | `--project` flags |
+| `VST_WORKTREE` | worktree id | `--worktree` flags + `<worktree-id>` arg in `session create` |
+| `VST_SESSION` | the agent's own session id | (informational; not used as a default to avoid self-targeting bugs) |
+| `VST_DAEMON_URL` | `http://localhost:<port>` | daemon endpoint for the CLI to talk to |
 
 **Destructive commands** (`project rm`, `worktree rm`, `session kill`, `mode rm`) **require explicit ids** — no env-var defaults — to prevent agents accidentally nuking their own context.
 
@@ -96,7 +96,7 @@ When the daemon spawns an agent into a session, it sets these env vars in the ag
 |---|---|
 | JSON output | All `ls`, `info`, `status` commands accept `--json`. Output is a single JSON value on stdout. Stderr is reserved for warnings. |
 | Exit codes | `0` success · `1` generic failure · `2` not-found · `3` conflict (duplicate / collision) · `4` daemon-down · `5` unauthorized (v1.1) |
-| ID printing | `worktree create` and `session create` print the new id as the **last line of stdout** for easy `id=$(vrun worktree create ...)` capture. |
+| ID printing | `worktree create` and `session create` print the new id as the **last line of stdout** for easy `id=$(vst worktree create ...)` capture. |
 
 ---
 
@@ -137,7 +137,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | POST | `/sessions` | `{ worktreeId, type, modeId?, prompt? }` | `Session` | `type`: `agent` (requires `modeId`) or `terminal`. `prompt?` (agent only) delivered to the new agent via the plugin's `promptDelivery` mode. |
 | DELETE | `/sessions/:id` | — | `{ ok }` | Rejected with 400 for the `m` slot (main is un-closeable). |
 | POST | `/sessions/:id/resume` | — | `Session` | Spawns new tmux + plugin's restore command for an `exited` session. |
-| POST | `/sessions/:id/input` | `{ data, sendEnter? }` | `{ ok }` | **Full-message send** with busy-detect + retry. Used by CLI (`vrun send`). The browser uses WS `session:input` for per-keystroke typing, NOT this endpoint. Implementation uses a named tmux paste buffer (`tmux load-buffer -b _vrun_send-<sid>` + `paste-buffer -b ... -d`) so it does not stomp on the user's clipboard. |
+| POST | `/sessions/:id/input` | `{ data, sendEnter? }` | `{ ok }` | **Full-message send** with busy-detect + retry. Used by CLI (`vst send`). The browser uses WS `session:input` for per-keystroke typing, NOT this endpoint. Implementation uses a named tmux paste buffer (`tmux load-buffer -b _vst_send-<sid>` + `paste-buffer -b ... -d`) so it does not stomp on the user's clipboard. |
 
 ### Modes
 

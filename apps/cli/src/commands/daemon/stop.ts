@@ -10,7 +10,7 @@ export function registerDaemonStop(daemon: Command): void {
     .description("Stop the daemon")
     .action(async () => {
       try {
-        const configPath = join(homedir(), ".viberun", "config.json");
+        const configPath = join(homedir(), ".vibe-station", "config.json");
         const content = readFileSync(configPath, "utf-8");
         const config = JSON.parse(content) as { port?: number; pid?: number };
 

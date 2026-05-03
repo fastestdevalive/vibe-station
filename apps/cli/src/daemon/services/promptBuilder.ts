@@ -3,7 +3,7 @@
  *
  * L1 — base: skill/skill.md (loaded once at daemon boot, cached)
  * L2 — context: project + worktree + mode context
- * L3 — rules: <project>/AGENTS.md or <project>/.viberun/rules.md (read at every spawn)
+ * L3 — rules: <project>/AGENTS.md or <project>/.vibe-station/rules.md (read at every spawn)
  *
  * Output: { systemPrompt, taskPrompt? }
  */
@@ -32,7 +32,7 @@ async function loadSkillMd(): Promise<string> {
     return content;
   } catch {
     // Fallback if asset not found (should not happen in normal operation)
-    cachedSkillMd = "# viberun-ide Agent\n\nYou are a viberun-ide-managed coding agent.";
+    cachedSkillMd = "# vibe-station Agent\n\nYou are a vibe-station-managed coding agent.";
     return cachedSkillMd;
   }
 }
@@ -88,7 +88,7 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
 
   const l2 = l2Lines.join("\n");
 
-  // L3 — project-level rules (AGENTS.md or .viberun/rules.md)
+  // L3 — project-level rules (AGENTS.md or .vibe-station/rules.md)
   const l3 = await readProjectRules(project.absolutePath);
 
   const systemPrompt = [l1, l2, ...(l3 ? [l3] : [])].join("\n");
@@ -102,7 +102,7 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
 async function readProjectRules(projectPath: string): Promise<string | null> {
   const candidates = [
     join(projectPath, "AGENTS.md"),
-    join(projectPath, ".viberun", "rules.md"),
+    join(projectPath, ".vibe-station", "rules.md"),
   ];
   for (const candidate of candidates) {
     try {

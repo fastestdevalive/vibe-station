@@ -159,7 +159,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     <div className="dashboard-panel">
       <div className="dashboard-panel__inner">
         <div className="dashboard-header">
-          <div className="dashboard-header__wordmark">viberun</div>
+          <div className="dashboard-header__wordmark">vibe-station</div>
           <div className="dashboard-header__daemon">
             <span
               className="dashboard-header__daemon-dot"

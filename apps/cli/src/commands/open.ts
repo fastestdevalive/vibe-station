@@ -5,7 +5,7 @@ import { die } from "../lib/output.js";
 export function registerOpen(program: Command): void {
   program
     .command("open [target]")
-    .description("Open the viberun IDE in browser")
+    .description("Open the vibe-station IDE in browser")
     .action(async (target?: string) => {
       const url = target ? `http://localhost:3000/${target}` : "http://localhost:3000";
 

@@ -59,7 +59,7 @@ export function createOpencodePlugin(): AgentPlugin {
       if (prompt.taskPrompt) {
         parts.push(prompt.taskPrompt);
       }
-      parts.push(`<!-- VRPRMT:${prompt.sessionId} -->`);
+      parts.push(`<!-- VSTPRMT:${prompt.sessionId} -->`);
       return {
         launchArgs: undefined,
         postLaunchInput: parts.length > 0 ? parts.join("\n\n") : undefined,

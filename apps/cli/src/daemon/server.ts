@@ -43,7 +43,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   });
 
   // Expose the version so routes can read it
-  (app as typeof app & { vrunVersion: string }).vrunVersion = version;
+  (app as typeof app & { vstVersion: string }).vstVersion = version;
 
   registerHealthRoute(app, startedAt);
   registerProjectRoutes(app);

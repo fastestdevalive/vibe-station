@@ -1,5 +1,5 @@
 /**
- * System health checks for `vrun doctor`.
+ * System health checks for `vst doctor`.
  * Checks:
  * - tmux on PATH
  * - git >= 2.20

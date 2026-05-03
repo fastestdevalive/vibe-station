@@ -2,47 +2,47 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 
-/** ~/.viberun */
-export function vrunHome(): string {
-  return join(homedir(), ".viberun");
+/** ~/.vibe-station */
+export function vstHome(): string {
+  return join(homedir(), ".vibe-station");
 }
 
-/** ~/.viberun/projects/<id> */
+/** ~/.vibe-station/projects/<id> */
 export function projectDir(projectId: string): string {
-  return join(vrunHome(), "projects", projectId);
+  return join(vstHome(), "projects", projectId);
 }
 
-/** ~/.viberun/projects/<id>/manifest.json */
+/** ~/.vibe-station/projects/<id>/manifest.json */
 export function manifestPath(projectId: string): string {
   return join(projectDir(projectId), "manifest.json");
 }
 
-/** ~/.viberun/projects/<id>/manifest.json.tmp */
+/** ~/.vibe-station/projects/<id>/manifest.json.tmp */
 export function manifestTmpPath(projectId: string): string {
   return join(projectDir(projectId), "manifest.json.tmp");
 }
 
-/** ~/.viberun/projects/<id>/worktrees/<worktreeId> */
+/** ~/.vibe-station/projects/<id>/worktrees/<worktreeId> */
 export function worktreePath(projectId: string, worktreeId: string): string {
   return join(projectDir(projectId), "worktrees", worktreeId);
 }
 
-/** ~/.viberun/config.json */
+/** ~/.vibe-station/config.json */
 export function configPath(): string {
-  return join(vrunHome(), "config.json");
+  return join(vstHome(), "config.json");
 }
 
-/** ~/.viberun/modes.json */
+/** ~/.vibe-station/modes.json */
 export function modesPath(): string {
-  return join(vrunHome(), "modes.json");
+  return join(vstHome(), "modes.json");
 }
 
-/** ~/.viberun/logs/daemon.log */
+/** ~/.vibe-station/logs/daemon.log */
 export function daemonLogPath(): string {
-  return join(vrunHome(), "logs", "daemon.log");
+  return join(vstHome(), "logs", "daemon.log");
 }
 
-/** ~/.viberun/projects/<p>/session-data/<w>/<s> — per-session data dir (sibling of worktrees/, not inside the checkout) */
+/** ~/.vibe-station/projects/<p>/session-data/<w>/<s> — per-session data dir (sibling of worktrees/, not inside the checkout) */
 export function sessionDataDir(projectId: string, worktreeId: string, sessionId: string): string {
   return join(projectDir(projectId), "session-data", worktreeId, sessionId);
 }

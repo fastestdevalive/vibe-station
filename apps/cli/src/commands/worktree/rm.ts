@@ -13,7 +13,7 @@ export function registerWorktreeRm(worktree: Command): void {
       await preflight();
       const msg = opts.purge
         ? `This will PERMANENTLY delete worktree "${id}", terminate its sessions, and remove files from disk.`
-        : `This will remove worktree "${id}" from vrun and terminate its sessions. Files stay on disk.`;
+        : `This will remove worktree "${id}" from vst and terminate its sessions. Files stay on disk.`;
       await confirmByTypingName(id, msg);
 
       const url = opts.purge ? `/worktrees/${id}?purge=true` : `/worktrees/${id}`;

@@ -230,7 +230,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         }),
     }),
     {
-      name: "viberun:workspace",
+      name: "vibestation:workspace",
       version: 3,
       migrate: (persisted) => {
         const p = persisted as Record<string, unknown> | null;

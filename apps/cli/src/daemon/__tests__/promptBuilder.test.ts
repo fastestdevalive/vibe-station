@@ -27,7 +27,7 @@ describe("buildPrompt", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-prompt-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-prompt-test-"));
     _resetSkillCacheForTest();
   });
 
@@ -91,9 +91,9 @@ describe("buildPrompt", () => {
     expect(result.systemPrompt).toContain("Always write tests.");
   });
 
-  it("falls back to .viberun/rules.md if no AGENTS.md", async () => {
-    await mkdir(join(tempDir, ".viberun"), { recursive: true });
-    await writeFile(join(tempDir, ".viberun", "rules.md"), "Custom rule: no console.log.", "utf8");
+  it("falls back to .vibe-station/rules.md if no AGENTS.md", async () => {
+    await mkdir(join(tempDir, ".vibe-station"), { recursive: true });
+    await writeFile(join(tempDir, ".vibe-station", "rules.md"), "Custom rule: no console.log.", "utf8");
     const result = await buildPrompt({ project: makeProject(tempDir), worktree: makeWorktree() });
     expect(result.systemPrompt).toContain("Custom rule: no console.log.");
   });
