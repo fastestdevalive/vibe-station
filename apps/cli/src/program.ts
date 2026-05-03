@@ -27,6 +27,7 @@ import { registerModeAdd } from "./commands/mode/add.js";
 import { registerModeRm } from "./commands/mode/rm.js";
 import { registerOpen } from "./commands/open.js";
 import { registerStatus } from "./commands/status.js";
+import { registerSummary } from "./commands/summary.js";
 import { registerDoctor } from "./commands/doctor.js";
 
 interface PackageJson {
@@ -104,6 +105,7 @@ export function buildProgram(): Command {
   // Utility commands
   registerOpen(program);
   registerStatus(program);
+  registerSummary(program);
   registerDoctor(program);
 
   return program;

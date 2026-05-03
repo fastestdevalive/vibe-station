@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
+import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 interface TerminalPaneProps {
   api: ApiInstance;
@@ -15,28 +16,75 @@ export function TerminalPane({ api }: TerminalPaneProps) {
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const lastTouchY = useRef<number>(0);
+  const prevActiveSessionRef = useRef<string | null>(null);
 
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
+  const sessionAttachState = useWorkspaceStore((s) => s.sessionAttachState);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
+  const markSessionAttachPending = useWorkspaceStore((s) => s.markSessionAttachPending);
+  const markSessionAttached = useWorkspaceStore((s) => s.markSessionAttached);
+  const clearSessionAttach = useWorkspaceStore((s) => s.clearSessionAttach);
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
 
   const [atBottom, setAtBottom] = useState(true);
+  const [resumePending, setResumePending] = useState(false);
 
-  const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
-  // useSessionOutput registers event listeners + WS subscription.
-  // It does NOT call openSession — we do that below after fit.fit() so the
-  // backend receives the actual terminal dimensions before replaying scrollback.
+  const lifecycleState = activeSessionId ? sessionStates[activeSessionId] : undefined;
+  const attach = activeSessionId ? sessionAttachState[activeSessionId] : undefined;
+
+  const attachPending = attach === "pending";
+
+  const showSpawningOverlay = lifecycleState === "not_started" || attachPending;
+
+  const mountTerminal =
+    Boolean(activeSessionId) &&
+    lifecycleState != null &&
+    lifecycleState !== "not_started";
+
+  const spawnReason = lifecycleState === "not_started" ? "spawning" : "reconnecting";
+
   const { lastChunk, sessionState } = useSessionOutput(api, activeSessionId);
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return undefined;
+    const cur = activeSessionId;
+    const prev = prevActiveSessionRef.current;
+    prevActiveSessionRef.current = cur;
+    if (prev && prev !== cur) clearSessionAttach(prev);
+    if (cur) markSessionAttachPending(cur);
+  }, [activeSessionId, clearSessionAttach, markSessionAttachPending]);
 
-    // mounted flag — guards async callbacks that run after a potential teardown
+  useEffect(() => {
+    return api.on("session:opened", (ev) => {
+      if (
+        ev.type === "session:opened" &&
+        ev.sessionId === useWorkspaceStore.getState().activeSessionId
+      ) {
+        markSessionAttached(ev.sessionId);
+      }
+    });
+  }, [api, markSessionAttached]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !mountTerminal || !activeSessionId) return undefined;
+
     let mounted = true;
     let rafId: number | null = null;
     let settleTimerId: ReturnType<typeof setTimeout> | null = null;
+
+    // mountTerminal flips false→true when a new session transitions out of
+    // not_started; the host div is conditionally rendered, so each remount is
+    // a fresh DOM node. xterm's open() is single-shot and binds term.element
+    // to a specific host — if we reuse the previous Terminal instance, it
+    // keeps writing to the now-detached old host and the new host stays blank.
+    // Detect the mismatch and recreate.
+    const existingTerm = termRef.current;
+    if (existingTerm && existingTerm.element && existingTerm.element !== host) {
+      existingTerm.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+    }
 
     const initialScale = useWorkspaceStore.getState().terminalFontScale;
     const term =
@@ -57,7 +105,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
 
     const fit = fitRef.current ?? new FitAddon();
     fitRef.current = fit;
-    // Phase 1: touch scroll handlers — re-attached every session switch
+
     const handleTouchStart = (e: TouchEvent) => {
       if (e.touches[0]) lastTouchY.current = e.touches[0].clientY;
     };
@@ -89,24 +137,24 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       });
     }
 
-    // Clear previous session output. Immediately re-fit and clear the glyph
-    // atlas so the canvas is at correct dimensions before any content arrives —
-    // reset() triggers a redraw, and the deferred RAF fit is too late to stop
-    // that first bad paint.
     term.reset();
     setAtBottom(true);
-    // Phase 2: scroll-to-bottom subscription
     const scrollSub = term.onScroll(() => {
       const b = term.buffer.active;
       setAtBottom(b.viewportY >= b.length - term.rows);
     });
-    try { fit.fit(); } catch { /* ignore if not yet attached */ }
+    try {
+      fit.fit();
+    } catch {
+      /* ignore */
+    }
     term.clearTextureAtlas?.();
-    // Force a full canvas repaint — reset() clears the buffer but doesn't
-    // repaint the canvas, leaving stale pixels from the previous session.
-    try { term.refresh(0, term.rows - 1); } catch { /* ignore */ }
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch {
+      /* ignore */
+    }
 
-    // RO tracks pending rAF so splitter-drag bursts coalesce to one per frame.
     let roPendingRaf: number | null = null;
     const ro = new ResizeObserver(() => {
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
@@ -119,13 +167,12 @@ export function TerminalPane({ api }: TerminalPaneProps) {
             void api.resizeSession(activeSessionId, term.cols, term.rows);
           }
         } catch {
-          // ignore fit errors during teardown
+          /* ignore */
         }
       });
     });
     ro.observe(host);
 
-    // window resize is a safety net for DPR/zoom changes that may not fire RO.
     const handleWindowResize = () => {
       if (!mounted) return;
       try {
@@ -134,14 +181,11 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           void api.resizeSession(activeSessionId, term.cols, term.rows);
         }
       } catch {
-        // ignore
+        /* ignore */
       }
     };
     window.addEventListener("resize", handleWindowResize);
 
-    // Fonts.ready gate: defer first open until the browser has loaded fonts so
-    // xterm measures cell metrics against JetBrains Mono, not the fallback.
-    // Feature-detect: jsdom does not implement document.fonts.
     const fontsReadyPromise: Promise<void> =
       typeof document !== "undefined" && document.fonts?.ready
         ? document.fonts.ready.then(() => undefined)
@@ -150,8 +194,6 @@ export function TerminalPane({ api }: TerminalPaneProps) {
     void fontsReadyPromise.then(() => {
       if (!mounted) return;
 
-      // Attach loadingdone listener for late font-swap (font-display:swap).
-      // Feature-detect: jsdom's document.fonts mock lacks addEventListener.
       const fontsFace = typeof document !== "undefined" ? document.fonts : undefined;
       const fontsListenerAttached =
         !!fontsFace && typeof fontsFace.addEventListener === "function";
@@ -165,7 +207,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
             void api.resizeSession(activeSessionId, termRef.current.cols, termRef.current.rows);
           }
         } catch {
-          // ignore
+          /* ignore */
         }
       };
 
@@ -173,7 +215,6 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         fontsFace!.addEventListener("loadingdone", handleFontsLoadingDone);
       }
 
-      // Initial rAF fit — let panel layout settle one frame.
       rafId = requestAnimationFrame(() => {
         rafId = null;
         if (!mounted) return;
@@ -181,11 +222,9 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           termRef.current?.clearTextureAtlas?.();
           fit.fit();
         } catch {
-          // ignore
+          /* ignore */
         }
 
-        // Deferred-settle: react-resizable-panels sometimes finalises
-        // flex-basis after the first rAF. 100ms gives it time to land.
         settleTimerId = setTimeout(() => {
           settleTimerId = null;
           if (!mounted) return;
@@ -193,10 +232,11 @@ export function TerminalPane({ api }: TerminalPaneProps) {
             fit.fit();
             term.refresh(0, term.rows - 1);
             if (activeSessionId) {
+              markSessionAttachPending(activeSessionId);
               void api.openSession(activeSessionId, term.cols, term.rows);
             }
           } catch {
-            // ignore
+            /* ignore */
           }
         }, 100);
       });
@@ -213,8 +253,6 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         void api.sendKeystroke(activeSessionId, data);
       }
     });
-    // Keep onResize as a secondary path; we also always call resizeSession
-    // explicitly after fit so col/row drift is avoided.
     const r = term.onResize(({ cols, rows }) => {
       if (activeSessionId) {
         void api.resizeSession(activeSessionId, cols, rows);
@@ -239,7 +277,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         void api.closeSession(activeSessionId);
       }
     };
-  }, [activeSessionId, api]);
+  }, [activeSessionId, api, mountTerminal, markSessionAttachPending]);
 
   useEffect(() => {
     if (activeSessionId && sessionState) {
@@ -253,62 +291,73 @@ export function TerminalPane({ api }: TerminalPaneProps) {
     }
   }, [lastChunk]);
 
-  // Fix 3: font-size effect — correct order, no pre-fit refresh(), plus
-  // clearTextureAtlas() so stale atlas glyphs are dropped immediately.
   useEffect(() => {
     const term = termRef.current;
-    if (!term?.options) return;
+    if (!term?.options || !mountTerminal) return;
     term.options.fontSize = Math.round(14 * terminalFontScale);
     term.clearTextureAtlas?.();
     fitRef.current?.fit();
     if (activeSessionId) {
       void api.resizeSession(activeSessionId, term.cols, term.rows);
     }
-  }, [terminalFontScale, activeSessionId, api]);
+  }, [terminalFontScale, activeSessionId, api, mountTerminal]);
 
-  // Re-open the active session when the daemon WS reconnects so scrollback
-  // gets replayed at the current terminal dimensions.
   useEffect(() => {
     let prev = api.getConnectionState();
     return api.subscribeConnection((s) => {
-      if (s === "online" && prev !== "online" && activeSessionId && termRef.current) {
+      if (s === "online" && prev !== "online" && activeSessionId && termRef.current && mountTerminal) {
         termRef.current.reset();
+        markSessionAttachPending(activeSessionId);
         void api.openSession(activeSessionId, termRef.current.cols, termRef.current.rows);
       }
       prev = s;
     });
-  }, [api, activeSessionId]);
+  }, [api, activeSessionId, mountTerminal, markSessionAttachPending]);
+
+  useEffect(() => {
+    setResumePending(false);
+  }, [activeSessionId]);
 
   async function resume() {
-    if (!activeSessionId) return;
-    await api.resumeSession(activeSessionId);
-    // Daemon spawned a fresh tmux pane. Clear the exited marker in the
-    // store, wipe stale scrollback, and re-attach the WS stream so output
-    // from the new pane flows into this terminal. We must close first to
-    // unregister the daemon-side stream that's still pointed at the dead pane.
-    patchSessionState(activeSessionId, "working");
-    const term = termRef.current;
-    if (term) {
-      term.reset();
-      // Daemon's sessionOpen handler auto-detaches any stale stream pointing
-      // at the dead pane, so this just attaches to the new one.
-      void api.openSession(activeSessionId, term.cols, term.rows);
+    if (!activeSessionId || resumePending) return;
+    setResumePending(true);
+    try {
+      await api.resumeSession(activeSessionId);
+      patchSessionState(activeSessionId, "working");
+      const term = termRef.current;
+      if (term) {
+        term.reset();
+        markSessionAttachPending(activeSessionId);
+        void api.openSession(activeSessionId, term.cols, term.rows);
+      }
+    } finally {
+      setResumePending(false);
     }
   }
 
+  const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
   const showBanner = state === "exited" || sessionState === "exited";
 
   return (
-    <div className="pane-stack" style={{ flex: 1, minHeight: 0, background: "var(--bg-primary)", position: "relative" }}>
+    <div className="terminal-pane-root">
       {showBanner ? (
         <div className="terminal-resume-banner">
-          Session exited.
-          <button type="button" onClick={() => void resume()}>
-            Resume
-          </button>
+          <span className="terminal-resume-banner__msg">Session exited.</span>
+          <span className="terminal-resume-banner__action">
+            {resumePending ? (
+              <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">
+                <span className="terminal-resume-busy__ring" aria-hidden />
+                <span className="terminal-resume-busy__label">Resuming…</span>
+              </span>
+            ) : (
+              <button type="button" className="terminal-resume-banner__btn" onClick={() => void resume()}>
+                Resume
+              </button>
+            )}
+          </span>
         </div>
       ) : null}
-      {!atBottom ? (
+      {!atBottom && mountTerminal && !showSpawningOverlay ? (
         <button
           type="button"
           className="terminal-scroll-btn"
@@ -320,8 +369,27 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           ↓
         </button>
       ) : null}
-      <div className="terminal-wrap">
-        <div ref={hostRef} className="terminal-host" />
+
+      <div className="terminal-pane-stack-inner">
+        {showSpawningOverlay ? (
+          <div className="terminal-spawning-layer">
+            <SpawningPlaceholder reason={spawnReason} />
+          </div>
+        ) : null}
+
+        {mountTerminal ? (
+          <div
+            className="terminal-wrap"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              opacity: showSpawningOverlay ? 0 : 1,
+              pointerEvents: showSpawningOverlay ? "none" : "auto",
+            }}
+          >
+            <div ref={hostRef} className="terminal-host" />
+          </div>
+        ) : null}
       </div>
     </div>
   );

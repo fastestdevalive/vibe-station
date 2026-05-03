@@ -65,7 +65,10 @@ export type WSEvent =
       sessionId: string;
       worktreeId: string;
       sessionType: SessionType;
-      mode: Mode | null;
+      /** Legacy: mode id string when agent; omitted for terminal */
+      mode?: string;
+      /** Full session row for optimistic UI (daemon v1+) */
+      snapshot?: Session;
     }
   | {
       type: "session:state";

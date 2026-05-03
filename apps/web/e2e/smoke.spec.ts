@@ -34,7 +34,7 @@ test("font toggle updates --font-family on root", async ({ page }) => {
 });
 
 test("layout toggle flips workspace data-terminal", async ({ page }) => {
-  await page.goto("/workspace");
+  await page.goto("/worktree");
   const layout = page.locator("#workspace-layout");
   await expect(layout).toHaveAttribute("data-terminal", "left");
   await page.getByRole("button", { name: /terminal pane layout/i }).click();
@@ -42,7 +42,7 @@ test("layout toggle flips workspace data-terminal", async ({ page }) => {
 });
 
 test("sidebar toggle updates data-sidebar", async ({ page }) => {
-  await page.goto("/workspace");
+  await page.goto("/worktree");
   const layout = page.locator("#workspace-layout");
   await expect(layout).toHaveAttribute("data-sidebar", "open");
   await page.getByRole("button", { name: /Hide projects sidebar/i }).click();

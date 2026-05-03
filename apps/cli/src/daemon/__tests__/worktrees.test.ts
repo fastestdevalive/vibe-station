@@ -84,6 +84,10 @@ describe("Worktree routes", () => {
   });
 
   afterEach(async () => {
+    // Drain any in-flight fire-and-forget runMainSpawnJob calls before we
+    // tear down — otherwise their delayed mutateProject hits a cleared store
+    // in the next test's beforeEach and surfaces as an unhandled rejection.
+    await new Promise((r) => setTimeout(r, 150));
     await app.close();
     await rm(tempDir, { recursive: true, force: true });
   });
@@ -244,5 +248,123 @@ describe("Worktree routes", () => {
       await app.inject({ method: "GET", url: "/projects" })
     ).json<ProjectRecord[]>()[0];
     expect(wt.baseBranch).toBe(project?.defaultBranch);
+  });
+
+  it("POST /worktrees returns 201 before slow spawn resolves (optimistic broadcasts)", async () => {
+    const broadcast = await import("../broadcaster.js");
+    const spy = vi.spyOn(broadcast, "broadcastAll");
+    const spawnModule = await import("../services/spawn.js");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    vi.mocked(spawnModule.spawnSession).mockImplementationOnce(() => gate);
+
+    const injectPromise = app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `opt-${Date.now()}`, modeId: "bug-fix" },
+    });
+
+    const res = await Promise.race([
+      injectPromise,
+      new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error("response slower than 800ms")), 800),
+      ),
+    ]);
+
+    expect(res.statusCode).toBe(201);
+
+    const calls = spy.mock.calls.map((c) => (c[0] as { type?: string })?.type);
+    expect(calls).toContain("worktree:created");
+    expect(calls).toContain("session:created");
+
+    release();
+    await injectPromise;
+
+    // Wait for runMainSpawnJob to settle so it doesn't leak a mutateProject
+    // call into the next test's cleared store.
+    const wt = (res as { json: <T>() => T }).json<{ id: string }>();
+    const expectedSessionId = `${wt.id}-m`;
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const found = spy.mock.calls
+        .map((c) => c[0] as { type: string; sessionId?: string; state?: string })
+        .find((m) => m.type === "session:state" && m.sessionId === expectedSessionId);
+      if (found) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    spy.mockRestore();
+    vi.mocked(spawnModule.spawnSession).mockResolvedValue(undefined);
+  });
+
+  it("broadcasts session:state=working after spawn completes", async () => {
+    const broadcast = await import("../broadcaster.js");
+    const spy = vi.spyOn(broadcast, "broadcastAll");
+    const spawnModule = await import("../services/spawn.js");
+    vi.mocked(spawnModule.spawnSession).mockResolvedValueOnce(undefined);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `working-${Date.now()}`, modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string }>();
+
+    // runMainSpawnJob is fire-and-forget; poll the spy until the expected
+    // broadcast arrives or we time out.
+    const expectedSessionId = `${wt.id}-m`;
+    const deadline = Date.now() + 2000;
+    let working: { type: string; sessionId?: string; state?: string } | undefined;
+    while (Date.now() < deadline) {
+      working = spy.mock.calls
+        .map((c) => c[0] as { type: string; sessionId?: string; state?: string })
+        .find((m) => m.type === "session:state" && m.state === "working" && m.sessionId === expectedSessionId);
+      if (working) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(working).toBeDefined();
+    spy.mockRestore();
+  });
+
+  it("spawn failure broadcasts session:state=exited with reason; worktree remains on disk", async () => {
+    const { stat } = await import("node:fs/promises");
+    const broadcast = await import("../broadcaster.js");
+    const spy = vi.spyOn(broadcast, "broadcastAll");
+    const spawnModule = await import("../services/spawn.js");
+    vi.mocked(spawnModule.spawnSession).mockRejectedValueOnce(new Error("boom"));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `failure-${Date.now()}`, modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string }>();
+    const expectedSessionId = `${wt.id}-m`;
+
+    const deadline = Date.now() + 2000;
+    let exited: { type: string; sessionId?: string; state?: string; reason?: string } | undefined;
+    while (Date.now() < deadline) {
+      exited = spy.mock.calls
+        .map((c) => c[0] as { type: string; sessionId?: string; state?: string; reason?: string })
+        .find((m) => m.type === "session:state" && m.state === "exited" && m.sessionId === expectedSessionId);
+      if (exited) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(exited).toBeDefined();
+    expect(exited?.reason).toContain("boom");
+
+    // Worktree directory should still exist on disk.
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    const st = await stat(wtPath);
+    expect(st.isDirectory()).toBe(true);
+
+    spy.mockRestore();
+    vi.mocked(spawnModule.spawnSession).mockResolvedValue(undefined);
   });
 });

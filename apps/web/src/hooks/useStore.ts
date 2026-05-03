@@ -36,6 +36,8 @@ export interface WorkspaceState {
   /** Hide worktrees whose sessions are all done or exited */
   hideInactiveWorktrees: boolean;
   mobileSidebarOpen: boolean;
+  /** Transient attach state between openSession and session:opened */
+  sessionAttachState: Record<string, "pending" | "attached">;
   setTerminalPosition: (p: TerminalPosition) => void;
   toggleTerminalPosition: () => void;
   /** File tree pane — same as ao-142 index 0 */
@@ -56,6 +58,9 @@ export interface WorkspaceState {
   toggleDotFiles: () => void;
   patchSessionState: (sessionId: string, state: SessionState) => void;
   syncSessionsFromApi: (sessions: Session[]) => void;
+  markSessionAttachPending: (sessionId: string) => void;
+  markSessionAttached: (sessionId: string) => void;
+  clearSessionAttach: (sessionId: string) => void;
 }
 
 function tryTogglePane(c: PaneCollapsed, index: 0 | 1 | 2): PaneCollapsed | null {
@@ -84,6 +89,7 @@ const initial = {
   leftSidebarCollapsed: false,
   hideInactiveWorktrees: false,
   mobileSidebarOpen: false,
+  sessionAttachState: {} as Record<string, "pending" | "attached">,
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -198,6 +204,20 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             next[sess.id] = sess.state;
           }
           return { sessionStates: next };
+        }),
+      markSessionAttachPending: (sessionId) =>
+        set((s) => ({
+          sessionAttachState: { ...s.sessionAttachState, [sessionId]: "pending" },
+        })),
+      markSessionAttached: (sessionId) =>
+        set((s) => ({
+          sessionAttachState: { ...s.sessionAttachState, [sessionId]: "attached" },
+        })),
+      clearSessionAttach: (sessionId) =>
+        set((s) => {
+          const next = { ...s.sessionAttachState };
+          delete next[sessionId];
+          return { sessionAttachState: next };
         }),
     }),
     {

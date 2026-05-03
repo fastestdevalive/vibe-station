@@ -308,13 +308,13 @@ export function createMockApi() {
         createdAt: nowIso(),
       };
       sessions.push(sess);
-      const mode = body.modeId ? modes.find((m) => m.id === body.modeId) ?? null : null;
       emit({
         type: "session:created",
         sessionId: sess.id,
         worktreeId: sess.worktreeId,
         sessionType: sess.type,
-        mode,
+        mode: typeof body.modeId === "string" ? body.modeId : undefined,
+        snapshot: sess,
       });
       return structuredClone(sess);
     },

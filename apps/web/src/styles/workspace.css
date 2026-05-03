@@ -447,7 +447,7 @@
 }
 
 .left-sidebar--collapsed .tree-row__label {
-  font-size: var(--font-size-xs);
+  font-size: calc(var(--font-size-xs) + 2px);
   line-height: 1.2;
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.03em;
@@ -459,9 +459,9 @@
 }
 
 .left-sidebar--collapsed .tree-row--worktree {
+  display: flex;
   justify-content: center;
   padding: var(--space-1);
-  min-height: 30px;
 }
 
 .left-sidebar--collapsed .wt-align-gutter {
@@ -568,20 +568,100 @@
   flex-shrink: 0;
 }
 
-.wt-row__label {
-  flex: 1;
+/* Same width as `.tree-row__chevron` — status glyph aligns under project disclosure icon */
+.wt-leading-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.wt-leading-slot .status-dot {
+  display: inline-flex;
+}
+
+/* Allow branch label + trail to shrink inside sidebar column (flex default min-width: auto blocks ellipsis). */
+.wt-row-wrap {
+  min-width: 0;
+  width: 100%;
+}
+
+.tree-row--worktree {
   min-width: 0;
 }
 
-.wt-menu-trigger {
-  opacity: 0;
+/*
+ * Same flex shape as `.tree-row--project`: primary cell grows (chevron/dot + branch),
+ * trailing cell matches project `.tree-row__action` column so ids align under the + button.
+ */
+.wt-row__expand {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.left-sidebar--collapsed .tree-row--worktree .wt-row__expand {
+  flex: 0 1 auto;
+}
+
+.wt-row__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wt-row__trail {
+  position: relative;
+  flex-shrink: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.wt-row__id {
+  box-sizing: border-box;
+  display: block;
+  min-width: 0;
+  max-width: 11rem;
+  padding-right: 2px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: opacity var(--transition-fast);
+}
+
+.tree-row--worktree .wt-menu-trigger {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+
+.tree-row--worktree:hover .wt-row__id,
+.tree-row--worktree:focus-within .wt-row__id {
+  opacity: 0;
 }
 
 .tree-row--worktree:hover .wt-menu-trigger,
 .tree-row--worktree:focus-within .wt-menu-trigger,
 .wt-menu-trigger[aria-expanded="true"] {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .menu-pop button.menu-pop__item--danger {
@@ -928,6 +1008,20 @@
   border-radius: var(--radius-sm);
 }
 
+/* Worktrees only: shorter row than default `.tree-row` (project font bumped below) */
+.tree-row.tree-row--worktree {
+  font-size: var(--font-size-sm);
+  min-height: 28px;
+}
+
+.left-sidebar .tree-row--project {
+  font-size: calc(var(--font-size-sm) + 2px);
+}
+
+.left-sidebar--collapsed .tree-row.tree-row--worktree {
+  min-height: 26px;
+}
+
 .tree-row:hover {
   background: var(--bg-hover);
 }
@@ -1168,6 +1262,63 @@
   gap: var(--space-3);
 }
 
+.terminal-resume-banner__msg {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-secondary);
+}
+
+.terminal-resume-banner__action {
+  flex-shrink: 0;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.terminal-resume-banner__btn {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-card);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.terminal-resume-banner__btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.terminal-resume-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.terminal-resume-busy__ring {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--fg-secondary);
+  animation: terminal-resume-spin 0.65s linear infinite;
+}
+
+.terminal-resume-busy__label {
+  letter-spacing: 0.02em;
+}
+
+@keyframes terminal-resume-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .terminal-scroll-btn {
   position: absolute;
   bottom: 12px;
@@ -1188,6 +1339,87 @@
 }
 .terminal-scroll-btn:hover {
   opacity: 1;
+}
+
+/* Terminal column body — do NOT reuse `.pane-stack` here: Workspace already wraps
+   TabsStrip + this pane in `.pane-stack`; nesting `.pane-stack` + height:100% breaks flex sizing inside PanelGroup. */
+.terminal-pane-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.terminal-pane-stack-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-spawning-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  background: var(--bg-primary);
+  pointer-events: none;
+}
+
+.spawning-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.spawning-placeholder__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: spawning-pulse 1s ease-in-out infinite alternate;
+}
+
+.spawning-placeholder__label {
+  letter-spacing: 0.02em;
+}
+
+@keyframes spawning-pulse {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1em;
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: currentColor;
+}
+
+.status-dot--none {
+  opacity: 0.45;
+}
+
+.status-dot--spawning {
+  animation: spawning-pulse 1s ease-in-out infinite alternate;
 }
 
 .preview-body {
@@ -2119,6 +2351,31 @@
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   flex-shrink: 0;
+}
+
+/* Session row: slot label + dim branch (left cluster), project name stays trailing */
+.dashboard-card--session .dashboard-card__session-main {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.dashboard-card--session .dashboard-card__primary {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.dashboard-card__branch {
+  flex: 1 1 0%;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  opacity: 0.72;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dashboard-empty {

@@ -12,6 +12,7 @@ export function createOpencodePlugin(): AgentPlugin {
   return {
     name: "opencode",
     promptDelivery: "post-launch",
+    postSentinelDelayMs: 500,
 
     getLaunchCommand(): string[] {
       return ["opencode"];
@@ -28,11 +29,12 @@ export function createOpencodePlugin(): AgentPlugin {
       };
     },
 
-    composeLaunchPrompt(prompt: { systemPrompt: string; taskPrompt?: string }) {
+    composeLaunchPrompt(prompt: { systemPrompt: string; taskPrompt?: string; sessionId: string }) {
       const parts = [prompt.systemPrompt];
       if (prompt.taskPrompt) {
         parts.push(prompt.taskPrompt);
       }
+      parts.push(`<!-- VRPRMT:${prompt.sessionId} -->`);
       return {
         launchArgs: undefined,
         postLaunchInput: parts.join("\n\n"),

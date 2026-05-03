@@ -15,7 +15,7 @@ import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
 const CreateSessionBody = z.object({
   worktreeId: z.string().min(1),
   type: z.enum(["agent", "terminal"]),
-  modeId: z.string().min(1).optional(),
+  modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
 });
 
@@ -52,8 +52,8 @@ function labelForSlot(slot: SessionRecord["slot"], type: SessionRecord["type"]):
   return `term ${String(slot).slice(1)}`;
 }
 
-/** Flatten SessionRecord's nested lifecycle and add UI-required fields. */
-function serializeSession(worktreeId: string, s: SessionRecord) {
+/** Flatten SessionRecord's nested lifecycle and add UI-required fields (REST + WS snapshot). */
+export function serializeSession(worktreeId: string, s: SessionRecord) {
   return {
     id: s.id,
     worktreeId,
@@ -124,7 +124,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       id: sessionId,
       slot,
       type,
-      modeId: type === "agent" ? modeId : undefined,
+      modeId: type === "agent" ? (modeId ?? undefined) : undefined,
       tmuxName,
       lifecycle: {
         state: "not_started",
@@ -224,12 +224,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
     }
 
-    notifySession(sessionId, {
+    // session:created must be broadcastAll, not notifySession — no client has
+    // subscribed to a brand-new sessionId yet, so notifySession would lose the
+    // event and the sidebar would only see the new session via the dialog's
+    // explicit refresh. Match the pattern used by routes/worktrees.ts:300-311.
+    broadcastAll({
       type: "session:created",
       sessionId,
       worktreeId,
       sessionType: type,
-      mode: modeId,
+      mode: typeof modeId === "string" ? modeId : undefined,
+      snapshot: serializeSession(worktreeId, sessionRecord),
     });
 
     return reply.status(201).send(serializeSession(worktreeId, sessionRecord));

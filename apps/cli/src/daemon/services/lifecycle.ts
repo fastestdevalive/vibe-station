@@ -4,46 +4,78 @@
  * Per HIGH-LEVEL-DESIGN.md §3 and §6:
  * - Polls each session at ~1 Hz
  * - Uses tmux has-session to detect exited sessions
- * - Captures pane output and runs plugin's detectActivity (if available)
- * - Debounces state-only disk writes at 500ms per project
- * - Only writes if state actually changed (no-op on no change)
+ * - Captures pane output and derives working vs idle from **activity stability**
+ * - Persists lifecycle transitions to the manifest when state changes
+ *
+ * Idle contract (activity-delta):
+ * - Hash the last CAPTURE_LINES of pane text each tick (SHA-1).
+ * - First observation for a session starts in "working" tracking (no immediate idle flip).
+ * - If the hash stays unchanged for IDLE_THRESHOLD_MS → lifecycle **idle**.
+ * - If the hash changes → reset stability clock → lifecycle **working**.
+ * - Only applies while lifecycle is already **working** or **idle** (never overrides
+ *   not_started / done / exited).
  */
 
+import { createHash } from "node:crypto";
 import { hasSession, capturePane } from "./tmux.js";
-import { writeManifest } from "./manifest.js";
-import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";
+import { getAllProjects, mutateProject } from "../state/project-store.js";
 import { notifySession } from "../broadcaster.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
 
-const POLL_INTERVAL_MS = 1000;
-const DEBOUNCE_MS = 500;
+export const POLL_INTERVAL_MS = 1000;
 
-// Per-project debounce timers
-const debouncers = new Map<string, ReturnType<typeof setTimeout>>();
+/** Pane output must stay byte-identical this long before we flip to idle. */
+export const IDLE_THRESHOLD_MS = 4000;
 
-// Track dirty projects
-const dirtyProjects = new Set<string>();
+/** Lines captured for idle hashing — compare full window, not only the last line. */
+export const CAPTURE_LINES = 20;
+
+type IdleTrack = { hash: string; stableSince: number };
+const idleTracking = new Map<string, IdleTrack>();
 
 let pollerHandle: ReturnType<typeof setInterval> | null = null;
 
-function scheduleDiskFlush(projectId: string): void {
-  const existing = debouncers.get(projectId);
-  if (existing) clearTimeout(existing);
+/** Test helper — clears pane-hash tracking. */
+export function _resetIdleTrackingForTest(): void {
+  idleTracking.clear();
+}
 
-  debouncers.set(
-    projectId,
-    setTimeout(() => {
-      debouncers.delete(projectId);
-      dirtyProjects.delete(projectId);
-      // Re-read from store and flush
-      const project = getProject(projectId);
-      if (project) {
-        writeManifest(project).catch((err) => {
-          console.error(`[lifecycle] Failed to flush manifest for ${projectId}:`, err);
-        });
-      }
-    }, DEBOUNCE_MS),
-  );
+function hashPane(output: string): string {
+  return createHash("sha1").update(output, "utf8").digest("hex");
+}
+
+async function persistLifecycleState(
+  projectId: string,
+  worktreeId: string,
+  sessionId: string,
+  newState: LifecycleState,
+): Promise<void> {
+  notifySession(sessionId, {
+    type: "session:state",
+    sessionId,
+    state: newState,
+  });
+  await mutateProject(projectId, (p) => ({
+    ...p,
+    worktrees: p.worktrees.map((w) =>
+      w.id === worktreeId
+        ? {
+            ...w,
+            sessions: w.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    lifecycle: {
+                      state: newState,
+                      lastTransitionAt: new Date().toISOString(),
+                    },
+                  }
+                : s,
+            ),
+          }
+        : w,
+    ),
+  }));
 }
 
 async function pollSession(
@@ -51,14 +83,12 @@ async function pollSession(
   worktreeId: string,
   session: SessionRecord,
 ): Promise<void> {
-  // Skip non-active sessions
   if (session.lifecycle.state === "not_started") return;
 
   const alive = await hasSession(session.tmuxName);
 
   if (!alive && session.lifecycle.state !== "exited") {
-    // Session exited — broadcast to live subscribers AND persist to manifest
-    // so a page reload doesn't show a "working" session for a dead pane.
+    idleTracking.delete(session.id);
     notifySession(session.id, {
       type: "session:exited",
       sessionId: session.id,
@@ -87,28 +117,43 @@ async function pollSession(
     return;
   }
 
-  if (!alive) return; // already exited, no change
+  if (!alive) return;
 
-  // Capture pane to detect activity
+  if (session.lifecycle.state !== "working" && session.lifecycle.state !== "idle") {
+    return;
+  }
+
   try {
-    const output = await capturePane(session.tmuxName, { lines: 20 });
-    // Basic heuristic: if output ends with a prompt-like pattern, consider idle
-    const isIdle = /[>\$#]\s*$/.test(output.trimEnd());
-    const newState: LifecycleState = isIdle ? "idle" : "working";
+    const output = await capturePane(session.tmuxName, { lines: CAPTURE_LINES });
+    const newHash = hashPane(output);
+    const now = Date.now();
 
-    if (newState !== session.lifecycle.state) {
-      // State changed — emit WS event
-      notifySession(session.id, {
-        type: "session:state",
-        sessionId: session.id,
-        state: newState,
-      });
-      dirtyProjects.add(projectId);
-      scheduleDiskFlush(projectId);
+    let entry = idleTracking.get(session.id);
+    if (!entry) {
+      idleTracking.set(session.id, { hash: newHash, stableSince: now });
+      return;
+    }
+
+    if (entry.hash !== newHash) {
+      idleTracking.set(session.id, { hash: newHash, stableSince: now });
+      if (session.lifecycle.state === "idle") {
+        await persistLifecycleState(projectId, worktreeId, session.id, "working");
+      }
+      return;
+    }
+
+    const stableAge = now - entry.stableSince;
+    if (stableAge >= IDLE_THRESHOLD_MS && session.lifecycle.state !== "idle") {
+      await persistLifecycleState(projectId, worktreeId, session.id, "idle");
     }
   } catch {
     // Capture pane failed — session may have just exited
   }
+}
+
+/** Exported for deterministic daemon tests (single poll tick). */
+export async function runLifecyclePollOnce(): Promise<void> {
+  await pollAll();
 }
 
 async function pollAll(): Promise<void> {
@@ -131,7 +176,6 @@ export function startLifecyclePoller(): void {
   pollerHandle = setInterval(() => {
     void pollAll();
   }, POLL_INTERVAL_MS);
-  // Unref so the timer doesn't keep the process alive if nothing else is running
   if (typeof pollerHandle === "object" && "unref" in pollerHandle) {
     (pollerHandle as { unref(): void }).unref();
   }
@@ -142,7 +186,5 @@ export function stopLifecyclePoller(): void {
     clearInterval(pollerHandle);
     pollerHandle = null;
   }
-  for (const t of debouncers.values()) clearTimeout(t);
-  debouncers.clear();
-  dirtyProjects.clear();
+  idleTracking.clear();
 }
