@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { hasSession, capturePane } from "./tmux.js";
 import { getAllProjects, mutateProject } from "../state/project-store.js";
 import { notifySession } from "../broadcaster.js";
+import { cleanupSessionDataDir } from "./paths.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
 
 export const POLL_INTERVAL_MS = 1000;
@@ -93,6 +94,8 @@ async function pollSession(
       type: "session:exited",
       sessionId: session.id,
     });
+    // Best-effort cleanup of per-session data dir (system-prompt file etc.)
+    cleanupSessionDataDir(projectId, worktreeId, session.id);
     await mutateProject(projectId, (p) => ({
       ...p,
       worktrees: p.worktrees.map((w) =>

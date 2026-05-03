@@ -6,7 +6,19 @@ import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
 vi.mock("../services/paths.js", () => ({
   worktreePath: () => "/tmp/vrun-spawn-test-wt",
+  sessionDataDir: () => "/tmp/vrun-spawn-test-data",
+  systemPromptPath: () => "/tmp/vrun-spawn-test-data/system-prompt.md",
+  cleanupSessionDataDir: () => {},
 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...original,
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+  };
+});
 
 vi.mock("../services/tmux.js", () => ({
   newSession: vi.fn().mockResolvedValue(undefined),
@@ -35,6 +47,9 @@ describe("spawnSession prompt verification", () => {
       getReadySignal: () => ({ fallbackMs: 0 }),
       composeLaunchPrompt: ({ sessionId }) => ({
         postLaunchInput: `system\n\n<!-- VRPRMT:${sessionId} -->`,
+        launchArgs: undefined,
+        useShell: undefined,
+        shellLine: undefined,
       }),
     };
   }

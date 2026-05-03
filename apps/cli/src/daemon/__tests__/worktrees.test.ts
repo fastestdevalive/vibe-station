@@ -21,6 +21,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    cleanupSessionDataDir: () => {},
   };
 });
 
