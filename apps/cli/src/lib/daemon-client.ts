@@ -16,11 +16,15 @@ async function daemonRequest<T>(
   }
 
   try {
+    // Only set Content-Type when we actually have a body. Fastify rejects
+    // empty bodies on application/json with FST_ERR_CTP_EMPTY_JSON_BODY,
+    // which broke `vrun worktree rm` (DELETE without body).
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+
     const response = await fetch(`${url}${path}`, {
       method,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: body ? JSON.stringify(body) : undefined,
     });
 

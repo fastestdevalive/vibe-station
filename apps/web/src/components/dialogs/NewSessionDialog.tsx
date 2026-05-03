@@ -5,6 +5,7 @@ import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
+import { NewModeDialog } from "./NewModeDialog";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -32,6 +33,7 @@ export function NewSessionDialog({
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [newModeOpen, setNewModeOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -80,6 +82,7 @@ export function NewSessionDialog({
   }
 
   return (
+    <>
     <Dialog
       open={open}
       title={`New session — ${projectName}`}
@@ -145,7 +148,7 @@ export function NewSessionDialog({
           </option>
         ))}
       </Select>
-      <button type="button" style={{ alignSelf: "flex-start", marginTop: "var(--space-2)" }}>
+      <button type="button" style={{ alignSelf: "flex-start", marginTop: "var(--space-2)" }} onClick={() => setNewModeOpen(true)}>
         + New mode
       </button>
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Initial prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
@@ -159,5 +162,19 @@ export function NewSessionDialog({
       />
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
+    {newModeOpen && (
+      <NewModeDialog
+        open
+        onClose={() => setNewModeOpen(false)}
+        api={api}
+        onSaved={async () => {
+          const ms = await api.listModes();
+          setModes(ms);
+          if (ms[ms.length - 1]) setModeId(ms[ms.length - 1]!.id);
+          setNewModeOpen(false);
+        }}
+      />
+    )}
+    </>
   );
 }

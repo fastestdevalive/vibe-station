@@ -17,6 +17,9 @@ export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
   paneCollapsed: [true, true, false],
 };
 
+/** IDE viewport fullscreen for terminal or preview (not persisted). */
+export type WorkspacePaneFullscreen = "terminal" | "preview";
+
 export interface WorkspaceState {
   /** Per-worktree layout state (terminalPosition + paneCollapsed). Falls back to DEFAULT_WORKTREE_LAYOUT. */
   layoutByWorktree: Record<string, WorktreeLayout>;
@@ -38,6 +41,9 @@ export interface WorkspaceState {
   mobileSidebarOpen: boolean;
   /** Transient attach state between openSession and session:opened */
   sessionAttachState: Record<string, "pending" | "attached">;
+  /** Terminal/preview maximized over full viewport (sidebar + top bar area). */
+  workspacePaneFullscreen: WorkspacePaneFullscreen | null;
+  setWorkspacePaneFullscreen: (next: WorkspacePaneFullscreen | null) => void;
   setTerminalPosition: (p: TerminalPosition) => void;
   toggleTerminalPosition: () => void;
   /** File tree pane — same as ao-142 index 0 */
@@ -90,6 +96,7 @@ const initial = {
   hideInactiveWorktrees: false,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
+  workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -185,12 +192,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
       toggleInactiveWorktreesFilter: () =>
         set((s) => ({ hideInactiveWorktrees: !s.hideInactiveWorktrees })),
+      setWorkspacePaneFullscreen: (next) => set({ workspacePaneFullscreen: next }),
       clearWorkspaceSelection: () =>
         set({
           activeProjectId: null,
           activeWorktreeId: null,
           activeSessionId: null,
           activeFilePath: null,
+          workspacePaneFullscreen: null,
         }),
       toggleDotFiles: () => set((s) => ({ showDotFiles: !s.showDotFiles })),
       patchSessionState: (sessionId, state) =>

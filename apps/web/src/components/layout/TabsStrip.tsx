@@ -1,4 +1,4 @@
-import { Minus, Plus } from "lucide-react";
+import { Maximize2, Minimize2, Minus, Plus } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
@@ -16,6 +16,8 @@ export function TabsStrip({ api, worktreeId }: TabsStripProps) {
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
+  const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
+  const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -121,14 +123,34 @@ export function TabsStrip({ api, worktreeId }: TabsStripProps) {
           <Plus size={14} />
         </button>
       </div>
-      <div className="tabs-strip__zoom" aria-label="Terminal zoom">
-        <span className="tabs-strip__zoom-label">Aa</span>
-        <button type="button" className="tab tab--icon" aria-label="Decrease terminal font" onClick={() => bumpTerminalFont(-0.05)}>
-          <Minus size={11} />
-        </button>
-        <button type="button" className="tab tab--icon" aria-label="Increase terminal font" onClick={() => bumpTerminalFont(0.05)}>
-          <Plus size={11} />
-        </button>
+      <div className="tabs-strip__tools">
+        <div className="tabs-strip__zoom" aria-label="Terminal zoom">
+          <span className="tabs-strip__zoom-label">Aa</span>
+          <button type="button" className="tab tab--icon" aria-label="Decrease terminal font" onClick={() => bumpTerminalFont(-0.05)}>
+            <Minus size={11} />
+          </button>
+          <button type="button" className="tab tab--icon" aria-label="Increase terminal font" onClick={() => bumpTerminalFont(0.05)}>
+            <Plus size={11} />
+          </button>
+        </div>
+        <div className="tabs-strip__fs">
+          <button
+            type="button"
+            className={`tab tab--icon${workspacePaneFullscreen === "terminal" ? " tab--fs-active" : ""}`}
+            aria-label={workspacePaneFullscreen === "terminal" ? "Exit fullscreen terminal" : "Fullscreen terminal"}
+            aria-pressed={workspacePaneFullscreen === "terminal"}
+            title={workspacePaneFullscreen === "terminal" ? "Exit fullscreen terminal" : "Fullscreen terminal"}
+            onClick={() =>
+              setWorkspacePaneFullscreen(workspacePaneFullscreen === "terminal" ? null : "terminal")
+            }
+          >
+            {workspacePaneFullscreen === "terminal" ? (
+              <Minimize2 size={13} strokeWidth={2} aria-hidden />
+            ) : (
+              <Maximize2 size={13} strokeWidth={2} aria-hidden />
+            )}
+          </button>
+        </div>
       </div>
 
       <NewTabDialog
