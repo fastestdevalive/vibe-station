@@ -1,4 +1,4 @@
-import { Minus, Plus, X } from "lucide-react";
+import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope } from "@/api/types";
@@ -30,6 +30,8 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
   const togglePaneCollapsed = useWorkspaceStore((s) => s.togglePaneCollapsed);
+  const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
+  const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
 
   const { theme } = useTheme();
   const themeMode = theme;
@@ -107,10 +109,34 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     return summarizeDiffLines(hunks);
   }, [scope, diffBody, fileBody]);
 
+  const previewFullscreenBtn = (
+    <div className="preview-header__fs">
+      <button
+        type="button"
+        className={`tab tab--icon${workspacePaneFullscreen === "preview" ? " tab--fs-active" : ""}`}
+        aria-label={workspacePaneFullscreen === "preview" ? "Exit fullscreen preview" : "Fullscreen preview"}
+        aria-pressed={workspacePaneFullscreen === "preview"}
+        title={workspacePaneFullscreen === "preview" ? "Exit fullscreen preview" : "Fullscreen preview"}
+        onClick={() =>
+          setWorkspacePaneFullscreen(workspacePaneFullscreen === "preview" ? null : "preview")
+        }
+      >
+        {workspacePaneFullscreen === "preview" ? (
+          <Minimize2 size={13} strokeWidth={2} aria-hidden />
+        ) : (
+          <Maximize2 size={13} strokeWidth={2} aria-hidden />
+        )}
+      </button>
+    </div>
+  );
+
   if (!worktreeId) {
     return (
       <div className="pane pane-stack">
-        <div className="preview-header"><span className="preview-header__title">Overview</span></div>
+        <div className="preview-header">
+          <span className="preview-header__title">Overview</span>
+          {previewFullscreenBtn}
+        </div>
         <div className="preview-body" style={{ padding: 0 }}>
           <DashboardPanel api={api} />
         </div>
@@ -129,7 +155,6 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
       aria-label="Close preview"
       title="Close preview (⌘⇧P)"
       onClick={() => togglePaneCollapsed(1)}
-      style={{ marginRight: 4 }}
     >
       <X size={13} />
     </button>
@@ -153,7 +178,10 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         <div className="preview-header">
           <span className="preview-header__title">Preview</span>
           {zoomControls}
-          {closeBtn}
+          <div className="preview-header__tail">
+            {previewFullscreenBtn}
+            {closeBtn}
+          </div>
         </div>
         <div className="empty-state">Select a file from the tree</div>
       </div>
@@ -177,7 +205,10 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         ) : null}
       </div>
       {zoomControls}
-      {closeBtn}
+      <div className="preview-header__tail">
+        {previewFullscreenBtn}
+        {closeBtn}
+      </div>
     </div>
   );
 

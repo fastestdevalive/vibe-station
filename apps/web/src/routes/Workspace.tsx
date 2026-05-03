@@ -71,7 +71,7 @@ export function Workspace() {
   const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : 220;
 
   const terminalColumn = (
-    <div className="pane-stack" style={{ height: "100%", minHeight: 0 }}>
+    <div className="pane-stack">
       <TabsStrip api={api} worktreeId={activeWorktreeId} />
       <TerminalPane api={api} />
     </div>

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
+import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
+import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface LayoutProps {
   topBar: ReactNode;
@@ -42,6 +44,10 @@ export function Layout({
   const mainContentRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
 
+  // Must be called unconditionally — before any early returns — to satisfy Rules of Hooks.
+  const paneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
+  const setPaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
+
   useEffect(() => {
     const el = mainContentRef.current;
     if (!el) return;
@@ -54,6 +60,15 @@ export function Layout({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (paneFullscreen === "terminal" && !terminalPaneVisible) setPaneFullscreen(null);
+    if (paneFullscreen === "preview" && !previewPaneVisible) setPaneFullscreen(null);
+  }, [paneFullscreen, terminalPaneVisible, previewPaneVisible, setPaneFullscreen]);
+
+  useEffect(() => {
+    setPaneFullscreen(null);
+  }, [terminalPosition, setPaneFullscreen]);
 
   const treeMaxPct = Math.min(99, (400 / containerWidth) * 100);
 
@@ -142,20 +157,31 @@ export function Layout({
   const vPreview = previewPaneVisible;
   const vTerm = terminalPaneVisible;
 
+  const terminalInSplit = vTerm && paneFullscreen !== "terminal";
+  const previewInSplit = vPreview && paneFullscreen !== "preview";
+
+  function wrapTerminal(node: ReactNode, placement: PaneFullscreenPlacement = "panel") {
+    return <PaneFullscreenChrome placement={placement}>{node}</PaneFullscreenChrome>;
+  }
+
+  function wrapPreview(node: ReactNode, placement: PaneFullscreenPlacement = "panel") {
+    return <PaneFullscreenChrome placement={placement}>{node}</PaneFullscreenChrome>;
+  }
+
   const dataSidebar = vTree ? "open" : "closed";
 
   const leftSplitNodes: React.ReactElement[] = [];
-  if (vTerm) {
+  if (terminalInSplit) {
     leftSplitNodes.push(
       <Panel key="term" defaultSize={33.4} minSize={18}>
-        {ideTerminalPane}
+        {wrapTerminal(ideTerminalPane)}
       </Panel>,
     );
   }
-  if (vPreview) {
+  if (previewInSplit) {
     leftSplitNodes.push(
       <Panel key="preview" defaultSize={33.3} minSize={15}>
-        {idePreviewPane}
+        {wrapPreview(idePreviewPane)}
       </Panel>,
     );
   }
@@ -185,38 +211,55 @@ export function Layout({
   );
 
   const topRowVisible = vPreview || vTree;
-  const bottomTop =
-    vPreview && vTree ? (
-      <PanelGroup direction="horizontal" style={{ width: "100%", height: "100%" }}>
-        <Panel defaultSize={72} minSize={30}>
-          {idePreviewPane}
-        </Panel>
-        <PanelResizeHandle className="resize-handle resize-handle--col" />
-        <Panel defaultSize={28} minSize={14} maxSize={treeMaxPct}>
+
+  let bottomTop: React.ReactNode = null;
+  if (vPreview && vTree) {
+    if (previewInSplit) {
+      bottomTop = (
+        <PanelGroup direction="horizontal" style={{ width: "100%", height: "100%" }}>
+          <Panel defaultSize={72} minSize={30}>
+            {wrapPreview(idePreviewPane)}
+          </Panel>
+          <PanelResizeHandle className="resize-handle resize-handle--col" />
+          <Panel defaultSize={28} minSize={14} maxSize={treeMaxPct}>
+            {ideFileTree}
+          </Panel>
+        </PanelGroup>
+      );
+    } else {
+      bottomTop = (
+        <div className="pane-fill-host">
           {ideFileTree}
-        </Panel>
-      </PanelGroup>
-    ) : vPreview ? (
-      idePreviewPane
-    ) : vTree ? (
-      ideFileTree
-    ) : null;
+        </div>
+      );
+    }
+  } else if (vPreview) {
+    bottomTop = previewInSplit ? wrapPreview(idePreviewPane) : null;
+  } else if (vTree) {
+    bottomTop = ideFileTree;
+  }
+
+  const bottomTopRow = bottomTop ?? <div className="pane-split-placeholder" aria-hidden />;
 
   const bottomSplitInner =
     vTerm && topRowVisible ? (
       <PanelGroup direction="vertical" style={{ width: "100%", height: "100%" }}>
         <Panel defaultSize={68} minSize={28}>
-          {bottomTop}
+          {bottomTopRow}
         </Panel>
         <PanelResizeHandle className="resize-handle resize-handle--row" />
         <Panel defaultSize={32} minSize={18}>
-          {ideTerminalPane}
+          {terminalInSplit ? wrapTerminal(ideTerminalPane) : <div className="pane-split-placeholder" aria-hidden />}
         </Panel>
       </PanelGroup>
     ) : vTerm && !topRowVisible ? (
-      ideTerminalPane
+      terminalInSplit ? (
+        wrapTerminal(ideTerminalPane)
+      ) : (
+        <div className="pane-split-placeholder pane-split-placeholder--grow" aria-hidden />
+      )
     ) : !vTerm && topRowVisible ? (
-      bottomTop
+      bottomTop ?? <PanesAllHidden />
     ) : (
       <PanesAllHidden />
     );
@@ -226,6 +269,19 @@ export function Layout({
       {bottomSplitInner}
     </div>
   );
+
+  const ideMainColumn = terminalPosition === "left" ? leftSplit : bottomSplit;
+
+  const fullscreenOverlay =
+    paneFullscreen === "terminal" ? (
+      <div className="pane-viewport-fullscreen" key="viewport-fs">
+        {wrapTerminal(ideTerminalPane, "viewport")}
+      </div>
+    ) : paneFullscreen === "preview" ? (
+      <div className="pane-viewport-fullscreen" key="viewport-fs">
+        {wrapPreview(idePreviewPane, "viewport")}
+      </div>
+    ) : null;
 
   if (terminalPosition === "left") {
     return (
@@ -247,9 +303,10 @@ export function Layout({
             }}
           >
             {isMobile ? sidebarMobile : sidebarDesktop}
-            {leftSplit}
+            {ideMainColumn}
           </div>
         </div>
+        {fullscreenOverlay}
       </div>
     );
   }
@@ -270,8 +327,9 @@ export function Layout({
         }}
       >
         {isMobile ? sidebarMobile : sidebarDesktop}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>{bottomSplit}</div>
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>{ideMainColumn}</div>
       </div>
+      {fullscreenOverlay}
     </div>
   );
 }
