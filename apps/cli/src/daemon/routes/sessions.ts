@@ -47,6 +47,63 @@ function findWorktreeContext(
   return null;
 }
 
+async function runAgentSpawnJob(opts: {
+  project: ProjectRecord;
+  worktree: WorktreeRecord;
+  session: SessionRecord;
+  modeId: string;
+  prompt: string | undefined;
+  daemonPort: number;
+}): Promise<void> {
+  const { project, worktree, session, modeId, prompt, daemonPort } = opts;
+  const sessionId = session.id;
+  const worktreeId = worktree.id;
+  try {
+    const modes = await (await import("../routes/modes.js")).loadModes();
+    const mode = modes.find((m) => m.id === modeId);
+    if (!mode) throw new Error(`Mode '${modeId}' not found`);
+    const plugin = resolvePlugin(mode.cli);
+    const { buildPrompt } = await import("../services/promptBuilder.js");
+    const builtPrompt = await buildPrompt({
+      project,
+      worktree,
+      modeContext: mode.context,
+      userPrompt: prompt,
+    });
+    await spawnSession({
+      project,
+      worktree,
+      session,
+      plugin,
+      daemonPort,
+      systemPrompt: builtPrompt.systemPrompt,
+      taskPrompt: builtPrompt.taskPrompt,
+    });
+    session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? { ...w, sessions: w.sessions.map((s) => (s.id === sessionId ? session : s)) }
+          : w,
+      ),
+    }));
+    broadcastAll({ type: "session:state", sessionId, state: "working" });
+  } catch (err) {
+    const reason = String(err);
+    session.lifecycle = { state: "exited", lastTransitionAt: new Date().toISOString() };
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? { ...w, sessions: w.sessions.map((s) => (s.id === sessionId ? session : s)) }
+          : w,
+      ),
+    }));
+    broadcastAll({ type: "session:state", sessionId, state: "exited", reason });
+  }
+}
+
 function labelForSlot(slot: SessionRecord["slot"], type: SessionRecord["type"]): string {
   if (slot === "m") return "main";
   if (type === "agent") return `agent ${String(slot).slice(1)}`;
@@ -167,79 +224,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       ),
     }));
 
-    // Spawn agent session if type is "agent"
-    if (type === "agent" && modeId) {
-      try {
-        const modes = await (await import("../routes/modes.js")).loadModes();
-        const mode = modes.find((m) => m.id === modeId);
-        if (!mode) {
-          throw new Error(`Mode '${modeId}' not found`);
-        }
-
-        const plugin = resolvePlugin(mode.cli);
-
-        // Build prompt
-        const { buildPrompt } = await import("../services/promptBuilder.js");
-        const builtPrompt = await buildPrompt({
-          project,
-          worktree,
-          modeContext: mode.context,
-          userPrompt: prompt,
-        });
-
-        // Get daemon port
-        const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-
-        // Spawn the agent session
-        await spawnSession({
-          project,
-          worktree,
-          session: sessionRecord,
-          plugin,
-          daemonPort,
-          systemPrompt: builtPrompt.systemPrompt,
-          taskPrompt: builtPrompt.taskPrompt,
-        });
-
-        // Update session state to working
-        sessionRecord.lifecycle = {
-          state: "working",
-          lastTransitionAt: new Date().toISOString(),
-        };
-
-        await mutateProject(project.id, (p) => ({
-          ...p,
-          worktrees: p.worktrees.map((w) =>
-            w.id === worktreeId
-              ? {
-                  ...w,
-                  sessions: w.sessions.map((s) =>
-                    s.id === sessionId ? sessionRecord : s,
-                  ),
-                }
-              : w,
-          ),
-        }));
-      } catch (err) {
-        // Clean up on spawn failure
-        await mutateProject(project.id, (p) => ({
-          ...p,
-          worktrees: p.worktrees.map((w) =>
-            w.id === worktreeId
-              ? { ...w, sessions: w.sessions.filter((s) => s.id !== sessionId) }
-              : w,
-          ),
-        }));
-        return reply.status(500).send({
-          error: `Failed to spawn agent session: ${String(err)}`,
-        });
-      }
-    }
-
+    // Broadcast and return immediately — agent spawn runs in background.
     // session:created must be broadcastAll, not notifySession — no client has
-    // subscribed to a brand-new sessionId yet, so notifySession would lose the
-    // event and the sidebar would only see the new session via the dialog's
-    // explicit refresh. Match the pattern used by routes/worktrees.ts:300-311.
+    // subscribed to a brand-new sessionId yet.
     broadcastAll({
       type: "session:created",
       sessionId,
@@ -248,6 +235,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       mode: typeof modeId === "string" ? modeId : undefined,
       snapshot: serializeSession(worktreeId, sessionRecord),
     });
+
+    if (type === "agent" && modeId) {
+      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      void runAgentSpawnJob({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
+    }
 
     return reply.status(201).send(serializeSession(worktreeId, sessionRecord));
   });

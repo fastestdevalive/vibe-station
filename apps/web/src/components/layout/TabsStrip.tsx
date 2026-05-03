@@ -57,6 +57,26 @@ export function TabsStrip({ api, worktreeId }: TabsStripProps) {
         null;
       if (pick) setActiveSession(pick);
     })();
+
+    const offCreated = api.on("session:created", (ev) => {
+      if (ev.type !== "session:created" || !ev.snapshot) return;
+      if (ev.snapshot.worktreeId !== worktreeId) return;
+      setSessions((prev) => {
+        const exists = prev.some((s) => s.id === ev.snapshot!.id);
+        return exists ? prev : [...prev, ev.snapshot!];
+      });
+      setActiveSession(ev.snapshot.id);
+    });
+
+    const offDeleted = api.on("session:deleted", (ev) => {
+      if (ev.type !== "session:deleted") return;
+      setSessions((prev) => prev.filter((s) => s.id !== ev.sessionId));
+    });
+
+    return () => {
+      offCreated();
+      offDeleted();
+    };
   }, [api, worktreeId, setActiveSession]);
 
   async function refreshTabs() {
@@ -158,7 +178,7 @@ export function TabsStrip({ api, worktreeId }: TabsStripProps) {
         api={api}
         worktreeId={worktreeId ?? ""}
         onClose={() => setNewOpen(false)}
-        onCreated={() => void refreshTabs()}
+        onCreated={() => {}}
       />
 
       <ConfirmDialog
