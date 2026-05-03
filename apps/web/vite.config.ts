@@ -15,11 +15,11 @@ export default defineConfig({
     strictPort: !!process.env.PORT,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:7422",
+        target: "http://127.0.0.1:7421",
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
       "/ws": {
-        target: "ws://127.0.0.1:7422",
+        target: "ws://127.0.0.1:7421",
         ws: true,
       },
     },
