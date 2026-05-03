@@ -40,14 +40,14 @@ const CreateProjectBody = z.object({
 
 export function registerProjectRoutes(app: FastifyInstance): void {
   // GET /projects
-  // Order newest-first by `createdAt`, breaking ties on `id`. The in-memory
-  // store is a Map whose iteration order tracks insertion, but daemon-boot
-  // load is `Promise.all` over `readdir`, so the same on-disk projects can
-  // appear in different orders across restarts. Stable sort here gives
-  // clients a deterministic listing.
+  // Order oldest-first by `createdAt` (new projects append at the bottom),
+  // breaking ties on `id`. The in-memory store is a Map whose iteration
+  // order tracks insertion, but daemon-boot load is `Promise.all` over
+  // `readdir`, so the same on-disk projects can appear in different orders
+  // across restarts. Stable sort here gives clients a deterministic listing.
   app.get("/projects", async (_req, reply) => {
     const sorted = [...getAllProjects()].sort((a, b) => {
-      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
       return a.id < b.id ? -1 : 1;
     });
     return reply.send(sorted.map(serializeProject));
