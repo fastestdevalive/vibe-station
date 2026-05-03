@@ -32,6 +32,7 @@ export function NewSessionDialog({
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
+  const [useTmux, setUseTmux] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newModeOpen, setNewModeOpen] = useState(false);
 
@@ -64,6 +65,7 @@ export function NewSessionDialog({
         modeId: modeId || "mode-1",
         baseBranch: baseBranch.trim() || undefined,
         prompt: initialPrompt.trim() || undefined,
+        useTmux,
       });
     } else {
       if (!existingWtId) {
@@ -75,6 +77,7 @@ export function NewSessionDialog({
         modeId: modeId || null,
         type: "agent",
         prompt: initialPrompt.trim() || undefined,
+        useTmux,
       });
     }
     onCreated?.();
@@ -160,6 +163,17 @@ export function NewSessionDialog({
         value={initialPrompt}
         onChange={(e) => setInitialPrompt(e.target.value)}
       />
+      <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <input
+          type="checkbox"
+          id="use-tmux-checkbox"
+          checked={useTmux}
+          onChange={(e) => setUseTmux(e.target.checked)}
+        />
+        <label htmlFor="use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
+          Use tmux (recommended — survives daemon restart, better concurrent device support)
+        </label>
+      </div>
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
     {newModeOpen && (

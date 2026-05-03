@@ -24,6 +24,7 @@ export function NewTabDialog({
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [useTmux, setUseTmux] = useState(true);
 
   useEffect(() => {
     if (!open) return;
@@ -40,6 +41,7 @@ export function NewTabDialog({
       modeId: tabType === "agent" ? modeId || null : null,
       type: tabType === "agent" ? "agent" : "terminal",
       prompt: tabType === "agent" ? prompt.trim() || undefined : undefined,
+      useTmux,
     });
     onCreated?.();
     onClose();
@@ -100,6 +102,22 @@ export function NewTabDialog({
             onChange={(e) => setPrompt(e.target.value)}
           />
         </>
+      ) : null}
+      <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+        <input
+          type="checkbox"
+          id="new-tab-use-tmux-checkbox"
+          checked={useTmux}
+          onChange={(e) => setUseTmux(e.target.checked)}
+        />
+        <label htmlFor="new-tab-use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
+          Use tmux (recommended — survives daemon restart, better concurrent device support)
+        </label>
+      </div>
+      {!useTmux && tabType === "terminal" ? (
+        <div style={{ marginTop: "var(--space-2)", color: "var(--fg-muted)", fontSize: "0.85em" }}>
+          Note: without tmux, restarting the daemon will end this terminal and lose its scrollback history.
+        </div>
       ) : null}
     </Dialog>
   );

@@ -10,9 +10,9 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
-import { loadAll } from "./state/project-store.js";
+import { loadAll, getAllProjects } from "./state/project-store.js";
 import { recoverNotStartedSessions } from "./services/recover.js";
-import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
+import { startLifecyclePoller, stopLifecyclePoller, persistLifecycleState } from "./services/lifecycle.js";
 
 const VST_HOME = join(homedir(), ".vibe-station");
 const CONFIG_PATH = join(VST_HOME, "config.json");
@@ -85,6 +85,24 @@ async function releaseLock(): Promise<void> {
   }
 }
 
+/**
+ * Mark any non-tmux sessions that are not already exited as exited.
+ * Direct-pty PTYs are children of the daemon process — they die on daemon
+ * restart, so there is nothing to recover.
+ */
+async function sweepDirectPtySessionsOnBoot(): Promise<void> {
+  for (const project of getAllProjects()) {
+    for (const worktree of project.worktrees) {
+      for (const session of worktree.sessions) {
+        if (!session.useTmux && session.lifecycle.state !== "exited") {
+          console.log(`[sweep] ${session.id}: direct-pty died with daemon → mark exited`);
+          await persistLifecycleState(project.id, worktree.id, session.id, "exited");
+        }
+      }
+    }
+  }
+}
+
 async function main() {
   await acquireLock();
 
@@ -92,6 +110,7 @@ async function main() {
   await loadAll();
 
   await recoverNotStartedSessions();
+  await sweepDirectPtySessionsOnBoot();
 
   const port = await findFreePort(DEFAULT_PORT);
   await writeConfig(port);

@@ -70,10 +70,14 @@ export function Workspace() {
 
   const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : 220;
 
+  const activeSession = activeSessionId
+    ? bundle.sessions.find((s) => s.id === activeSessionId)
+    : undefined;
+
   const terminalColumn = (
     <div className="pane-stack">
       <TabsStrip api={api} worktreeId={activeWorktreeId} />
-      <TerminalPane api={api} />
+      <TerminalPane api={api} activeSession={activeSession} />
     </div>
   );
 

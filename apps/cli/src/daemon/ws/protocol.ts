@@ -98,6 +98,7 @@ const SessionCreatedSnapshot = z.object({
   modeId: z.string().nullable(),
   label: z.string(),
   tmuxName: z.string(),
+  useTmux: z.boolean().optional().default(true),
   state: z.enum(["not_started", "working", "idle", "done", "exited"]),
   lifecycleState: z.enum(["not_started", "working", "idle", "done", "exited"]),
   createdAt: z.string(),

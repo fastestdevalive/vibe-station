@@ -1,21 +1,23 @@
+import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
+import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
+import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 interface TerminalPaneProps {
   api: ApiInstance;
+  activeSession?: Session;
 }
 
-export function TerminalPane({ api }: TerminalPaneProps) {
+export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const lastTouchY = useRef<number>(0);
   const prevActiveSessionRef = useRef<string | null>(null);
 
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
@@ -44,7 +46,9 @@ export function TerminalPane({ api }: TerminalPaneProps) {
 
   const spawnReason = lifecycleState === "not_started" ? "spawning" : "reconnecting";
 
-  const { lastChunk, sessionState } = useSessionOutput(api, activeSessionId);
+  const { sessionState } = useSessionOutput(api, activeSessionId);
+
+  const enableCopyModeScroll = activeSession?.useTmux !== false;
 
   useEffect(() => {
     const cur = activeSessionId;
@@ -70,90 +74,85 @@ export function TerminalPane({ api }: TerminalPaneProps) {
     if (!host || !mountTerminal || !activeSessionId) return undefined;
 
     let mounted = true;
-    let rafId: number | null = null;
-    let settleTimerId: ReturnType<typeof setTimeout> | null = null;
-
-    // mountTerminal flips false→true when a new session transitions out of
-    // not_started; the host div is conditionally rendered, so each remount is
-    // a fresh DOM node. xterm's open() is single-shot and binds term.element
-    // to a specific host — if we reuse the previous Terminal instance, it
-    // keeps writing to the now-detached old host and the new host stays blank.
-    // Detect the mismatch and recreate.
-    const existingTerm = termRef.current;
-    if (existingTerm && existingTerm.element && existingTerm.element !== host) {
-      existingTerm.dispose();
-      termRef.current = null;
-      fitRef.current = null;
-    }
 
     const initialScale = useWorkspaceStore.getState().terminalFontScale;
-    const term =
-      termRef.current ??
-      new Terminal({
-        cursorBlink: true,
-        fontSize: Math.round(14 * initialScale),
-        fontFamily: "JetBrains Mono, monospace",
-        lineHeight: 1.2,
-        scrollback: 10000,
-        allowProposedApi: true,
-        theme: {
-          background: "#0f0f0f",
-          foreground: "#e5e5e5",
-        },
-      });
+    const term = new Terminal({
+      cursorBlink: true,
+      fontSize: Math.round(14 * initialScale),
+      fontFamily: "JetBrains Mono, monospace",
+      lineHeight: 1.2,
+      scrollback: 10000,
+      allowProposedApi: true,
+      theme: {
+        background: "#0f0f0f",
+        foreground: "#e5e5e5",
+      },
+    });
     termRef.current = term;
 
-    const fit = fitRef.current ?? new FitAddon();
+    const fit = new FitAddon();
     fitRef.current = fit;
+    term.loadAddon(fit);
 
-    const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches[0]) lastTouchY.current = e.touches[0].clientY;
-    };
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!e.touches[0]) return;
-      const delta = lastTouchY.current - e.touches[0].clientY;
-      term.scrollLines(Math.round(delta / ((term.options.lineHeight ?? 1.2) * (term.options.fontSize ?? 14)) * 1.5));
-      lastTouchY.current = e.touches[0].clientY;
-      e.preventDefault();
-    };
-    host.addEventListener("touchstart", handleTouchStart, { passive: false });
-    host.addEventListener("touchmove", handleTouchMove, { passive: false });
-
-    if (!term.element) {
-      term.loadAddon(fit);
-      term.open(host);
-      term.attachCustomKeyEventHandler((domEvent) => {
-        const mod = domEvent.ctrlKey || domEvent.metaKey;
-        if (mod && !domEvent.shiftKey && domEvent.key.toLowerCase() === "p") {
+    term.open(host);
+    term.attachCustomKeyEventHandler((domEvent) => {
+      const mod = domEvent.ctrlKey || domEvent.metaKey;
+      if (mod && !domEvent.shiftKey && domEvent.key.toLowerCase() === "p") {
+        return false;
+      }
+      if (mod && domEvent.shiftKey) {
+        const k = domEvent.key.length === 1 ? domEvent.key.toUpperCase() : domEvent.key;
+        if (k === "F" || k === "P" || k === "Z") {
           return false;
         }
-        if (mod && domEvent.shiftKey) {
-          const k = domEvent.key.length === 1 ? domEvent.key.toUpperCase() : domEvent.key;
-          if (k === "F" || k === "P" || k === "Z") {
-            return false;
-          }
-        }
-        return true;
-      });
-    }
-
-    term.reset();
-    setAtBottom(true);
-    const scrollSub = term.onScroll(() => {
-      const b = term.buffer.active;
-      setAtBottom(b.viewportY >= b.length - term.rows);
+      }
+      return true;
     });
+
+    setAtBottom(true);
+
     try {
       fit.fit();
     } catch {
       /* ignore */
     }
-    term.clearTextureAtlas?.();
-    try {
-      term.refresh(0, term.rows - 1);
-    } catch {
-      /* ignore */
-    }
+
+    // Subscribe to output BEFORE openSession so the daemon's first replay
+    // chunk is captured. Write directly to the terminal — do NOT route
+    // through React state. Identical consecutive chunks (e.g. shell's
+    // "\b \b" echo for repeated backspaces) get dropped by React's state-
+    // equality bail-out; same-tick chunks get coalesced to the last value.
+    const offOutput = api.on("session:output", (ev) => {
+      if (
+        ev.type === "session:output" &&
+        ev.sessionId === activeSessionId &&
+        termRef.current
+      ) {
+        termRef.current.write(ev.chunk);
+      }
+    });
+
+    // Open session synchronously after fit. Daemon won't emit chunks
+    // until openSession lands.
+    markSessionAttachPending(activeSessionId);
+    void api.openSession(activeSessionId, term.cols, term.rows);
+
+    // Mobile vertical-swipe scrolling. In normal buffer it scrolls xterm's
+    // scrollback; in alternate buffer (vim/htop/tmux copy-mode) it sends
+    // tmux prefix `[` to enter copy-mode then arrow keys. onScrollAway
+    // flips the jump-to-latest button on, since xterm.onScroll won't fire
+    // in alternate buffer (the viewport never moves).
+    const cleanupTouchScroll = attachTouchScroll(term, (data) => {
+      void api.sendKeystroke(activeSessionId, data);
+    }, {
+      onScrollAway: () => setAtBottom(false),
+      enableCopyModeScroll,
+    });
+
+    const scrollSub = term.onScroll(() => {
+      const b = term.buffer.active;
+      setAtBottom(b.viewportY >= b.length - term.rows);
+    });
 
     let roPendingRaf: number | null = null;
     const ro = new ResizeObserver(() => {
@@ -163,9 +162,7 @@ export function TerminalPane({ api }: TerminalPaneProps) {
         if (!mounted) return;
         try {
           fit.fit();
-          if (activeSessionId) {
-            void api.resizeSession(activeSessionId, term.cols, term.rows);
-          }
+          void api.resizeSession(activeSessionId, term.cols, term.rows);
         } catch {
           /* ignore */
         }
@@ -177,119 +174,42 @@ export function TerminalPane({ api }: TerminalPaneProps) {
       if (!mounted) return;
       try {
         fit.fit();
-        if (activeSessionId) {
-          void api.resizeSession(activeSessionId, term.cols, term.rows);
-        }
+        void api.resizeSession(activeSessionId, term.cols, term.rows);
       } catch {
         /* ignore */
       }
     };
     window.addEventListener("resize", handleWindowResize);
 
-    const fontsReadyPromise: Promise<void> =
-      typeof document !== "undefined" && document.fonts?.ready
-        ? document.fonts.ready.then(() => undefined)
-        : Promise.resolve();
-
-    void fontsReadyPromise.then(() => {
-      if (!mounted) return;
-
-      const fontsFace = typeof document !== "undefined" ? document.fonts : undefined;
-      const fontsListenerAttached =
-        !!fontsFace && typeof fontsFace.addEventListener === "function";
-
-      const handleFontsLoadingDone = () => {
-        if (!mounted || !fitRef.current || !termRef.current) return;
-        try {
-          termRef.current.clearTextureAtlas?.();
-          fitRef.current.fit();
-          if (activeSessionId) {
-            void api.resizeSession(activeSessionId, termRef.current.cols, termRef.current.rows);
-          }
-        } catch {
-          /* ignore */
-        }
-      };
-
-      if (fontsListenerAttached) {
-        fontsFace!.addEventListener("loadingdone", handleFontsLoadingDone);
-      }
-
-      rafId = requestAnimationFrame(() => {
-        rafId = null;
-        if (!mounted) return;
-        try {
-          termRef.current?.clearTextureAtlas?.();
-          fit.fit();
-        } catch {
-          /* ignore */
-        }
-
-        settleTimerId = setTimeout(() => {
-          settleTimerId = null;
-          if (!mounted) return;
-          try {
-            fit.fit();
-            term.refresh(0, term.rows - 1);
-            if (activeSessionId) {
-              markSessionAttachPending(activeSessionId);
-              void api.openSession(activeSessionId, term.cols, term.rows);
-            }
-          } catch {
-            /* ignore */
-          }
-        }, 100);
-      });
-
-      return () => {
-        if (fontsListenerAttached) {
-          fontsFace!.removeEventListener("loadingdone", handleFontsLoadingDone);
-        }
-      };
-    });
-
     const d = term.onData((data) => {
-      if (activeSessionId) {
-        void api.sendKeystroke(activeSessionId, data);
-      }
+      void api.sendKeystroke(activeSessionId, data);
     });
     const r = term.onResize(({ cols, rows }) => {
-      if (activeSessionId) {
-        void api.resizeSession(activeSessionId, cols, rows);
-      }
+      void api.resizeSession(activeSessionId, cols, rows);
     });
 
     return () => {
       mounted = false;
+      offOutput();
       d.dispose();
       r.dispose();
       scrollSub.dispose();
       ro.disconnect();
       window.removeEventListener("resize", handleWindowResize);
-      if (host) {
-        host.removeEventListener("touchstart", handleTouchStart);
-        host.removeEventListener("touchmove", handleTouchMove);
-      }
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      if (settleTimerId !== null) clearTimeout(settleTimerId);
+      cleanupTouchScroll();
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
-      if (activeSessionId) {
-        void api.closeSession(activeSessionId);
-      }
+      void api.closeSession(activeSessionId);
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
     };
-  }, [activeSessionId, api, mountTerminal, markSessionAttachPending]);
+  }, [activeSessionId, enableCopyModeScroll, api, mountTerminal, markSessionAttachPending]);
 
   useEffect(() => {
     if (activeSessionId && sessionState) {
       patchSessionState(activeSessionId, sessionState);
     }
   }, [activeSessionId, patchSessionState, sessionState]);
-
-  useEffect(() => {
-    if (lastChunk && termRef.current) {
-      termRef.current.write(lastChunk);
-    }
-  }, [lastChunk]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -362,7 +282,19 @@ export function TerminalPane({ api }: TerminalPaneProps) {
           type="button"
           className="terminal-scroll-btn"
           onClick={() => {
-            termRef.current?.scrollToBottom();
+            const term = termRef.current;
+            if (term) {
+              if (term.buffer.active.type === "normal") {
+                // Normal buffer: scrollback exists in xterm — use its API.
+                term.scrollToBottom();
+              } else if (activeSessionId) {
+                // Alternate buffer: the user is in tmux copy-mode (entered
+                // by attachTouchScroll on swipe-away). Send 'q' to exit
+                // copy-mode and return to the live tail. xterm has no
+                // scrollback to scroll to here.
+                void api.sendKeystroke(activeSessionId, "q");
+              }
+            }
             setAtBottom(true);
           }}
         >

@@ -150,16 +150,28 @@ describe("TerminalPane", () => {
   });
 
   it("writes terminal output chunks", async () => {
+    const open = vi.spyOn(api, "openSession");
     render(<TerminalPane api={api} />);
+    // Wait for the terminal to be constructed and subscription installed
+    // before emitting — chunks arriving before the terminal exists have
+    // nowhere to land (production daemon doesn't emit until openSession).
+    await waitFor(() => expect(open).toHaveBeenCalledWith("sess-main", 80, 24));
     api.__test.emit({ type: "session:output", sessionId: "sess-main", chunk: "hello" });
     await waitFor(() => expect(writeSpy).toHaveBeenCalledWith("hello"));
   });
 
   it("font-size change calls clearTextureAtlas and resizeSession", async () => {
     const { Terminal } = await import("@xterm/xterm");
+    const open = vi.spyOn(api, "openSession");
     const resizeSpy = vi.spyOn(api, "resizeSession");
 
     render(<TerminalPane api={api} />);
+
+    // Wait for the terminal to be constructed (dynamic import + fonts.ready)
+    // before mutating the store — the font-scale effect short-circuits when
+    // termRef.current is still null.
+    await waitFor(() => expect(open).toHaveBeenCalledWith("sess-main", 80, 24));
+    resizeSpy.mockClear();
 
     // Simulate font scale change
     await act(async () => {
@@ -167,7 +179,6 @@ describe("TerminalPane", () => {
     });
 
     await waitFor(() => {
-      // clearTextureAtlas should have been called
       const term = (Terminal as unknown as { instances?: { clearTextureAtlas: ReturnType<typeof vi.fn> }[] }).instances?.[0];
       if (term) {
         expect(term.clearTextureAtlas).toHaveBeenCalled();
@@ -193,12 +204,9 @@ describe("TerminalPane", () => {
   });
 
   it("renders SpawningPlaceholder when attach is pending", () => {
-    // Test verifies that when sessionAttachState is "pending",
-    // the SpawningPlaceholder is shown instead of the xterm.
-    // This handles the gap between "resume" or "new tab" and actual attach completion.
-    // Implementation: TerminalPane.tsx derives displayState:
-    //   if (attach === "pending") → displayState = "spawning"
-    //   render SpawningPlaceholder early, return before xterm construction
+    // Stub openSession so the mock doesn't synchronously emit session:opened
+    // (which would flip attach from "pending" to "attached" before we assert).
+    vi.spyOn(api, "openSession").mockImplementation(() => new Promise(() => {}));
     useWorkspaceStore.setState({
       activeSessionId: "sess-main",
       sessionStates: { "sess-main": "working" },
@@ -209,9 +217,8 @@ describe("TerminalPane", () => {
   });
 
   it("renders xterm after session:opened arrives", async () => {
-    // Test verifies that xterm is not constructed until sessionAttachState transitions from pending to attached.
-    // Implementation: TerminalPane.tsx listens to session:opened and calls markSessionAttached(id).
-    // This transitions displayState from "spawning" to the actual session state.
+    // Same trick: prevent the mock's auto-emit so we control the transition.
+    vi.spyOn(api, "openSession").mockImplementation(() => new Promise(() => {}));
     useWorkspaceStore.setState({
       activeSessionId: "sess-main",
       sessionStates: { "sess-main": "working" },

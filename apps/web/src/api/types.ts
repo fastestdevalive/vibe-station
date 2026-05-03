@@ -40,6 +40,7 @@ export interface Session {
   state: SessionState;
   lifecycleState: SessionState;
   tmuxName: string;
+  useTmux?: boolean;
   createdAt: string;
 }
 
@@ -173,6 +174,7 @@ export interface CreateWorktreeBody {
   modeId: string;
   baseBranch?: string;
   prompt?: string;
+  useTmux?: boolean;
 }
 
 export interface CreateSessionBody {
@@ -180,6 +182,7 @@ export interface CreateSessionBody {
   modeId: string | null;
   type: SessionType;
   prompt?: string;
+  useTmux?: boolean;
 }
 
 export interface SendInputBody {

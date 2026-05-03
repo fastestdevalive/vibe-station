@@ -1,5 +1,19 @@
 import type { WebSocket } from "@fastify/websocket";
 import type { ServerMessage } from "./protocol.js";
+import type { SessionStream } from "./streams/sessionStream.js";
+
+export type OpenStreamEntry = {
+  kind: "tmux" | "direct";
+  stream: SessionStream;
+  subscriberId: string;
+  /**
+   * Chunk listener attached at session:open time. Captured here so session:close
+   * can `stream.off("chunk", onChunk)` — for shared (direct-pty) streams this is
+   * essential, otherwise a re-open on the same connection accumulates listeners
+   * and chunks get delivered to conn.send N times.
+   */
+  onChunk: (chunk: string) => void;
+};
 
 /**
  * Per-connection state holder.
@@ -7,11 +21,14 @@ import type { ServerMessage } from "./protocol.js";
  */
 export class WSConnection {
   private subscriptions: Set<string> = new Set();
-  openStreams: Map<string, unknown> = new Map(); // sessionId -> TmuxStream (public for handlers)
+  openStreams: Map<string, OpenStreamEntry> = new Map(); // sessionId -> OpenStreamEntry (public for handlers)
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
+  readonly id: string; // Unique identifier for this connection
 
-  constructor(private ws: WebSocket) {}
+  constructor(private ws: WebSocket) {
+    this.id = Math.random().toString(36).slice(2);
+  }
 
   /**
    * Send a message to the client. Handles backpressure: if write buffer
@@ -63,8 +80,8 @@ export class WSConnection {
   /**
    * Register an open stream for a session.
    */
-  registerOpenStream(sessionId: string, stream: unknown): void {
-    this.openStreams.set(sessionId, stream);
+  registerOpenStream(sessionId: string, entry: OpenStreamEntry): void {
+    this.openStreams.set(sessionId, entry);
   }
 
   /**
@@ -123,11 +140,10 @@ export class WSConnection {
     this.subscriptions.clear();
 
     // Close all open streams
-    for (const stream of this.openStreams.values()) {
+    for (const entry of this.openStreams.values()) {
       try {
-        if (stream && typeof stream === "object" && "detach" in stream) {
-          await (stream as any).detach();
-        }
+        entry.stream.off("chunk", entry.onChunk);
+        await entry.stream.detach(entry.subscriberId);
       } catch (err) {
         console.warn("[WSConnection] Error closing stream during cleanup:", err);
       }

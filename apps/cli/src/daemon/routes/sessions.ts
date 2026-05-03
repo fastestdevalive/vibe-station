@@ -7,10 +7,12 @@ import {
   buildTmuxName,
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
+import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { cleanupSessionDataDir } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../plugins/registry.js";
+import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
 
 const CreateSessionBody = z.object({
@@ -18,6 +20,7 @@ const CreateSessionBody = z.object({
   type: z.enum(["agent", "terminal"]),
   modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
+  useTmux: z.boolean().optional(),
 });
 
 const InputBody = z.object({
@@ -120,6 +123,7 @@ export function serializeSession(worktreeId: string, s: SessionRecord) {
     modeId: s.modeId ?? null,
     label: labelForSlot(s.slot, s.type),
     tmuxName: s.tmuxName,
+    useTmux: s.useTmux,
     state: s.lifecycle.state,
     lifecycleState: s.lifecycle.state,
     createdAt: s.lifecycle.lastTransitionAt,
@@ -156,6 +160,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
     const n = Math.min(Math.max(parseInt(lines ?? "100", 10) || 100, 1), 10000);
+
+    if (!ctx.session.useTmux) {
+      const stream = directPtyRegistry.get(id);
+      const output = stream ? (stream.getRecentOutput?.(n * 200) ?? "") : "";
+      return reply.send({ id, output });
+    }
+
     const output = await capturePane(ctx.session.tmuxName, { lines: n });
     return reply.send({ id, output });
   });
@@ -166,7 +177,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { worktreeId, type, modeId, prompt } = result.data;
+    const { worktreeId, type, modeId, prompt, useTmux: rawUseTmux } = result.data;
+    const useTmux = resolveUseTmux(rawUseTmux);
 
     if (type === "agent" && !modeId) {
       return reply.status(400).send({ error: "'modeId' is required for agent sessions" });
@@ -186,7 +198,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       : reserveNextTerminalSlot(worktree);
 
     const wtNum = parseInt(worktree.id.split("-").at(-1) ?? "1", 10);
-    const tmuxName = buildTmuxName(project.prefix, wtNum, slot);
+    const tmuxName = useTmux ? buildTmuxName(project.prefix, wtNum, slot) : `__direct__-${`${worktreeId}-${slot}`}`;
     const sessionId = `${worktreeId}-${slot}`;
 
     const sessionRecord: SessionRecord = {
@@ -195,6 +207,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       type,
       modeId: type === "agent" ? (modeId ?? undefined) : undefined,
       tmuxName,
+      useTmux,
       lifecycle: {
         state: "not_started",
         lastTransitionAt: new Date().toISOString(),
@@ -206,7 +219,22 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       try {
         const { worktreePath: getWtPath } = await import("../services/paths.js");
         const wtPath = getWtPath(project.id, worktree.id);
-        await newSession({ name: tmuxName, cwd: wtPath });
+        if (useTmux) {
+          await newSession({ name: tmuxName, cwd: wtPath });
+        } else {
+          const { DirectPtyBackend } = await import("../services/directPty.js");
+          await DirectPtyBackend.spawn({
+            command: process.env.SHELL ?? "/bin/bash",
+            args: [],
+            cwd: wtPath,
+            env: { ...process.env as Record<string, string> },
+            cols: 80,
+            rows: 24,
+            sessionId,
+            projectId: project.id,
+            worktreeId,
+          });
+        }
         sessionRecord.lifecycle = {
           state: "working",
           lastTransitionAt: new Date().toISOString(),
@@ -259,11 +287,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       });
     }
 
-    // Kill tmux session
-    try {
-      await killSession(session.tmuxName);
-    } catch {
-      // best-effort
+    // Kill session (tmux or direct-pty)
+    if (!session.useTmux) {
+      directPtyRegistry.get(id)?.kill?.();
+    } else {
+      try {
+        await killSession(session.tmuxName);
+      } catch {
+        // best-effort
+      }
     }
 
     // Best-effort cleanup of per-session data dir
@@ -361,11 +393,26 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         });
       }
     } else {
-      // Terminal session — just create a new tmux session
+      // Terminal session — spawn a new shell session
       try {
         const { worktreePath: getWtPath } = await import("../services/paths.js");
         const wtPath = getWtPath(project.id, worktree.id);
-        await newSession({ name: session.tmuxName, cwd: wtPath });
+        if (session.useTmux) {
+          await newSession({ name: session.tmuxName, cwd: wtPath });
+        } else {
+          const { DirectPtyBackend } = await import("../services/directPty.js");
+          await DirectPtyBackend.spawn({
+            command: process.env.SHELL ?? "/bin/bash",
+            args: [],
+            cwd: wtPath,
+            env: { ...process.env as Record<string, string> },
+            cols: 80,
+            rows: 24,
+            sessionId: session.id,
+            projectId: project.id,
+            worktreeId: worktree.id,
+          });
+        }
       } catch {
         // Session may already exist; best-effort
       }
@@ -411,6 +458,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const { data, sendEnter = false } = result.data;
     const { session } = ctx;
+
+    if (!session.useTmux) {
+      const stream = directPtyRegistry.get(id);
+      if (!stream) {
+        return reply.status(409).send({ error: "Session not running" });
+      }
+      stream.write(data + (sendEnter ? "\r" : ""));
+      return reply.send({ ok: true });
+    }
 
     const bufferId = `_vst_send-${id}`;
     try {
