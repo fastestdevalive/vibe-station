@@ -42,9 +42,9 @@ export function daemonLogPath(): string {
   return join(vrunHome(), "logs", "daemon.log");
 }
 
-/** ~/.viberun/projects/<p>/worktrees/<w>/sessions/<s> — per-session data dir */
+/** ~/.viberun/projects/<p>/session-data/<w>/<s> — per-session data dir (sibling of worktrees/, not inside the checkout) */
 export function sessionDataDir(projectId: string, worktreeId: string, sessionId: string): string {
-  return join(projectDir(projectId), "worktrees", worktreeId, "sessions", sessionId);
+  return join(projectDir(projectId), "session-data", worktreeId, sessionId);
 }
 
 /** <sessionDataDir>/system-prompt.md */
