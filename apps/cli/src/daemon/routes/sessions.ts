@@ -6,7 +6,7 @@ import {
   reserveNextTerminalSlot,
   buildTmuxName,
 } from "../services/sessionId.js";
-import { killSession, newSession, pasteBuffer } from "../services/tmux.js";
+import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { cleanupSessionDataDir } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
@@ -90,6 +90,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
     return reply.send(serializeSession(ctx.worktree.id, ctx.session));
+  });
+
+  // GET /sessions/:id/output?lines=N
+  app.get("/sessions/:id/output", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { lines } = req.query as { lines?: string };
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const n = Math.min(Math.max(parseInt(lines ?? "100", 10) || 100, 1), 10000);
+    const output = await capturePane(ctx.session.tmuxName, { lines: n });
+    return reply.send({ id, output });
   });
 
   // POST /sessions
