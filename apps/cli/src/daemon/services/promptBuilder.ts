@@ -14,36 +14,27 @@ import type { ProjectRecord, WorktreeRecord } from "../types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-// Skill.md is at skill/skill.md relative to the repo root.
-// From dist/daemon/services/, navigate up to find it.
-// Fallback chain for different run contexts.
-function skillMdCandidates(): string[] {
-  return [
-    // From compiled dist/daemon/services/promptBuilder.js:
-    //   → ../../../../skill/skill.md
-    join(here, "..", "..", "..", "..", "skill", "skill.md"),
-    // From src/daemon/services/promptBuilder.ts (vitest):
-    //   → ../../../../../skill/skill.md
-    join(here, "..", "..", "..", "..", "..", "skill", "skill.md"),
-  ];
+// agent-system-prompt.md lives at ../assets/agent-system-prompt.md relative to this file,
+// which resolves correctly under both:
+//   compiled: dist/daemon/services/ → dist/daemon/assets/agent-system-prompt.md
+//   vitest:   src/daemon/services/  → src/daemon/assets/agent-system-prompt.md
+function assetPath(): string {
+  return join(here, "..", "assets", "agent-system-prompt.md");
 }
 
 let cachedSkillMd: string | undefined;
 
 async function loadSkillMd(): Promise<string> {
   if (cachedSkillMd !== undefined) return cachedSkillMd;
-  for (const candidate of skillMdCandidates()) {
-    try {
-      const content = await readFile(candidate, "utf8");
-      cachedSkillMd = content;
-      return content;
-    } catch {
-      // try next
-    }
+  try {
+    const content = await readFile(assetPath(), "utf8");
+    cachedSkillMd = content;
+    return content;
+  } catch {
+    // Fallback if asset not found (should not happen in normal operation)
+    cachedSkillMd = "# viberun-ide Agent\n\nYou are a viberun-ide-managed coding agent.";
+    return cachedSkillMd;
   }
-  // Fallback if file not found
-  cachedSkillMd = "# viberun-ide Agent\n\nYou are a viberun-ide-managed coding agent.";
-  return cachedSkillMd;
 }
 
 /** Force-reload the skill.md cache (useful for tests). */

@@ -8,6 +8,7 @@ import {
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer } from "../services/tmux.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
+import { cleanupSessionDataDir } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../plugins/registry.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
@@ -261,6 +262,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     } catch {
       // best-effort
     }
+
+    // Best-effort cleanup of per-session data dir
+    cleanupSessionDataDir(project.id, worktree.id, id);
 
     // Remove from manifest
     await mutateProject(project.id, (p) => ({

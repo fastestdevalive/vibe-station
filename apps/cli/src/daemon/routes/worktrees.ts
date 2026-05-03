@@ -12,7 +12,7 @@ import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists } from
 import { killSession } from "../services/tmux.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
-import { worktreePath as getWorktreePath } from "../services/paths.js";
+import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../plugins/registry.js";
@@ -367,6 +367,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       } catch {
         // best-effort
       }
+      // Best-effort cleanup of per-session data dir
+      cleanupSessionDataDir(project.id, wtId, session.id);
     }
 
     if (shouldPurge) {

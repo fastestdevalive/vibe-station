@@ -12,8 +12,9 @@
  * 8. Flip state to working (caller persists)
  */
 
+import { mkdirSync, writeFileSync } from "node:fs";
 import { newSession, hasSession, capturePane, pasteBuffer } from "./tmux.js";
-import { worktreePath as getWorktreePath } from "./paths.js";
+import { worktreePath as getWorktreePath, sessionDataDir, systemPromptPath } from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
@@ -34,7 +35,9 @@ export interface AgentPlugin {
     systemPrompt: string;
     taskPrompt?: string;
     sessionId: string;
-  }): { launchArgs?: string[]; postLaunchInput?: string };
+    systemPromptFile: string;
+    launchCfg: LaunchConfig;
+  }): { launchArgs?: string[]; postLaunchInput?: string; useShell?: boolean; shellLine?: string };
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
   /** Return argv for resuming a prior session, or null for fresh launch. */
   getRestoreCommand?(args: {
@@ -123,11 +126,19 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
     await plugin.setupWorkspaceHooks(wtPath);
   }
 
+  // Write system-prompt file to per-session data dir
+  const dataDir = sessionDataDir(project.id, worktree.id, session.id);
+  mkdirSync(dataDir, { recursive: true });
+  const promptFile = systemPromptPath(project.id, worktree.id, session.id);
+  writeFileSync(promptFile, systemPrompt, "utf8");
+
   // Compose launch prompt
-  const { launchArgs, postLaunchInput } = plugin.composeLaunchPrompt({
+  const { launchArgs, postLaunchInput, useShell, shellLine } = plugin.composeLaunchPrompt({
     systemPrompt,
     taskPrompt,
     sessionId: session.id,
+    systemPromptFile: promptFile,
+    launchCfg,
   });
 
   // Step 4: Resolve env
@@ -141,7 +152,11 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   };
 
   // Build launch command (binary + flags)
-  const commandParts = [...plugin.getLaunchCommand(launchCfg), ...(launchArgs ?? [])];
+  // When the plugin signals useShell, wrap in `sh -lc <shellLine>` so that
+  // shell substitutions like $(cat <file>) are evaluated at exec time.
+  const commandParts: string[] = useShell && shellLine
+    ? ["sh", "-lc", shellLine]
+    : [...plugin.getLaunchCommand(launchCfg), ...(launchArgs ?? [])];
 
   // Step 5: Spawn tmux
   try {

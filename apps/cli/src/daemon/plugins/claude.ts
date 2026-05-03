@@ -8,6 +8,7 @@
 
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { worktreePath as getWorktreePath } from "../services/paths.js";
+import { sq } from "../services/shell.js";
 import { findLatestChatUuid } from "./claudeRestore.js";
 
 export function createClaudePlugin(): AgentPlugin {
@@ -37,17 +38,20 @@ export function createClaudePlugin(): AgentPlugin {
       systemPrompt: string;
       taskPrompt?: string;
       sessionId: string;
+      systemPromptFile: string;
+      launchCfg: LaunchConfig;
     }) {
-      const launchArgs: string[] = [
-        "--dangerously-skip-permissions",
-        "--system-prompt",
-        prompt.systemPrompt,
-      ];
+      // Shell-line launch: $(cat '<file>') reads the prompt at exec time, avoiding
+      // ARG_MAX limits for long prompts. spawn.ts wraps this in `sh -lc <shellLine>`.
+      const filePart = `$(cat ${sq(prompt.systemPromptFile)})`;
+      let shellLine = `claude --dangerously-skip-permissions --system-prompt ${filePart}`;
       if (prompt.taskPrompt) {
-        launchArgs.push(prompt.taskPrompt);
+        shellLine += ` ${sq(prompt.taskPrompt)}`;
       }
       return {
-        launchArgs,
+        useShell: true as const,
+        shellLine,
+        launchArgs: undefined,
         postLaunchInput: undefined,
       };
     },

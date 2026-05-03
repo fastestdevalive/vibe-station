@@ -7,7 +7,7 @@
     "vrun": "./dist/main.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node -e \"require('fs').cpSync('src/daemon/assets','dist/daemon/assets',{recursive:true})\"",
     "dev": "tsc -b --watch",
     "start": "node dist/main.js",
     "typecheck": "tsc -b --noEmit",
@@ -15,6 +15,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@fastify/type-provider-zod": "^1.0.0",
     "@fastify/websocket": "^11.2.0",

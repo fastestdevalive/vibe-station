@@ -6,6 +6,7 @@ import { execSync } from "node:child_process";
 import { buildServer } from "../server.js";
 import type { FastifyInstance } from "fastify";
 import type { ProjectRecord, WorktreeRecord } from "../types.js";
+import type { LaunchConfig } from "../services/spawn.js";
 
 let tempDir: string;
 
@@ -21,6 +22,13 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir || "/tmp/vrun-test", "config.json"),
     modesPath: () => pathJoin(tempDir || "/tmp/vrun-test", "modes.json"),
     daemonLogPath: () => pathJoin(tempDir || "/tmp/vrun-test", "logs", "daemon.log"),
+    cleanupSessionDataDir: () => {},
+    sessionDataDir: (p: string, w: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s),
+    systemPromptPath: (p: string, w: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s, "system-prompt.md"),
+    opencodeConfigPath: (p: string, w: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vrun-test", "projects", p, "worktrees", w, "sessions", s, "opencode-config.json"),
   };
 });
 
@@ -68,36 +76,41 @@ describe("Agent plugins", () => {
       expect(cmd[0]).toBe("claude");
     });
 
-    it("T10.6 — composeLaunchPrompt with both system + task: launchArgs contains --dangerously-skip-permissions, --system-prompt and task; postLaunchInput is undefined", async () => {
+    it("T10.6 — composeLaunchPrompt with both system + task: useShell=true, shellLine contains --dangerously-skip-permissions, $(cat ...), task; postLaunchInput is undefined", async () => {
       const { resolvePlugin } = await import("../plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
         sessionId: "sess-test",
+        systemPromptFile: "/tmp/system-prompt.md",
+        launchCfg: {} as unknown as LaunchConfig,
       });
-      expect(result.launchArgs).toContain("--dangerously-skip-permissions");
-      expect(result.launchArgs).toContain("--system-prompt");
-      expect(result.launchArgs).toContain("You are helpful");
-      expect(result.launchArgs).toContain("Fix the bug");
-      expect(result.launchArgs?.join("\n")).not.toContain("VRPRMT:");
+      expect(result.useShell).toBe(true);
+      expect(result.shellLine).toContain("--dangerously-skip-permissions");
+      expect(result.shellLine).toContain("--system-prompt");
+      expect(result.shellLine).toContain("$(cat ");
+      expect(result.shellLine).toContain("/tmp/system-prompt.md");
+      expect(result.shellLine).toContain("Fix the bug");
+      expect(result.shellLine).not.toContain("VRPRMT:");
       expect(result.postLaunchInput).toBeUndefined();
     });
 
-    it("T10.7 — composeLaunchPrompt with no task: launchArgs has --dangerously-skip-permissions and --system-prompt only; no positional arg", async () => {
+    it("T10.7 — composeLaunchPrompt with no task: useShell=true, shellLine has --dangerously-skip-permissions and $(cat ...) only", async () => {
       const { resolvePlugin } = await import("../plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         sessionId: "sess-test",
+        systemPromptFile: "/tmp/system-prompt.md",
+        launchCfg: {} as unknown as LaunchConfig,
       });
-      expect(result.launchArgs).toContain("--dangerously-skip-permissions");
-      expect(result.launchArgs).toContain("--system-prompt");
-      expect(result.launchArgs).toContain("You are helpful");
-      // Should have exactly 3 items: --dangerously-skip-permissions, --system-prompt, the prompt
-      expect(result.launchArgs).toHaveLength(3);
+      expect(result.useShell).toBe(true);
+      expect(result.shellLine).toContain("--dangerously-skip-permissions");
+      expect(result.shellLine).toContain("--system-prompt");
+      expect(result.shellLine).toContain("$(cat ");
       expect(result.postLaunchInput).toBeUndefined();
-      expect(JSON.stringify(result.launchArgs)).not.toContain("VRPRMT:");
+      expect(result.shellLine).not.toContain("VRPRMT:");
     });
 
     it("T10.10 — getEnvironment() includes CLAUDECODE: '1'", async () => {
@@ -140,19 +153,28 @@ describe("Agent plugins", () => {
   });
 
   describe("Cursor plugin", () => {
-    it("T10.8 — composeLaunchPrompt: launchArgs is empty/undefined; postLaunchInput contains system + task joined", async () => {
+    it("T10.8 — composeLaunchPrompt: useShell=true; shellLine contains cursor-agent, $(cat ...), task; postLaunchInput is undefined", async () => {
       const { resolvePlugin } = await import("../plugins/registry.js");
       const plugin = resolvePlugin("cursor");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
         sessionId: "sess-test",
+        systemPromptFile: "/tmp/system-prompt.md",
+        launchCfg: {
+          project: { id: "p1" },
+          worktree: { id: "w1" },
+          session: { id: "sess-test" },
+          daemonPort: 7421,
+        } as unknown as LaunchConfig,
       });
+      expect(result.useShell).toBe(true);
+      expect(result.shellLine).toContain("cursor-agent");
+      expect(result.shellLine).toContain("$(");
+      expect(result.shellLine).toContain("/tmp/system-prompt.md");
+      expect(result.shellLine).toContain("Fix the bug");
       expect(result.launchArgs).toBeUndefined();
-      expect(result.postLaunchInput).toContain("You are helpful");
-      expect(result.postLaunchInput).toContain("Fix the bug");
-      expect(result.postLaunchInput).toContain("\n\n");
-      expect(result.postLaunchInput).toContain("VRPRMT:sess-test");
+      expect(result.postLaunchInput).toBeUndefined();
     });
 
     it("Phase 1 — T1.T1 — getLaunchCommand returns argv containing --force, --sandbox, disabled, --approve-mcps; NOT --print", async () => {
@@ -171,18 +193,25 @@ describe("Agent plugins", () => {
   });
 
   describe("OpenCode plugin", () => {
-    it("T10.9 — composeLaunchPrompt: same shape as cursor — post-launch delivery", async () => {
+    it("T10.9 — composeLaunchPrompt: system prompt NOT in postLaunchInput; task prompt IS; VRPRMT needle present", async () => {
       const { resolvePlugin } = await import("../plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
         taskPrompt: "Fix the bug",
         sessionId: "sess-test",
+        systemPromptFile: "/tmp/system-prompt.md",
+        launchCfg: {
+          project: { id: "p1" },
+          worktree: { id: "w1" },
+          session: { id: "sess-test" },
+          daemonPort: 7421,
+        } as unknown as LaunchConfig,
       });
       expect(result.launchArgs).toBeUndefined();
-      expect(result.postLaunchInput).toContain("You are helpful");
+      // System prompt is delivered via OPENCODE_CONFIG env, not postLaunchInput
+      expect(result.postLaunchInput).not.toContain("You are helpful");
       expect(result.postLaunchInput).toContain("Fix the bug");
-      expect(result.postLaunchInput).toContain("\n\n");
       expect(result.postLaunchInput).toContain("VRPRMT:sess-test");
     });
 

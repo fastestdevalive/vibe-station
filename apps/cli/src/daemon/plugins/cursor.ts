@@ -15,12 +15,15 @@
 
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { worktreePath as getWorktreePath } from "../services/paths.js";
+import { sq } from "../services/shell.js";
 import { findLatestCursorChatId } from "./cursorRestore.js";
 
 export function createCursorPlugin(): AgentPlugin {
   return {
     name: "cursor",
-    promptDelivery: "post-launch",
+    // Shell-line launch: system prompt is baked into the launch command via $(cat <file>).
+    // No post-launch paste for system prompt; task prompt is also inlined at launch.
+    promptDelivery: "inline",
 
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
@@ -46,15 +49,34 @@ export function createCursorPlugin(): AgentPlugin {
       };
     },
 
-    composeLaunchPrompt(prompt: { systemPrompt: string; taskPrompt?: string; sessionId: string }) {
-      const parts = [prompt.systemPrompt];
+    composeLaunchPrompt(prompt: {
+      systemPrompt: string;
+      taskPrompt?: string;
+      sessionId: string;
+      systemPromptFile: string;
+      launchCfg: LaunchConfig;
+    }) {
+      const wtPath = getWorktreePath(prompt.launchCfg.project.id, prompt.launchCfg.worktree.id);
+      // Mirror ao-142 agent-cursor/src/index.ts:190-198:
+      // cursor-agent … -- "$(cat '<file>'; printf '\n\n'; printf %s '<task>')"
+      const filePart = `cat ${sq(prompt.systemPromptFile)}`;
+      let stdinContent = filePart;
       if (prompt.taskPrompt) {
-        parts.push(prompt.taskPrompt);
+        stdinContent += `; printf '\\n\\n'; printf %s ${sq(prompt.taskPrompt)}`;
       }
-      parts.push(`<!-- VRPRMT:${prompt.sessionId} -->`);
+      const shellLine = [
+        "cursor-agent",
+        `--workspace ${sq(wtPath)}`,
+        "--force",
+        "--sandbox disabled",
+        "--approve-mcps",
+        `-- "$(${stdinContent})"`,
+      ].join(" ");
       return {
+        useShell: true as const,
+        shellLine,
         launchArgs: undefined,
-        postLaunchInput: parts.join("\n\n"),
+        postLaunchInput: undefined,
       };
     },
 
@@ -67,6 +89,12 @@ export function createCursorPlugin(): AgentPlugin {
       project: { id: string };
       worktree: { id: string };
     }): Promise<string[] | null> {
+      // Decision (phase 3.4 / open question 8): ao-142 returns null from getRestoreCommand
+      // for cursor, forcing every restart through a fresh getLaunchCommand (which always
+      // bakes in the system prompt via shell substitution). We adopt the same strategy:
+      // cursor-agent's --resume flag + positional `--` system-prompt arg combination is
+      // not verified safe, and a fresh launch always re-delivers the system prompt.
+      // Resumed cursor sessions see updated AGENTS.md on every spawn.
       const { project, worktree } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);
       const chatId = await findLatestCursorChatId(wtPath);
