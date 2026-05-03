@@ -23,6 +23,7 @@ export function NewTabDialog({
   const [tabType, setTabType] = useState<"agent" | "terminal">("agent");
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
+  const [prompt, setPrompt] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -38,6 +39,7 @@ export function NewTabDialog({
       worktreeId,
       modeId: tabType === "agent" ? modeId || null : null,
       type: tabType === "agent" ? "agent" : "terminal",
+      initialPrompt: tabType === "agent" ? prompt.trim() || undefined : undefined,
     });
     onCreated?.();
     onClose();
@@ -64,13 +66,19 @@ export function NewTabDialog({
         name="tabtype"
         label="Agent"
         checked={tabType === "agent"}
-        onChange={() => setTabType("agent")}
+        onChange={() => {
+          setTabType("agent");
+          setPrompt("");
+        }}
       />
       <Radio
         name="tabtype"
         label="Terminal"
         checked={tabType === "terminal"}
-        onChange={() => setTabType("terminal")}
+        onChange={() => {
+          setTabType("terminal");
+          setPrompt("");
+        }}
       />
       {tabType === "agent" ? (
         <>
@@ -82,6 +90,15 @@ export function NewTabDialog({
               </option>
             ))}
           </Select>
+          <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
+          <textarea
+            className="field-textarea"
+            aria-label="Prompt"
+            placeholder="Describe what you want the agent to do…"
+            rows={4}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
         </>
       ) : null}
     </Dialog>
