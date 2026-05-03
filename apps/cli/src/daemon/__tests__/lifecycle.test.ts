@@ -18,7 +18,7 @@ let tempDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir,
+    vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
     manifestPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json"),
     manifestTmpPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json.tmp"),
@@ -111,7 +111,7 @@ describe("lifecycle polling behavior", () => {
   }
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-lifecycle-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-lifecycle-test-"));
     await mkdir(join(tempDir, "projects", "proj-l"), { recursive: true });
     await mkdir(join(tempDir, "repo"), { recursive: true });
     _resetIdleTrackingForTest();

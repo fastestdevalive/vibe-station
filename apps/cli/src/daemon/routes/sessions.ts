@@ -316,11 +316,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           restoredFromHistory = true;
           const launchCfg = { project, worktree, session, daemonPort: 0 };
           const env: Record<string, string> = {
-            VR_SESSION: session.id,
-            VR_WORKTREE: worktree.id,
-            VR_PROJECT: project.id,
-            VR_DATA_DIR: `${process.env.HOME ?? "~"}/.viberun/projects/${project.id}`,
-            VR_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
+            VST_SESSION: session.id,
+            VST_WORKTREE: worktree.id,
+            VST_PROJECT: project.id,
+            VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
+            VST_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
             ...plugin.getEnvironment(launchCfg),
           };
 
@@ -412,7 +412,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { data, sendEnter = false } = result.data;
     const { session } = ctx;
 
-    const bufferId = `_vrun_send-${id}`;
+    const bufferId = `_vst_send-${id}`;
     try {
       await pasteBuffer(session.tmuxName, bufferId, data + (sendEnter ? "\n" : ""));
     } catch (err) {

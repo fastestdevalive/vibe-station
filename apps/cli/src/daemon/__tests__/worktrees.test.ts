@@ -12,7 +12,7 @@ let tempDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir,
+    vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
     manifestPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json"),
     manifestTmpPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json.tmp"),
@@ -41,7 +41,7 @@ describe("Worktree routes", () => {
   let projectId: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-wt-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-wt-test-"));
     repoDir = join(tempDir, "my-repo");
 
     execSync(

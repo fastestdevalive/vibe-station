@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectRecord } from "../types.js";
 
-// We need to override vrunHome for these tests.
+// We need to override vstHome for these tests.
 // Use vi.mock to redirect path resolution.
 import { vi } from "vitest";
 
@@ -14,7 +14,7 @@ let tempDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir,
+    vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
     manifestPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json"),
     manifestTmpPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json.tmp"),
@@ -37,7 +37,7 @@ const makeProject = (id: string): ProjectRecord => ({
 
 describe("manifest read/write", () => {
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-test-"));
   });
 
   afterEach(async () => {
@@ -81,7 +81,7 @@ describe("manifest read/write", () => {
 
 describe("project-store", () => {
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-test-"));
     // Reset module state between tests
     const { _clearStoreForTest } = await import("../state/project-store.js");
     _clearStoreForTest();

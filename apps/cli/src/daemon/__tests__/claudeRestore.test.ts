@@ -18,7 +18,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-restore-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-restore-test-"));
     testHomeDir = tempDir;
   });
 
@@ -71,17 +71,17 @@ describe("claudeRestore — findLatestChatUuid", () => {
     expect(uuid).toBe("chat-uuid-12345");
   });
 
-  it("3.T5 — slug strips dots (e.g. /home/gb/.viberun/foo → -home-gb--viberun-foo)", async () => {
+  it("3.T5 — slug strips dots (e.g. /home/gb/.vibe-station/foo → -home-gb--vibe-station-foo)", async () => {
     const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
 
-    // Worktree path with a dot dir mid-path (matches real ~/.viberun layout)
-    const slug = "-home-gb--viberun-projects-console-home-worktrees-ch-2";
+    // Worktree path with a dot dir mid-path (matches real ~/.vibe-station layout)
+    const slug = "-home-gb--vibe-station-projects-console-home-worktrees-ch-2";
     const projectsDir = join(tempDir, ".claude", "projects", slug);
     await mkdir(projectsDir, { recursive: true });
     await writeFile(join(projectsDir, "abc-123.jsonl"), "chat");
 
     const uuid = await findLatestChatUuid(
-      "/home/gb/.viberun/projects/console-home/worktrees/ch-2",
+      "/home/gb/.vibe-station/projects/console-home/worktrees/ch-2",
     );
     expect(uuid).toBe("abc-123");
   });

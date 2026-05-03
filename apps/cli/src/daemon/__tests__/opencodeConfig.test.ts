@@ -8,7 +8,7 @@ describe("writeOpenCodeConfig", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-opencode-config-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-opencode-config-test-"));
   });
 
   afterEach(async () => {
@@ -28,7 +28,7 @@ describe("writeOpenCodeConfig", () => {
 
   it("stores absolute paths as-is", async () => {
     const configPath = join(tempDir, "opencode-config.json");
-    const files = ["/home/user/.viberun/projects/p1/worktrees/wt/sessions/s1/system-prompt.md"];
+    const files = ["/home/user/.vibe-station/projects/p1/session-data/wt/s1/system-prompt.md"];
 
     writeOpenCodeConfig(configPath, files);
 

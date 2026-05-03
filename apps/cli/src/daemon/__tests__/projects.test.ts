@@ -13,7 +13,7 @@ let repoDir: string;
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
-    vrunHome: () => tempDir,
+    vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
     manifestPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json"),
     manifestTmpPath: (id: string) => pathJoin(tempDir, "projects", id, "manifest.json.tmp"),
@@ -29,7 +29,7 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
   let app: FastifyInstance;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vrun-proj-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "vst-proj-test-"));
     repoDir = join(tempDir, "my-repo");
 
     // Create a real git repo for testing
@@ -61,8 +61,8 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
       payload: { path: repoDir },
     });
     expect(res.statusCode).toBe(201);
-    const body = res.json<ProjectRecord>();
-    expect(body.absolutePath).toBe(repoDir);
+    const body = res.json<{ path: string }>();
+    expect(body.path).toBe(repoDir);
     expect(body.id).toBeTruthy();
     expect(body.prefix).toBeTruthy();
     expect(body.defaultBranch).toBeTruthy();

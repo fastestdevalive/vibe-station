@@ -33,7 +33,8 @@ describe("NewSessionDialog", () => {
           baseBranch: "main",
         }),
       );
-      expect(cs).toHaveBeenCalled();
     });
+    // New worktree: POST /worktrees spawns the main session — no separate createSession.
+    expect(cs).not.toHaveBeenCalled();
   });
 });

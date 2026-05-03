@@ -12,13 +12,13 @@ async function daemonRequest<T>(
 ): Promise<DaemonResult<T>> {
   const url = getDaemonUrl();
   if (!url) {
-    die("Daemon is not running. Run `vrun daemon start`.", 4);
+    die("Daemon is not running. Run `vst daemon start`.", 4);
   }
 
   try {
     // Only set Content-Type when we actually have a body. Fastify rejects
     // empty bodies on application/json with FST_ERR_CTP_EMPTY_JSON_BODY,
-    // which broke `vrun worktree rm` (DELETE without body).
+    // which broke `vst worktree rm` (DELETE without body).
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -46,7 +46,7 @@ async function daemonRequest<T>(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("ECONNREFUSED") || message.includes("connect")) {
-      die("Daemon is not running. Run `vrun daemon start`.", 4);
+      die("Daemon is not running. Run `vst daemon start`.", 4);
     }
     throw err;
   }

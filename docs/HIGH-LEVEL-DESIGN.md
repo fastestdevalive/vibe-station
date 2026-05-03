@@ -1,4 +1,4 @@
-# viberun-ide — High-Level Design
+# vibe-station — High-Level Design
 
 > v1 design covering persistence, plugins, tmux, lifecycle, and the finalized API contract. Patterns mirror agent-orchestrator (AO) where noted; AO file refs use `ao:` prefix.
 
@@ -13,7 +13,7 @@
              │ REST (localhost)          │ WebSocket (/ws)
              ↓                           ↓
 ┌──────────────────────────────────────────────────────────────────┐
-│                          vrun DAEMON                             │
+│                          vst DAEMON                             │
 │  Fastify + ws · in-memory state ⇄ atomic JSON writes             │
 │  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐    │
 │  │ tmux    │  │ worktree │  │ plugin   │  │ file/diff/git  │    │
@@ -26,8 +26,8 @@
         ↑
         │ user input via terminal
 ┌──────────────────────────────────────────────────────────────────┐
-│  vrun CLI (binary, same package as daemon)                       │
-│  `vrun project add <path>`, `vrun worktree create`, …            │
+│  vst CLI (binary, same package as daemon)                       │
+│  `vst project add <path>`, `vst worktree create`, …            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -38,7 +38,7 @@
 - **CLIs own their transcripts** — we never write chat history ourselves. Each session record carries a `transcriptRef` pointing to the CLI's native storage (e.g. claude's jsonl, opencode's session id). Plugins read these directly.
 - Layout:
   ```
-  ~/.viberun/
+  ~/.vibe-station/
     config.json                    # daemon port, defaults, version
     modes.json                     # all agent modes (≤10)
     projects/
@@ -48,12 +48,12 @@
           <worktree-id>/           # actual git worktree checkout — clean, cd-able, no metadata pollution
     logs/daemon.log
   ```
-- `<project-id>` = slugified project name (e.g. `viberun-ide`). **No hash.** On name collision at add time, CLI errors and requires `--name=<override>`.
+- `<project-id>` = slugified project name (e.g. `vibe-station`). **No hash.** On name collision at add time, CLI errors and requires `--name=<override>`.
 - `manifest.json` shape:
   ```json
   {
-    "id": "viberun-ide",
-    "absolutePath": "/home/gb/code/.../viberun-ide",
+    "id": "vibe-station",
+    "absolutePath": "/home/gb/code/.../vibe-station",
     "prefix": "vibe",
     "defaultBranch": "main",
     "createdAt": "...",
@@ -100,7 +100,7 @@ A common AO complaint is intermittent slowness from disk thrash (per-session fil
 
 ╭─ BOOT (one-time per daemon process) ────────────────────────────────╮
 │                                                                      │
-│   ~/.viberun/projects/                                               │
+│   ~/.vibe-station/projects/                                               │
 │     proj-a/manifest.json  ──read──→  store.set("proj-a", record)    │
 │     proj-b/manifest.json  ──read──→  store.set("proj-b", record)    │
 │     proj-c/manifest.json  ──read──→  store.set("proj-c", record)    │
@@ -195,7 +195,7 @@ A common AO complaint is intermittent slowness from disk thrash (per-session fil
 
 ### Anti-patterns avoided (cf. AO slowness reports)
 
-| AO problem | Cause | viberun-ide approach |
+| AO problem | Cause | vibe-station approach |
 |---|---|---|
 | Per-session JSON files (250+ on disk) inflate fs metadata cost | One file per session | One `manifest.json` per project (10 files, not 250) |
 | Reads disk on every API call | No in-memory cache | Boot-time load → memory cache; reads never touch disk |
@@ -229,7 +229,7 @@ interface AgentPlugin {
   isProcessRunning(handle: TmuxHandle): Promise<boolean>;
 
   // First-ready signal: how the daemon knows the agent has booted enough to receive
-  // post-launch input (for the optional `prompt` and for `vrun send`). Either:
+  // post-launch input (for the optional `prompt` and for `vst send`). Either:
   //   - a substring sentinel the plugin expects in pty output, OR
   //   - a fallback wait time in ms (after which we assume ready).
   getReadySignal(): { sentinel?: string; fallbackMs: number };
@@ -264,9 +264,9 @@ Mirrors `ao:packages/core/src/prompt-builder.ts`. Lives at `packages/core/src/pr
 
 | Layer | Content | Source |
 |---|---|---|
-| **L1 — base** | "You are a viberun-ide-managed agent. Available CLI: `vrun project/worktree/session/send/...`. `VR_*` env vars are pre-set. Git workflow rules. PR best practices." | `packages/skill/skill.md` |
+| **L1 — base** | "You are a vibe-station-managed agent. Available CLI: `vst project/worktree/session/send/...`. `VST_*` env vars are pre-set. Git workflow rules. PR best practices." | `packages/skill/skill.md` |
 | **L2 — context** | Project name + path + default branch; current worktree branch + baseBranch + baseSha; sibling sessions in this worktree; mode-specific context (from the agent mode's `context` field) | Composed from project + worktree + mode |
-| **L3 — rules** | Project rules from `<project>/AGENTS.md` or `<project>/.viberun/rules.md` (read at spawn) | File on disk |
+| **L3 — rules** | Project rules from `<project>/AGENTS.md` or `<project>/.vibe-station/rules.md` (read at spawn) | File on disk |
 
 Output:
 - `systemPrompt` — concatenation of L1 + L2 + L3
@@ -303,13 +303,13 @@ Mirrors AO's `reserveNextSessionIdentity` (`ao:packages/core/src/session-manager
 
 ### Session spawn ordering (canonical)
 
-Pinned step order so `VR_*` env vars are populated before the agent process exists. Performed under the project's mutex:
+Pinned step order so `VST_*` env vars are populated before the agent process exists. Performed under the project's mutex:
 
 1. **Reserve identity** — compute the next free worktree-id (or session slot for `POST /sessions`); mark reserved in memory.
 2. **Persist record** — write `manifest.json` with the new worktree/session record at `lifecycle.state = "not_started"`.
 3. **Setup hooks** — call plugin's `setupWorkspaceHooks?` if defined.
-4. **Resolve env** — compute `VR_PROJECT`, `VR_WORKTREE`, `VR_SESSION`, `VR_DAEMON_URL`.
-5. **Spawn tmux** — `tmux new-session -d -s <tmuxName> -e VR_SESSION=...` running the plugin's `getLaunchCommand`.
+4. **Resolve env** — compute `VST_PROJECT`, `VST_WORKTREE`, `VST_SESSION`, `VST_DAEMON_URL`.
+5. **Spawn tmux** — `tmux new-session -d -s <tmuxName> -e VST_SESSION=...` running the plugin's `getLaunchCommand`.
 6. **Flip state** — `lifecycle.state = "working"` (or `not_started` until first ready signal observed; whichever the plugin prefers).
 
 If step 5 fails after step 2 has written the manifest, the rollback in §"Worktree ↔ main-session invariant" runs.
@@ -326,7 +326,7 @@ A worktree always has exactly one branch. **The user always provides the branch 
 |---|---|
 | `branch` (required) | Validated against git's branch-safe regex (`^[a-zA-Z0-9][a-zA-Z0-9._/-]*$`, no `..`, ≤200 chars). Reject `400` with hint if invalid. |
 | Specified name **already exists** in the repo | Reject with `409` — `Branch 'my-feature' already exists. Pick a different name.` |
-| `baseBranch` omitted | Default to the project's default base. Detection chain at project-add: `git symbolic-ref refs/remotes/origin/HEAD` → `master` if exists locally → `main` if exists locally → first branch in `git branch --list` → reject `vrun project add` with `Could not detect default branch; pass --default-branch=<name>`. |
+| `baseBranch` omitted | Default to the project's default base. Detection chain at project-add: `git symbolic-ref refs/remotes/origin/HEAD` → `master` if exists locally → `main` if exists locally → first branch in `git branch --list` → reject `vst project add` with `Could not detect default branch; pass --default-branch=<name>`. |
 | `baseBranch` does not exist locally | Daemon fetches from origin if remote exists; otherwise rejects with `400`. |
 
 **The branch name doubles as the worktree's display label** — it's what the sidebar and breadcrumb show. There is no separate `name` field.
@@ -347,7 +347,7 @@ The branch name is **immutable for the worktree's lifetime** in v1 — to rename
 
 A worktree **always** has exactly one main session (slot `m`).
 
-- **Creation is atomic**: `POST /worktrees` (and `vrun worktree create`) always provisions the git worktree AND spawns the main session in the same operation. There is no "worktree without sessions" state.
+- **Creation is atomic**: `POST /worktrees` (and `vst worktree create`) always provisions the git worktree AND spawns the main session in the same operation. There is no "worktree without sessions" state.
 - The main session cannot be killed via `DELETE /sessions/:id` — that's rejected with `400`. The only way to end a main session is `DELETE /worktrees/:id`, which terminates all sessions including main and removes the checkout.
 - After tmux death, the main session moves to `exited` state but the record persists; the worktree still has its main session, just paused. Resume re-spawns the tmux session in place.
 
@@ -360,7 +360,7 @@ If `git worktree add` succeeds but the main-session spawn fails (tmux unreachabl
 4. Remove the worktree record from `manifest.json`; release the reserved id back to the project's mutex.
 5. Return `500` with `{ error, reason }` describing which step failed.
 
-If rollback itself partially fails (e.g. `git worktree remove` errors), log the orphan path to `logs/daemon.log` and surface in `vrun doctor` for manual cleanup. Never leave the manifest pointing at a non-existent worktree.
+If rollback itself partially fails (e.g. `git worktree remove` errors), log the orphan path to `logs/daemon.log` and surface in `vst doctor` for manual cleanup. Never leave the manifest pointing at a non-existent worktree.
 
 ### Initial prompt at creation
 
@@ -442,7 +442,7 @@ The prompt builder (§4) composes `{ systemPrompt, taskPrompt }` from L1 (skill.
 
 In addition to the inline prompt, the skill file is dropped on disk in the worktree so the agent can re-read it during long sessions:
 
-- `packages/skill/skill.md` is copied (not symlinked, to survive worktree removal) to `<worktree>/.viberun/skill.md` at spawn time.
+- `packages/skill/skill.md` is copied (not symlinked, to survive worktree removal) to `<worktree>/.vibe-station/skill.md` at spawn time.
 - Per-plugin hook setup runs once per spawn:
   - **claude**: write PostToolUse hook into `<wt>/.claude/settings.json` (mirrors `ao:packages/plugins/agent-claude-code/src/index.ts:34-212`).
   - **cursor**, **opencode**: equivalent install paths TBD per plugin.
@@ -451,18 +451,18 @@ In addition to the inline prompt, the skill file is dropped on disk in the workt
 
 | Var | Value |
 |---|---|
-| `VR_SESSION` | the agent's session id |
-| `VR_WORKTREE` | worktree id |
-| `VR_PROJECT` | project id |
-| `VR_DATA_DIR` | `~/.viberun/projects/<project-id>` |
-| `VR_DAEMON_URL` | `http://localhost:<port>` |
+| `VST_SESSION` | the agent's session id |
+| `VST_WORKTREE` | worktree id |
+| `VST_PROJECT` | project id |
+| `VST_DATA_DIR` | `~/.vibe-station/projects/<project-id>` |
+| `VST_DAEMON_URL` | `http://localhost:<port>` |
 
 ## 8. API Contract
 
 The complete contract — CLI commands, REST endpoints, WebSocket events — lives in **`docs/API-CONTRACT.md`**. Single source of truth.
 
 Summary of shape:
-- **CLI** (noun-verb groups): `vrun project {add,rm,ls,info}`, `vrun worktree {create,rm,ls,info}`, `vrun session {create,ls,info,kill,attach,restore,output}`, `vrun send`, `vrun mode {ls,add,rm}`, `vrun daemon {start,stop,status,restart}`, `vrun open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VR_PROJECT`/`VR_WORKTREE`/`VR_SESSION`/`VR_DAEMON_URL` env vars; non-destructive commands default to those.
+- **CLI** (noun-verb groups): `vst project {add,rm,ls,info}`, `vst worktree {create,rm,ls,info}`, `vst session {create,ls,info,kill,attach,restore,output}`, `vst send`, `vst mode {ls,add,rm}`, `vst daemon {start,stop,status,restart}`, `vst open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VST_PROJECT`/`VST_WORKTREE`/`VST_SESSION`/`VST_DAEMON_URL` env vars; non-destructive commands default to those.
 - **REST** (localhost, no auth in v1): CRUD for `/projects`, `/worktrees`, `/sessions`, `/modes`; file/diff/tree under `/worktrees/:id/...`; resume + full-message-send on `/sessions/:id/...`.
 - **WebSocket** (`/ws`): three multiplexed channels — state subscription (`subscribe`), output stream (`session:open/input/resize/close`), file/tree watching (`file:watch`, `tree:watch`). Server pushes per-session lifecycle, output, file/tree mutations, and broadcast structural events.
 
@@ -480,7 +480,7 @@ Summary of shape:
 
 ## 10. Modes
 
-- Stored in `~/.viberun/modes.json` (single global file, max 10).
+- Stored in `~/.vibe-station/modes.json` (single global file, max 10).
 - Modal UI from `[⚙ Modes]` button — no dedicated route.
 - Built-in presets baked into the web app:
   - `bug-fix-with-pr`: "You are fixing a bug. Open a PR when done. Run tests before committing."
@@ -489,21 +489,21 @@ Summary of shape:
 
 ## 11. Project Lifecycle
 
-- **Add**: `vrun project add <path> [--name=<id>] [--prefix=<prefix>]`. CLI calls daemon REST internally. Daemon validates:
+- **Add**: `vst project add <path> [--name=<id>] [--prefix=<prefix>]`. CLI calls daemon REST internally. Daemon validates:
   - `<path>` exists and is a git repo
   - project id (slugified name) is not already registered → 409 if duplicate
   - generated prefix does not collide with another project's prefix → 409 with the colliding project name
   - on 409, CLI surfaces the override hint (`--name=` or `--prefix=`).
-- **Delete**: `vrun project rm <id>`. CLI prints confirmation prompt: `This will terminate N sessions and remove M worktrees. Type project name to confirm:`. Daemon then cascades: terminate sessions → remove worktree directories → delete `projects/<id>/`.
+- **Delete**: `vst project rm <id>`. CLI prints confirmation prompt: `This will terminate N sessions and remove M worktrees. Type project name to confirm:`. Daemon then cascades: terminate sessions → remove worktree directories → delete `projects/<id>/`.
 - No UI button in v1 — destructive ops on CLI surface only.
 
 ## 12. Folder Structure (Monorepo)
 
 ```
-viberun-ide/
+vibe-station/
 ├── apps/
 │   ├── web/                       # SPA (React + Vite)
-│   └── cli/                       # `viberun` binary (incl. daemon subcommand)
+│   └── cli/                       # `vst` binary (incl. daemon subcommand)
 ├── packages/
 │   ├── core/                      # types, plugin contracts, paths utils
 │   ├── plugin-claude/
@@ -514,15 +514,15 @@ viberun-ide/
 │   ├── HIGH-LEVEL-DESIGN.md       # this file
 │   └── TECH-STACK.md
 ├── .feature-plans/
-│   ├── viberun-ide-prd.md
-│   ├── viberun-ide-ui-plan.md
+│   ├── vibe-station-prd.md
+│   ├── vibe-station-ui-plan.md
 │   └── scratch-design.md
 ├── package.json                   # workspace root
 ├── pnpm-workspace.yaml
 └── tsconfig.base.json
 ```
 
-CLI + daemon share a package: `apps/cli` exposes both one-shot subcommands (`vrun project ...`, `vrun worktree ...`, `vrun session ...`, etc.) and the long-running daemon (`vrun daemon start`). Single Node binary.
+CLI + daemon share a package: `apps/cli` exposes both one-shot subcommands (`vst project ...`, `vst worktree ...`, `vst session ...`, etc.) and the long-running daemon (`vst daemon start`). Single Node binary.
 
 ## 13. Module Boundaries
 

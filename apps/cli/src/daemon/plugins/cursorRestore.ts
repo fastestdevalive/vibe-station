@@ -7,10 +7,10 @@
  *
  * Flattening rule (observed empirically — cursor-agent ≥ 2025.05):
  *   - strip leading `/`
- *   - drop `.` characters (so `.viberun` becomes `viberun`)
+ *   - drop `.` characters (so `.vibe-station` becomes `vibestation`)
  *   - replace remaining `/` with `-`
- * Example: `/home/gb/.viberun/projects/console-home/worktrees/ch-6`
- *       → `home-gb-viberun-projects-console-home-worktrees-ch-6`
+ * Example: `/home/gb/.vibe-station/projects/console-home/worktrees/ch-6`
+ *       → `home-gb-vibestation-projects-console-home-worktrees-ch-6`
  *
  * To resume, we find the newest chatId-named subdirectory under agent-transcripts.
  */

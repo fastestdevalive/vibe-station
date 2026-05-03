@@ -48,14 +48,14 @@ export function buildProgram(): Command {
   const program = new Command();
 
   program
-    .name("vrun")
-    .description("viberun-ide — orchestrate parallel AI coding agents")
-    .version(readPackageVersion(), "-v, --version", "print the vrun version");
+    .name("vst")
+    .description("vibe-station — orchestrate parallel AI coding agents")
+    .version(readPackageVersion(), "-v, --version", "print the vst version");
 
   // Daemon commands
   const daemon = program
     .command("daemon")
-    .description("Manage the viberun daemon");
+    .description("Manage the vibe-station daemon");
   registerDaemonStatus(daemon);
   registerDaemonStart(daemon);
   registerDaemonStop(daemon);

@@ -8,10 +8,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const pkgPath = join(here, "..", "..", "package.json");
 const expectedVersion = JSON.parse(readFileSync(pkgPath, "utf8")).version as string;
 
-describe("vrun CLI program", () => {
+describe("vst CLI program", () => {
   it("builds without throwing", () => {
     const program = buildProgram();
-    expect(program.name()).toBe("vrun");
+    expect(program.name()).toBe("vst");
   });
 
   it("registers --version that matches package.json", () => {
@@ -31,7 +31,7 @@ describe("vrun CLI program", () => {
     });
 
     try {
-      await program.parseAsync(["node", "vrun", "--version"]);
+      await program.parseAsync(["node", "vst", "--version"]);
     } catch (err) {
       expect((err as { code?: string }).code).toBe("commander.version");
     }
@@ -40,6 +40,6 @@ describe("vrun CLI program", () => {
 
   it("has a description", () => {
     const program = buildProgram();
-    expect(program.description()).toMatch(/viberun-ide/);
+    expect(program.description()).toMatch(/vibe-station/);
   });
 });

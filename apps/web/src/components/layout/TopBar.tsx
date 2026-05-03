@@ -123,7 +123,7 @@ export function TopBar({
       {!isMobile ? (
         <>
           <button type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
-            viberun
+            vibe-station
           </button>
           <div className="top-bar__crumb" title={crumbTitle}>
             {crumbNode}

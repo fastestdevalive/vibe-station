@@ -8,13 +8,13 @@ interface ConfigFile {
 }
 
 export function getDaemonUrl(): string | null {
-  const envUrl = process.env.VR_DAEMON_URL;
+  const envUrl = process.env.VST_DAEMON_URL;
   if (envUrl) {
     return envUrl;
   }
 
   try {
-    const configPath = join(homedir(), ".viberun", "config.json");
+    const configPath = join(homedir(), ".vibe-station", "config.json");
     const content = readFileSync(configPath, "utf-8");
     const config = JSON.parse(content) as ConfigFile;
     if (!config.port) {
@@ -29,7 +29,7 @@ export function getDaemonUrl(): string | null {
 export function getDaemonUrlOrThrow(): string {
   const url = getDaemonUrl();
   if (!url) {
-    die("Daemon is not running. Run `vrun daemon start`.", 4);
+    die("Daemon is not running. Run `vst daemon start`.", 4);
   }
   return url;
 }

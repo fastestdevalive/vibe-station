@@ -27,7 +27,7 @@ export function handleTreeWatch(
   try {
     // For Phase 7, construct the absolute path from worktreeId and path.
     // In a real implementation, look up the worktree root from the project store.
-    const worktreeRoot = join(process.env.HOME || "/tmp", ".viberun", "projects", "test", "worktrees", worktreeId);
+    const worktreeRoot = join(process.env.HOME || "/tmp", ".vibe-station", "projects", "test", "worktrees", worktreeId);
     const absPath = treePath ? join(worktreeRoot, treePath) : worktreeRoot;
 
     const watcher = new FileWatcher();

@@ -3,8 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 type Theme = "dark" | "light";
 type Font = "mono" | "sans";
 
-const THEME_KEY = "viberun:theme";
-const FONT_KEY = "viberun:font";
+const THEME_KEY = "vibestation:theme";
+const FONT_KEY = "vibestation:font";
 
 function parseTheme(raw: string | null): Theme {
   return raw === "dark" || raw === "light" ? raw : "dark";

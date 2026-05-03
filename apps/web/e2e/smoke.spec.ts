@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     try {
-      localStorage.removeItem("viberun:workspace");
+      localStorage.removeItem("vibestation:workspace");
     } catch {
       /* ignore */
     }
