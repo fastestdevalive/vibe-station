@@ -90,6 +90,11 @@ export function TopBar({
 
   const crumbTitle = crumbParts.map((p) => p.label).join(" › ") || undefined;
 
+  const mobileTitle =
+    layoutMode === "dashboard"
+      ? "Dashboard"
+      : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+
   const crumbNode = crumbParts.length === 0 ? (
     <span className="top-bar__crumb-seg">—</span>
   ) : (
@@ -115,12 +120,40 @@ export function TopBar({
       >
         <PanelLeft size={18} />
       </button>
-      <button type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
-        viberun
-      </button>
-      <div className="top-bar__crumb" title={crumbTitle}>
-        {crumbNode}
-      </div>
+      {!isMobile ? (
+        <>
+          <button type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
+            viberun
+          </button>
+          <div className="top-bar__crumb" title={crumbTitle}>
+            {crumbNode}
+          </div>
+        </>
+      ) : (
+        <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
+          {layoutMode === "dashboard" ? (
+            <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
+          ) : (
+            <>
+              <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>
+              <div className="top-bar__mobile-wt-row">
+                {wt ? (
+                  <>
+                    <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
+                      {wt.id}
+                    </span>
+                    <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
+                      {wt.branch}
+                    </span>
+                  </>
+                ) : (
+                  <span className="top-bar__crumb-seg top-bar__mobile-line">—</span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
       <div className="top-bar__end">
         <ConnectionStatus />
         <div className="top-bar__actions">
@@ -158,7 +191,7 @@ export function TopBar({
               >
                 <SquareTerminal size={17} />
               </button>
-<button
+              <button
                 type="button"
                 className={`top-bar__pane-btn ${treeOn ? "top-bar__pane-btn--on" : ""}`}
                 aria-pressed={treeOn}
