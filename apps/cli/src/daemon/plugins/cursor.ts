@@ -89,12 +89,12 @@ export function createCursorPlugin(): AgentPlugin {
       project: { id: string };
       worktree: { id: string };
     }): Promise<string[] | null> {
-      // Decision (phase 3.4 / open question 8): ao-142 returns null from getRestoreCommand
-      // for cursor, forcing every restart through a fresh getLaunchCommand (which always
-      // bakes in the system prompt via shell substitution). We adopt the same strategy:
-      // cursor-agent's --resume flag + positional `--` system-prompt arg combination is
-      // not verified safe, and a fresh launch always re-delivers the system prompt.
-      // Resumed cursor sessions see updated AGENTS.md on every spawn.
+      // cursor-agent --resume <chatId> reloads the prior conversation from cursor's
+      // local chat-history DB, which already includes the original system prompt as
+      // part of the saved transcript. So we hand back the resume argv as-is — no
+      // shell-line, no system-prompt re-injection. Tradeoff: a resumed session will
+      // NOT pick up edits to AGENTS.md / .viberun/rules.md made between runs;
+      // those only land on a fresh spawn.
       const { project, worktree } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);
       const chatId = await findLatestCursorChatId(wtPath);
