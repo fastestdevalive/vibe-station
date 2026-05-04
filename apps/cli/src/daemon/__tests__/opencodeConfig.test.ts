@@ -23,7 +23,16 @@ describe("writeOpenCodeConfig", () => {
 
     const raw = await readFile(configPath, "utf8");
     const parsed = JSON.parse(raw);
-    expect(parsed).toEqual({ instructions: [instructionFile] });
+    expect(parsed.instructions).toEqual([instructionFile]);
+  });
+
+  it("includes a fully permissive permission block so opencode never prompts", async () => {
+    const configPath = join(tempDir, "opencode-config.json");
+    writeOpenCodeConfig(configPath, ["/x.md"]);
+
+    const raw = await readFile(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    expect(parsed.permission).toEqual({ "*": { "*": "allow" } });
   });
 
   it("stores absolute paths as-is", async () => {

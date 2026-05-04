@@ -58,6 +58,19 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
    */
   async attach(cols: number, rows: number, subscriberId: string): Promise<void> {
     try {
+      // Pre-flight: confirm the tmux session exists. Without this check, a
+      // missing/dead session causes `tmux attach-session` to print
+      // "can't find session: <name>" into the pty before exiting non-zero —
+      // which lands as garbage in the user's terminal viewport. Bail out
+      // early with a clean error instead.
+      try {
+        execSync(`tmux has-session -t ${this.tmuxName}`, { stdio: "ignore", timeout: 5000 });
+      } catch {
+        this.closed = true;
+        this.emit("error", `Session '${this.tmuxName}' not running`);
+        return;
+      }
+
       // Hide tmux's status line for this session — keeps the visible area
       // equal to the requested rows. Best-effort: a failure here just costs
       // us one row of green status bar, not a broken session.
@@ -178,6 +191,14 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
       }
       this.pty = null;
     }
+
+    // Defense in depth: drop any listeners that might still hold a reference
+    // to this stream's events. The closed flag already prevents emit("chunk")
+    // from running, but if a stray listener was attached and not paired with
+    // a matching off() (e.g. a leftover from a re-open race) it would
+    // otherwise sit forever. Pairs with the off() in sessionOpen.ts's stale
+    // handling, but is unconditional here so no listener can outlive detach.
+    this.removeAllListeners();
 
     this.emit("close");
   }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { SessionState, WSEvent } from "@/api/types";
+import { useWorkspaceStore } from "./useStore";
 
 export function useSubscription(sessionIds: string[], api: ApiInstance) {
   const key = useMemo(() => [...sessionIds].sort().join(","), [sessionIds]);
@@ -46,17 +47,25 @@ export function useSessionOutput(
     const offExited = api.on("session:exited", (ev) => {
       if (ev.type === "session:exited" && ev.sessionId === sessionId) setSessionState("exited");
     });
-    // session:error fires for several reasons. Only mark exited when the
-    // message indicates the session is actually gone — not for transient
-    // duplicate-open errors that React StrictMode triggers in dev.
+    // session:error → exited, EXCEPT during the spawn phase. The store's
+    // sessionStates is the source of truth: it reflects both syncSessionsFromApi
+    // (so a session that was "idle" before a daemon restart is correctly seen
+    // as idle here) and prior session:state events (so a session that was just
+    // observed working is seen as working). We only suppress the flip when the
+    // session is genuinely still spawning (state === "not_started") — in that
+    // window, "not running" errors are a race with spawnSession, not a real
+    // exit, and the eventual session:state event will update us.
     const offError = api.on("session:error", (ev) => {
       if (
-        ev.type === "session:error" &&
-        ev.sessionId === sessionId &&
-        /not found|exited|can't find pane/i.test(ev.message)
+        ev.type !== "session:error" ||
+        ev.sessionId !== sessionId ||
+        !/not found|exited|not running|can't find pane/i.test(ev.message)
       ) {
-        setSessionState("exited");
+        return;
       }
+      const known = useWorkspaceStore.getState().sessionStates[sessionId];
+      if (known === "not_started") return; // race during fresh spawn
+      setSessionState("exited");
     });
     // Resume re-spawns a fresh tmux pane on the daemon. Clear local exited
     // state so the Resume banner goes away and the live UI reflects working.
