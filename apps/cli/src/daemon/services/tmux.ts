@@ -92,6 +92,13 @@ export async function listSessions(): Promise<string[]> {
  * Load data into a named tmux buffer via a temp file and paste it into the
  * target pane. This avoids the shell argument-length limit that `send-keys`
  * hits with large prompts.
+ *
+ * `-p` enables bracketed paste, which wraps the content in `\e[200~`/`\e[201~`
+ * markers. TUI editors (opencode, claude TUI, cursor-agent's input box) honor
+ * these markers and treat the whole payload as a paste rather than as
+ * individual keystrokes — so embedded newlines stay in the editor instead of
+ * being interpreted as Enter (which would submit each line as a separate
+ * message and leave only the trailing fragment in the input).
  */
 export async function pasteBuffer(target: string, bufferId: string, data: string): Promise<void> {
   const { writeFile, unlink } = await import("node:fs/promises");
@@ -99,7 +106,7 @@ export async function pasteBuffer(target: string, bufferId: string, data: string
   try {
     await writeFile(tmpFile, data, "utf8");
     await run(["load-buffer", "-b", bufferId, tmpFile]);
-    await run(["paste-buffer", "-b", bufferId, "-d", "-t", target]);
+    await run(["paste-buffer", "-b", bufferId, "-d", "-p", "-t", target]);
   } finally {
     await unlink(tmpFile).catch(() => {});
   }

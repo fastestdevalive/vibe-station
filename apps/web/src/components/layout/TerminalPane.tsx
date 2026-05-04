@@ -14,6 +14,25 @@ interface TerminalPaneProps {
   activeSession?: Session;
 }
 
+/**
+ * Detect xterm.js's auto-responses to terminal capability queries so we don't
+ * forward them as keystrokes. Patterns:
+ *   - DA1 reply: ESC [ ? <params> c   (e.g. \e[?1;2c)
+ *   - DA2 reply: ESC [ > <params> c   (e.g. \e[>0;276;0c)
+ *   - DSR cursor position: ESC [ <row> ; <col> R
+ *   - DSR status report:   ESC [ 0 n
+ * Real user input never matches these (function keys, arrows, modifier
+ * combos all encode differently), so this is safe to drop unconditionally.
+ */
+function isXtermAutoResponse(data: string): boolean {
+  return (
+    /^\x1b\[\?[\d;]+c$/.test(data) ||
+    /^\x1b\[>[\d;]+c$/.test(data) ||
+    /^\x1b\[\d+;\d+R$/.test(data) ||
+    /^\x1b\[0n$/.test(data)
+  );
+}
+
 export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -37,7 +56,14 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
   const attachPending = attach === "pending";
 
-  const showSpawningOverlay = lifecycleState === "not_started" || attachPending;
+  // Only show "Starting…/Reconnecting…" when the session is actually meant
+  // to come up — i.e. it's spawning, or it's running and we're awaiting an
+  // attach. For an exited session the open will never succeed (daemon
+  // rejects it), so the pending flag would otherwise sit forever and stack
+  // a misleading "Reconnecting…" on top of the Resume banner.
+  const showSpawningOverlay =
+    lifecycleState === "not_started" ||
+    (attachPending && (lifecycleState === "working" || lifecycleState === "idle"));
 
   const mountTerminal =
     Boolean(activeSessionId) &&
@@ -95,6 +121,10 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     term.loadAddon(fit);
 
     term.open(host);
+    // Take keyboard focus so the user can start typing immediately when a tab
+    // or worktree is opened. The effect re-runs on activeSessionId change, so
+    // tab switches refocus the new tab's terminal too.
+    term.focus();
     term.attachCustomKeyEventHandler((domEvent) => {
       const mod = domEvent.ctrlKey || domEvent.metaKey;
       if (mod && !domEvent.shiftKey && domEvent.key.toLowerCase() === "p") {
@@ -182,6 +212,14 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     window.addEventListener("resize", handleWindowResize);
 
     const d = term.onData((data) => {
+      // Filter out xterm.js's auto-responses to terminal capability queries.
+      // tmux/agents periodically send DA1 (\e[c) and DA2 (\e[>c) to identify
+      // the terminal; xterm answers via term.onData. If we forward those
+      // answers to api.sendKeystroke, they land in the shell's stdin and
+      // get echoed into the agent's input box (e.g. [?1;2c [>84;0;0c
+      // appearing as if typed). On a noisy connection this also turns into
+      // a tight loop because the agent's redraw retriggers the query.
+      if (isXtermAutoResponse(data)) return;
       void api.sendKeystroke(activeSessionId, data);
     });
     const r = term.onResize(({ cols, rows }) => {
@@ -223,13 +261,29 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
   }, [terminalFontScale, activeSessionId, api, mountTerminal]);
 
   useEffect(() => {
+    // Re-attach on reconnect ONLY — not on the initial connect. The big
+    // terminal-init effect above already calls openSession when mountTerminal
+    // becomes true, so firing again here on the first online transition is
+    // a redundant second openSession on the same connection. Two opens =
+    // two handleSessionOpen calls = a tmux-attach race that on browser
+    // refresh leaves a stale TmuxOutputStream still emitting chunks
+    // alongside the live one (visible as double-echoed keystrokes).
     let prev = api.getConnectionState();
+    let everOnline = prev === "online";
     return api.subscribeConnection((s) => {
-      if (s === "online" && prev !== "online" && activeSessionId && termRef.current && mountTerminal) {
+      if (
+        s === "online" &&
+        prev !== "online" &&
+        everOnline &&
+        activeSessionId &&
+        termRef.current &&
+        mountTerminal
+      ) {
         termRef.current.reset();
         markSessionAttachPending(activeSessionId);
         void api.openSession(activeSessionId, termRef.current.cols, termRef.current.rows);
       }
+      if (s === "online") everOnline = true;
       prev = s;
     });
   }, [api, activeSessionId, mountTerminal, markSessionAttachPending]);

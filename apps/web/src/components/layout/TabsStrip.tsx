@@ -65,12 +65,32 @@ export function TabsStrip({ api, worktreeId }: TabsStripProps) {
         const exists = prev.some((s) => s.id === ev.snapshot!.id);
         return exists ? prev : [...prev, ev.snapshot!];
       });
+      // Seed lifecycle state from the snapshot so the spawning placeholder
+      // shows "Starting…" while state is "not_started", instead of skipping
+      // straight to "Reconnecting…" when session:state working arrives later.
+      useWorkspaceStore.getState().patchSessionState(ev.snapshot.id, ev.snapshot.state);
       setActiveSession(ev.snapshot.id);
     });
 
     const offDeleted = api.on("session:deleted", (ev) => {
       if (ev.type !== "session:deleted") return;
-      setSessions((prev) => prev.filter((s) => s.id !== ev.sessionId));
+      setSessions((prev) => {
+        const idx = prev.findIndex((s) => s.id === ev.sessionId);
+        const remaining = prev.filter((s) => s.id !== ev.sessionId);
+        // If the closed tab was the active one, switch focus to a sibling so
+        // the user doesn't stare at an [exited] view of a session that no
+        // longer exists. Prefer the tab immediately before the closed one;
+        // fall back to the first remaining tab (usually the main session).
+        const cur = useWorkspaceStore.getState().activeSessionId;
+        if (cur === ev.sessionId && remaining.length > 0) {
+          const beforeId = idx > 0 ? prev[idx - 1]?.id : null;
+          const target = beforeId && remaining.some((r) => r.id === beforeId)
+            ? beforeId
+            : remaining[0]!.id;
+          setActiveSession(target);
+        }
+        return remaining;
+      });
     });
 
     return () => {
