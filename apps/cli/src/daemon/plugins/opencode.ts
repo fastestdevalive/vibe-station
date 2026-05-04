@@ -8,11 +8,18 @@
  * Ready signal: waits for "opencode" banner in pane output.
  */
 
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { opencodeConfigPath, systemPromptPath } from "../services/paths.js";
+import { opencodeConfigPath, systemPromptPath, worktreePath as getWorktreePath } from "../services/paths.js";
 import { writeOpenCodeConfig } from "../services/opencodeConfig.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function createOpencodePlugin(): AgentPlugin {
   return {
@@ -55,6 +62,9 @@ export function createOpencodePlugin(): AgentPlugin {
     }) {
       // System prompt is delivered via OPENCODE_CONFIG env (see getEnvironment).
       // Only the task prompt + verification needle are sent via post-launch paste.
+      // postLaunchSubmit=true → spawn.ts sends Enter after the bracketed paste so
+      // the TUI actually submits the message (bracketed paste alone preserves
+      // newlines but never auto-submits).
       const parts: string[] = [];
       if (prompt.taskPrompt) {
         parts.push(prompt.taskPrompt);
@@ -63,11 +73,69 @@ export function createOpencodePlugin(): AgentPlugin {
       return {
         launchArgs: undefined,
         postLaunchInput: parts.length > 0 ? parts.join("\n\n") : undefined,
+        postLaunchSubmit: true,
       };
     },
 
-    async setupWorkspaceHooks(): Promise<void> {
-      // No-op for v1
+    async setupWorkspaceHooks(worktreePath: string): Promise<void> {
+      const pluginDir = join(worktreePath, ".opencode", "plugins");
+      const pluginPath = join(pluginDir, "vst-recorder.ts");
+
+      const content =
+        [
+          'import type { Plugin } from "@opencode-ai/plugin";',
+          'import { writeFileSync, mkdirSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "",
+          "export const VstRecorder: Plugin = async ({ directory }) => ({",
+          '  "session.created": async (input) => {',
+          "    const token = process.env.VST_SPAWN_TOKEN;",
+          "    if (!token) return;",
+          '    const dir = join(directory, ".vibe-station", "agent-chat-ids");',
+          "    mkdirSync(dir, { recursive: true });",
+          "    writeFileSync(join(dir, token), input.sessionID);",
+          "  },",
+          "});",
+        ].join("\n") + "\n";
+
+      await fs.mkdir(pluginDir, { recursive: true });
+
+      // Idempotent: skip write if content is unchanged
+      try {
+        const existing = await fs.readFile(pluginPath, "utf8");
+        if (existing === content) return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+
+      await fs.writeFile(pluginPath, content, "utf8");
+    },
+
+    async captureChatId(args: {
+      session: SessionRecord;
+      project: ProjectRecord;
+      worktree: WorktreeRecord;
+    }): Promise<string | null> {
+      // session.created fires when the user's first chat is created, which for the TUI
+      // may be after the ready sentinel. Poll for up to 30s; timeout → null → mtime fallback.
+      const tokenFile = join(
+        getWorktreePath(args.project.id, args.worktree.id),
+        ".vibe-station",
+        "agent-chat-ids",
+        args.session.id,
+      );
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline) {
+        try {
+          const id = (await fs.readFile(tokenFile, "utf8")).trim();
+          await fs.unlink(tokenFile).catch(() => {});
+          return id || null;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        }
+        await sleep(500);
+      }
+      return null;
     },
 
     async getRestoreCommand(args: {
@@ -75,12 +143,6 @@ export function createOpencodePlugin(): AgentPlugin {
       project: { id: string };
       worktree: { id: string };
     }): Promise<string[] | null> {
-      // KNOWN LIMITATION: agentChatId is not yet captured at launch time.
-      // ao-142 queries `opencode session list --format json` and matches by
-      // title (e.g. AO:<id>); we don't do that yet. Until either (a) we parse
-      // sessionId from the opencode startup banner, or (b) we shell out to
-      // `opencode session list`, this restore path is effectively dead — it
-      // always falls through to fresh launch. Tracked as Phase-2 follow-up.
       if (args.session.agentChatId) {
         return ["opencode", "--session", args.session.agentChatId];
       }
