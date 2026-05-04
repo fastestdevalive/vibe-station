@@ -6,10 +6,28 @@
  * Ready signal: waits for interactive prompt sentinel ("> ").
  */
 
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { sq } from "../services/shell.js";
 import { findLatestChatUuid } from "./claudeRestore.js";
+import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
+
+async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promise<void> {
+  let content = "";
+  try {
+    content = await fs.readFile(gitignorePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (content.split("\n").some((line) => line.trim() === entry)) return;
+  const newContent =
+    content === "" || content.endsWith("\n")
+      ? content + entry + "\n"
+      : content + "\n" + entry + "\n";
+  await fs.writeFile(gitignorePath, newContent, "utf8");
+}
 
 export function createClaudePlugin(): AgentPlugin {
   return {
@@ -56,18 +74,87 @@ export function createClaudePlugin(): AgentPlugin {
       };
     },
 
-    async setupWorkspaceHooks(): Promise<void> {
-      // No-op for v1; hooks are implemented in v1.1
+    async setupWorkspaceHooks(worktreePath: string): Promise<void> {
+      const claudeDir = join(worktreePath, ".claude");
+      const hookScriptPath = join(claudeDir, "vibe-recorder.sh");
+      const settingsPath = join(claudeDir, "settings.json");
+
+      await fs.mkdir(claudeDir, { recursive: true });
+
+      const hookScript = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'token="${VST_SPAWN_TOKEN:-}"',
+        '[ -z "$token" ] && exit 0',
+        "uuid=$(jq -r '.session_id // empty')",
+        '[ -z "$uuid" ] && exit 0',
+        'dir="$CLAUDE_PROJECT_DIR/.vibe-station/agent-chat-ids"',
+        'mkdir -p "$dir"',
+        'printf \'%s\' "$uuid" > "$dir/$token"',
+      ].join("\n") + "\n";
+
+      await fs.writeFile(hookScriptPath, hookScript, { mode: 0o755 });
+
+      // Add .claude/ to .gitignore (best-effort)
+      await ensureGitignoreEntry(join(worktreePath, ".gitignore"), ".claude/").catch(() => {});
+
+      // Merge our SessionStart hook entry into .claude/settings.json
+      let settings: Record<string, unknown> = {};
+      try {
+        const existing = await fs.readFile(settingsPath, "utf8");
+        settings = JSON.parse(existing) as Record<string, unknown>;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      }
+
+      const existingHooks = settings.hooks as Record<string, unknown[]> | undefined;
+      const sessionStartHooks = (existingHooks?.SessionStart ?? []) as unknown[];
+      const alreadyPresent = sessionStartHooks.some(
+        (entry) =>
+          Array.isArray((entry as { hooks?: unknown[] }).hooks) &&
+          (entry as { hooks: { type?: string; command?: string }[] }).hooks.some(
+            (h) => h.command === ".claude/vibe-recorder.sh",
+          ),
+      );
+
+      if (!alreadyPresent) {
+        const ourEntry = {
+          hooks: [{ type: "command", command: ".claude/vibe-recorder.sh" }],
+        };
+        settings.hooks = {
+          ...(settings.hooks as Record<string, unknown>),
+          SessionStart: [...sessionStartHooks, ourEntry],
+        };
+        await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+      }
+    },
+
+    async captureChatId(args: {
+      session: SessionRecord;
+      project: ProjectRecord;
+      worktree: WorktreeRecord;
+    }): Promise<string | null> {
+      const wtPath = getWorktreePath(args.project.id, args.worktree.id);
+      const tokenFile = join(wtPath, ".vibe-station", "agent-chat-ids", args.session.id);
+      try {
+        const uuid = (await fs.readFile(tokenFile, "utf8")).trim();
+        await fs.unlink(tokenFile).catch(() => {});
+        return uuid || null;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw err;
+      }
     },
 
     async getRestoreCommand(args: {
-      session: any;
-      project: any;
-      worktree: any;
+      session: SessionRecord;
+      project: ProjectRecord;
+      worktree: WorktreeRecord;
     }): Promise<string[] | null> {
-      const { project, worktree } = args;
-      const wtPath = getWorktreePath(project.id, worktree.id);
-      const uuid = await findLatestChatUuid(wtPath);
+      const { project, worktree, session } = args;
+      const uuid =
+        session.agentChatId ??
+        (await findLatestChatUuid(getWorktreePath(project.id, worktree.id)));
       if (uuid) {
         return ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
       }

@@ -9,7 +9,7 @@ import {
 import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
-import { cleanupSessionDataDir } from "../services/paths.js";
+import { cleanupSessionDataDir, worktreePath } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
@@ -346,9 +346,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         if (restoreArgv) {
           // Resume path: spawn from explicit restore argv
           restoredFromHistory = true;
+          const wtPath = worktreePath(project.id, worktree.id);
+
+          // Ensure hook script is installed (self-heals legacy sessions without agentChatId)
+          if (plugin.setupWorkspaceHooks) {
+            await plugin.setupWorkspaceHooks(wtPath);
+          }
+
           const launchCfg = { project, worktree, session, daemonPort: 0 };
           const env: Record<string, string> = {
             VST_SESSION: session.id,
+            VST_SPAWN_TOKEN: session.id,
             VST_WORKTREE: worktree.id,
             VST_PROJECT: project.id,
             VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
@@ -364,6 +372,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             env,
             fallbackMs: plugin.getReadySignal().fallbackMs,
           });
+
+          // Capture chat ID for future resumes (self-healing for legacy sessions)
+          const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+          if (capturedId) {
+            session.agentChatId = capturedId;
+          }
         } else {
           // Fresh launch path: build prompt and spawn normally
           const { buildPrompt } = await import("../services/promptBuilder.js");

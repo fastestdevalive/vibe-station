@@ -4,17 +4,19 @@
  * Step sequence (under project mutex, called by POST /worktrees and POST /sessions):
  * 1. Reserve identity (done by caller before invoking)
  * 2. Persist record at not_started (done by caller)
- * 3. Setup workspace hooks (plugin.setupWorkspaceHooks)
- * 4. Resolve env (VST_*)
+ * 2.5. provideChatId (optional, parallel with step 3) — pre-mint chat id before spawn
+ * 3. Setup workspace hooks (plugin.setupWorkspaceHooks, parallel with 2.5)
+ * 4. Resolve env (VST_*, including VST_SPAWN_TOKEN for chat-id capture)
  * 5a. For useTmux=true: tmux new-session
  * 5b. For useTmux=false: DirectPtyBackend.spawn
  * 6. Wait for ready signal (getReadySignal) — if sentinel not found, fallback after ms
  * 7. Send postLaunchInput if any
+ * 7.5. captureChatId (optional) — read token file written by agent hook/plugin
  * 8. Flip state to working (caller persists)
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { newSession, hasSession, capturePane, pasteBuffer } from "./tmux.js";
+import { newSession, hasSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
 import { DirectPtyBackend } from "./directPty.js";
 import { worktreePath as getWorktreePath, sessionDataDir, systemPromptPath } from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
@@ -39,8 +41,20 @@ export interface AgentPlugin {
     sessionId: string;
     systemPromptFile: string;
     launchCfg: LaunchConfig;
-  }): { launchArgs?: string[]; postLaunchInput?: string; useShell?: boolean; shellLine?: string };
+  }): { launchArgs?: string[]; postLaunchInput?: string; postLaunchSubmit?: boolean; useShell?: boolean; shellLine?: string };
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
+  /** Pre-spawn: obtain a chat id before launching (e.g. cursor-agent create-chat). */
+  provideChatId?(args: {
+    session: SessionRecord;
+    project: ProjectRecord;
+    worktree: WorktreeRecord;
+  }): Promise<string | null>;
+  /** Post-ready: capture the agent's chat id written to a token file by a hook/plugin. */
+  captureChatId?(args: {
+    session: SessionRecord;
+    project: ProjectRecord;
+    worktree: WorktreeRecord;
+  }): Promise<string | null>;
   /** Return argv for resuming a prior session, or null for fresh launch. */
   getRestoreCommand?(args: {
     session: SessionRecord;
@@ -139,9 +153,13 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
     daemonPort,
   };
 
-  // Step 3: Setup workspace hooks
-  if (plugin.setupWorkspaceHooks) {
-    await plugin.setupWorkspaceHooks(wtPath);
+  // Steps 2.5 + 3: provideChatId + setupWorkspaceHooks in parallel (both pre-spawn, independent)
+  const [preSpawnChatId] = await Promise.all([
+    plugin.provideChatId?.({ session, project, worktree }) ?? Promise.resolve(null),
+    plugin.setupWorkspaceHooks ? plugin.setupWorkspaceHooks(wtPath) : Promise.resolve(),
+  ]);
+  if (preSpawnChatId) {
+    session.agentChatId = preSpawnChatId;
   }
 
   // Write system-prompt file to per-session data dir
@@ -151,7 +169,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   writeFileSync(promptFile, systemPrompt, "utf8");
 
   // Compose launch prompt
-  const { launchArgs, postLaunchInput, useShell, shellLine } = plugin.composeLaunchPrompt({
+  const { launchArgs, postLaunchInput, postLaunchSubmit, useShell, shellLine } = plugin.composeLaunchPrompt({
     systemPrompt,
     taskPrompt,
     sessionId: session.id,
@@ -162,6 +180,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   // Step 4: Resolve env
   const baseEnv: Record<string, string> = {
     VST_SESSION: session.id,
+    VST_SPAWN_TOKEN: session.id,
     VST_WORKTREE: worktree.id,
     VST_PROJECT: project.id,
     VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
@@ -209,6 +228,21 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
       // Step 7: Send postLaunchInput
       if (postLaunchInput) {
         stream.write(postLaunchInput);
+        // postLaunchSubmit: explicit Enter so the TUI submits the message.
+        // Direct-pty has no bracketed paste, so embedded newlines may already
+        // act as Enter in some TUIs — but a trailing Enter is harmless when
+        // the input box already submitted on its own (it just opens an empty
+        // line on the next prompt) and necessary for TUIs that consumed the
+        // whole write as one input event.
+        if (postLaunchSubmit) {
+          stream.write("\r");
+        }
+      }
+
+      // Step 7.5: Capture chat ID written by agent hook/plugin
+      const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+      if (capturedId) {
+        session.agentChatId = capturedId;
       }
     } catch (err) {
       // Clean up the stream on error
@@ -258,6 +292,14 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
       return;
     }
     await pasteBuffer(session.tmuxName, `vst-prompt-${session.id}`, postLaunchInput);
+    // Bracketed paste in pasteBuffer (-p) prevents embedded newlines from
+    // being interpreted as Enter — necessary for multi-line prompts not to
+    // be split across multiple submissions. The trade-off: we now need an
+    // explicit Enter to submit. Plugins that want auto-submit (e.g. opencode)
+    // opt in via postLaunchSubmit.
+    if (postLaunchSubmit) {
+      await sendKeys(session.tmuxName, "", true);
+    }
 
     const needle = promptVerificationNeedle(session.id);
     if (postLaunchInput.includes(needle)) {
@@ -275,6 +317,12 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
         );
       }
     }
+  }
+
+  // Step 7.5: Capture chat ID written by agent hook/plugin
+  const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+  if (capturedId) {
+    session.agentChatId = capturedId;
   }
 }
 

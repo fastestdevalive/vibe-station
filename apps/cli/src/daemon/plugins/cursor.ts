@@ -13,10 +13,14 @@
  * Removed `--print` (causes immediate exit on EOF; we want interactive REPL)
  */
 
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { sq } from "../services/shell.js";
 import { findLatestCursorChatId } from "./cursorRestore.js";
+
+const execFile = promisify(execFileCb);
 
 export function createCursorPlugin(): AgentPlugin {
   return {
@@ -27,15 +31,12 @@ export function createCursorPlugin(): AgentPlugin {
 
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
-      return [
-        "cursor-agent",
-        "--workspace",
-        wtPath,
-        "--force",
-        "--sandbox",
-        "disabled",
-        "--approve-mcps",
-      ];
+      const argv: string[] = ["cursor-agent"];
+      if (cfg.session?.agentChatId) {
+        argv.push("--resume", cfg.session.agentChatId);
+      }
+      argv.push("--workspace", wtPath, "--force", "--sandbox", "disabled", "--approve-mcps");
+      return argv;
     },
 
     getEnvironment(): Record<string, string> {
@@ -64,14 +65,19 @@ export function createCursorPlugin(): AgentPlugin {
       if (prompt.taskPrompt) {
         stdinContent += `; printf '\\n\\n'; printf %s ${sq(prompt.taskPrompt)}`;
       }
-      const shellLine = [
-        "cursor-agent",
+
+      const parts: string[] = ["cursor-agent"];
+      if (prompt.launchCfg.session?.agentChatId) {
+        parts.push(`--resume ${prompt.launchCfg.session.agentChatId}`);
+      }
+      parts.push(
         `--workspace ${sq(wtPath)}`,
         "--force",
         "--sandbox disabled",
         "--approve-mcps",
         `-- "$(${stdinContent})"`,
-      ].join(" ");
+      );
+      const shellLine = parts.join(" ");
       return {
         useShell: true as const,
         shellLine,
@@ -81,11 +87,20 @@ export function createCursorPlugin(): AgentPlugin {
     },
 
     async setupWorkspaceHooks(): Promise<void> {
-      // No-op for v1
+      // No-op for cursor: chat id is obtained via provideChatId (cursor-agent create-chat)
+    },
+
+    async provideChatId(): Promise<string | null> {
+      try {
+        const { stdout } = await execFile("cursor-agent", ["create-chat"], { timeout: 10_000 });
+        return stdout.trim() || null;
+      } catch {
+        return null; // offline / not logged in → fresh launch, no regression
+      }
     },
 
     async getRestoreCommand(args: {
-      session: unknown;
+      session: { agentChatId?: string };
       project: { id: string };
       worktree: { id: string };
     }): Promise<string[] | null> {
@@ -95,9 +110,9 @@ export function createCursorPlugin(): AgentPlugin {
       // shell-line, no system-prompt re-injection. Tradeoff: a resumed session will
       // NOT pick up edits to AGENTS.md / .vibe-station/rules.md made between runs;
       // those only land on a fresh spawn.
-      const { project, worktree } = args;
+      const { project, worktree, session } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);
-      const chatId = await findLatestCursorChatId(wtPath);
+      const chatId = session.agentChatId ?? (await findLatestCursorChatId(wtPath));
       if (!chatId) return null;
       // Mirror the fresh-launch flags so the restored session has the same
       // workspace/sandbox/MCP behaviour. --resume picks an existing chat.

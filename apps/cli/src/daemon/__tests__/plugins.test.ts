@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -369,5 +369,195 @@ describe("Agent plugins", () => {
         expect(result === null || Array.isArray(result)).toBe(true);
       }
     });
+  });
+});
+
+// ─── Chat-id capture tests (per-session-chat-id-capture feature) ───────────
+
+describe("Claude plugin — chat-id capture", () => {
+  let wtDir: string;
+
+  beforeEach(async () => {
+    wtDir = await mkdtemp(join(tmpdir(), "vst-claude-hooktest-"));
+  });
+
+  afterEach(async () => {
+    await rm(wtDir, { recursive: true, force: true });
+  });
+
+  it("2.T1 — setupWorkspaceHooks creates .claude/vibe-recorder.sh and .claude/settings.json", async () => {
+    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const plugin = createClaudePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const scriptPath = join(wtDir, ".claude", "vibe-recorder.sh");
+    const settingsPath = join(wtDir, ".claude", "settings.json");
+
+    const scriptContent = await readFile(scriptPath, "utf8");
+    expect(scriptContent).toContain("VST_SPAWN_TOKEN");
+    expect(scriptContent).toContain("jq");
+    expect(scriptContent).toContain("agent-chat-ids");
+
+    const { stat } = await import("node:fs/promises");
+    const { mode } = await stat(scriptPath);
+    expect(mode & 0o111).toBeTruthy();
+
+    const settingsRaw = await readFile(settingsPath, "utf8");
+    const settings = JSON.parse(settingsRaw);
+    const sessionStart = settings.hooks?.SessionStart;
+    expect(Array.isArray(sessionStart)).toBe(true);
+    expect(
+      sessionStart.some((e: any) =>
+        e.hooks?.some((h: any) => h.command === ".claude/vibe-recorder.sh"),
+      ),
+    ).toBe(true);
+  });
+
+  it("2.T2 — setupWorkspaceHooks merges with existing user hooks in settings.json", async () => {
+    const claudeDir = join(wtDir, ".claude");
+    await mkdir(claudeDir, { recursive: true });
+    const existingSettings = {
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "my-hook.sh" }] }],
+      },
+    };
+    await writeFile(join(claudeDir, "settings.json"), JSON.stringify(existingSettings, null, 2), "utf8");
+
+    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const plugin = createClaudePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const raw = await readFile(join(claudeDir, "settings.json"), "utf8");
+    const settings = JSON.parse(raw);
+    const hooks = settings.hooks.SessionStart;
+    expect(hooks).toHaveLength(2);
+    expect(hooks.some((e: any) => e.hooks?.some((h: any) => h.command === "my-hook.sh"))).toBe(true);
+    expect(
+      hooks.some((e: any) => e.hooks?.some((h: any) => h.command === ".claude/vibe-recorder.sh")),
+    ).toBe(true);
+  });
+
+  it("2.T3 — setupWorkspaceHooks is idempotent: calling twice does not duplicate the entry", async () => {
+    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const plugin = createClaudePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const raw = await readFile(join(wtDir, ".claude", "settings.json"), "utf8");
+    const settings = JSON.parse(raw);
+    const ourEntries = settings.hooks.SessionStart.filter((e: any) =>
+      e.hooks?.some((h: any) => h.command === ".claude/vibe-recorder.sh"),
+    );
+    expect(ourEntries).toHaveLength(1);
+  });
+
+  it("2.T6 — getRestoreCommand with session.agentChatId set → uses it without filesystem call", async () => {
+    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const plugin = createClaudePlugin();
+    const result = await plugin.getRestoreCommand!({
+      session: { agentChatId: "known-uuid" } as any,
+      project: { id: "p1" } as any,
+      worktree: { id: "w1" } as any,
+    });
+    expect(result).toEqual(["claude", "--resume", "known-uuid", "--dangerously-skip-permissions"]);
+  });
+});
+
+describe("Cursor plugin — chat-id capture", () => {
+  it("3.T4 — getLaunchCommand with session.agentChatId → argv contains --resume <id>", async () => {
+    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    const cmd = plugin.getLaunchCommand({
+      project: { id: "p1" },
+      worktree: { id: "w1" },
+      session: { id: "s1", agentChatId: "uuid-abc" },
+    } as any);
+    expect(cmd).toContain("--resume");
+    expect(cmd).toContain("uuid-abc");
+  });
+
+  it("3.T5 — getLaunchCommand without agentChatId → no --resume flag", async () => {
+    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    const cmd = plugin.getLaunchCommand({
+      project: { id: "p1" },
+      worktree: { id: "w1" },
+      session: { id: "s1" },
+    } as any);
+    expect(cmd).not.toContain("--resume");
+  });
+
+  it("3.T6 — getRestoreCommand with agentChatId set → returns resume argv without filesystem call", async () => {
+    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    const result = await plugin.getRestoreCommand!({
+      session: { agentChatId: "cursor-uuid-xyz" },
+      project: { id: "p1" },
+      worktree: { id: "w1" },
+    });
+    expect(result).not.toBeNull();
+    expect(result).toContain("--resume");
+    expect(result).toContain("cursor-uuid-xyz");
+  });
+
+  it("3.T7 — getRestoreCommand without agentChatId → falls back to findLatestCursorChatId (returns null when no chats)", async () => {
+    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    const result = await plugin.getRestoreCommand!({
+      session: {},
+      project: { id: "p1" },
+      worktree: { id: "w1" },
+    });
+    expect(result).toBeNull();
+  });
+});
+
+describe("OpenCode plugin — chat-id capture", () => {
+  let wtDir: string;
+
+  beforeEach(async () => {
+    wtDir = await mkdtemp(join(tmpdir(), "vst-opencode-hooktest-"));
+  });
+
+  afterEach(async () => {
+    await rm(wtDir, { recursive: true, force: true });
+  });
+
+  it("4.T1 — setupWorkspaceHooks creates .opencode/plugins/vst-recorder.ts", async () => {
+    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const content = await readFile(join(wtDir, ".opencode", "plugins", "vst-recorder.ts"), "utf8");
+    expect(content).toContain("VstRecorder");
+    expect(content).toContain("session.created");
+    expect(content).toContain("VST_SPAWN_TOKEN");
+  });
+
+  it("4.T2 — setupWorkspaceHooks is idempotent: no re-write if content unchanged", async () => {
+    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const pluginPath = join(wtDir, ".opencode", "plugins", "vst-recorder.ts");
+    const { stat } = await import("node:fs/promises");
+    const { mtimeMs: mtimeBefore } = await stat(pluginPath);
+
+    await new Promise((r) => setTimeout(r, 10));
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const { mtimeMs: mtimeAfter } = await stat(pluginPath);
+    expect(mtimeAfter).toBe(mtimeBefore);
+  });
+
+  it("4.T5 — getRestoreCommand with agentChatId → [opencode, --session, id]", async () => {
+    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    const result = await plugin.getRestoreCommand!({
+      session: { agentChatId: "ses_abc" },
+      project: {},
+      worktree: {},
+    });
+    expect(result).toEqual(["opencode", "--session", "ses_abc"]);
   });
 });
