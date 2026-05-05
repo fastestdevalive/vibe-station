@@ -5,7 +5,7 @@
     "rootDir": "src",
     "declaration": false,
     "noEmit": false,
-    "types": ["node", "vitest/globals"],
+    "types": ["node"],
     "resolveJsonModule": true,
     "preserveSymlinks": true
   },

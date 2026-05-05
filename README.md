@@ -44,7 +44,7 @@ pnpm build
 
 # Link the CLI globally so `vst` is available anywhere
 pnpm link --global
-# — or add apps/cli/dist to your PATH
+# — or add cli/dist to your PATH
 ```
 
 Verify it works:
@@ -319,10 +319,17 @@ pnpm typecheck
 pnpm lint
 ```
 
-The project is a monorepo with two packages:
+The project is a monorepo with three sibling directories at the root:
 
-- `apps/web` — React 19 + Vite frontend
-- `apps/cli` — `vst` CLI binary + the daemon (Fastify)
+- `web-ui/` — React 19 + Vite frontend (`@vibestation/web`)
+- `cli/` — `vst` CLI binary (`@vibestation/cli`)
+- `daemon/` — Fastify HTTP server + PTY/tmux management (TypeScript source only — compiled into `cli/dist/daemon/` via a source symlink, not a separate package)
+
+`cli/src/daemon` is a symlink to `../../daemon/src`, so a single `tsc` in `cli/` compiles both the CLI commands and the daemon in one pass. The daemon runs as a detached child process spawned by `vst daemon start` — it is not imported as a module.
+
+> **Windows:** Git requires symlink support (`git config core.symlinks true` + Developer Mode enabled) for `cli/src/daemon` to clone correctly. Without it the build will fail. Linux and macOS work out of the box.
+
+> **Editor tip:** Open daemon source via `cli/src/daemon/` (the symlink path) rather than `daemon/src/` directly — TypeScript's project context and `go-to-definition` are anchored to the `cli/` tsconfig, so the symlink path gives you full IDE support.
 
 ---
 
