@@ -46,66 +46,58 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
           overflow: "hidden",
         }}
       >
-        {/* Pill tab bar */}
+        {/* Underline tab bar — matches design system `variant="underline"` */}
         <div
+          role="tablist"
           style={{
             flexShrink: 0,
-            padding: "var(--space-3) var(--space-3) 0",
+            display: "flex",
+            gap: "var(--space-1)",
+            borderBottom: "var(--border-width) solid var(--border-default)",
+            padding: "0 var(--space-3)",
           }}
         >
-          {/* inline-flex so the pill shrinks to its content, not full row width */}
-          <div
-            role="tablist"
-            style={{
-              display: "inline-flex",
-              gap: "var(--space-2)",
-              background: "var(--bg-card)",
-              border: "var(--border-width) solid var(--border-default)",
-              borderRadius: "var(--radius-lg)",
-              padding: "var(--space-2)",
-            }}
-          >
-            {sections.map((section) => (
-              <button
-                key={section.id}
-                role="tab"
-                aria-selected={activeTab === section.id}
-                type="button"
-                onClick={() => setActiveTab(section.id)}
-                style={{
-                  position: "relative",
-                  flex: "none",
-                  border: "none",
-                  background: "transparent",
-                  borderRadius: "var(--radius-md)",
-                  padding: "var(--space-3) var(--space-5)",
-                  cursor: "pointer",
-                  font: "inherit",
-                  fontSize: "var(--font-size-sm)",
-                  fontWeight: "var(--font-weight-medium)",
-                  color: activeTab === section.id ? "var(--fg-primary)" : "var(--fg-muted)",
-                  transition: "color 150ms ease",
-                  minHeight: 40,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {activeTab === section.id && (
-                  <motion.span
-                    layoutId={`tab-indicator-${tabLayoutId}`}
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      background: "var(--bg-active)",
-                      borderRadius: "var(--radius-md)",
-                      zIndex: 0,
-                    }}
-                    transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }}
-                  />
-                )}
-                <span style={{ position: "relative", zIndex: 1 }}>{section.label}</span>
-              </button>
-            ))}
-          </div>
+          {sections.map((section) => (
+            <button
+              key={section.id}
+              role="tab"
+              aria-selected={activeTab === section.id}
+              type="button"
+              onClick={() => setActiveTab(section.id)}
+              style={{
+                position: "relative",
+                flex: "none",
+                border: "none",
+                background: "transparent",
+                padding: "var(--space-3) var(--space-3)",
+                marginBottom: "-1px",
+                cursor: "pointer",
+                font: "inherit",
+                fontSize: "var(--font-size-sm)",
+                fontWeight: "var(--font-weight-medium)",
+                color: activeTab === section.id ? "var(--fg-primary)" : "var(--fg-muted)",
+                transition: "color 150ms ease",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {activeTab === section.id && (
+                <motion.span
+                  layoutId={`tab-indicator-${tabLayoutId}`}
+                  style={{
+                    position: "absolute",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: 2,
+                    background: "var(--accent)",
+                    borderRadius: 1,
+                  }}
+                  transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }}
+                />
+              )}
+              {section.label}
+            </button>
+          ))}
         </div>
 
         {/* Active section content */}
