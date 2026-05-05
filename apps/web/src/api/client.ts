@@ -66,7 +66,8 @@ export function createClientApi() {
 
   function scheduleReconnect() {
     if (reconnectTimer) return;
-    const delay = backoffMs;
+    const jitter = Math.random() * 0.3 * backoffMs;
+    const delay = backoffMs + jitter;
     backoffMs = Math.min(MAX_BACKOFF_MS, Math.round(backoffMs * 1.7));
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;

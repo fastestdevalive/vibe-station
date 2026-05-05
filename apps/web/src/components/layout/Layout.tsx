@@ -39,7 +39,7 @@ export function Layout({
   mobileSidebarOpen,
   onMobileSidebarClose,
 }: LayoutProps) {
-  const { terminalPosition, treePaneVisible, previewPaneVisible, terminalPaneVisible } = useLayout();
+  const { terminalPosition, treePaneVisible, previewPaneVisible, terminalPaneVisible, activeWorktreeId } = useLayout();
 
   const mainContentRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(1200);
@@ -157,8 +157,24 @@ export function Layout({
   const vPreview = previewPaneVisible;
   const vTerm = terminalPaneVisible;
 
-  const terminalInSplit = vTerm && paneFullscreen !== "terminal";
+  const terminalInSplit = vTerm;
   const previewInSplit = vPreview && paneFullscreen !== "preview";
+  const wt = activeWorktreeId ?? "__none__";
+
+  // Stable wrapper for the terminal — className/style swap between normal and
+  // fullscreen without changing the element type, so TerminalPane never remounts.
+  // position:fixed escapes Panel's overflow:hidden and covers the viewport.
+  const terminalFullscreen = paneFullscreen === "terminal";
+  const terminalWrapClass = terminalFullscreen ? "pane-viewport-fullscreen" : undefined;
+  const terminalWrapStyle = terminalFullscreen ? undefined : { flex: 1, height: "100%", minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" } as const;
+  const terminalPlacement: PaneFullscreenPlacement = terminalFullscreen ? "viewport" : "panel";
+  function terminalWrapper() {
+    return (
+      <div className={terminalWrapClass} style={terminalWrapStyle}>
+        {wrapTerminal(ideTerminalPane, terminalPlacement)}
+      </div>
+    );
+  }
 
   function wrapTerminal(node: ReactNode, placement: PaneFullscreenPlacement = "panel") {
     return <PaneFullscreenChrome placement={placement}>{node}</PaneFullscreenChrome>;
@@ -174,7 +190,7 @@ export function Layout({
   if (terminalInSplit) {
     leftSplitNodes.push(
       <Panel key="term" defaultSize={33.4} minSize={18}>
-        {wrapTerminal(ideTerminalPane)}
+        {terminalWrapper()}
       </Panel>,
     );
   }
@@ -197,7 +213,7 @@ export function Layout({
     leftSplitNodes.length === 0 ? (
       <PanesAllHidden />
     ) : (
-      <PanelGroup direction="horizontal" style={{ width: "100%", height: "100%" }}>
+      <PanelGroup direction="horizontal" autoSaveId={`vs-ide-left-${wt}-${+terminalInSplit}${+previewInSplit}${+vTree}`} style={{ width: "100%", height: "100%" }}>
         {leftSplitNodes.flatMap((panel, i) =>
           i === 0 ? [panel] : [<PanelResizeHandle key={`sep-${i}`} className="resize-handle resize-handle--col" />, panel],
         )}
@@ -216,7 +232,7 @@ export function Layout({
   if (vPreview && vTree) {
     if (previewInSplit) {
       bottomTop = (
-        <PanelGroup direction="horizontal" style={{ width: "100%", height: "100%" }}>
+        <PanelGroup direction="horizontal" autoSaveId={`vs-ide-bottom-pt-${wt}-${+previewInSplit}${+vTree}`} style={{ width: "100%", height: "100%" }}>
           <Panel defaultSize={72} minSize={30}>
             {wrapPreview(idePreviewPane)}
           </Panel>
@@ -243,18 +259,18 @@ export function Layout({
 
   const bottomSplitInner =
     vTerm && topRowVisible ? (
-      <PanelGroup direction="vertical" style={{ width: "100%", height: "100%" }}>
+      <PanelGroup direction="vertical" autoSaveId={`vs-ide-bottom-v-${wt}-${+vPreview}${+vTree}`} style={{ width: "100%", height: "100%" }}>
         <Panel defaultSize={68} minSize={28}>
           {bottomTopRow}
         </Panel>
         <PanelResizeHandle className="resize-handle resize-handle--row" />
         <Panel defaultSize={32} minSize={18}>
-          {terminalInSplit ? wrapTerminal(ideTerminalPane) : <div className="pane-split-placeholder" aria-hidden />}
+          {terminalInSplit ? terminalWrapper() : <div className="pane-split-placeholder" aria-hidden />}
         </Panel>
       </PanelGroup>
     ) : vTerm && !topRowVisible ? (
       terminalInSplit ? (
-        wrapTerminal(ideTerminalPane)
+        terminalWrapper()
       ) : (
         <div className="pane-split-placeholder pane-split-placeholder--grow" aria-hidden />
       )
@@ -273,11 +289,7 @@ export function Layout({
   const ideMainColumn = terminalPosition === "left" ? leftSplit : bottomSplit;
 
   const fullscreenOverlay =
-    paneFullscreen === "terminal" ? (
-      <div className="pane-viewport-fullscreen" key="viewport-fs">
-        {wrapTerminal(ideTerminalPane, "viewport")}
-      </div>
-    ) : paneFullscreen === "preview" ? (
+    paneFullscreen === "preview" ? (
       <div className="pane-viewport-fullscreen" key="viewport-fs">
         {wrapPreview(idePreviewPane, "viewport")}
       </div>

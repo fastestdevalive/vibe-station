@@ -1,21 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/api";
 import type { ConnectionState } from "@/api/client";
 
-/**
- * Subtle connection indicator. Renders nothing while online; shows a small
- * "Reconnecting…" pill while the WS is reconnecting. Reconnect happens
- * automatically in the api client (exponential backoff up to 15s).
- */
 export function ConnectionStatus() {
   const [state, setState] = useState<ConnectionState>(() => api.getConnectionState());
-  /** Brief "Connected" flash after returning to online from offline. */
   const [showRecovered, setShowRecovered] = useState(false);
+  const hasEverBeenOnline = useRef(false);
 
   useEffect(() => {
     let prev: ConnectionState = api.getConnectionState();
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = api.subscribeConnection((s) => {
+      if (s === "online") hasEverBeenOnline.current = true;
       setState(s);
       if (s === "online" && (prev === "offline" || prev === "connecting")) {
         setShowRecovered(true);
@@ -35,7 +31,7 @@ export function ConnectionStatus() {
   const label =
     state === "online"
       ? "Connected"
-      : state === "connecting"
+      : state === "connecting" || !hasEverBeenOnline.current
         ? "Connecting…"
         : "Reconnecting…";
 
