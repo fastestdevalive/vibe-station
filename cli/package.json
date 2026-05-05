@@ -7,10 +7,10 @@
     "vst": "./dist/main.js"
   },
   "scripts": {
-    "build": "cd ../daemon && tsc && cd ../cli && tsc && node -e \"require('fs').cpSync('../daemon/src/assets','dist/daemon/assets',{recursive:true})\"",
-    "dev": "tsc --noEmit --watch",
+    "build": "tsc -b && node -e \"require('fs').cpSync('../daemon/src/assets','dist/daemon/assets',{recursive:true})\"",
+    "dev": "tsc -b --watch",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b --noEmit",
     "lint": "eslint --config ../eslint.config.mjs src",
     "test": "vitest run",
     "test:watch": "vitest"

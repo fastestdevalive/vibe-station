@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { FastifyInstance } from "fastify";
 
 export function registerHealthRoute(app: FastifyInstance, startedAt: number): void {

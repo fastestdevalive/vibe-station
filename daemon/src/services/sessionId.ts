@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Session and worktree identity reservation.
  * Mirrors AO's reserveNextSessionIdentity (ao:packages/core/src/session-manager.ts:790-828).

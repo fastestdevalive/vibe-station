@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { EventEmitter } from "node:events";
 
 export interface SessionStream extends EventEmitter {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * OpenCode CLI plugin.
  * Implements AgentPlugin interface for the `opencode` interactive agent.

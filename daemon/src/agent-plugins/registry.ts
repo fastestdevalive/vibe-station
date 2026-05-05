@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Agent plugin registry.
  * Resolves concrete AgentPlugin implementations by CLI name.

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Boot-time recovery for sessions stuck at `not_started` after an unclean daemon restart.
  */

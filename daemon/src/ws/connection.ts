@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { WebSocket } from "@fastify/websocket";
 import type { ServerMessage } from "./protocol.js";
 import type { SessionStream } from "./streams/sessionStream.js";

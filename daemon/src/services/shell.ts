@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Shell-quoting utility. No external dependencies.
  */

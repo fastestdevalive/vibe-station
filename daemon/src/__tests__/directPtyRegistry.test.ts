@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, it, expect, beforeEach } from "vitest";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import type { SessionStream } from "../ws/streams/sessionStream.js";

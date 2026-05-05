@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { watch, type FSWatcher } from "chokidar";
 import ignore from "ignore";
 import { readFileSync } from "node:fs";

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { execSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { spawn as ptySpawn, type IPty } from "node-pty";
@@ -38,7 +37,7 @@ import type { SessionStream } from "./sessionStream.js";
  * The subscriberId parameter is ignored because each TmuxOutputStream is owned by
  * one WSConnection, not shared across subscribers.
  */
-export class TmuxOutputStream extends (EventEmitter as any) implements SessionStream {
+export class TmuxOutputStream extends EventEmitter implements SessionStream {
   private tmuxName: string;
   private pty: IPty | null = null;
   private closed = false;

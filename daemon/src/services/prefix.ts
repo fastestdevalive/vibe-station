@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Generate a 2-6 char project prefix from a project id.
  * Mirrors AO's generateSessionPrefix from ao:packages/core/src/paths.ts:64-87.

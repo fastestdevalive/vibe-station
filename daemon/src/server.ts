@@ -1,4 +1,3 @@
-// @ts-nocheck
 import Fastify from "fastify";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";

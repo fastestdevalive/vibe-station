@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Convert a display name into a slug suitable for use as a project id.
  * Rules: lowercase, replace spaces/special chars with hyphens, collapse consecutive hyphens,

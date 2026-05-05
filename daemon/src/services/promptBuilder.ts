@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * 3-layer prompt builder per HIGH-LEVEL-DESIGN.md §4.
  *

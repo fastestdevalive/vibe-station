@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { execSync } from "node:child_process";
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";

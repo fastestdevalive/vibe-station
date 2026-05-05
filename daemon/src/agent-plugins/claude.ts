@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Claude Code CLI plugin.
  * Implements AgentPlugin interface for the `claude` command-line agent.

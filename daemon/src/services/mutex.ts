@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Per-project mutex.
  * Serializes all writes for a given project id.

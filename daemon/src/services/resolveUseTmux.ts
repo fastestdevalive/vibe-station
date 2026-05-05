@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Coerce undefined/absent useTmux values to true for back-compat.
  *

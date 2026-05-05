@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Claude chat session restore helpers.
  * Discovers and restores prior Claude Code chat sessions by UUID.

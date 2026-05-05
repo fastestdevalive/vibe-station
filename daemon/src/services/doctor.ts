@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * System health checks for `vst doctor`.
  * Checks:

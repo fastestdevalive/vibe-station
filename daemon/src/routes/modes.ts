@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Mode routes — CRUD for agent modes.
  * Stored in ~/.vibe-station/modes.json (max 10 modes).

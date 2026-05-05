@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";

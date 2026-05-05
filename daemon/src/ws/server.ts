@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import fastifyWebsocket from "@fastify/websocket";

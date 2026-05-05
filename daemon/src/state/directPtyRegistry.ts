@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Registry of active direct-PTY streams.
  *
