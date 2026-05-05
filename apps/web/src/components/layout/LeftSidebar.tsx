@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, FolderTree, Moon, MoreHorizontal, Plus, Slid
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -11,8 +12,6 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
-import { ModesMenuDialog } from "@/components/dialogs/ModesMenuDialog";
-import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
 function abbrevLabel(name: string): string {
@@ -54,6 +53,8 @@ interface LeftSidebarProps {
 }
 
 export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: LeftSidebarProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { theme, toggleTheme, toggleFont } = useTheme();
   const [projects, setProjects] = useState<Project[]>([]);
   const [worktreeMap, setWorktreeMap] = useState<Record<string, Worktree[]>>({});
@@ -75,8 +76,6 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   const toggleInactiveWorktreesFilter = useWorkspaceStore((s) => s.toggleInactiveWorktreesFilter);
 
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
-  const [modesOpen, setModesOpen] = useState(false);
-  const [newModeOpen, setNewModeOpen] = useState(false);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const refreshProjects = useCallback(async () => {
@@ -391,10 +390,10 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
       <div className="left-sidebar__footer">
         <button
           type="button"
-          className="icon-btn"
-          title="Modes — orchestrator modes and presets"
-          aria-label="Modes"
-          onClick={() => setModesOpen(true)}
+          className={location.pathname === "/settings" ? "icon-btn icon-btn--active" : "icon-btn"}
+          title="Settings"
+          aria-label="Settings"
+          onClick={() => navigate("/settings")}
         >
           <SlidersHorizontal size={16} />
         </button>
@@ -428,23 +427,6 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
           onCreated={() => void refreshProjects()}
         />
       ) : null}
-
-      <ModesMenuDialog
-        open={modesOpen}
-        onClose={() => setModesOpen(false)}
-        api={api}
-        onNewMode={() => {
-          setModesOpen(false);
-          setNewModeOpen(true);
-        }}
-      />
-
-      <NewModeDialog
-        open={newModeOpen}
-        onClose={() => setNewModeOpen(false)}
-        api={api}
-        onSaved={() => void refreshProjects()}
-      />
 
       <ConfirmDialog
         open={pendingDelete !== null}

@@ -1,5 +1,6 @@
 import type {
   ChangedPathEntry,
+  CliId,
   CreateModeBody,
   CreateSessionBody,
   CreateWorktreeBody,
@@ -294,6 +295,13 @@ export function createClientApi() {
       const root = baseUrl();
       const res = await fetch(`${root}/modes`);
       return parseJson<Mode[]>(res);
+    },
+
+    async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
+      const root = baseUrl();
+      const q = new URLSearchParams({ cli });
+      const res = await fetch(`${root}/cli-models?${q}`);
+      return parseJson<{ models: string[]; error?: string }>(res);
     },
 
     async createMode(body: CreateModeBody): Promise<Mode> {

@@ -11,7 +11,7 @@ import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { cleanupSessionDataDir, worktreePath } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
-import { resolvePlugin } from "../plugins/registry.js";
+import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
 
@@ -81,6 +81,7 @@ async function runAgentSpawnJob(opts: {
       daemonPort,
       systemPrompt: builtPrompt.systemPrompt,
       taskPrompt: builtPrompt.taskPrompt,
+      model: mode.model,
     });
     session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({
@@ -341,6 +342,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           session,
           project,
           worktree,
+          model: mode.model,
         });
 
         if (restoreArgv) {
@@ -353,7 +355,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             await plugin.setupWorkspaceHooks(wtPath);
           }
 
-          const launchCfg = { project, worktree, session, daemonPort: 0 };
+          const launchCfg = { project, worktree, session, daemonPort: 0, ...(mode.model ? { model: mode.model } : {}) };
           const env: Record<string, string> = {
             VST_SESSION: session.id,
             VST_SPAWN_TOKEN: session.id,
@@ -399,6 +401,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             daemonPort,
             systemPrompt: builtPrompt.systemPrompt,
             taskPrompt: builtPrompt.taskPrompt,
+            model: mode.model,
           });
         }
       } catch (err) {

@@ -114,13 +114,13 @@ describe("LeftSidebar", () => {
     });
   });
 
-  it("Modes is an icon button with accessible name", async () => {
+  it("Settings is an icon button with accessible name", async () => {
     render(
       <MemoryRouter>
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
     await screen.findByText("Proj A");
-    expect(screen.getByRole("button", { name: /^Modes$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Settings$/i })).toBeInTheDocument();
   });
 });

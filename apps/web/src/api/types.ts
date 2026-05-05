@@ -52,6 +52,8 @@ export interface Mode {
   cli: CliId;
   context: string;
   presetId?: string;
+  /** Passed as CLI `--model` / `-m` when set; omitted uses CLI default. */
+  model?: string;
 }
 
 export interface TreeEntry {
@@ -195,12 +197,14 @@ export interface CreateModeBody {
   cli: CliId;
   context: string;
   presetId?: string;
+  model?: string;
 }
 
 export interface UpdateModeBody {
   name?: string;
   cli?: CliId;
   context?: string;
+  model?: string;
 }
 
 export interface TerminalApi {

@@ -55,11 +55,18 @@ export interface AgentPlugin {
     project: ProjectRecord;
     worktree: WorktreeRecord;
   }): Promise<string | null>;
+  /**
+   * Return the list of models available for this CLI.
+   * Each plugin owns its own discovery strategy — callers never branch on CLI name.
+   */
+  listModels(): Promise<{ models: string[]; error?: string }>;
   /** Return argv for resuming a prior session, or null for fresh launch. */
   getRestoreCommand?(args: {
     session: SessionRecord;
     project: ProjectRecord;
     worktree: WorktreeRecord;
+    /** Per-mode model override — plugin should include the model flag in the returned argv. */
+    model?: string;
   }): Promise<string[] | null>;
 }
 
@@ -68,6 +75,8 @@ export interface LaunchConfig {
   worktree: WorktreeRecord;
   session: SessionRecord;
   daemonPort: number;
+  /** Per-mode model override passed to the agent CLI when set. */
+  model?: string;
 }
 
 export interface SpawnOptions {
@@ -78,6 +87,7 @@ export interface SpawnOptions {
   daemonPort: number;
   systemPrompt: string;
   taskPrompt?: string;
+  model?: string;
 }
 
 export interface SpawnSessionFromArgvOptions {
@@ -143,7 +153,7 @@ export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): P
  * Branches on session.useTmux.
  */
 export async function spawnSession(opts: SpawnOptions): Promise<void> {
-  const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt } = opts;
+  const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
   const wtPath = getWorktreePath(project.id, worktree.id);
 
   const launchCfg: LaunchConfig = {
@@ -151,6 +161,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
     worktree,
     session,
     daemonPort,
+    ...(model ? { model } : {}),
   };
 
   // Steps 2.5 + 3: provideChatId + setupWorkspaceHooks in parallel (both pre-spawn, independent)

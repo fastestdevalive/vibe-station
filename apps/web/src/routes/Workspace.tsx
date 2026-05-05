@@ -10,6 +10,7 @@ import { TerminalPane } from "@/components/layout/TerminalPane";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { FileTreeSidebar } from "@/components/layout/FileTreeSidebar";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
+import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
@@ -20,6 +21,8 @@ export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
   const isDashboard = location.pathname === "/";
+  const isSettings = location.pathname === "/settings";
+  const isFullWidthPane = isDashboard || isSettings;
 
   const [bundle, setBundle] = useState<{
     projects: Project[];
@@ -39,8 +42,8 @@ export function Workspace() {
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
-  useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions, isDashboard);
-  useWorkspaceKeyboardShortcuts(setQuickOpen, !isDashboard);
+  useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions, isFullWidthPane);
+  useWorkspaceKeyboardShortcuts(setQuickOpen, !isFullWidthPane);
 
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
   // even before the first session subscription. The api client owns reconnects.
@@ -83,13 +86,13 @@ export function Workspace() {
 
   return (
     <div className="workspace-route">
-      {!isDashboard ? (
+      {!isFullWidthPane ? (
         <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
       ) : null}
       <Layout
         topBar={
           <TopBar
-            layoutMode={isDashboard ? "dashboard" : "workspace"}
+            layoutMode={isFullWidthPane ? "dashboard" : "workspace"}
             projects={bundle.projects}
             worktrees={bundle.worktrees}
             sessions={bundle.sessions}
@@ -110,16 +113,18 @@ export function Workspace() {
             collapsed={!isMobile && leftSidebarCollapsed}
             onWorktreeSelected={() => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard) navigate("/worktree");
+              if (isDashboard || isSettings) navigate("/worktree");
             }}
           />
         }
-        dashboardPane={isDashboard ? <DashboardPanel api={api} /> : undefined}
+        dashboardPane={
+          isDashboard ? <DashboardPanel api={api} /> : isSettings ? <SettingsPanel api={api} /> : undefined
+        }
         leftColumnPx={leftColumnPx}
         isMobile={isMobile}
         mobileSidebarOpen={mobileSidebarOpen}
         onMobileSidebarClose={() => setMobileSidebarOpen(false)}
-        {...(isDashboard
+        {...(isFullWidthPane
           ? {}
           : {
               terminalPane: terminalColumn,
