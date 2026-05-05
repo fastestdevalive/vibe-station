@@ -58,11 +58,11 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
             role="tablist"
             style={{
               display: "inline-flex",
-              gap: "var(--space-1)",
+              gap: "var(--space-2)",
               background: "var(--bg-card)",
               border: "var(--border-width) solid var(--border-default)",
               borderRadius: "var(--radius-lg)",
-              padding: "var(--space-1)",
+              padding: "var(--space-2)",
             }}
           >
             {sections.map((section) => (
@@ -78,14 +78,14 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
                   border: "none",
                   background: "transparent",
                   borderRadius: "var(--radius-md)",
-                  padding: "var(--space-2) var(--space-4)",
+                  padding: "var(--space-3) var(--space-5)",
                   cursor: "pointer",
                   font: "inherit",
                   fontSize: "var(--font-size-sm)",
                   fontWeight: "var(--font-weight-medium)",
                   color: activeTab === section.id ? "var(--fg-primary)" : "var(--fg-muted)",
                   transition: "color 150ms ease",
-                  minHeight: 36,
+                  minHeight: 40,
                   whiteSpace: "nowrap",
                 }}
               >
