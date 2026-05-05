@@ -63,6 +63,9 @@ export function createClaudePlugin(): AgentPlugin {
       // ARG_MAX limits for long prompts. spawn.ts wraps this in `sh -lc <shellLine>`.
       const filePart = `"$(cat ${sq(prompt.systemPromptFile)})"`;
       let shellLine = `claude --dangerously-skip-permissions --system-prompt ${filePart}`;
+      if (prompt.launchCfg.model) {
+        shellLine += ` --model ${sq(prompt.launchCfg.model)}`;
+      }
       if (prompt.taskPrompt) {
         shellLine += ` ${sq(prompt.taskPrompt)}`;
       }

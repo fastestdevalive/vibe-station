@@ -35,6 +35,9 @@ export function createCursorPlugin(): AgentPlugin {
       if (cfg.session?.agentChatId) {
         argv.push("--resume", cfg.session.agentChatId);
       }
+      if (cfg.model) {
+        argv.push("--model", cfg.model);
+      }
       argv.push("--workspace", wtPath, "--force", "--sandbox", "disabled", "--approve-mcps");
       return argv;
     },
@@ -69,6 +72,9 @@ export function createCursorPlugin(): AgentPlugin {
       const parts: string[] = ["cursor-agent"];
       if (prompt.launchCfg.session?.agentChatId) {
         parts.push(`--resume ${prompt.launchCfg.session.agentChatId}`);
+      }
+      if (prompt.launchCfg.model) {
+        parts.push(`--model ${sq(prompt.launchCfg.model)}`);
       }
       parts.push(
         `--workspace ${sq(wtPath)}`,
