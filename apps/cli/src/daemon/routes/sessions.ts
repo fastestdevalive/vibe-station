@@ -355,7 +355,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             await plugin.setupWorkspaceHooks(wtPath);
           }
 
-          const launchCfg = { project, worktree, session, daemonPort: 0 };
+          const launchCfg = { project, worktree, session, daemonPort: 0, ...(mode.model ? { model: mode.model } : {}) };
           const env: Record<string, string> = {
             VST_SESSION: session.id,
             VST_SPAWN_TOKEN: session.id,
