@@ -1,5 +1,5 @@
 import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope } from "@/api/types";
 import { ApiError } from "@/api/errors";
@@ -94,6 +94,37 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
       cancelled = true;
     };
   }, [api, worktreeId, path, scope, lastChanged]);
+
+  // ── Scroll persistence ────────────────────────────────────────────────
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Kept current by onScroll — avoids reading bodyRef.current in cleanup
+  // (React clears refs before running effect cleanups when a node unmounts).
+  const scrollTopRef = useRef(0);
+  const pendingScrollRef = useRef<number | null>(null);
+  const scrollKey = worktreeId && path ? `${worktreeId}:${path}` : null;
+
+  useEffect(() => {
+    if (scrollKey) {
+      pendingScrollRef.current = useWorkspaceStore.getState().fileScrollByKey[scrollKey] ?? 0;
+    }
+    return () => {
+      if (worktreeId && path) {
+        useWorkspaceStore.getState().setFileScroll(worktreeId, path, scrollTopRef.current);
+      }
+    };
+  }, [scrollKey, worktreeId, path]);
+
+  useEffect(() => {
+    if (pendingScrollRef.current === null) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    const target = pendingScrollRef.current;
+    pendingScrollRef.current = null;
+    requestAnimationFrame(() => {
+      if (bodyRef.current) bodyRef.current.scrollTop = target;
+    });
+  }, [fileBody, diffBody]);
+  // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
     if (scope !== "local" && scope !== "branch") return null;
@@ -265,7 +296,12 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   return (
     <div className="pane pane-stack">
       {header}
-      <div className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`} style={previewScaleStyle}>
+      <div
+        ref={bodyRef}
+        onScroll={() => { scrollTopRef.current = bodyRef.current?.scrollTop ?? scrollTopRef.current; }}
+        className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`}
+        style={previewScaleStyle}
+      >
         {body}
       </div>
     </div>

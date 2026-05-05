@@ -27,6 +27,10 @@ export interface WorkspaceState {
   activeWorktreeId: string | null;
   activeSessionId: string | null;
   activeFilePath: string | null;
+  /** Last opened file path per worktree (persisted). */
+  lastFileByWorktree: Record<string, string>;
+  /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted). */
+  fileScrollByKey: Record<string, number>;
   showDotFiles: boolean;
   /** Live session.state mirror for WS + list payloads */
   sessionStates: Record<string, SessionState>;
@@ -54,6 +58,7 @@ export interface WorkspaceState {
   setActiveWorktree: (projectId: string, worktreeId: string, sessions?: Session[]) => void;
   setActiveSession: (sessionId: string) => void;
   setActiveFile: (path: string | null) => void;
+  setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   bumpPreviewFont: (delta: number) => void;
   bumpTerminalFont: (delta: number) => void;
@@ -86,6 +91,8 @@ const initial = {
   activeWorktreeId: null as string | null,
   activeSessionId: null as string | null,
   activeFilePath: null as string | null,
+  lastFileByWorktree: {} as Record<string, string>,
+  fileScrollByKey: {} as Record<string, number>,
   showDotFiles: true,
   sessionStates: {} as Record<string, SessionState>,
   lastSessionByWorktree: {} as Record<string, string>,
@@ -162,7 +169,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             activeProjectId: projectId,
             activeWorktreeId: worktreeId,
             activeSessionId: defaultSessionId,
-            activeFilePath: null,
+            activeFilePath: s.lastFileByWorktree[worktreeId] ?? null,
           };
         }),
       setActiveSession: (sessionId) =>
@@ -174,7 +181,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : s.lastSessionByWorktree;
           return { activeSessionId: sessionId, lastSessionByWorktree: nextLast };
         }),
-      setActiveFile: (path) => set({ activeFilePath: path }),
+      setActiveFile: (path) =>
+        set((s) => {
+          const wt = s.activeWorktreeId;
+          const nextLastFile =
+            path && wt ? { ...s.lastFileByWorktree, [wt]: path } : s.lastFileByWorktree;
+          return { activeFilePath: path, lastFileByWorktree: nextLastFile };
+        }),
+      setFileScroll: (worktreeId, filePath, scrollTop) =>
+        set((s) => ({
+          fileScrollByKey: { ...s.fileScrollByKey, [`${worktreeId}:${filePath}`]: scrollTop },
+        })),
       setDiffScopeForWorktree: (worktreeId, scope) =>
         set((s) => ({
           diffScopeByWorktree: { ...s.diffScopeByWorktree, [worktreeId]: scope },
@@ -231,7 +248,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     }),
     {
       name: "vibestation:workspace",
-      version: 3,
+      version: 4,
       migrate: (persisted) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -239,6 +256,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (!p.layoutByWorktree) {
           return { ...p, layoutByWorktree: {} };
         }
+        // v3 → v4: new fields default to {} / null; no structural migration needed
         return persisted;
       },
       partialize: (s) => ({
@@ -246,6 +264,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         activeProjectId: s.activeProjectId,
         activeWorktreeId: s.activeWorktreeId,
         activeSessionId: s.activeSessionId,
+        activeFilePath: s.activeFilePath,
+        lastFileByWorktree: s.lastFileByWorktree,
+        fileScrollByKey: s.fileScrollByKey,
         showDotFiles: s.showDotFiles,
         sessionStates: s.sessionStates,
         lastSessionByWorktree: s.lastSessionByWorktree,

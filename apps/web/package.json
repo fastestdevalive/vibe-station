@@ -24,7 +24,7 @@
     "mermaid": "^11.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-resizable-panels": "^2.1.0",
+    "react-resizable-panels": "^3.0.6",
     "react-router-dom": "^6.28.0",
     "shiki": "^3.0.0",
     "zustand": "^5.0.0",
