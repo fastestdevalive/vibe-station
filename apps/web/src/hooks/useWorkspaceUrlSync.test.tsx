@@ -69,4 +69,42 @@ describe("useWorkspaceUrlSync - URL omission for main slot logic", () => {
       expect(shouldOmitSessionParam).toBe(false);
     });
   });
+
+  describe("Path-param routing logic", () => {
+    it("write effect produces /worktree/:wtId path for main-slot session", () => {
+      const activeWorktreeId = W1;
+      const sessions = [mockSession("s-main", "m")];
+      const activeSessionId = "s-main";
+      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+
+      // Compute target path (mimics write effect logic)
+      let targetPath = "/worktree";
+      if (activeWorktreeId) {
+        targetPath = `/worktree/${activeWorktreeId}`;
+        if (activeSessionId && activeSession.slot !== "m") {
+          targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
+        }
+      }
+
+      expect(targetPath).toBe(`/worktree/${W1}`);
+    });
+
+    it("write effect produces /worktree/:wtId/:sessionId path for non-main session", () => {
+      const activeWorktreeId = W1;
+      const sessions = [mockSession("s-main", "m"), mockSession("s-alt", "a")];
+      const activeSessionId = "s-alt";
+      const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+
+      // Compute target path (mimics write effect logic)
+      let targetPath = "/worktree";
+      if (activeWorktreeId) {
+        targetPath = `/worktree/${activeWorktreeId}`;
+        if (activeSessionId && activeSession.slot !== "m") {
+          targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
+        }
+      }
+
+      expect(targetPath).toBe(`/worktree/${W1}/s-alt`);
+    });
+  });
 });

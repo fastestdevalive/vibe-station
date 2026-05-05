@@ -49,7 +49,7 @@ interface LeftSidebarProps {
   api: ApiInstance;
   /** Narrow desktop rail: abbreviated labels + compact controls */
   collapsed?: boolean;
-  onWorktreeSelected?: () => void;
+  onWorktreeSelected?: (wtId: string) => void;
 }
 
 export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: LeftSidebarProps) {
@@ -243,11 +243,11 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   function selectWorktree(projectId: string, w: Worktree) {
     // Early-return if re-tapping the same worktree with an active session (defense-in-depth)
     if (w.id === activeWorktreeId && activeSessionId != null) {
-      onWorktreeSelected?.();
+      onWorktreeSelected?.(w.id);
       return;
     }
     setActiveWorktree(projectId, w.id, sessionMap[w.id]);
-    onWorktreeSelected?.();
+    onWorktreeSelected?.(w.id);
   }
 
   return (
