@@ -53,10 +53,11 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
             padding: "var(--space-3) var(--space-3) 0",
           }}
         >
+          {/* inline-flex so the pill shrinks to its content, not full row width */}
           <div
             role="tablist"
             style={{
-              display: "flex",
+              display: "inline-flex",
               gap: "var(--space-1)",
               background: "var(--bg-card)",
               border: "var(--border-width) solid var(--border-default)",
@@ -73,11 +74,11 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
                 onClick={() => setActiveTab(section.id)}
                 style={{
                   position: "relative",
-                  flex: 1,
+                  flex: "none",
                   border: "none",
                   background: "transparent",
                   borderRadius: "var(--radius-md)",
-                  padding: "var(--space-2) var(--space-3)",
+                  padding: "var(--space-2) var(--space-4)",
                   cursor: "pointer",
                   font: "inherit",
                   fontSize: "var(--font-size-sm)",
@@ -85,6 +86,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
                   color: activeTab === section.id ? "var(--fg-primary)" : "var(--fg-muted)",
                   transition: "color 150ms ease",
                   minHeight: 36,
+                  whiteSpace: "nowrap",
                 }}
               >
                 {activeTab === section.id && (
