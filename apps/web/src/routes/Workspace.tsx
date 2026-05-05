@@ -113,7 +113,7 @@ export function Workspace() {
             collapsed={!isMobile && leftSidebarCollapsed}
             onWorktreeSelected={() => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard) navigate("/worktree");
+              if (isDashboard || isSettings) navigate("/worktree");
             }}
           />
         }
