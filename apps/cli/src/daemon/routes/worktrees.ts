@@ -16,7 +16,7 @@ import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { serializeSession } from "./sessions.js";
-import { resolvePlugin } from "../plugins/registry.js";
+import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";

@@ -45,39 +45,39 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
 describe("Agent plugins", () => {
   describe("Plugin resolution", () => {
     it("T10.1 — resolvePlugin('claude') returns a plugin with name === 'claude'", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       expect(plugin.name).toBe("claude");
     });
 
     it("T10.2 — resolvePlugin('cursor') returns name === 'cursor'", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("cursor");
       expect(plugin.name).toBe("cursor");
     });
 
     it("T10.3 — resolvePlugin('opencode') returns name === 'opencode'", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       expect(plugin.name).toBe("opencode");
     });
 
     it("T10.4 — resolvePlugin('unknown') throws", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       expect(() => resolvePlugin("unknown" as any)).toThrow();
     });
   });
 
   describe("Claude plugin", () => {
     it("T10.5 — getLaunchCommand() returns argv starting with 'claude'", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const cmd = plugin.getLaunchCommand({} as any);
       expect(cmd[0]).toBe("claude");
     });
 
     it("T10.6 — composeLaunchPrompt with both system + task: useShell=true, shellLine contains --dangerously-skip-permissions, $(cat ...), task; postLaunchInput is undefined", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
@@ -97,7 +97,7 @@ describe("Agent plugins", () => {
     });
 
     it("T10.7 — composeLaunchPrompt with no task: useShell=true, shellLine has --dangerously-skip-permissions and $(cat ...) only", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
@@ -114,7 +114,7 @@ describe("Agent plugins", () => {
     });
 
     it("T10.10 — getEnvironment() includes CLAUDECODE: '1'", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const env = plugin.getEnvironment({} as any);
       expect(env.CLAUDECODE).toBe("1");
@@ -122,7 +122,7 @@ describe("Agent plugins", () => {
     });
 
     it("T10.11 — getReadySignal() has sentinel: '> ' and fallbackMs >= 10_000", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
       const signal = plugin.getReadySignal();
       expect(signal.sentinel).toBe("> ");
@@ -130,8 +130,8 @@ describe("Agent plugins", () => {
     });
 
     it("Phase 3 — T3.T3 — getRestoreCommand returns argv [claude, --resume, <uuid>, --dangerously-skip-permissions] when uuid exists", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
-      const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
       // Create a temporary test to simulate a working findLatestChatUuid
       // We'll test just the return shape here; full integration test in claudeRestore.test.ts
@@ -154,7 +154,7 @@ describe("Agent plugins", () => {
 
   describe("Cursor plugin", () => {
     it("T10.8 — composeLaunchPrompt: useShell=true; shellLine contains cursor-agent, $(cat ...), task; postLaunchInput is undefined", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("cursor");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
@@ -178,7 +178,7 @@ describe("Agent plugins", () => {
     });
 
     it("Phase 1 — T1.T1 — getLaunchCommand returns argv containing --force, --sandbox, disabled, --approve-mcps; NOT --print", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("cursor");
       const cmd = plugin.getLaunchCommand({
         project: { id: "test-proj" },
@@ -194,7 +194,7 @@ describe("Agent plugins", () => {
 
   describe("OpenCode plugin", () => {
     it("T10.9 — composeLaunchPrompt: system prompt NOT in postLaunchInput; task prompt IS; VSTPRMT needle present", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       const result = plugin.composeLaunchPrompt({
         systemPrompt: "You are helpful",
@@ -216,7 +216,7 @@ describe("Agent plugins", () => {
     });
 
     it("Phase 5 — T5.T1 — getRestoreCommand with agentChatId='abc' returns [opencode, --session, abc]", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       const result = await plugin.getRestoreCommand?.({
         session: { agentChatId: "abc" },
@@ -227,7 +227,7 @@ describe("Agent plugins", () => {
     });
 
     it("Phase 5 — T5.T2 — getRestoreCommand without agentChatId returns null", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("opencode");
       const result = await plugin.getRestoreCommand?.({
         session: {},
@@ -352,7 +352,7 @@ describe("Agent plugins", () => {
     });
 
     it("Phase 5 — T5.T4 (contract) — every registered plugin (claude, cursor, opencode) defines getRestoreCommand", async () => {
-      const { resolvePlugin } = await import("../plugins/registry.js");
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
 
       const pluginNames = ["claude", "cursor", "opencode"] as const;
 
@@ -386,7 +386,7 @@ describe("Claude plugin — chat-id capture", () => {
   });
 
   it("2.T1 — setupWorkspaceHooks creates .claude/vibe-recorder.sh and .claude/settings.json", async () => {
-    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
     const plugin = createClaudePlugin();
     await plugin.setupWorkspaceHooks!(wtDir);
 
@@ -423,7 +423,7 @@ describe("Claude plugin — chat-id capture", () => {
     };
     await writeFile(join(claudeDir, "settings.json"), JSON.stringify(existingSettings, null, 2), "utf8");
 
-    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
     const plugin = createClaudePlugin();
     await plugin.setupWorkspaceHooks!(wtDir);
 
@@ -438,7 +438,7 @@ describe("Claude plugin — chat-id capture", () => {
   });
 
   it("2.T3 — setupWorkspaceHooks is idempotent: calling twice does not duplicate the entry", async () => {
-    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
     const plugin = createClaudePlugin();
     await plugin.setupWorkspaceHooks!(wtDir);
     await plugin.setupWorkspaceHooks!(wtDir);
@@ -452,7 +452,7 @@ describe("Claude plugin — chat-id capture", () => {
   });
 
   it("2.T6 — getRestoreCommand with session.agentChatId set → uses it without filesystem call", async () => {
-    const { createClaudePlugin } = await import("../plugins/claude.js");
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
     const plugin = createClaudePlugin();
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "known-uuid" } as any,
@@ -465,7 +465,7 @@ describe("Claude plugin — chat-id capture", () => {
 
 describe("Cursor plugin — chat-id capture", () => {
   it("3.T4 — getLaunchCommand with session.agentChatId → argv contains --resume <id>", async () => {
-    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
     const plugin = createCursorPlugin();
     const cmd = plugin.getLaunchCommand({
       project: { id: "p1" },
@@ -477,7 +477,7 @@ describe("Cursor plugin — chat-id capture", () => {
   });
 
   it("3.T5 — getLaunchCommand without agentChatId → no --resume flag", async () => {
-    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
     const plugin = createCursorPlugin();
     const cmd = plugin.getLaunchCommand({
       project: { id: "p1" },
@@ -488,7 +488,7 @@ describe("Cursor plugin — chat-id capture", () => {
   });
 
   it("3.T6 — getRestoreCommand with agentChatId set → returns resume argv without filesystem call", async () => {
-    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
     const plugin = createCursorPlugin();
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "cursor-uuid-xyz" },
@@ -501,7 +501,7 @@ describe("Cursor plugin — chat-id capture", () => {
   });
 
   it("3.T7 — getRestoreCommand without agentChatId → falls back to findLatestCursorChatId (returns null when no chats)", async () => {
-    const { createCursorPlugin } = await import("../plugins/cursor.js");
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
     const plugin = createCursorPlugin();
     const result = await plugin.getRestoreCommand!({
       session: {},
@@ -524,7 +524,7 @@ describe("OpenCode plugin — chat-id capture", () => {
   });
 
   it("4.T1 — setupWorkspaceHooks creates .opencode/plugins/vst-recorder.ts", async () => {
-    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
     const plugin = createOpencodePlugin();
     await plugin.setupWorkspaceHooks!(wtDir);
 
@@ -535,7 +535,7 @@ describe("OpenCode plugin — chat-id capture", () => {
   });
 
   it("4.T2 — setupWorkspaceHooks is idempotent: no re-write if content unchanged", async () => {
-    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
     const plugin = createOpencodePlugin();
     await plugin.setupWorkspaceHooks!(wtDir);
 
@@ -551,7 +551,7 @@ describe("OpenCode plugin — chat-id capture", () => {
   });
 
   it("4.T5 — getRestoreCommand with agentChatId → [opencode, --session, id]", async () => {
-    const { createOpencodePlugin } = await import("../plugins/opencode.js");
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
     const plugin = createOpencodePlugin();
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "ses_abc" },

@@ -11,7 +11,7 @@ import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { cleanupSessionDataDir, worktreePath } from "../services/paths.js";
 import { notifySession, broadcastAll } from "../broadcaster.js";
-import { resolvePlugin } from "../plugins/registry.js";
+import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
 
