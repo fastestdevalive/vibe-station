@@ -68,6 +68,8 @@ export interface LaunchConfig {
   worktree: WorktreeRecord;
   session: SessionRecord;
   daemonPort: number;
+  /** Per-mode model override passed to the agent CLI when set. */
+  model?: string;
 }
 
 export interface SpawnOptions {
@@ -78,6 +80,7 @@ export interface SpawnOptions {
   daemonPort: number;
   systemPrompt: string;
   taskPrompt?: string;
+  model?: string;
 }
 
 export interface SpawnSessionFromArgvOptions {
@@ -143,7 +146,7 @@ export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): P
  * Branches on session.useTmux.
  */
 export async function spawnSession(opts: SpawnOptions): Promise<void> {
-  const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt } = opts;
+  const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
   const wtPath = getWorktreePath(project.id, worktree.id);
 
   const launchCfg: LaunchConfig = {
@@ -151,6 +154,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
     worktree,
     session,
     daemonPort,
+    ...(model ? { model } : {}),
   };
 
   // Steps 2.5 + 3: provideChatId + setupWorkspaceHooks in parallel (both pre-spawn, independent)

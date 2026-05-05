@@ -27,7 +27,10 @@ export function createOpencodePlugin(): AgentPlugin {
     promptDelivery: "post-launch",
     postSentinelDelayMs: 500,
 
-    getLaunchCommand(): string[] {
+    getLaunchCommand(cfg: LaunchConfig): string[] {
+      if (cfg.model) {
+        return ["opencode", "-m", cfg.model];
+      }
       return ["opencode"];
     },
 

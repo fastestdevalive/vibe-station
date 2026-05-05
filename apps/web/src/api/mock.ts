@@ -1,5 +1,6 @@
 import type {
   ChangedPathEntry,
+  CliId,
   CreateModeBody,
   CreateSessionBody,
   CreateWorktreeBody,
@@ -426,6 +427,25 @@ export function createMockApi() {
       return structuredClone(modes);
     },
 
+    async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
+      if (cli === "claude") {
+        return {
+          models: [
+            "sonnet",
+            "opus",
+            "haiku",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-haiku-4-5",
+          ],
+        };
+      }
+      if (cli === "cursor") {
+        return { models: ["auto", "composer-2-fast", "gpt-5.3-codex"] };
+      }
+      return { models: ["opencode/big-pickle", "opencode/other"] };
+    },
+
     async createMode(body: CreateModeBody): Promise<Mode> {
       if (modes.length >= 10) throw new ApiError("max modes", 400);
       const m: Mode = {
@@ -434,6 +454,7 @@ export function createMockApi() {
         cli: body.cli,
         context: body.context,
         presetId: body.presetId,
+        ...(body.model ? { model: body.model } : {}),
       };
       modes.push(m);
       emit({ type: "mode:created", mode: m });
@@ -446,6 +467,13 @@ export function createMockApi() {
       if (body.name !== undefined) m.name = body.name;
       if (body.cli !== undefined) m.cli = body.cli;
       if (body.context !== undefined) m.context = body.context;
+      if (body.model !== undefined) {
+        if (body.model.trim() === "") {
+          delete m.model;
+        } else {
+          m.model = body.model;
+        }
+      }
       emit({ type: "mode:updated", mode: m });
       return structuredClone(m);
     },

@@ -81,6 +81,7 @@ async function runAgentSpawnJob(opts: {
       daemonPort,
       systemPrompt: builtPrompt.systemPrompt,
       taskPrompt: builtPrompt.taskPrompt,
+      model: mode.model,
     });
     session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({

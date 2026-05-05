@@ -3,6 +3,8 @@
  * Stored in ~/.vibe-station/modes.json (max 10 modes).
  */
 import type { FastifyInstance } from "fastify";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
@@ -11,8 +13,23 @@ import { broadcastAll } from "../broadcaster.js";
 import { getAllProjects } from "../state/project-store.js";
 import type { CliId } from "../types.js";
 
+const execFileAsync = promisify(execFile);
+
 const MAX_MODES = 10;
 const MAX_CONTEXT_LEN = 10_000;
+const MAX_MODEL_LEN = 100;
+const CLI_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const CLAUDE_MODELS_HARDCODED = [
+  "sonnet",
+  "opus",
+  "haiku",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+] as const;
+
+const cliModelCache = new Map<CliId, { models: string[]; fetchedAt: number }>();
 
 interface Mode {
   id: string;
@@ -20,6 +37,7 @@ interface Mode {
   cli: CliId;
   context: string;
   createdAt: string;
+  model?: string;
 }
 
 // In-memory cache for modes
@@ -51,15 +69,84 @@ const CreateModeBody = z.object({
   cli: z.enum(["claude", "cursor", "opencode"]),
   context: z.string().min(1).max(MAX_CONTEXT_LEN),
   presetId: z.string().optional(),
+  model: z.string().max(MAX_MODEL_LEN).optional(),
 });
 
 const UpdateModeBody = z.object({
   name: z.string().min(1).max(64).optional(),
   context: z.string().min(1).max(MAX_CONTEXT_LEN).optional(),
+  cli: z.enum(["claude", "cursor", "opencode"]).optional(),
+  model: z.string().max(MAX_MODEL_LEN).optional(),
 });
 
 function generateId(): string {
   return `mode-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeModelField(model: string | undefined): string | undefined {
+  if (model === undefined) return undefined;
+  const t = model.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+async function fetchCliModelsUncached(cli: CliId): Promise<{ models: string[]; error?: string }> {
+  try {
+    if (cli === "claude") {
+      return { models: [...CLAUDE_MODELS_HARDCODED] };
+    }
+    if (cli === "opencode") {
+      const { stdout } = await execFileAsync("opencode", ["models"], {
+        timeout: 120_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const models = stdout
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      return { models };
+    }
+    if (cli === "cursor") {
+      const { stdout } = await execFileAsync("cursor-agent", ["--list-models"], {
+        timeout: 60_000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      const models = stdout
+        .split("\n")
+        .map((line) => {
+          const tok = line.trim().split(/\s+/)[0];
+          return tok ?? "";
+        })
+        .filter(Boolean);
+      return { models };
+    }
+    return { models: [], error: `Unknown CLI: ${cli}` };
+  } catch (err) {
+    return { models: [], error: String(err) };
+  }
+}
+
+/** Exported for tests; uses TTL cache for non-Claude CLIs. */
+export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
+  if (cli === "claude") {
+    const hit = cliModelCache.get("claude");
+    if (hit && Date.now() - hit.fetchedAt < CLI_MODEL_CACHE_TTL_MS) {
+      return { models: hit.models };
+    }
+    const models = [...CLAUDE_MODELS_HARDCODED];
+    cliModelCache.set("claude", { models, fetchedAt: Date.now() });
+    return { models };
+  }
+
+  const hit = cliModelCache.get(cli);
+  if (hit && Date.now() - hit.fetchedAt < CLI_MODEL_CACHE_TTL_MS) {
+    return { models: hit.models };
+  }
+
+  const result = await fetchCliModelsUncached(cli);
+  if (!result.error) {
+    cliModelCache.set(cli, { models: result.models, fetchedAt: Date.now() });
+  }
+  return result;
 }
 
 /** Check if any running session references this modeId. */
@@ -75,6 +162,20 @@ function isModeInUse(modeId: string): boolean {
 }
 
 export function registerModeRoutes(app: FastifyInstance): void {
+  // GET /cli-models?cli=
+  app.get("/cli-models", async (req, reply) => {
+    const q = z.enum(["claude", "cursor", "opencode"]).safeParse(
+      typeof req.query === "object" && req.query !== null && "cli" in req.query
+        ? (req.query as { cli?: string }).cli
+        : undefined,
+    );
+    if (!q.success) {
+      return reply.status(400).send({ error: "Invalid or missing cli query param" });
+    }
+    const body = await resolveCliModels(q.data);
+    return reply.send(body);
+  });
+
   // GET /modes
   app.get("/modes", async (_req, reply) => {
     return reply.send(await loadModes());
@@ -86,7 +187,8 @@ export function registerModeRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { name, cli, context, presetId } = result.data;
+    const { name, cli, context } = result.data;
+    const modelNorm = normalizeModelField(result.data.model);
 
     const modes = await loadModes();
     if (modes.length >= MAX_MODES) {
@@ -106,6 +208,7 @@ export function registerModeRoutes(app: FastifyInstance): void {
       cli,
       context,
       createdAt: new Date().toISOString(),
+      ...(modelNorm ? { model: modelNorm } : {}),
     };
 
     await saveModes([...modes, mode]);
@@ -120,7 +223,7 @@ export function registerModeRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { name, context } = result.data;
+    const { name, context, cli, model } = result.data;
 
     const modes = await loadModes();
     const idx = modes.findIndex((m) => m.id === id);
@@ -130,11 +233,16 @@ export function registerModeRoutes(app: FastifyInstance): void {
       return reply.status(409).send({ error: `A mode named '${name}' already exists.` });
     }
 
-    const updated = {
-      ...modes[idx]!,
-      ...(name ? { name } : {}),
-      ...(context ? { context } : {}),
-    };
+    const prev = modes[idx]!;
+    const updated: Mode = { ...prev };
+    if (name) updated.name = name;
+    if (context) updated.context = context;
+    if (cli !== undefined) updated.cli = cli;
+    if (model !== undefined) {
+      const m = normalizeModelField(model);
+      if (m) updated.model = m;
+      else delete updated.model;
+    }
     modes[idx] = updated;
     await saveModes(modes);
     broadcastAll({ type: "mode:updated", mode: updated as unknown as Record<string, unknown> });
