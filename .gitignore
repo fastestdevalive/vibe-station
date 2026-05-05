@@ -71,7 +71,6 @@ coverage/
 # Claude Code
 .claude/
 
-
 # Package manager locks (keep only one — uncomment your preference)
 # package-lock.json
 # yarn.lock
