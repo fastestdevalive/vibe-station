@@ -9,7 +9,7 @@ description: Spawn isolated git-worktree coding sessions (claude, cursor, openco
 
 `vst` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes. The daemon exposes a REST API and a WebSocket endpoint for real-time pane streaming.
 
-**This skill is for agents OUTSIDE vst.** If you are an agent spawned BY vst, your system prompt is `apps/cli/src/daemon/assets/agent-system-prompt.md` — do not load this skill. This file describes how external agents (Claude Code, Cursor users in their own project, OpenClaw bots, GitHub Action runners, MCP consumers, etc.) drive vst from the outside.
+**This skill is for agents OUTSIDE vst.** If you are an agent spawned BY vst, your system prompt is `daemon/src/assets/agent-system-prompt.md` — do not load this skill. This file describes how external agents (Claude Code, Cursor users in their own project, OpenClaw bots, GitHub Action runners, MCP consumers, etc.) drive vst from the outside.
 
 ---
 
@@ -378,4 +378,4 @@ When to use each:
 
 ---
 
-*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `apps/cli/src/daemon/assets/agent-system-prompt.md`. That file is for vst's own workers. This file (`skill/SKILL.md`) is for external agents and bots that drive vst from outside.*
+*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `daemon/src/assets/agent-system-prompt.md`. That file is for vst's own workers. This file (`skill/SKILL.md`) is for external agents and bots that drive vst from outside.*

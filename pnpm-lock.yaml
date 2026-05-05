@@ -21,7 +21,7 @@ importers:
         specifier: ^8.15.0
         version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
 
-  apps/cli:
+  cli:
     dependencies:
       '@fastify/type-provider-zod':
         specifier: ^1.0.0
@@ -79,7 +79,7 @@ importers:
         specifier: ^8.20.0
         version: 8.20.0
 
-  apps/web:
+  web-ui:
     dependencies:
       '@xterm/addon-fit':
         specifier: ^0.11.0
@@ -3806,7 +3806,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.16
       tinyrainbow: 1.2.0
-      vitest: 2.1.9(@types/node@22.19.17)(@vitest/ui@2.1.9)(jsdom@25.0.1)
+      vitest: 2.1.9(@types/node@20.19.39)(@vitest/ui@2.1.9)(jsdom@25.0.1)
 
   '@vitest/utils@2.1.9':
     dependencies:

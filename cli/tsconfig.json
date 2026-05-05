@@ -1,12 +1,13 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
     "declaration": false,
     "noEmit": false,
-    "types": ["node", "vitest/globals"],
-    "resolveJsonModule": true
+    "types": ["node"],
+    "resolveJsonModule": true,
+    "preserveSymlinks": true
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
