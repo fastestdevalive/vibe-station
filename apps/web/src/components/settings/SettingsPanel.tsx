@@ -3,10 +3,12 @@ import { motion } from "framer-motion";
 import type { ApiInstance } from "@/api";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ModesSetting } from "./ModesSetting";
+import { AppearanceSetting } from "./AppearanceSetting";
 
 interface Section {
   id: string;
   label: string;
+  ref: React.RefObject<HTMLElement | null>;
   content: React.ReactNode;
 }
 
@@ -17,6 +19,7 @@ interface SettingsPanelProps {
 export function SettingsPanel({ api }: SettingsPanelProps) {
   const isMobile = useMediaQuery("(max-width: 768px)");
   const modesRef = useRef<HTMLElement | null>(null);
+  const appearanceRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState("modes");
   const tabLayoutId = useId();
 
@@ -24,15 +27,22 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     {
       id: "modes",
       label: "Modes",
+      ref: modesRef,
       content: <ModesSetting api={api} />,
+    },
+    {
+      id: "appearance",
+      label: "Appearance",
+      ref: appearanceRef,
+      content: <AppearanceSetting />,
     },
   ];
 
-  const scrollToModes = useCallback(() => {
-    modesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const scrollTo = useCallback((ref: React.RefObject<HTMLElement | null>) => {
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  // ── Mobile: pill tabs ────────────────────────────────────────────────────
+  // ── Mobile: underline tabs ───────────────────────────────────────────────
   if (isMobile) {
     const activeSection = sections.find((s) => s.id === activeTab) ?? sections[0]!;
     return (
@@ -149,40 +159,47 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         >
           Settings
         </div>
-        <button
-          type="button"
-          onClick={scrollToModes}
-          className="settings-nav__link"
-          style={{
-            display: "block",
-            width: "100%",
-            textAlign: "left",
-            padding: "var(--space-2) var(--space-3)",
-            borderRadius: "var(--radius-sm)",
-            border: "none",
-            background: "transparent",
-            color: "var(--fg-primary)",
-            cursor: "pointer",
-            font: "inherit",
-          }}
-        >
-          Modes
-        </button>
+        {sections.map((section) => (
+          <button
+            key={section.id}
+            type="button"
+            onClick={() => scrollTo(section.ref)}
+            className="settings-nav__link"
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "var(--space-2) var(--space-3)",
+              borderRadius: "var(--radius-sm)",
+              border: "none",
+              background: "transparent",
+              color: "var(--fg-primary)",
+              cursor: "pointer",
+              font: "inherit",
+            }}
+          >
+            {section.label}
+          </button>
+        ))}
       </nav>
+
       <div
         className="settings-content"
-        style={{
-          overflow: "auto",
-          minHeight: 0,
-        }}
+        style={{ overflow: "auto", minHeight: 0 }}
       >
-        <section
-          id="settings-modes"
-          ref={modesRef}
-          style={{ scrollMarginTop: "var(--space-3)" }}
-        >
-          <ModesSetting api={api} />
-        </section>
+        {sections.map((section, i) => (
+          <section
+            key={section.id}
+            id={`settings-${section.id}`}
+            ref={section.ref}
+            style={{
+              scrollMarginTop: "var(--space-3)",
+              marginBottom: i < sections.length - 1 ? "var(--space-7)" : 0,
+            }}
+          >
+            {section.content}
+          </section>
+        ))}
       </div>
     </div>
   );
