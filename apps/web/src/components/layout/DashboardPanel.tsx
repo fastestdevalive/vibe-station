@@ -126,7 +126,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       if (wt) {
         const sessionsForWorktree = sessions.filter((ss) => ss.worktreeId === wt.id);
         setActiveWorktree(wt.projectId, wt.id, sessionsForWorktree);
-        void navigate("/worktree");
+        void navigate(`/worktree/${wt.id}`);
       }
     },
     [navigate, sessions, setActiveWorktree, worktrees],
