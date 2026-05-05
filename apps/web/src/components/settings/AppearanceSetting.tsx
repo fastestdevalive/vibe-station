@@ -1,4 +1,5 @@
 import { useTheme } from "@/hooks/useTheme";
+import { SectionHeader } from "./SectionHeader";
 
 function Row({
   label,
@@ -91,25 +92,10 @@ export function AppearanceSetting() {
 
   return (
     <div>
-      <div
-        style={{
-          fontSize: "var(--font-size-base)",
-          fontWeight: "var(--font-weight-medium)",
-          color: "var(--fg-primary)",
-          marginBottom: "var(--space-1)",
-        }}
-      >
-        Appearance
-      </div>
-      <div
-        style={{
-          fontSize: "var(--font-size-sm)",
-          color: "var(--fg-muted)",
-          marginBottom: "var(--space-4)",
-        }}
-      >
-        Customize how vibe-station looks on your device.
-      </div>
+      <SectionHeader
+        title="Appearance"
+        description="Customize how vibe-station looks on your device."
+      />
 
       <Row
         label="Brightness"

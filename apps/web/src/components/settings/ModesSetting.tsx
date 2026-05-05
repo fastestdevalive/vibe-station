@@ -6,6 +6,7 @@ import { ApiError } from "@/api/errors";
 import { Button } from "@/components/ui/Button";
 import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
+import { SectionHeader } from "./SectionHeader";
 
 interface ModesSettingProps {
   api: ApiInstance;
@@ -67,16 +68,10 @@ export function ModesSetting({ api }: ModesSettingProps) {
 
   return (
     <div style={{ paddingBottom: "var(--space-8)" }}>
-      <h2
-        style={{
-          fontSize: "18px",
-          fontWeight: 600,
-          margin: "0 0 var(--space-4)",
-          color: "var(--fg-primary)",
-        }}
-      >
-        Modes
-      </h2>
+      <SectionHeader
+        title="Modes"
+        description="Orchestrator modes define the CLI, system prompt, and model used when starting a new agent session."
+      />
 
       <div
         style={{
