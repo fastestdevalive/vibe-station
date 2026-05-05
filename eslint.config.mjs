@@ -9,7 +9,7 @@ export default tseslint.config(
     ignores: ["**/dist/**", "**/node_modules/**"],
   },
   {
-    files: ["apps/web/**/*.{ts,tsx}"],
+    files: ["web-ui/**/*.{ts,tsx}"],
     plugins: {
       "react-hooks": reactHooks,
     },

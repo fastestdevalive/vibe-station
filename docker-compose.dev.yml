@@ -32,8 +32,8 @@ services:
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)
-      - ./apps/web/src:/app/apps/web/src:ro
-      - ./apps/web/public:/app/apps/web/public:ro
+      - ./web-ui/src:/app/web-ui/src:ro
+      - ./web-ui/public:/app/web-ui/public:ro
 
       # Persist daemon state across container restarts (modes.json, projects, etc.)
       # Remove this volume to start completely fresh: docker volume rm vst-dev-data

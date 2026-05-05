@@ -6,7 +6,7 @@ Accumulated lessons from bugs that were painful to diagnose. Read before touchin
 
 ## Terminal — never unmount TerminalPane during UI transitions
 
-**File:** `apps/web/src/components/layout/Layout.tsx`
+**File:** `web-ui/src/components/layout/Layout.tsx`
 
 ### The invariant
 
@@ -44,7 +44,7 @@ The terminal is **never** rendered in `fullscreenOverlay`. Only the preview pane
 
 ## Agent plugin — all CLI-specific logic lives in the plugin, nowhere else
 
-**Files:** `apps/cli/src/daemon/plugins/` · Interface: `apps/cli/src/daemon/services/spawn.ts`
+**Files:** `daemon/src/agent-plugins/` · Interface: `daemon/src/services/spawn.ts`
 
 ### The invariant
 
@@ -87,5 +87,5 @@ else if (mode.cli === "opencode") { ... }
 ### What to watch for
 
 - **New CLI support:** if a fourth CLI is ever added, implement *all* required methods and the optional ones that make sense. The TypeScript interface will enforce required methods at compile time.
-- **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `plugins/registry.ts`. Routes are allowed to import it. Services (`spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
-- **`CliId` type:** defined in `daemon/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.
+- **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `daemon/src/agent-plugins/registry.ts`. Routes are allowed to import it. Services (`daemon/src/services/spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
+- **`CliId` type:** defined in `daemon/src/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.

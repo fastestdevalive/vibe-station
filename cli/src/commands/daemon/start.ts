@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getDaemonUrl } from "../../lib/daemon-url.js";
 import { die, warn } from "../../lib/output.js";
-import { daemonLogPath } from "../../daemon/services/paths.js";
+import { daemonLogPath } from "../../lib/paths.js";
 import ora from "ora";
 
 const here = dirname(fileURLToPath(import.meta.url));
