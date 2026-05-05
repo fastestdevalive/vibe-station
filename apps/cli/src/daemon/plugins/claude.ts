@@ -29,10 +29,24 @@ async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promi
   await fs.writeFile(gitignorePath, newContent, "utf8");
 }
 
+const CLAUDE_MODELS = [
+  "sonnet",
+  "opus",
+  "haiku",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+] as const;
+
 export function createClaudePlugin(): AgentPlugin {
   return {
     name: "claude",
     promptDelivery: "inline",
+
+    async listModels() {
+      // Claude has no CLI list-models command; return a curated static list.
+      return { models: [...CLAUDE_MODELS] };
+    },
 
     getLaunchCommand(): string[] {
       return ["claude"];

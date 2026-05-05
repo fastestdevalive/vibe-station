@@ -3,31 +3,19 @@
  * Stored in ~/.vibe-station/modes.json (max 10 modes).
  */
 import type { FastifyInstance } from "fastify";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { z } from "zod";
 import { readFile, writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
 import { modesPath, vstHome } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { getAllProjects } from "../state/project-store.js";
+import { resolvePlugin } from "../plugins/registry.js";
 import type { CliId } from "../types.js";
-
-const execFileAsync = promisify(execFile);
 
 const MAX_MODES = 10;
 const MAX_CONTEXT_LEN = 10_000;
 const MAX_MODEL_LEN = 100;
 const CLI_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
-
-const CLAUDE_MODELS_HARDCODED = [
-  "sonnet",
-  "opus",
-  "haiku",
-  "claude-opus-4-5",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-] as const;
 
 const cliModelCache = new Map<CliId, { models: string[]; fetchedAt: number }>();
 /** In-flight deduplication: concurrent requests share the same fetch promise. */
@@ -91,56 +79,13 @@ function normalizeModelField(model: string | undefined): string | undefined {
   return t.length > 0 ? t : undefined;
 }
 
+/** Delegates to the plugin — no CLI-specific logic here. */
 async function fetchCliModelsUncached(cli: CliId): Promise<{ models: string[]; error?: string }> {
-  try {
-    if (cli === "claude") {
-      return { models: [...CLAUDE_MODELS_HARDCODED] };
-    }
-    if (cli === "opencode") {
-      const { stdout } = await execFileAsync("opencode", ["models"], {
-        timeout: 15_000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      const models = stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-      return { models };
-    }
-    if (cli === "cursor") {
-      const { stdout } = await execFileAsync("cursor-agent", ["--list-models"], {
-        timeout: 15_000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      const models = stdout
-        .split("\n")
-        .map((line) => {
-          const tok = line.trim().split(/\s+/)[0];
-          return tok ?? "";
-        })
-        .filter(Boolean);
-      return { models };
-    }
-    return { models: [], error: `Unknown CLI: ${cli}` };
-  } catch (err) {
-    // Log full error server-side; return sanitized message to client
-    console.error(`[cli-models] fetch failed for ${cli}:`, err);
-    return { models: [], error: "Failed to fetch models from CLI. Check that the CLI is installed and authenticated." };
-  }
+  return resolvePlugin(cli).listModels();
 }
 
-/** Exported for tests; uses TTL cache for non-Claude CLIs. */
+/** Exported for tests; uses TTL cache + in-flight deduplication for all CLIs. */
 export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
-  if (cli === "claude") {
-    const hit = cliModelCache.get("claude");
-    if (hit && Date.now() - hit.fetchedAt < CLI_MODEL_CACHE_TTL_MS) {
-      return { models: hit.models };
-    }
-    const models = [...CLAUDE_MODELS_HARDCODED];
-    cliModelCache.set("claude", { models, fetchedAt: Date.now() });
-    return { models };
-  }
-
   const hit = cliModelCache.get(cli);
   if (hit && Date.now() - hit.fetchedAt < CLI_MODEL_CACHE_TTL_MS) {
     return { models: hit.models };
