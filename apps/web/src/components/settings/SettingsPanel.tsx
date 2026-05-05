@@ -89,7 +89,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
                     left: 0,
                     right: 0,
                     height: 2,
-                    background: "var(--accent)",
+                    background: "var(--fg-muted)",
                     borderRadius: 1,
                   }}
                   transition={{ type: "spring", stiffness: 400, damping: 30, mass: 0.8 }}
