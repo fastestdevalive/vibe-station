@@ -2,11 +2,16 @@
  * Session and worktree identity reservation.
  * Mirrors AO's reserveNextSessionIdentity (ao:packages/core/src/session-manager.ts:790-828).
  */
+import { existsSync } from "node:fs";
 import type { ProjectRecord, SessionSlot, WorktreeRecord } from "../types.js";
+import { worktreePath } from "./paths.js";
 
 /**
  * Reserve the next free worktree number for a project.
- * Returns the smallest positive integer not already used by any worktree in the project.
+ * Returns the smallest positive integer not already used by any worktree in the project,
+ * AND whose worktree directory does not already exist on disk. The disk check guards
+ * against orphans left by `vst worktree rm` (without --purge), which intentionally
+ * removes from the manifest but keeps files and git registration.
  * MUST be called under the project mutex.
  */
 export function reserveNextWorktreeNum(project: ProjectRecord): number {
@@ -20,7 +25,10 @@ export function reserveNextWorktreeNum(project: ProjectRecord): number {
   );
 
   for (let n = 1; n < 100_000; n++) {
-    if (!usedNums.has(n)) return n;
+    if (usedNums.has(n)) continue;
+    const candidatePath = worktreePath(project.id, `${project.prefix}-${n}`);
+    if (existsSync(candidatePath)) continue;
+    return n;
   }
   throw new Error(`Could not reserve worktree number for project ${project.id}`);
 }
