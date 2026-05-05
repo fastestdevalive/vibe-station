@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Cursor chat session restore helpers.
  * Discovers prior cursor-agent chat sessions by chatId.

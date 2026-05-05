@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Tmux command wrappers.
  * All functions use execFile so each argument is passed directly as an argv

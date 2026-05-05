@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Cursor agent plugin.
  * Implements AgentPlugin interface for the `cursor agent` headless CLI.

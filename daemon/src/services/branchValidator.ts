@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Branch name validation per HIGH-LEVEL-DESIGN.md §5.
  *

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { ServerMessage } from "./ws/protocol.js";
 import type { WSConnection } from "./ws/connection.js";
 

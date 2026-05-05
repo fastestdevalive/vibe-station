@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { DirectPtyBackend, DirectPtyStream } from "../services/directPty.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";

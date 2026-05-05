@@ -5,9 +5,10 @@
     "rootDir": "src",
     "declaration": false,
     "noEmit": false,
-    "resolveJsonModule": true,
-    "skipLibCheck": true
+    "types": ["node", "vitest/globals"],
+    "resolveJsonModule": true
   },
+  "references": [{ "path": "../daemon" }],
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }

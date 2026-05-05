@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, it, expect, afterEach } from "vitest";
 import { buildServer } from "../server.js";
 import type { FastifyInstance } from "fastify";

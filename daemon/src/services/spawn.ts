@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Canonical session spawn ordering per HIGH-LEVEL-DESIGN.md §5.
  *

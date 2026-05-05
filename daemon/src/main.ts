@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Daemon entry point.
  * Usage: node dist/daemon/main.js

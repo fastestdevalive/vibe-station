@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Git wrappers used by the daemon.
  * All functions shell out to the `git` CLI.

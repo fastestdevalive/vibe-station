@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * In-memory project store.
  *

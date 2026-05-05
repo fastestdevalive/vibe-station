@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Rollback helpers for worktree creation failure.
  * Implements the rollback sequence from HIGH-LEVEL-DESIGN.md §5.

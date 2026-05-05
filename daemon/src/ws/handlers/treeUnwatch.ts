@@ -1,4 +1,3 @@
-// @ts-nocheck
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import type { FileWatcher } from "../streams/fileWatcher.js";

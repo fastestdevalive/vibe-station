@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Writes an opencode JSON config file that points to system-prompt instruction
  * files and configures permissions.

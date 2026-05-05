@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { EventEmitter } from "node:events";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 import type { SessionStream } from "../ws/streams/sessionStream.js";

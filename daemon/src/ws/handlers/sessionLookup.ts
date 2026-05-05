@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { getAllProjects } from "../../state/project-store.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../../types.js";
 

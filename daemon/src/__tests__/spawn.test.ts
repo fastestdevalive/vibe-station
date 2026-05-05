@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as tmuxNs from "../services/tmux.js";
 import { spawnSession } from "../services/spawn.js";

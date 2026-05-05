@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Manifest read/write.
  * Writes are atomic: write to manifest.json.tmp in the same dir,
