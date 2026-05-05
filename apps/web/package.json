@@ -16,22 +16,23 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.2.0",
     "framer-motion": "^12.0.0",
+    "highlight.js": "*",
     "lucide-react": "^0.468.0",
     "marked": "^15.0.0",
     "mermaid": "^11.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "*",
     "react-resizable-panels": "^3.0.6",
     "react-router-dom": "^6.28.0",
-    "shiki": "^3.0.0",
-    "zustand": "^5.0.0",
-    "highlight.js": "*",
-    "react-markdown": "*",
     "rehype-highlight": "*",
-    "remark-gfm": "*"
+    "remark-gfm": "*",
+    "shiki": "^3.0.0",
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@axe-core/react": "^4.10.0",

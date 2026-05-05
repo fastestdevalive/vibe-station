@@ -8,7 +8,11 @@
  * Ready signal: waits for "opencode" banner in pane output.
  */
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
+
+const execFileAsync = promisify(execFile);
 import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { opencodeConfigPath, systemPromptPath, worktreePath as getWorktreePath } from "../services/paths.js";
@@ -25,9 +29,26 @@ export function createOpencodePlugin(): AgentPlugin {
   return {
     name: "opencode",
     promptDelivery: "post-launch",
+
+    async listModels() {
+      try {
+        const { stdout } = await execFileAsync("opencode", ["models"], {
+          timeout: 15_000,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        const models = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+        return { models };
+      } catch (err) {
+        console.error("[cli-models] opencode fetch failed:", err);
+        return { models: [], error: "Failed to fetch models from CLI. Check that the CLI is installed and authenticated." };
+      }
+    },
     postSentinelDelayMs: 500,
 
-    getLaunchCommand(): string[] {
+    getLaunchCommand(cfg: LaunchConfig): string[] {
+      if (cfg.model) {
+        return ["opencode", "-m", cfg.model];
+      }
       return ["opencode"];
     },
 
@@ -142,9 +163,13 @@ export function createOpencodePlugin(): AgentPlugin {
       session: { agentChatId?: string };
       project: { id: string };
       worktree: { id: string };
+      model?: string;
     }): Promise<string[] | null> {
       if (args.session.agentChatId) {
-        return ["opencode", "--session", args.session.agentChatId];
+        const argv = ["opencode"];
+        if (args.model) argv.push("-m", args.model);
+        argv.push("--session", args.session.agentChatId);
+        return argv;
       }
       return null;
     },

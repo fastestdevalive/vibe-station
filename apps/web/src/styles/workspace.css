@@ -1055,6 +1055,12 @@
   color: var(--fg-primary);
 }
 
+.icon-btn--active {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+  border-color: var(--border-default);
+}
+
 /* Sidebar row controls use a compact hit target; keep width aligned with .wt-align-gutter (28px). */
 .tree-row .icon-btn.tree-row__chevron,
 .tree-row .icon-btn.tree-row__action {

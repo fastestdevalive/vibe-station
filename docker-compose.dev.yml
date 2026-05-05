@@ -1,0 +1,49 @@
+# Dev sandbox: feature branch FE + daemon in isolation.
+# Does NOT touch your running vibe-station instance.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up --build
+#
+# Then open: http://localhost:5174
+#
+# CLI binaries are bind-mounted read-only from the host so that
+# GET /cli-models?cli=opencode|cursor|claude works inside the container.
+# Session spawning (actually running agents) is NOT supported in this sandbox —
+# use this for UI + API testing only.
+
+services:
+  vst-dev:
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    ports:
+      # Host 5174 → container 5173 (Vite dev server)
+      # Avoids collision with your main vite instance on 5173
+      - "5174:5173"
+    environment:
+      HOME: /home/vst
+      # Vite proxy already points to 127.0.0.1:7421 — no change needed
+    volumes:
+      # Mount CLI binaries read-only so the daemon can shell out to them.
+      # Paths use $HOME — override with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN if yours differ.
+      - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
+      - ${CURSOR_BIN:-${HOME}/.local/bin/cursor-agent}:/usr/local/bin/cursor-agent:ro
+      - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
+
+      # Hot-reload: mount web source so Vite picks up changes instantly
+      # (daemon changes still require a rebuild — see below)
+      - ./apps/web/src:/app/apps/web/src:ro
+      - ./apps/web/public:/app/apps/web/public:ro
+
+      # Persist daemon state across container restarts (modes.json, projects, etc.)
+      # Remove this volume to start completely fresh: docker volume rm vst-dev-data
+      - vst-dev-data:/home/vst/.vibe-station
+
+    # Rebuild daemon when its source changes:
+    #   docker compose -f docker-compose.dev.yml up --build
+    stdin_open: true
+    tty: true
+
+volumes:
+  vst-dev-data:
+    name: vst-dev-data

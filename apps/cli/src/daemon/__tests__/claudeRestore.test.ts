@@ -28,7 +28,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   });
 
   it("3.T1 — returns null when ~/.claude/projects/<slug>/ does not exist", async () => {
-    const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+    const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
     // No .claude/projects dir created — should return null gracefully
     const uuid = await findLatestChatUuid("/some/nonexistent/worktree");
@@ -36,7 +36,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   });
 
   it("3.T2 — with two jsonl files, returns the uuid of the newest by mtime", async () => {
-    const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+    const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
     // Create .claude/projects/<slug>/ with two jsonl files
     const slug = "-test-path-to-worktree";
@@ -58,7 +58,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   });
 
   it("3.T3 — with only one jsonl file, returns its uuid", async () => {
-    const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+    const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
     const slug = "-single-file-test";
     const projectsDir = join(tempDir, ".claude", "projects", slug);
@@ -72,7 +72,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   });
 
   it("3.T5 — slug strips dots (e.g. /home/gb/.vibe-station/foo → -home-gb--vibe-station-foo)", async () => {
-    const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+    const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
     // Worktree path with a dot dir mid-path (matches real ~/.vibe-station layout)
     const slug = "-home-gb--vibe-station-projects-console-home-worktrees-ch-2";
@@ -87,7 +87,7 @@ describe("claudeRestore — findLatestChatUuid", () => {
   });
 
   it("3.T4 — ignores non-jsonl files and directories", async () => {
-    const { findLatestChatUuid } = await import("../plugins/claudeRestore.js");
+    const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
 
     const slug = "-mixed-files-test";
     const projectsDir = join(tempDir, ".claude", "projects", slug);

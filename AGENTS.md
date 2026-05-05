@@ -39,3 +39,53 @@ The terminal is **never** rendered in `fullscreenOverlay`. Only the preview pane
 - **Portal traps:** `createPortal` changes the DOM location but NOT the React tree position — this is safe. But rendering the same `ideTerminalPane` element from two different call sites is not.
 - **`terminalInSplit` flag:** this is `vTerm` (terminal pane visible), not `vTerm && paneFullscreen !== "terminal"`. The fullscreen state must never suppress the terminal from rendering in its panel slot.
 - **`key` prop changes:** changing the `key` on a container that wraps `TerminalPane` forces an unmount. Never derive `key` from `paneFullscreen`.
+
+---
+
+## Agent plugin — all CLI-specific logic lives in the plugin, nowhere else
+
+**Files:** `apps/cli/src/daemon/plugins/` · Interface: `apps/cli/src/daemon/services/spawn.ts`
+
+### The invariant
+
+Every behaviour that differs between `claude`, `cursor`, and `opencode` **must be implemented as a method on `AgentPlugin`**, not as an `if/else` or `switch` on `CliId` anywhere in calling code. The plugin is the single extension point for CLI-specific logic.
+
+Calling code resolves the plugin once via `resolvePlugin(cli)` and then calls interface methods. It must never inspect the CLI name again after that point.
+
+```ts
+// ✅ correct — resolves once, calls interface
+const plugin = resolvePlugin(mode.cli);
+const { models } = await plugin.listModels();
+const argv = await plugin.getRestoreCommand({ session, project, worktree, model });
+
+// ❌ wrong — CLI-specific knowledge leaking into calling code
+if (mode.cli === "claude") { ... }
+else if (mode.cli === "opencode") { ... }
+```
+
+### Adding new CLI-specific behaviour
+
+1. Add the method to `AgentPlugin` in `spawn.ts` with a JSDoc that explains the contract.
+2. Implement it in all three plugins: `claude.ts`, `cursor.ts`, `opencode.ts`.
+3. Call `resolvePlugin(cli).yourNewMethod()` from wherever the feature is needed.
+4. Never add a new `if (cli === ...)` branch outside of the plugin files.
+
+### Current plugin methods
+
+| Method | Required | Purpose |
+|--------|----------|---------|
+| `listModels()` | yes | Return available models for this CLI |
+| `getLaunchCommand(cfg)` | yes | Build spawn argv |
+| `getEnvironment(cfg)` | yes | Extra env vars for the process |
+| `getReadySignal()` | yes | Sentinel string or fallback timeout |
+| `composeLaunchPrompt(...)` | yes | Build the shell line / post-launch input |
+| `setupWorkspaceHooks?(path)` | optional | Write hook scripts into the worktree |
+| `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
+| `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |
+| `getRestoreCommand?(args)` | optional | Return resume argv, or null for fresh spawn |
+
+### What to watch for
+
+- **New CLI support:** if a fourth CLI is ever added, implement *all* required methods and the optional ones that make sense. The TypeScript interface will enforce required methods at compile time.
+- **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `plugins/registry.ts`. Routes are allowed to import it. Services (`spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
+- **`CliId` type:** defined in `daemon/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.

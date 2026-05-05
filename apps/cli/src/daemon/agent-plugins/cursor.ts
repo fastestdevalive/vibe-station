@@ -29,11 +29,31 @@ export function createCursorPlugin(): AgentPlugin {
     // No post-launch paste for system prompt; task prompt is also inlined at launch.
     promptDelivery: "inline",
 
+    async listModels() {
+      try {
+        const { stdout } = await execFile("cursor-agent", ["--list-models"], {
+          timeout: 15_000,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        const models = stdout
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/)[0] ?? "")
+          .filter(Boolean);
+        return { models };
+      } catch (err) {
+        console.error("[cli-models] cursor-agent fetch failed:", err);
+        return { models: [], error: "Failed to fetch models from CLI. Check that the CLI is installed and authenticated." };
+      }
+    },
+
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
       const argv: string[] = ["cursor-agent"];
       if (cfg.session?.agentChatId) {
         argv.push("--resume", cfg.session.agentChatId);
+      }
+      if (cfg.model) {
+        argv.push("--model", cfg.model);
       }
       argv.push("--workspace", wtPath, "--force", "--sandbox", "disabled", "--approve-mcps");
       return argv;
@@ -70,6 +90,9 @@ export function createCursorPlugin(): AgentPlugin {
       if (prompt.launchCfg.session?.agentChatId) {
         parts.push(`--resume ${prompt.launchCfg.session.agentChatId}`);
       }
+      if (prompt.launchCfg.model) {
+        parts.push(`--model ${sq(prompt.launchCfg.model)}`);
+      }
       parts.push(
         `--workspace ${sq(wtPath)}`,
         "--force",
@@ -103,6 +126,7 @@ export function createCursorPlugin(): AgentPlugin {
       session: { agentChatId?: string };
       project: { id: string };
       worktree: { id: string };
+      model?: string;
     }): Promise<string[] | null> {
       // cursor-agent --resume <chatId> reloads the prior conversation from cursor's
       // local chat-history DB, which already includes the original system prompt as
@@ -110,23 +134,16 @@ export function createCursorPlugin(): AgentPlugin {
       // shell-line, no system-prompt re-injection. Tradeoff: a resumed session will
       // NOT pick up edits to AGENTS.md / .vibe-station/rules.md made between runs;
       // those only land on a fresh spawn.
-      const { project, worktree, session } = args;
+      const { project, worktree, session, model } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);
       const chatId = session.agentChatId ?? (await findLatestCursorChatId(wtPath));
       if (!chatId) return null;
       // Mirror the fresh-launch flags so the restored session has the same
       // workspace/sandbox/MCP behaviour. --resume picks an existing chat.
-      return [
-        "cursor-agent",
-        "--resume",
-        chatId,
-        "--workspace",
-        wtPath,
-        "--force",
-        "--sandbox",
-        "disabled",
-        "--approve-mcps",
-      ];
+      const argv = ["cursor-agent", "--resume", chatId];
+      if (model) argv.push("--model", model);
+      argv.push("--workspace", wtPath, "--force", "--sandbox", "disabled", "--approve-mcps");
+      return argv;
     },
   };
 }

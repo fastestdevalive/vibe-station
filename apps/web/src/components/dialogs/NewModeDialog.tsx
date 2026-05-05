@@ -4,6 +4,26 @@ import type { CliId } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
+import { ModelPicker } from "../shared/ModelPicker";
+
+function defaultModelForCli(cli: CliId): string {
+  try {
+    const s = localStorage.getItem(`vst-last-model-${cli}`);
+    if (s) return s;
+  } catch {
+    /* ignore */
+  }
+  switch (cli) {
+    case "claude":
+      return "sonnet";
+    case "cursor":
+      return "auto";
+    case "opencode":
+      return "opencode/big-pickle";
+    default:
+      return "";
+  }
+}
 
 const PRESET_BUG =
   "You are fixing a bug. Open a PR when done. Run tests before committing.";
@@ -31,6 +51,7 @@ export function NewModeDialog({
   const [cli, setCli] = useState<CliId>("claude");
   const [preset, setPreset] = useState<PresetId>("bug-fix-with-pr");
   const [context, setContext] = useState(PRESET_BUG);
+  const [model, setModel] = useState<string | undefined>(() => defaultModelForCli("claude"));
   const [error, setError] = useState<string | null>(null);
 
   const namesLower = useMemo(
@@ -69,11 +90,15 @@ export function NewModeDialog({
       cli,
       context,
       presetId: preset === "custom" ? undefined : preset,
+      model: model && model.length > 0 ? model : undefined,
     });
     onSaved?.();
     onClose();
+    // Reset name and context but preserve CLI so consecutive mode creation
+    // for the same CLI doesn't require re-selecting it each time.
     setName("");
     applyPreset("bug-fix-with-pr");
+    setModel(defaultModelForCli(cli));
   }
 
   return (
@@ -104,19 +129,28 @@ export function NewModeDialog({
         name="cli"
         label="claude"
         checked={cli === "claude"}
-        onChange={() => setCli("claude")}
+        onChange={() => {
+          setCli("claude");
+          setModel(defaultModelForCli("claude"));
+        }}
       />
       <Radio
         name="cli"
         label="cursor"
         checked={cli === "cursor"}
-        onChange={() => setCli("cursor")}
+        onChange={() => {
+          setCli("cursor");
+          setModel(defaultModelForCli("cursor"));
+        }}
       />
       <Radio
         name="cli"
         label="opencode"
         checked={cli === "opencode"}
-        onChange={() => setCli("opencode")}
+        onChange={() => {
+          setCli("opencode");
+          setModel(defaultModelForCli("opencode"));
+        }}
       />
       <div className="field-label">Context preset</div>
       <Radio
@@ -153,6 +187,8 @@ export function NewModeDialog({
           fontFamily: "inherit",
         }}
       />
+      <div className="field-label">Model</div>
+      <ModelPicker api={api} cli={cli} value={model} onChange={setModel} />
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
   );

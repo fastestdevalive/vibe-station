@@ -29,10 +29,24 @@ async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promi
   await fs.writeFile(gitignorePath, newContent, "utf8");
 }
 
+const CLAUDE_MODELS = [
+  "sonnet",
+  "opus",
+  "haiku",
+  "claude-opus-4-5",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+] as const;
+
 export function createClaudePlugin(): AgentPlugin {
   return {
     name: "claude",
     promptDelivery: "inline",
+
+    async listModels() {
+      // Claude has no CLI list-models command; return a curated static list.
+      return { models: [...CLAUDE_MODELS] };
+    },
 
     getLaunchCommand(): string[] {
       return ["claude"];
@@ -63,6 +77,9 @@ export function createClaudePlugin(): AgentPlugin {
       // ARG_MAX limits for long prompts. spawn.ts wraps this in `sh -lc <shellLine>`.
       const filePart = `"$(cat ${sq(prompt.systemPromptFile)})"`;
       let shellLine = `claude --dangerously-skip-permissions --system-prompt ${filePart}`;
+      if (prompt.launchCfg.model) {
+        shellLine += ` --model ${sq(prompt.launchCfg.model)}`;
+      }
       if (prompt.taskPrompt) {
         shellLine += ` ${sq(prompt.taskPrompt)}`;
       }
@@ -150,13 +167,16 @@ export function createClaudePlugin(): AgentPlugin {
       session: SessionRecord;
       project: ProjectRecord;
       worktree: WorktreeRecord;
+      model?: string;
     }): Promise<string[] | null> {
-      const { project, worktree, session } = args;
+      const { project, worktree, session, model } = args;
       const uuid =
         session.agentChatId ??
         (await findLatestChatUuid(getWorktreePath(project.id, worktree.id)));
       if (uuid) {
-        return ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+        const argv = ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+        if (model) argv.push("--model", model);
+        return argv;
       }
       return null;
     },
