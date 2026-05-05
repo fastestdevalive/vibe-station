@@ -6,9 +6,9 @@
     "declaration": false,
     "noEmit": false,
     "types": ["node", "vitest/globals"],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "preserveSymlinks": true
   },
-  "references": [{ "path": "../daemon" }],
   "include": ["src"],
   "exclude": ["src/**/*.test.ts", "src/**/__tests__/**"]
 }

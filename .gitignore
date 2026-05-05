@@ -1,7 +1,5 @@
 # Dependencies
 node_modules/
-daemon/node_modules
-daemon/.tsbuildinfo
 .pnp
 .pnp.js
 .yarn/install-state.gz
