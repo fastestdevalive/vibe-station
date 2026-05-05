@@ -18,17 +18,21 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
   // Read effect: apply path params to store
   useEffect(() => {
     if (!ready || urlConsumed.current) return;
-    urlConsumed.current = true;
 
-    // Backward-compat: if ?wt= query param exists (old URL), redirect to new path format
+    // Backward-compat: if ?wt= query param exists (old URL), redirect to new path format.
+    // Do NOT set urlConsumed.current yet — let the next render's read effect consume the
+    // new path params and populate the store. Setting it here would cause the write effect
+    // to fire with an empty store and clobber the redirected URL back to "/worktree".
     const searchParams = new URLSearchParams(location.search);
     const wtParam = searchParams.get("wt");
     if (wtParam) {
       const sessParam = searchParams.get("session");
       const newPath = `/worktree/${wtParam}${sessParam ? `/${sessParam}` : ""}`;
       navigate(newPath, { replace: true });
-      return; // Let the next render apply the read effect with the new path
+      return;
     }
+
+    urlConsumed.current = true;
 
     // Apply path params to store
     const wtId = params.wtId;
