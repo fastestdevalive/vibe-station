@@ -95,13 +95,17 @@ export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; 
   const inflight = cliModelInflight.get(cli);
   if (inflight) return inflight;
 
-  const fetchPromise = fetchCliModelsUncached(cli).then((result) => {
-    cliModelInflight.delete(cli);
-    if (!result.error) {
-      cliModelCache.set(cli, { models: result.models, fetchedAt: Date.now() });
-    }
-    return result;
-  });
+  const fetchPromise = fetchCliModelsUncached(cli)
+    .then((result) => {
+      if (!result.error) {
+        cliModelCache.set(cli, { models: result.models, fetchedAt: Date.now() });
+      }
+      return result;
+    })
+    .finally(() => {
+      // Always clean up — guards against unexpected rejections escaping a plugin's try/catch
+      cliModelInflight.delete(cli);
+    });
   cliModelInflight.set(cli, fetchPromise);
   return fetchPromise;
 }
@@ -194,7 +198,12 @@ export function registerModeRoutes(app: FastifyInstance): void {
     const updated: Mode = { ...prev };
     if (name) updated.name = name;
     if (context) updated.context = context;
-    if (cli !== undefined) updated.cli = cli;
+    if (cli !== undefined) {
+      updated.cli = cli;
+      // Changing CLI invalidates the saved model (e.g. a cursor model passed to claude).
+      // Clear it unless the caller explicitly supplies a new model in the same request.
+      if (model === undefined) delete updated.model;
+    }
     if (model !== undefined) {
       const m = normalizeModelField(model);
       if (m) updated.model = m;

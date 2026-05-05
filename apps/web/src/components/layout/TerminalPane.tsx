@@ -1,5 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
@@ -119,6 +120,9 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
+
+    // Make http:// and https:// URLs clickable — opens in a new tab
+    term.loadAddon(new WebLinksAddon((_, url) => window.open(url, "_blank", "noopener,noreferrer")));
 
     term.open(host);
     // Take keyboard focus so the user can start typing immediately when a tab
