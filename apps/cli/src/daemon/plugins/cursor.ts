@@ -29,6 +29,23 @@ export function createCursorPlugin(): AgentPlugin {
     // No post-launch paste for system prompt; task prompt is also inlined at launch.
     promptDelivery: "inline",
 
+    async listModels() {
+      try {
+        const { stdout } = await execFile("cursor-agent", ["--list-models"], {
+          timeout: 15_000,
+          maxBuffer: 10 * 1024 * 1024,
+        });
+        const models = stdout
+          .split("\n")
+          .map((line) => line.trim().split(/\s+/)[0] ?? "")
+          .filter(Boolean);
+        return { models };
+      } catch (err) {
+        console.error("[cli-models] cursor-agent fetch failed:", err);
+        return { models: [], error: "Failed to fetch models from CLI. Check that the CLI is installed and authenticated." };
+      }
+    },
+
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
       const argv: string[] = ["cursor-agent"];

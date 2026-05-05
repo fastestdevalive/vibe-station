@@ -55,6 +55,11 @@ export interface AgentPlugin {
     project: ProjectRecord;
     worktree: WorktreeRecord;
   }): Promise<string | null>;
+  /**
+   * Return the list of models available for this CLI.
+   * Each plugin owns its own discovery strategy — callers never branch on CLI name.
+   */
+  listModels(): Promise<{ models: string[]; error?: string }>;
   /** Return argv for resuming a prior session, or null for fresh launch. */
   getRestoreCommand?(args: {
     session: SessionRecord;
