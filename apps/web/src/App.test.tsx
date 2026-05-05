@@ -14,9 +14,11 @@ describe("App routing", () => {
 
   it("canonical route is /worktree", () => {
     // Test verifies that /worktree is the canonical route and renders Workspace.
-    // Implementation: App.tsx has route:
+    // Implementation: App.tsx has routes:
     //   <Route path="/worktree" element={<Workspace />} />
-    // This is the primary URL for the workspace pane.
+    //   <Route path="/worktree/:wtId" element={<Workspace />} />
+    //   <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />
+    // This allows /worktree (bare), /worktree/vs-7 (with wtId), or /worktree/vs-7/s-abc (with sessionId).
     expect(App).toBeTruthy();
   });
 });

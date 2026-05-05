@@ -71,8 +71,6 @@ coverage/
 # Claude Code
 .claude/
 
-# Local feature plans (not published)
-.feature-plans/
 
 # Package manager locks (keep only one — uncomment your preference)
 # package-lock.json

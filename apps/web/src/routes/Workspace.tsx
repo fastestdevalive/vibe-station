@@ -42,7 +42,7 @@ export function Workspace() {
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
-  useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions, isFullWidthPane);
+  useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions);
   useWorkspaceKeyboardShortcuts(setQuickOpen, !isFullWidthPane);
 
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
@@ -111,9 +111,9 @@ export function Workspace() {
           <LeftSidebar
             api={api}
             collapsed={!isMobile && leftSidebarCollapsed}
-            onWorktreeSelected={() => {
+            onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard || isSettings) navigate("/worktree");
+              if (isDashboard || isSettings) navigate(`/worktree/${wtId}`);
             }}
           />
         }
