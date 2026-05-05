@@ -12,7 +12,7 @@
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter @vibestation/web test:e2e",
     "ci": "pnpm typecheck && pnpm lint && pnpm test",
-    "postinstall": "ln -sfn ../cli/node_modules daemon/node_modules"
+    "postinstall": "node -e \"const fs=require('fs'),p='daemon/node_modules';try{fs.unlinkSync(p)}catch(_){};fs.symlinkSync('../cli/node_modules',p,'junction')\""
   },
   "engines": {
     "node": ">=20"
