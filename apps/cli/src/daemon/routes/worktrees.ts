@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import ignore from "ignore";
@@ -428,24 +428,38 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const hideDotfiles = showHidden === "false";
 
     try {
+      // Resolve symlinks so gitignore paths are computed against the real location.
+      // If the real path escapes the worktree root, relative() returns a "../" path
+      // and we skip the gitignore check for those entries.
+      let resolvedTarget = targetPath;
+      try { resolvedTarget = await realpath(targetPath); } catch { /* broken symlink — readdir will 404 */ }
+
       const entries = await readdir(targetPath, { withFileTypes: true });
-      const result = entries
+      const mapped = entries
         .filter((e) => {
           if (hideDotfiles && e.name.startsWith(".")) return false;
           // Always hide .git directory — it's noise.
           if (e.name === ".git") return false;
-          // Filter gitignored paths
+          // Filter gitignored paths; skip check when the real path escapes the worktree.
           if (ig) {
-            const rel = relative(wtPath, join(targetPath, e.name));
-            if (rel && ig.ignores(rel)) return false;
+            const rel = relative(wtPath, join(resolvedTarget, e.name));
+            if (rel && !rel.startsWith("..") && ig.ignores(rel)) return false;
           }
           return true;
         })
-        .map((e) => ({
-          name: e.name,
-          type: e.isDirectory() ? "dir" : "file",
-          path: join(subPath, e.name),
-        }));
+        .map(async (e) => {
+          let type: "dir" | "file" = e.isDirectory() ? "dir" : "file";
+          if (e.isSymbolicLink()) {
+            try {
+              const s = await stat(join(targetPath, e.name));
+              type = s.isDirectory() ? "dir" : "file";
+            } catch {
+              // Broken symlink — treat as file
+            }
+          }
+          return { name: e.name, type, path: join(subPath, e.name) };
+        });
+      const result = await Promise.all(mapped);
       return reply.send(result);
     } catch {
       return reply.status(404).send({ error: `Path not found: ${subPath}` });
