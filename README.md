@@ -131,34 +131,42 @@ vst project rm my-app
 
 ### Worktrees
 
-Each worktree is a `git worktree` checkout on its own branch. It's the unit of parallel work — one feature, one bug fix, one experiment.
+A worktree is an isolated `git worktree` checkout on its own branch. It's the unit of parallel work — one feature, one bug fix, one experiment. Each worktree is completely independent: agents in different worktrees work on different branches and can never overwrite each other's files.
+
+When you create a worktree, vibe-station automatically creates a **main session** on it and starts your agent. The worktree and its main session are always created together.
 
 ```bash
 vst worktree ls --project=my-app
 vst worktree info <worktree-id>
-vst worktree rm <worktree-id>     # removes the branch and worktree
+vst worktree rm <worktree-id>     # removes the branch, worktree, and all its sessions
 ```
 
 ### Sessions (tabs)
 
-Every worktree has a **main session** (slot `m`) — the primary agent — which is always running and can't be deleted. You can add more sessions to the same worktree:
+A session is a running process inside a worktree — either an **AI agent** or a plain **terminal**. Every worktree starts with one session and you can add more as needed. Think of them as tabs that all share the same branch and file system.
+
+**The main session** (slot `m`) is created automatically with the worktree. It runs your primary agent and cannot be removed — it lives as long as the worktree does.
+
+**Additional sessions** can be agents or terminals, and can be added or removed freely:
 
 ```bash
-# Add a second agent session
+# Add a second agent (e.g. to write tests while the main agent writes code)
 vst session create <worktree-id> --type=agent --mode=<mode-id> --prompt="Write tests for the auth module"
 
-# Add a plain terminal (no AI)
+# Add a plain terminal — no AI, just a shell in the worktree
 vst session create <worktree-id> --type=terminal
 ```
 
-Session slots are named `m` (main), `a2`, `a3` (extra agents), `t1`, `t2` (terminals).
+Session slots are named `m` (main agent), `a2`, `a3` (extra agents), `t1`, `t2` (terminals).
 
 ```bash
 vst session ls --worktree=<worktree-id>
 vst session info <session-id>
-vst session kill <session-id>       # only non-main sessions
+vst session kill <session-id>       # any session except the main slot
 vst session attach <session-id>     # drop into the raw tmux session
 ```
+
+> **Worktree vs session in short:** a worktree is the isolated branch + directory; sessions are the processes running inside it. One worktree, many sessions.
 
 ### Modes
 
