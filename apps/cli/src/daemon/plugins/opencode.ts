@@ -145,9 +145,13 @@ export function createOpencodePlugin(): AgentPlugin {
       session: { agentChatId?: string };
       project: { id: string };
       worktree: { id: string };
+      model?: string;
     }): Promise<string[] | null> {
       if (args.session.agentChatId) {
-        return ["opencode", "--session", args.session.agentChatId];
+        const argv = ["opencode"];
+        if (args.model) argv.push("-m", args.model);
+        argv.push("--session", args.session.agentChatId);
+        return argv;
       }
       return null;
     },

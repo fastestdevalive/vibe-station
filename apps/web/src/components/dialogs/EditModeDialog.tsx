@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { CliId, Mode } from "@/api/types";
+
+function defaultModelForCli(cli: CliId): string | undefined {
+  try {
+    const s = localStorage.getItem(`vst-last-model-${cli}`);
+    if (s) return s;
+  } catch { /* ignore */ }
+  switch (cli) {
+    case "claude": return "sonnet";
+    case "cursor": return "auto";
+    case "opencode": return "opencode/big-pickle";
+  }
+}
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
@@ -31,25 +43,20 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
   async function submit() {
     setError(null);
     const trimmed = name.trim();
-    if (!trimmed) {
-      setError("Name is required.");
-      return;
+    if (!trimmed) { setError("Name is required."); return; }
+    if (trimmed.length > 64) { setError("Name must be at most 64 characters."); return; }
+    if (context.length > 10 * 1024) { setError("Context must be at most 10KB."); return; }
+    try {
+      await api.updateMode(mode.id, {
+        name: trimmed,
+        cli,
+        context,
+        model: model && model.length > 0 ? model : undefined,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
-    if (trimmed.length > 64) {
-      setError("Name must be at most 64 characters.");
-      return;
-    }
-    if (context.length > 10 * 1024) {
-      setError("Context must be at most 10KB.");
-      return;
-    }
-    await api.updateMode(mode.id, {
-      name: trimmed,
-      cli,
-      context,
-      model: model && model.length > 0 ? model : undefined,
-    });
-    onClose();
   }
 
   return (
@@ -82,7 +89,7 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
         checked={cli === "claude"}
         onChange={() => {
           setCli("claude");
-          setModel(undefined);
+          setModel(defaultModelForCli("claude"));
         }}
       />
       <Radio
@@ -91,7 +98,7 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
         checked={cli === "cursor"}
         onChange={() => {
           setCli("cursor");
-          setModel(undefined);
+          setModel(defaultModelForCli("cursor"));
         }}
       />
       <Radio
@@ -100,7 +107,7 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
         checked={cli === "opencode"}
         onChange={() => {
           setCli("opencode");
-          setModel(undefined);
+          setModel(defaultModelForCli("opencode"));
         }}
       />
       <div className="field-label">Context</div>

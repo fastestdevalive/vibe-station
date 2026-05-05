@@ -17,7 +17,7 @@ export function ModesSetting({ api }: ModesSettingProps) {
   const [newOpen, setNewOpen] = useState(false);
   const [editing, setEditing] = useState<Mode | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<{ id: string; msg: string } | null>(null);
 
   const load = useCallback(async () => {
     const list = await api.listModes();
@@ -56,13 +56,12 @@ export function ModesSetting({ api }: ModesSettingProps) {
       await api.deleteMode(id);
       setPendingDeleteId(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        setDeleteError(
-          "This mode is being used by an active session. Stop the session first.",
-        );
-      } else {
-        setDeleteError(e instanceof Error ? e.message : String(e));
-      }
+      // Always reset pending state so the row shows Edit/Delete again (not a stuck "Delete?")
+      setPendingDeleteId(null);
+      const msg = e instanceof ApiError && e.status === 409
+        ? "This mode is being used by an active session. Stop the session first."
+        : (e instanceof Error ? e.message : String(e));
+      setDeleteError({ id, msg });
     }
   }
 
@@ -92,13 +91,12 @@ export function ModesSetting({ api }: ModesSettingProps) {
         </span>
       </div>
 
-      {deleteError ? (
-        <div className="field-error" style={{ marginBottom: "var(--space-3)" }}>
-          {deleteError}
-        </div>
-      ) : null}
-
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+        {modes.length === 0 && (
+          <div style={{ padding: "var(--space-5) 0", textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
+            No modes yet. Create one to get started.
+          </div>
+        )}
         {modes.map((m) => (
           <div
             key={m.id}
@@ -142,62 +140,36 @@ export function ModesSetting({ api }: ModesSettingProps) {
                 ) : null}
               </div>
             </div>
-            {pendingDeleteId === m.id ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "13px" }}>
-                Delete?
-                <button
-                  type="button"
-                  onClick={() => void confirmDelete(m.id)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--fg-primary)",
-                    cursor: "pointer",
-                    textDecoration: "underline",
-                    padding: 0,
-                    font: "inherit",
-                  }}
-                >
-                  Yes
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPendingDeleteId(null)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--fg-muted)",
-                    cursor: "pointer",
-                    padding: 0,
-                    font: "inherit",
-                  }}
-                >
-                  No
-                </button>
-              </span>
-            ) : (
-              <div style={{ display: "flex", gap: 4 }}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label={`Edit ${m.name}`}
-                  onClick={() => setEditing(m)}
-                >
-                  <Pencil size={16} />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  aria-label={`Delete ${m.name}`}
-                  onClick={() => {
-                    setDeleteError(null);
-                    setPendingDeleteId(m.id);
-                  }}
-                >
-                  <Trash2 size={16} />
-                </Button>
-              </div>
-            )}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              {pendingDeleteId === m.id ? (
+                <span style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "13px" }}>
+                  Delete?
+                  <button type="button" onClick={() => void confirmDelete(m.id)}
+                    style={{ background: "none", border: "none", color: "var(--fg-primary)", cursor: "pointer", textDecoration: "underline", padding: 0, font: "inherit" }}>
+                    Yes
+                  </button>
+                  <button type="button" onClick={() => setPendingDeleteId(null)}
+                    style={{ background: "none", border: "none", color: "var(--fg-muted)", cursor: "pointer", padding: 0, font: "inherit" }}>
+                    No
+                  </button>
+                </span>
+              ) : (
+                <div style={{ display: "flex", gap: 4 }}>
+                  <Button type="button" variant="ghost" aria-label={`Edit ${m.name}`} onClick={() => setEditing(m)}>
+                    <Pencil size={16} />
+                  </Button>
+                  <Button type="button" variant="ghost" aria-label={`Delete ${m.name}`}
+                    onClick={() => { setDeleteError(null); setPendingDeleteId(m.id); }}>
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
+              )}
+              {deleteError?.id === m.id && (
+                <div className="field-error" style={{ fontSize: "var(--font-size-xs)", textAlign: "right" }}>
+                  {deleteError.msg}
+                </div>
+              )}
+            </div>
           </div>
         ))}
       </div>

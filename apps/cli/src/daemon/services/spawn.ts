@@ -60,6 +60,8 @@ export interface AgentPlugin {
     session: SessionRecord;
     project: ProjectRecord;
     worktree: WorktreeRecord;
+    /** Per-mode model override — plugin should include the model flag in the returned argv. */
+    model?: string;
   }): Promise<string[] | null>;
 }
 

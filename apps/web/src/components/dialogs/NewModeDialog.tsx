@@ -94,10 +94,11 @@ export function NewModeDialog({
     });
     onSaved?.();
     onClose();
+    // Reset name and context but preserve CLI so consecutive mode creation
+    // for the same CLI doesn't require re-selecting it each time.
     setName("");
     applyPreset("bug-fix-with-pr");
-    setModel(defaultModelForCli("claude"));
-    setCli("claude");
+    setModel(defaultModelForCli(cli));
   }
 
   return (

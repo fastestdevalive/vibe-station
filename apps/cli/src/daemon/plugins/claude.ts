@@ -153,13 +153,16 @@ export function createClaudePlugin(): AgentPlugin {
       session: SessionRecord;
       project: ProjectRecord;
       worktree: WorktreeRecord;
+      model?: string;
     }): Promise<string[] | null> {
-      const { project, worktree, session } = args;
+      const { project, worktree, session, model } = args;
       const uuid =
         session.agentChatId ??
         (await findLatestChatUuid(getWorktreePath(project.id, worktree.id)));
       if (uuid) {
-        return ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+        const argv = ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+        if (model) argv.push("--model", model);
+        return argv;
       }
       return null;
     },
