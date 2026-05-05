@@ -9,7 +9,7 @@ import { mkdir } from "node:fs/promises";
 import { modesPath, vstHome } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { getAllProjects } from "../state/project-store.js";
-import { resolvePlugin } from "../plugins/registry.js";
+import { resolvePlugin } from "../agent-plugins/registry.js";
 import type { CliId } from "../types.js";
 
 const MAX_MODES = 10;
