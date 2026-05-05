@@ -4,7 +4,7 @@
 
 **Issue:** (settings-screen-and-modes)
 **Branch:** `feat/settings-screen-and-modes`
-**Status:** Implemented (manual verification checklists below still open for QA)
+**Status:** Implemented — code on branch `feat/settings-screen-and-modes`. **Requirements** (R1–R19) and **Phase 1–3 implementation** checklists below are complete `[x]`. **Verify phase** rows (`1.T*`, `2.T*`, `3.T*`) remain `[ ]` until manual QA against a live daemon + browser.
 **PRD:** n/a
 
 **Reference files:**
@@ -44,27 +44,27 @@
 
 ## Requirements
 
-| # | Requirement |
-|---|-------------|
-| 1 | Sidebar settings icon navigates to `/settings` route; active state shown on icon |
-| 2 | Settings screen renders in the main content area (right of sidebar), identical structural pattern to dashboard |
-| 3 | Settings left nav lists sections; clicking a section anchor-scrolls the content panel |
-| 4 | Modes section: lists all modes, each as a row with name, CLI badge, model badge (if set), Edit and Delete buttons |
-| 5 | Edit mode dialog: all fields editable — name, CLI (radio), context, model; pre-populated with current values |
-| 6 | Delete mode: inline confirmation; on 409 (in-use by active session) surfaces readable error message |
-| 7 | New `GET /cli-models?cli=<cliId>` daemon endpoint returns list of model strings for a given CLI |
-| 8 | Mode data model gains optional `model?: string`; stored in `modes.json`, exposed in all CRUD responses |
-| 9 | PUT /modes/:id extended to also accept `cli` and `model` updates (CLI was previously immutable — remove that restriction) |
-| 10 | New/edit mode: model dropdown disabled until CLI is selected; populates via `listCliModels` when CLI changes |
-| 11 | Default model per CLI persisted in `localStorage` (`vst-last-model-<cli>`); pre-selected on dialog open when no saved mode model exists |
-| 12 | Default selections: Claude → `sonnet`, Cursor → `auto`, OpenCode → `opencode/big-pickle` (used as fallback when no localStorage value exists) |
-| 13 | Model dropdown always includes `(default)` as the first option (value = empty/undefined = no flag passed to CLI) |
-| 14 | On model dropdown error from CLI: show inline warning + allow free-text input fallback |
-| 15 | Each agent plugin applies the model flag to its launch command when `LaunchConfig.model` is set |
-| 16 | Existing sessions are unaffected by mode edits; UI shows info callout: "Changes only apply to new sessions" |
-| 17 | WS events `mode:created / mode:updated / mode:deleted` drive live updates in the settings screen |
-| 18 | `ModesMenuDialog` is removed entirely (replaced by the dedicated settings screen) |
-| 19 | Design uses inline JSX + CSS custom properties (`var(--space-*)`, `var(--fg-*)`, `var(--border-default)`, etc.) — same pattern as `DashboardPanel.tsx` and `NewModeDialog.tsx`; the design system is a visual reference only, **not** an npm dependency |
+<!-- Acceptance criteria — mirrored against merged branch -->
+
+- [x] **R1** Sidebar settings icon navigates to `/settings` route; active state shown on icon
+- [x] **R2** Settings screen renders in the main content area (right of sidebar), identical structural pattern to dashboard
+- [x] **R3** Settings left nav lists sections; clicking a section anchor-scrolls the content panel
+- [x] **R4** Modes section: lists all modes, each as a row with name, CLI badge, model badge (if set), Edit and Delete buttons
+- [x] **R5** Edit mode dialog: all fields editable — name, CLI (radio), context, model; pre-populated with current values
+- [x] **R6** Delete mode: inline confirmation; on 409 (in-use by active session) surfaces readable error message
+- [x] **R7** New `GET /cli-models?cli=<cliId>` daemon endpoint returns list of model strings for a given CLI
+- [x] **R8** Mode data model gains optional `model?: string`; stored in `modes.json`, exposed in all CRUD responses
+- [x] **R9** PUT /modes/:id extended to also accept `cli` and `model` updates (CLI was previously immutable — remove that restriction)
+- [x] **R10** New/edit mode: model dropdown disabled until CLI is selected; populates via `listCliModels` when CLI changes
+- [x] **R11** Default model per CLI persisted in `localStorage` (`vst-last-model-<cli>`); pre-selected on dialog open when no saved mode model exists
+- [x] **R12** Default selections: Claude → `sonnet`, Cursor → `auto`, OpenCode → `opencode/big-pickle` (used as fallback when no localStorage value exists)
+- [x] **R13** Model dropdown always includes `(default)` as the first option (value = empty/undefined = no flag passed to CLI)
+- [x] **R14** On model dropdown error from CLI: show inline warning + allow free-text input fallback
+- [x] **R15** Each agent plugin applies the model flag to its launch command when `LaunchConfig.model` is set
+- [x] **R16** Existing sessions are unaffected by mode edits; UI shows info callout aligned with plan wording (sessions continue with original settings)
+- [x] **R17** WS events `mode:created / mode:updated / mode:deleted` drive live updates in the settings screen
+- [x] **R18** `ModesMenuDialog` is removed entirely (replaced by the dedicated settings screen)
+- [x] **R19** Design uses inline JSX + CSS custom properties (`var(--space-*)`, `var(--fg-*)`, `var(--border-default)`, etc.) — same pattern as `DashboardPanel.tsx` and `NewModeDialog.tsx`; the design system is a visual reference only, **not** an npm dependency
 
 ---
 
@@ -225,7 +225,8 @@ The design system at `~/code/fastestdevalive/100gb-minimalist-design-system` is 
 - [x] **1.10** `opencode.ts` `getLaunchCommand`: if `cfg.model`, return `["opencode", "-m", cfg.model]` instead of `["opencode"]`
 - [x] **1.11** `cursor.ts` `getLaunchCommand`: if `cfg.model`, insert `"--model", cfg.model` into argv before `"--workspace"`
 
-**Verify phase 1:**
+**Verify phase 1** *(manual — curl against running daemon or integration test)*
+
 - [ ] **1.T1** `POST /modes` with `model: "sonnet"` → 201; response body includes `model: "sonnet"`
 - [ ] **1.T2** `PUT /modes/:id` with `{ cli: "opencode" }` → 200; mode's CLI updated in response + `modes.json`
 - [ ] **1.T3** `PUT /modes/:id` with `{ model: "auto" }` → 200; model updated
@@ -253,7 +254,8 @@ The design system at `~/code/fastestdevalive/100gb-minimalist-design-system` is 
   - Remove `modesOpen` state, `ModesMenuDialog` import and render
 - [x] **2.5** Delete `apps/web/src/components/dialogs/ModesMenuDialog.tsx`
 
-**Verify phase 2:**
+**Verify phase 2** *(manual — browser)*
+
 - [ ] **2.T1** Click settings icon in sidebar → URL changes to `/settings`; main content area shows the settings screen (left nav + content)
 - [ ] **2.T2** Clicking sidebar worktree navigates away from `/settings` to `/worktree`
 - [ ] **2.T3** Settings nav "Modes" button scrolls to modes section
@@ -301,7 +303,8 @@ The design system at `~/code/fastestdevalive/100gb-minimalist-design-system` is 
   - On success: call `onClose()` — WS `mode:updated` event will update the list in `ModesSetting`
   - Footer buttons: `<button onClick={onClose}>Cancel</button>` and `<button onClick={submit}>Save</button>` — match `NewModeDialog` footer pattern exactly
 
-**Verify phase 3:**
+**Verify phase 3** *(manual — browser + daemon)*
+
 - [ ] **3.T1** Modes section lists all existing modes with name, CLI badge, edit + delete buttons
 - [ ] **3.T2** WS event `mode:created` → new mode appears in list without reload
 - [ ] **3.T3** WS event `mode:deleted` → mode disappears from list
