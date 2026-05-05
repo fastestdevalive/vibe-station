@@ -342,6 +342,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           session,
           project,
           worktree,
+          model: mode.model,
         });
 
         if (restoreArgv) {
@@ -400,6 +401,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             daemonPort,
             systemPrompt: builtPrompt.systemPrompt,
             taskPrompt: builtPrompt.taskPrompt,
+            model: mode.model,
           });
         }
       } catch (err) {

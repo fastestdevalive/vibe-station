@@ -23,9 +23,11 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
       setLoading(false);
       return;
     }
+    // Clear stale list immediately so old CLI's models don't flash during switch
+    setModels([]);
+    setFetchError(null);
     let cancelled = false;
     setLoading(true);
-    setFetchError(null);
     void api.listCliModels(cli).then((r) => {
       if (cancelled) return;
       setLoading(false);
@@ -34,7 +36,6 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
         setModels([]);
       } else {
         setModels(r.models);
-        setFetchError(null);
       }
     });
     return () => {
@@ -46,12 +47,8 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
     if (!cli) return;
     const trimmed = nextRaw.trim();
     try {
-      if (trimmed) {
-        localStorage.setItem(`vst-last-model-${cli}`, trimmed);
-      }
-    } catch {
-      /* ignore */
-    }
+      if (trimmed) localStorage.setItem(`vst-last-model-${cli}`, trimmed);
+    } catch { /* ignore */ }
     onChange(trimmed ? trimmed : undefined);
   }
 
@@ -86,23 +83,25 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
     );
   }
 
-  const selectValue = value === undefined || value === "" ? "" : value;
+  const selectValue = value ?? "";
+  // If the saved value isn't in the fetched list, include it as an option so
+  // the select doesn't silently fall back to "(default)" while state still
+  // holds the old value — makes the mismatch visible to the user.
+  const valueInList = !selectValue || models.includes(selectValue);
 
   return (
     <Select
       disabled={loading}
       aria-label="Model"
       value={selectValue}
-      onChange={(e) => {
-        const v = e.target.value;
-        persistAndNotify(v);
-      }}
+      onChange={(e) => persistAndNotify(e.target.value)}
     >
       <option value="">(default)</option>
+      {!valueInList && (
+        <option value={selectValue}>{selectValue} (not in current list)</option>
+      )}
       {models.map((m) => (
-        <option key={m} value={m}>
-          {m}
-        </option>
+        <option key={m} value={m}>{m}</option>
       ))}
     </Select>
   );

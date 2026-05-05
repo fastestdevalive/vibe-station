@@ -30,6 +30,8 @@ const CLAUDE_MODELS_HARDCODED = [
 ] as const;
 
 const cliModelCache = new Map<CliId, { models: string[]; fetchedAt: number }>();
+/** In-flight deduplication: concurrent requests share the same fetch promise. */
+const cliModelInflight = new Map<CliId, Promise<{ models: string[]; error?: string }>>();
 
 interface Mode {
   id: string;
@@ -96,7 +98,7 @@ async function fetchCliModelsUncached(cli: CliId): Promise<{ models: string[]; e
     }
     if (cli === "opencode") {
       const { stdout } = await execFileAsync("opencode", ["models"], {
-        timeout: 120_000,
+        timeout: 15_000,
         maxBuffer: 10 * 1024 * 1024,
       });
       const models = stdout
@@ -107,7 +109,7 @@ async function fetchCliModelsUncached(cli: CliId): Promise<{ models: string[]; e
     }
     if (cli === "cursor") {
       const { stdout } = await execFileAsync("cursor-agent", ["--list-models"], {
-        timeout: 60_000,
+        timeout: 15_000,
         maxBuffer: 10 * 1024 * 1024,
       });
       const models = stdout
@@ -121,7 +123,9 @@ async function fetchCliModelsUncached(cli: CliId): Promise<{ models: string[]; e
     }
     return { models: [], error: `Unknown CLI: ${cli}` };
   } catch (err) {
-    return { models: [], error: String(err) };
+    // Log full error server-side; return sanitized message to client
+    console.error(`[cli-models] fetch failed for ${cli}:`, err);
+    return { models: [], error: "Failed to fetch models from CLI. Check that the CLI is installed and authenticated." };
   }
 }
 
@@ -142,11 +146,19 @@ export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; 
     return { models: hit.models };
   }
 
-  const result = await fetchCliModelsUncached(cli);
-  if (!result.error) {
-    cliModelCache.set(cli, { models: result.models, fetchedAt: Date.now() });
-  }
-  return result;
+  // Deduplicate concurrent fetches for the same CLI
+  const inflight = cliModelInflight.get(cli);
+  if (inflight) return inflight;
+
+  const fetchPromise = fetchCliModelsUncached(cli).then((result) => {
+    cliModelInflight.delete(cli);
+    if (!result.error) {
+      cliModelCache.set(cli, { models: result.models, fetchedAt: Date.now() });
+    }
+    return result;
+  });
+  cliModelInflight.set(cli, fetchPromise);
+  return fetchPromise;
 }
 
 /** Check if any running session references this modeId. */

@@ -109,6 +109,7 @@ export function createCursorPlugin(): AgentPlugin {
       session: { agentChatId?: string };
       project: { id: string };
       worktree: { id: string };
+      model?: string;
     }): Promise<string[] | null> {
       // cursor-agent --resume <chatId> reloads the prior conversation from cursor's
       // local chat-history DB, which already includes the original system prompt as
@@ -116,23 +117,16 @@ export function createCursorPlugin(): AgentPlugin {
       // shell-line, no system-prompt re-injection. Tradeoff: a resumed session will
       // NOT pick up edits to AGENTS.md / .vibe-station/rules.md made between runs;
       // those only land on a fresh spawn.
-      const { project, worktree, session } = args;
+      const { project, worktree, session, model } = args;
       const wtPath = getWorktreePath(project.id, worktree.id);
       const chatId = session.agentChatId ?? (await findLatestCursorChatId(wtPath));
       if (!chatId) return null;
       // Mirror the fresh-launch flags so the restored session has the same
       // workspace/sandbox/MCP behaviour. --resume picks an existing chat.
-      return [
-        "cursor-agent",
-        "--resume",
-        chatId,
-        "--workspace",
-        wtPath,
-        "--force",
-        "--sandbox",
-        "disabled",
-        "--approve-mcps",
-      ];
+      const argv = ["cursor-agent", "--resume", chatId];
+      if (model) argv.push("--model", model);
+      argv.push("--workspace", wtPath, "--force", "--sandbox", "disabled", "--approve-mcps");
+      return argv;
     },
   };
 }

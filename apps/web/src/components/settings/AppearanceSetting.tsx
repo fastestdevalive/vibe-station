@@ -52,6 +52,7 @@ function SegmentedControl({
 }) {
   return (
     <div
+      role="radiogroup"
       style={{
         display: "inline-flex",
         background: "var(--bg-card)",
@@ -65,6 +66,8 @@ function SegmentedControl({
         <button
           key={opt.value}
           type="button"
+          role="radio"
+          aria-checked={value === opt.value}
           onClick={() => onChange(opt.value)}
           style={{
             border: "none",
