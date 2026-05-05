@@ -33,7 +33,7 @@ EXPOSE 5173
 
 CMD ["sh", "-c", "\
   rm -f /home/vst/.vibe-station/.daemon.lock && \
-  node apps/cli/dist/daemon/main.js & \
+  node cli/dist/daemon/main.js & \
   echo 'Waiting for daemon...' && \
   until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done && \
   echo 'Daemon ready.' && \
