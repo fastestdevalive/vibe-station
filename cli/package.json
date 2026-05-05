@@ -1,0 +1,43 @@
+{
+  "name": "@vibestation/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vst": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "cd ../daemon && tsc && cd ../cli && tsc && node -e \"require('fs').cpSync('../daemon/src/assets','dist/daemon/assets',{recursive:true})\"",
+    "dev": "tsc --noEmit --watch",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint --config ../eslint.config.mjs src",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@fastify/type-provider-zod": "^1.0.0",
+    "@fastify/websocket": "^11.2.0",
+    "chalk": "^5.3.0",
+    "chokidar": "^5.0.0",
+    "commander": "^12.1.0",
+    "fastify": "^5.8.5",
+    "ignore": "^7.0.5",
+    "node-pty": "^1.1.0",
+    "ora": "^8.0.1",
+    "prompts": "^2.4.2",
+    "zod": "^4.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/prompts": "^2.4.9",
+    "@types/ws": "^8.18.1",
+    "nock": "^13.5.4",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0",
+    "ws": "^8.20.0"
+  }
+}
