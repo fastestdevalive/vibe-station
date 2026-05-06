@@ -2536,7 +2536,7 @@
 
 .dashboard-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-4);
   padding-bottom: var(--space-6);
   border-bottom: var(--border-width) solid var(--border-default);

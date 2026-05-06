@@ -199,6 +199,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               title="Dismiss from tracking (keep files)"
               onClick={(e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 setPendingDismiss(wt);
               }}
             >
