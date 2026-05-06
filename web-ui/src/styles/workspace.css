@@ -729,7 +729,9 @@
 .wt-row__stretch-link {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  /* z-index 1 puts the link above normal-flow content so mouse clicks land
+     here. wt-row__trail is z-index 2 so the ⋯ button stays above it. */
+  z-index: 1;
   text-decoration: none;
   color: transparent;
 }

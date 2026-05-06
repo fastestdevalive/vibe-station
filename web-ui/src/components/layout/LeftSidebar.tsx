@@ -379,7 +379,7 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
                           onClick={() => selectWorktree(p.id, w)}
                           tabIndex={-1}
                         />
-                        <div className="wt-row__expand" style={{ position: "relative", zIndex: 1 }}>
+                        <div className="wt-row__expand">
                           {!collapsed ? (
                             <span className="wt-leading-slot" aria-hidden>
                               <StatusDot
