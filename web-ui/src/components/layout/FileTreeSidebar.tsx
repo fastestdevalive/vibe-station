@@ -393,11 +393,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
         </div>
       </div>
       <div
-        style={{
-          flex: 1,
-          overflow: "auto",
-          padding: "var(--space-2)",
-        }}
+        style={{ flex: 1, overflow: "auto", padding: "var(--space-2)" }}
         role={diffMode ? undefined : "tree"}
         aria-label={
           diffMode
@@ -407,32 +403,34 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
               : "Worktree files"
         }
       >
-        {!diffMode && localLoading ? (
-          <div className="file-tree-git-loading" aria-live="polite">
-            Loading git markers…
-          </div>
-        ) : null}
-        {!diffMode && localError ? (
-          <div className="file-tree-git-error" role="alert">
-            {localError}
-          </div>
-        ) : null}
-        {diffMode ? (
-          <ChangedFileList entries={groupedEntries} loading={groupedLoading} error={groupedError} />
-        ) : (
-          root.map((e) => (
-            <TreeNode
-              key={e.path}
-              api={api}
-              worktreeId={activeWorktreeId}
-              entry={e}
-              level={0}
-              expanded={expanded}
-              toggle={toggle}
-              gitStatusByPath={gitStatusByPath}
-            />
-          ))
-        )}
+        <div style={{ minWidth: "max-content" }}>
+          {!diffMode && localLoading ? (
+            <div className="file-tree-git-loading" aria-live="polite">
+              Loading git markers…
+            </div>
+          ) : null}
+          {!diffMode && localError ? (
+            <div className="file-tree-git-error" role="alert">
+              {localError}
+            </div>
+          ) : null}
+          {diffMode ? (
+            <ChangedFileList entries={groupedEntries} loading={groupedLoading} error={groupedError} />
+          ) : (
+            root.map((e) => (
+              <TreeNode
+                key={e.path}
+                api={api}
+                worktreeId={activeWorktreeId}
+                entry={e}
+                level={0}
+                expanded={expanded}
+                toggle={toggle}
+                gitStatusByPath={gitStatusByPath}
+              />
+            ))
+          )}
+        </div>
       </div>
     </div>
   );
