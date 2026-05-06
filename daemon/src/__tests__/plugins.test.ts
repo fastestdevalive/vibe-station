@@ -62,16 +62,24 @@ describe("Agent plugins", () => {
       expect(plugin.name).toBe("opencode");
     });
 
+    it("resolvePlugin('gemini') returns name === 'gemini'", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      expect(plugin.name).toBe("gemini");
+      expect(plugin.defaultModel).toBe("gemini-2.5-pro");
+    });
+
     it("T10.4 — resolvePlugin('unknown') throws", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       expect(() => resolvePlugin("unknown" as any)).toThrow();
     });
 
-    it("Phase 1 — defaultModel matches plugin defaults (claude, cursor, opencode)", async () => {
+    it("Phase 1 — defaultModel matches plugin defaults", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       expect(resolvePlugin("claude").defaultModel).toBe("sonnet");
       expect(resolvePlugin("cursor").defaultModel).toBe("auto");
       expect(resolvePlugin("opencode").defaultModel).toBe("opencode/big-pickle");
+      expect(resolvePlugin("gemini").defaultModel).toBe("gemini-2.5-pro");
     });
   });
 
@@ -245,6 +253,68 @@ describe("Agent plugins", () => {
     });
   });
 
+  describe("Gemini plugin", () => {
+    it("getLaunchCommand with model includes -m flag", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1" },
+        daemonPort: 7421,
+        model: "gemini-2.5-pro",
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini", "-m", "gemini-2.5-pro"]);
+    });
+
+    it("getLaunchCommand without model returns bare gemini", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1" },
+        daemonPort: 7421,
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini"]);
+    });
+
+    it("getEnvironment sets GEMINI_SYSTEM_MD to system prompt path", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const { systemPromptPath } = await import("../services/paths.js");
+      const plugin = resolvePlugin("gemini");
+      const env = plugin.getEnvironment({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1" },
+        daemonPort: 7421,
+      } as LaunchConfig);
+      expect(env.GEMINI_SYSTEM_MD).toBe(systemPromptPath("p1", "w1", "s1"));
+    });
+
+    it("composeLaunchPrompt: postLaunchSubmit true and VSTPRMT needle present", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = plugin.composeLaunchPrompt({
+        systemPrompt: "sys",
+        taskPrompt: "Do the task",
+        sessionId: "sess-g",
+        systemPromptFile: "/tmp/sp.md",
+        launchCfg: {} as LaunchConfig,
+      });
+      expect(result.postLaunchSubmit).toBe(true);
+      expect(result.postLaunchInput).toContain("Do the task");
+      expect(result.postLaunchInput).toContain("VSTPRMT:sess-g");
+    });
+
+    it("listModels returns three gemini ids", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const { models } = await plugin.listModels();
+      expect(models).toEqual(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]);
+    });
+  });
+
   describe("Integration tests", () => {
     let app: FastifyInstance;
     let repoDir: string;
@@ -358,13 +428,11 @@ describe("Agent plugins", () => {
       expect(callArgs?.[0]?.plugin?.name).toBe("cursor");
     });
 
-    it("Phase 5 — T5.T4 (contract) — every registered plugin (claude, cursor, opencode) defines getRestoreCommand", async () => {
-      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+    it("Phase 5 — T5.T4 (contract) — every registered plugin defines getRestoreCommand", async () => {
+      const { resolvePlugin, SUPPORTED_CLIS } = await import("../agent-plugins/registry.js");
 
-      const pluginNames = ["claude", "cursor", "opencode"] as const;
-
-      for (const name of pluginNames) {
-        const plugin = resolvePlugin(name as any);
+      for (const name of SUPPORTED_CLIS) {
+        const plugin = resolvePlugin(name);
         // Plugin must have the method
         expect(typeof plugin.getRestoreCommand).toBe("function");
         // Calling with stub args must return either null or string[]

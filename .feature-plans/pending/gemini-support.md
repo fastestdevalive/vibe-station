@@ -207,7 +207,7 @@ AFTER — one registration point:
 
 ### Phase 2 — Gemini plugin + dynamic Zod + `/supported-clis` route
 
-- [ ] **2.1** Create `daemon/src/agent-plugins/gemini.ts`:
+- [x] **2.1** Create `daemon/src/agent-plugins/gemini.ts`:
   - `name: "gemini"`, `defaultModel: "gemini-2.5-pro"`, `promptDelivery: "post-launch"`, `postSentinelDelayMs: 500`
   - `listModels()` → `{ models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"] }`
   - `getLaunchCommand(cfg)` → `["gemini", ...(cfg.model ? ["-m", cfg.model] : [])]`
@@ -215,19 +215,19 @@ AFTER — one registration point:
   - `getReadySignal()` → `{ sentinel: "╭", fallbackMs: 10_000 }`
   - `composeLaunchPrompt(prompt)` → `postLaunchInput` = taskPrompt + `<!-- VSTPRMT:sessionId -->`; `postLaunchSubmit: true`
   - `getRestoreCommand` → returns `null`
-- [ ] **2.2** `registry.ts` — add `gemini: createGeminiPlugin` to `PLUGIN_MAP`; add import
-- [ ] **2.3** `modes.ts:59,68,128` — replace three `z.enum(["claude","cursor","opencode"])` with `z.enum(SUPPORTED_CLIS as [CliId, ...CliId[]])`; import `SUPPORTED_CLIS`, `CliId` from registry
-- [ ] **2.4** `modes.ts` — add `GET /supported-clis` route: `Object.entries(PLUGIN_MAP).map(([id, f]) => ({ id, defaultModel: f().defaultModel }))` — import `PLUGIN_MAP` from registry
+- [x] **2.2** `registry.ts` — add `gemini: createGeminiPlugin` to `PLUGIN_MAP`; add import
+- [x] **2.3** `modes.ts:59,68,128` — replace three `z.enum(["claude","cursor","opencode"])` with `z.enum(SUPPORTED_CLIS as [CliId, ...CliId[]])`; import `SUPPORTED_CLIS`, `CliId` from registry
+- [x] **2.4** `modes.ts` — add `GET /supported-clis` route: `Object.entries(PLUGIN_MAP).map(([id, f]) => ({ id, defaultModel: f().defaultModel }))` — import `PLUGIN_MAP` from registry
 
 **Verify phase 2:**
-- [ ] **2.T1** `resolvePlugin("gemini").name === "gemini"` and `.defaultModel === "gemini-2.5-pro"`
-- [ ] **2.T2** `getLaunchCommand` with model → `["gemini", "-m", "gemini-2.5-pro"]`; without → `["gemini"]`
-- [ ] **2.T3** `getEnvironment` → object contains `GEMINI_SYSTEM_MD` with correct path
-- [ ] **2.T4** `composeLaunchPrompt` → `postLaunchSubmit: true`; input contains task + `VSTPRMT:` needle
-- [ ] **2.T5** `listModels()` → three gemini model ids
-- [ ] **2.T6** `GET /supported-clis` → array includes `{ id: "gemini", defaultModel: "gemini-2.5-pro" }`
-- [ ] **2.T7** `POST /modes` with `cli: "gemini"` → 201; with `cli: "bogus"` → 400
-- [ ] **2.T8** `tsc --noEmit` in `daemon/` exits 0
+- [x] **2.T1** `resolvePlugin("gemini").name === "gemini"` and `.defaultModel === "gemini-2.5-pro"`
+- [x] **2.T2** `getLaunchCommand` with model → `["gemini", "-m", "gemini-2.5-pro"]`; without → `["gemini"]`
+- [x] **2.T3** `getEnvironment` → object contains `GEMINI_SYSTEM_MD` with correct path
+- [x] **2.T4** `composeLaunchPrompt` → `postLaunchSubmit: true`; input contains task + `VSTPRMT:` needle
+- [x] **2.T5** `listModels()` → three gemini model ids
+- [x] **2.T6** `GET /supported-clis` → array includes `{ id: "gemini", defaultModel: "gemini-2.5-pro" }`
+- [x] **2.T7** `POST /modes` with `cli: "gemini"` → 201; with `cli: "bogus"` → 400
+- [x] **2.T8** `tsc --noEmit` in `daemon/` exits 0
 
 ---
 

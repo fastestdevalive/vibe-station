@@ -53,6 +53,34 @@ describe("Mode routes", () => {
     expect(res.json()).toEqual([]);
   });
 
+  it("GET /supported-clis lists all CLIs with defaultModel including gemini", async () => {
+    const res = await app.inject({ method: "GET", url: "/supported-clis" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<Array<{ id: string; defaultModel: string }>>();
+    const gemini = body.find((c) => c.id === "gemini");
+    expect(gemini).toEqual({ id: "gemini", defaultModel: "gemini-2.5-pro" });
+    expect(body.map((c) => c.id).sort()).toEqual(["claude", "cursor", "gemini", "opencode"]);
+  });
+
+  it("POST /modes accepts cli gemini", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/modes",
+      payload: { name: "gemini-mode", cli: "gemini", context: "Use Gemini." },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<Mode>().cli).toBe("gemini");
+  });
+
+  it("POST /modes rejects bogus cli", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/modes",
+      payload: { name: "bad", cli: "bogus", context: "ctx" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it("POST /modes creates a mode", async () => {
     const res = await app.inject({
       method: "POST",
