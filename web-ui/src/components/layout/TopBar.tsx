@@ -144,7 +144,7 @@ export function TopBar({
             aria-label="Home"
             onClick={() => clearWorkspaceSelection()}
           >
-            vibe-station
+            Vibe Station
           </Link>
           <div
             className="top-bar__crumb"

@@ -2547,10 +2547,10 @@
 }
 
 .dashboard-header__wordmark {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  color: var(--fg-primary);
-  letter-spacing: -0.02em;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-muted);
+  letter-spacing: 0;
 }
 
 .dashboard-header__daemon {
