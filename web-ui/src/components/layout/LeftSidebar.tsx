@@ -275,14 +275,14 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
-      {(isMobile || !collapsed) ? (
+      {isMobile ? (
         <Link
           to="/"
           className="left-sidebar__brand"
           aria-label="Home"
           onClick={() => {
             clearWorkspaceSelection();
-            if (isMobile) setMobileSidebarOpen(false);
+            setMobileSidebarOpen(false);
           }}
         >
           vibe-station
@@ -360,7 +360,7 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
                     <div key={w.id} className="wt-row-wrap">
                       <div
                         className="tree-row tree-row--worktree"
-                        data-active={activeWorktreeId === w.id}
+                        data-active={activeWorktreeId === w.id && location.pathname.startsWith("/worktree/")}
                         style={{ position: "relative" }}
                         title={collapsed ? `${w.branch} — select worktree` : undefined}
                         role="button"

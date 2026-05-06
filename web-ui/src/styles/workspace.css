@@ -411,12 +411,14 @@
   gap: var(--space-1);
   margin-bottom: var(--space-2);
   min-height: 32px;
+  /* padding-left matches brand's padding-left (16px) minus scroll-area padding (8px)
+     so "Projects" text left-edge = brand "vibe-station" left-edge */
+  padding-left: var(--space-2);
 }
 
 .sidebar-projects-heading__gutter {
-  /* match tree-row left padding so "Projects" label aligns with the status dot column */
-  width: var(--space-2);
-  flex-shrink: 0;
+  /* hidden — alignment handled by padding-left on the heading itself */
+  display: none;
 }
 
 .sidebar-projects-heading__title {
@@ -518,6 +520,7 @@
   justify-content: center;
   margin-bottom: var(--space-1);
   min-height: 28px;
+  padding-left: 0;
 }
 
 .left-sidebar--collapsed .sidebar-projects-heading__gutter {
