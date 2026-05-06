@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProjectRecord, WorktreeRecord } from "../types.js";
+import { worktreePath } from "./paths.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -64,11 +65,16 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
   const l1 = await loadSkillMd();
 
   // L2 — project + worktree + mode context
+  const wtPath = worktreePath(project.id, worktree.id);
   const l2Lines: string[] = [
     "",
     "## Context",
     "",
-    `**Project:** ${project.id} (${project.absolutePath})`,
+    `**Your working directory (worktree):** ${wtPath}`,
+    `> This is where you must read and write all files. Do NOT work in the project base directory.`,
+    "",
+    `**Project:** ${project.id}`,
+    `**Project base directory:** ${project.absolutePath} — for reference only; do not edit files here`,
     `**Default branch:** ${project.defaultBranch}`,
     `**Worktree:** ${worktree.id}`,
     `**Branch:** ${worktree.branch}`,
