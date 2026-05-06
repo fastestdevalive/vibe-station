@@ -2530,7 +2530,8 @@
 }
 
 .dashboard-panel__inner--kanban {
-  max-width: none;
+  /* 3 columns × ~260px + 2 gaps × 12px + some breathing room */
+  max-width: 900px;
 }
 
 .dashboard-header {
