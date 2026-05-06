@@ -44,7 +44,13 @@ export interface Session {
   createdAt: string;
 }
 
-export type CliId = "claude" | "cursor" | "opencode";
+/** Dynamic CLI id strings — canonical list from GET /supported-clis */
+export type CliId = string;
+
+export interface SupportedCli {
+  id: string;
+  defaultModel: string;
+}
 
 export interface Mode {
   id: string;
