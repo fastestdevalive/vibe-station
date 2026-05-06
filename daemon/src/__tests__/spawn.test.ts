@@ -40,6 +40,7 @@ describe("spawnSession prompt verification", () => {
   function pluginWithMarker(): AgentPlugin {
     return {
       name: "cursor",
+      defaultModel: "auto",
       promptDelivery: "post-launch",
       postSentinelDelayMs: 0,
       getLaunchCommand: () => ["true"],
@@ -51,6 +52,7 @@ describe("spawnSession prompt verification", () => {
         useShell: undefined,
         shellLine: undefined,
       }),
+      listModels: async () => ({ models: [] }),
     };
   }
 
@@ -167,11 +169,13 @@ describe("spawnSession chat-id hooks", () => {
   function minimalPlugin(): AgentPlugin {
     return {
       name: "test",
+      defaultModel: "test-model",
       promptDelivery: "inline",
       getLaunchCommand: () => ["true"],
       getEnvironment: () => ({}),
       getReadySignal: () => ({ fallbackMs: 0 }),
       composeLaunchPrompt: () => ({ launchArgs: undefined, postLaunchInput: undefined }),
+      listModels: async () => ({ models: [] }),
     };
   }
 
