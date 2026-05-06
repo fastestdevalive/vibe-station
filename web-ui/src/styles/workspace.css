@@ -611,7 +611,7 @@
 
 .tree-row__label {
   flex: 1;
-  min-width: 0;
+  white-space: nowrap;
 }
 
 .tree-row__action {
