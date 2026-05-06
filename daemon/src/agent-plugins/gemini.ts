@@ -19,12 +19,18 @@ import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
 import { systemPromptPath } from "../services/paths.js";
 import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
 
-const GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"] as const;
+// "auto" = no -m flag passed; Gemini CLI picks the default model automatically.
+const GEMINI_MODELS = [
+  "auto",
+  "gemini-3.1-pro-preview",
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite-preview",
+] as const;
 
 export function createGeminiPlugin(): AgentPlugin {
   return {
     name: "gemini",
-    defaultModel: "gemini-2.5-pro",
+    defaultModel: "auto",
     promptDelivery: "inline",
 
     async listModels() {
@@ -33,7 +39,8 @@ export function createGeminiPlugin(): AgentPlugin {
 
     getLaunchCommand(cfg: LaunchConfig): string[] {
       const argv = ["gemini", "--yolo", "--skip-trust"];
-      if (cfg.model) argv.push("-m", cfg.model);
+      // "auto" or unset → let the CLI pick its default; any other value → pass -m
+      if (cfg.model && cfg.model !== "auto") argv.push("-m", cfg.model);
       // --session-id is set after provideChatId() populates session.agentChatId
       if (cfg.session.agentChatId) argv.push("--session-id", cfg.session.agentChatId);
       return argv;
@@ -79,7 +86,7 @@ export function createGeminiPlugin(): AgentPlugin {
       const { session, model } = args;
       if (!session.agentChatId) return null;
       const argv = ["gemini", "--yolo", "--skip-trust", "--resume", session.agentChatId];
-      if (model) argv.push("-m", model);
+      if (model && model !== "auto") argv.push("-m", model);
       return argv;
     },
   };

@@ -66,7 +66,7 @@ describe("Agent plugins", () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("gemini");
       expect(plugin.name).toBe("gemini");
-      expect(plugin.defaultModel).toBe("gemini-2.5-pro");
+      expect(plugin.defaultModel).toBe("auto");
     });
 
     it("T10.4 — resolvePlugin('unknown') throws", async () => {
@@ -79,7 +79,7 @@ describe("Agent plugins", () => {
       expect(resolvePlugin("claude").defaultModel).toBe("sonnet");
       expect(resolvePlugin("cursor").defaultModel).toBe("auto");
       expect(resolvePlugin("opencode").defaultModel).toBe("opencode/big-pickle");
-      expect(resolvePlugin("gemini").defaultModel).toBe("gemini-2.5-pro");
+      expect(resolvePlugin("gemini").defaultModel).toBe("auto");
     });
   });
 
@@ -254,7 +254,7 @@ describe("Agent plugins", () => {
   });
 
   describe("Gemini plugin", () => {
-    it("getLaunchCommand includes --yolo, --skip-trust, and -m when model set", async () => {
+    it("getLaunchCommand includes -m when model is a specific id", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
@@ -262,12 +262,25 @@ describe("Agent plugins", () => {
         worktree: { id: "w1" },
         session: { id: "s1", agentChatId: undefined },
         daemonPort: 7421,
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
       } as LaunchConfig);
-      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust", "-m", "gemini-2.5-pro"]);
+      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust", "-m", "gemini-3.1-pro-preview"]);
     });
 
-    it("getLaunchCommand without model omits -m flag", async () => {
+    it("getLaunchCommand omits -m when model is 'auto'", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1", agentChatId: undefined },
+        daemonPort: 7421,
+        model: "auto",
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust"]);
+    });
+
+    it("getLaunchCommand omits -m when no model supplied", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
@@ -344,16 +357,28 @@ describe("Agent plugins", () => {
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
 
-    it("getRestoreCommand returns --resume argv when agentChatId is set", async () => {
+    it("getRestoreCommand returns --resume argv with -m when specific model set", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("gemini");
       const result = await plugin.getRestoreCommand?.({
         session: { agentChatId: "abc-uuid" } as never,
         project: { id: "p1" } as never,
         worktree: { id: "w1" } as never,
-        model: "gemini-2.5-flash",
+        model: "gemini-3.1-pro-preview",
       });
-      expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid", "-m", "gemini-2.5-flash"]);
+      expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid", "-m", "gemini-3.1-pro-preview"]);
+    });
+
+    it("getRestoreCommand omits -m when model is auto", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = await plugin.getRestoreCommand?.({
+        session: { agentChatId: "abc-uuid" } as never,
+        project: { id: "p1" } as never,
+        worktree: { id: "w1" } as never,
+        model: "auto",
+      });
+      expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid"]);
     });
 
     it("getRestoreCommand returns null when agentChatId is missing", async () => {
@@ -367,11 +392,16 @@ describe("Agent plugins", () => {
       expect(result).toBeNull();
     });
 
-    it("listModels returns three gemini ids", async () => {
+    it("listModels returns auto + three preview model ids", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("gemini");
       const { models } = await plugin.listModels();
-      expect(models).toEqual(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]);
+      expect(models).toEqual([
+        "auto",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+      ]);
     });
   });
 
