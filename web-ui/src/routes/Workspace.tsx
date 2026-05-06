@@ -45,6 +45,18 @@ export function Workspace() {
   useWorkspaceUrlSync(bundleLoaded, bundle.worktrees, bundle.sessions);
   useWorkspaceKeyboardShortcuts(setQuickOpen, !isFullWidthPane);
 
+  // Update browser tab title to reflect current context
+  useEffect(() => {
+    if (isSettings) {
+      document.title = "Settings — vibe-station";
+    } else if (isDashboard || !activeWorktreeId) {
+      document.title = "vibe-station";
+    } else {
+      const wt = bundle.worktrees.find((w) => w.id === activeWorktreeId);
+      document.title = wt ? `${wt.branch} — vibe-station` : "vibe-station";
+    }
+  }, [activeWorktreeId, bundle.worktrees, isDashboard, isSettings]);
+
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
   // even before the first session subscription. The api client owns reconnects.
   useEffect(() => {
