@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import ignore from "ignore";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { EventEmitter } from "node:events";
 
 /**
@@ -26,7 +26,10 @@ export class FileWatcher extends EventEmitter {
       try {
         const gitignoreContent = readFileSync(gitignorePath, "utf8");
         const ig = ignore().add(gitignoreContent);
-        ignoreFilter = (path: string) => ig.ignores(path);
+        ignoreFilter = (path: string) => {
+          const rel = relative(worktreeRoot, path);
+          return !!rel && !rel.startsWith("..") && ig.ignores(rel);
+        };
       } catch {
         // No .gitignore — use default
       }
