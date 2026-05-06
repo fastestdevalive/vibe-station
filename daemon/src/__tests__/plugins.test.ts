@@ -66,6 +66,13 @@ describe("Agent plugins", () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       expect(() => resolvePlugin("unknown" as any)).toThrow();
     });
+
+    it("Phase 1 — defaultModel matches plugin defaults (claude, cursor, opencode)", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      expect(resolvePlugin("claude").defaultModel).toBe("sonnet");
+      expect(resolvePlugin("cursor").defaultModel).toBe("auto");
+      expect(resolvePlugin("opencode").defaultModel).toBe("opencode/big-pickle");
+    });
   });
 
   describe("Claude plugin", () => {

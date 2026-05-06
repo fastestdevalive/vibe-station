@@ -41,6 +41,7 @@ const CLAUDE_MODELS = [
 export function createClaudePlugin(): AgentPlugin {
   return {
     name: "claude",
+    defaultModel: "sonnet",
     promptDelivery: "inline",
 
     async listModels() {

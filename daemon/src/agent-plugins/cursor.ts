@@ -25,6 +25,7 @@ const execFile = promisify(execFileCb);
 export function createCursorPlugin(): AgentPlugin {
   return {
     name: "cursor",
+    defaultModel: "auto",
     // Shell-line launch: system prompt is baked into the launch command via $(cat <file>).
     // No post-launch paste for system prompt; task prompt is also inlined at launch.
     promptDelivery: "inline",
