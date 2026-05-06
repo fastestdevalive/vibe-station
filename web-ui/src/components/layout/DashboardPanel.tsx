@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Columns3, EyeOff, LayoutList } from "lucide-react";
 import { Link } from "react-router-dom";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { HealthResponse, Project, Session, SessionState, Worktree } from "@/api/types";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -52,6 +53,8 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     setSessions(ss);
     syncSessionsFromApi(ss);
   }, [api, syncSessionsFromApi]);
+
+  const isMobile = useMediaQuery("(max-width: 768px)");
 
   const [dashboardView, setDashboardView] = useState<"list" | "kanban">(() => {
     try {
@@ -229,18 +232,21 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               {daemonOk ? `daemon · port ${health.port}` : "daemon unreachable"}
             </span>
           </div>
-          <button
-            type="button"
-            className="icon-btn dashboard-header__view-toggle"
-            aria-label={toggleViewLabel}
-            title={toggleViewLabel}
-            onClick={() => setDashboardView((v) => (v === "list" ? "kanban" : "list"))}
-          >
-            {dashboardView === "list" ? <Columns3 size={18} /> : <LayoutList size={18} />}
-          </button>
+          {!isMobile ? (
+            <button
+              type="button"
+              className="icon-btn dashboard-header__view-toggle"
+              aria-label={toggleViewLabel}
+              title={toggleViewLabel}
+              onClick={() => setDashboardView((v) => (v === "list" ? "kanban" : "list"))}
+            >
+              {dashboardView === "list" ? <Columns3 size={18} /> : <LayoutList size={18} />}
+            </button>
+          ) : null}
         </div>
 
-        {dashboardView === "list" ? (
+        {/* On mobile always render the list layout — kanban columns don't work on narrow screens */}
+        {isMobile || dashboardView === "list" ? (
           <>
             {working.length > 0 ? (
               <section className="dashboard-section">
@@ -289,6 +295,32 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
             </div>
           </div>
         )}
+
+        {/* Projects — always shown below worktree sections */}
+        {projects.length > 0 ? (
+          <section className="dashboard-section">
+            <div className="dashboard-section__label">projects</div>
+            <div className="dashboard-card-list">
+              {projects.map((p) => {
+                const wts = worktrees.filter((w) => w.projectId === p.id);
+                const activeCount = wts.filter((w) =>
+                  sessions.some(
+                    (s) => s.worktreeId === w.id && (s.state === "working" || s.state === "idle"),
+                  ),
+                ).length;
+                return (
+                  <div key={p.id} className="dashboard-card dashboard-card--project">
+                    <span className="dashboard-card__primary">{p.name}</span>
+                    <span className="dashboard-card__secondary">
+                      {wts.length} {wts.length === 1 ? "worktree" : "worktrees"}
+                      {activeCount > 0 ? ` · ${activeCount} active` : ""}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
       </div>
 
       <ConfirmDialog

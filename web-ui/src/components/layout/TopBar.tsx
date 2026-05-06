@@ -30,7 +30,7 @@ function shortcutHints() {
 
 interface TopBarProps {
   /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles. */
-  layoutMode?: "workspace" | "dashboard";
+  layoutMode?: "workspace" | "dashboard" | "settings";
   projects: Project[];
   worktrees: Worktree[];
   sessions: Session[];
@@ -92,6 +92,8 @@ export function TopBar({
   const crumbParts: { label: string; highlight?: boolean }[] = [];
   if (layoutMode === "dashboard") {
     crumbParts.push({ label: "Dashboard" });
+  } else if (layoutMode === "settings") {
+    crumbParts.push({ label: "Settings" });
   } else {
     if (project) crumbParts.push({ label: project.name });
     if (wt) crumbParts.push({ label: wt.branch, highlight: true });
@@ -103,7 +105,9 @@ export function TopBar({
   const mobileTitle =
     layoutMode === "dashboard"
       ? "Dashboard"
-      : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+      : layoutMode === "settings"
+        ? "Settings"
+        : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
     <span className="top-bar__crumb-seg">—</span>
@@ -154,6 +158,8 @@ export function TopBar({
         <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
           {layoutMode === "dashboard" ? (
             <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
+          ) : layoutMode === "settings" ? (
+            <span className="top-bar__crumb-seg top-bar__mobile-line">Settings</span>
           ) : (
             <>
               <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>

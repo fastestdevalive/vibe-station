@@ -104,7 +104,7 @@ export function Workspace() {
       <Layout
         topBar={
           <TopBar
-            layoutMode={isFullWidthPane ? "dashboard" : "workspace"}
+            layoutMode={isSettings ? "settings" : isDashboard ? "dashboard" : "workspace"}
             projects={bundle.projects}
             worktrees={bundle.worktrees}
             sessions={bundle.sessions}
