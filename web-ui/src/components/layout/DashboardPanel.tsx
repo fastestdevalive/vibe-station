@@ -262,6 +262,10 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
                 <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
               </section>
             ) : null}
+
+            {working.length === 0 && idle.length === 0 && finished.length === 0 ? (
+              <p className="dashboard-empty">No agent worktrees yet. Add a project with the CLI.</p>
+            ) : null}
           </>
         ) : (
           <div className="dashboard-kanban">

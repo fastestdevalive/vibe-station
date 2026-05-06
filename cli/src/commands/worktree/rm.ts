@@ -25,6 +25,7 @@ export function registerWorktreeRm(worktree: Command): void {
           message: "Also delete files from disk?",
           initial: false,
         });
+        if (ans.doPurge === undefined) die("Cancelled.", 1);
         shouldPurge = Boolean(ans.doPurge);
       }
 

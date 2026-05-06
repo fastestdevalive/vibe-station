@@ -363,12 +363,21 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
                         data-active={activeWorktreeId === w.id}
                         style={{ position: "relative" }}
                         title={collapsed ? `${w.branch} — select worktree` : undefined}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            void selectWorktree(p.id, w);
+                          }
+                        }}
                       >
                         <Link
                           to={`/worktree/${w.id}`}
                           className="wt-row__stretch-link"
                           aria-label={`Open worktree ${w.branch}`}
                           onClick={() => selectWorktree(p.id, w)}
+                          tabIndex={-1}
                         />
                         <div className="wt-row__expand" style={{ position: "relative", zIndex: 1 }}>
                           {!collapsed ? (
@@ -482,7 +491,7 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
         title="Dismiss worktree?"
         message={
           pendingDismiss
-            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk.`
+            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk. Any running sessions will be stopped.`
             : ""
         }
         confirmLabel="Dismiss"
