@@ -7,9 +7,9 @@
 # Then open: http://localhost:5174
 #
 # CLI binaries are bind-mounted read-only from the host so that
-# GET /cli-models?cli=opencode|cursor|claude works inside the container.
-# Session spawning (actually running agents) is NOT supported in this sandbox —
-# use this for UI + API testing only.
+# GET /cli-models works inside the container. gemini is installed directly in the image;
+# ~/.gemini is bind-mounted so OAuth credentials are available inside the container.
+# Override paths with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN if yours differ.
 
 services:
   vst-dev:
@@ -29,6 +29,8 @@ services:
       - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
       - ${CURSOR_BIN:-${HOME}/.local/bin/cursor-agent}:/usr/local/bin/cursor-agent:ro
       - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
+      # Gemini is installed in the image; mount host credentials so OAuth works
+      - ${HOME}/.gemini:/home/vst/.gemini:ro
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)

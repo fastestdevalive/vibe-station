@@ -3,7 +3,7 @@
  * These mirror the manifest.json schema from HIGH-LEVEL-DESIGN.md §2.
  */
 
-export type CliId = "claude" | "cursor" | "opencode";
+export type { CliId } from "./agent-plugins/registry.js";
 
 export type LifecycleState = "not_started" | "working" | "idle" | "done" | "exited";
 

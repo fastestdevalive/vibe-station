@@ -28,6 +28,7 @@ function sleep(ms: number): Promise<void> {
 export function createOpencodePlugin(): AgentPlugin {
   return {
     name: "opencode",
+    defaultModel: "opencode/big-pickle",
     promptDelivery: "post-launch",
 
     async listModels() {

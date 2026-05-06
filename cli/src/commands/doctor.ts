@@ -35,7 +35,7 @@ export function registerDoctor(program: Command): void {
         return true;
       }) && allOk;
 
-      const binaries = ["claude", "cursor", "opencode"];
+      const binaries = ["claude", "cursor", "opencode", "gemini"];
       for (const bin of binaries) {
         check(`${bin} is on PATH`, () => {
           try {

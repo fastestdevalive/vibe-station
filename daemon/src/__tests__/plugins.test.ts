@@ -62,9 +62,24 @@ describe("Agent plugins", () => {
       expect(plugin.name).toBe("opencode");
     });
 
+    it("resolvePlugin('gemini') returns name === 'gemini'", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      expect(plugin.name).toBe("gemini");
+      expect(plugin.defaultModel).toBe("auto");
+    });
+
     it("T10.4 — resolvePlugin('unknown') throws", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       expect(() => resolvePlugin("unknown" as any)).toThrow();
+    });
+
+    it("Phase 1 — defaultModel matches plugin defaults", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      expect(resolvePlugin("claude").defaultModel).toBe("sonnet");
+      expect(resolvePlugin("cursor").defaultModel).toBe("auto");
+      expect(resolvePlugin("opencode").defaultModel).toBe("opencode/big-pickle");
+      expect(resolvePlugin("gemini").defaultModel).toBe("auto");
     });
   });
 
@@ -238,6 +253,158 @@ describe("Agent plugins", () => {
     });
   });
 
+  describe("Gemini plugin", () => {
+    it("getLaunchCommand includes -m when model is a specific id", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1", agentChatId: undefined },
+        daemonPort: 7421,
+        model: "gemini-3.1-pro-preview",
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust", "-m", "gemini-3.1-pro-preview"]);
+    });
+
+    it("getLaunchCommand omits -m when model is 'auto'", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1", agentChatId: undefined },
+        daemonPort: 7421,
+        model: "auto",
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust"]);
+    });
+
+    it("getLaunchCommand omits -m when no model supplied", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1", agentChatId: undefined },
+        daemonPort: 7421,
+      } as LaunchConfig);
+      expect(cmd).toEqual(["gemini", "--yolo", "--skip-trust"]);
+    });
+
+    it("getLaunchCommand includes --session-id when agentChatId is set", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const cmd = plugin.getLaunchCommand({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1", agentChatId: "my-uuid-1234" },
+        daemonPort: 7421,
+      } as LaunchConfig);
+      expect(cmd).toContain("--session-id");
+      expect(cmd).toContain("my-uuid-1234");
+    });
+
+    it("getEnvironment sets GEMINI_SYSTEM_MD to system prompt path", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const { systemPromptPath } = await import("../services/paths.js");
+      const plugin = resolvePlugin("gemini");
+      const env = plugin.getEnvironment({
+        project: { id: "p1" },
+        worktree: { id: "w1" },
+        session: { id: "s1" },
+        daemonPort: 7421,
+      } as LaunchConfig);
+      expect(env.GEMINI_SYSTEM_MD).toBe(systemPromptPath("p1", "w1", "s1"));
+    });
+
+    it("composeLaunchPrompt: task prompt delivered inline via launchArgs [-i, prompt]", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = plugin.composeLaunchPrompt({
+        systemPrompt: "sys",
+        taskPrompt: "Do the task",
+        sessionId: "sess-g",
+        systemPromptFile: "/tmp/sp.md",
+        launchCfg: {} as LaunchConfig,
+      });
+      expect(result.launchArgs).toEqual(["-i", "Do the task"]);
+      expect(result.postLaunchInput).toBeUndefined();
+      expect(result.postLaunchSubmit).toBeUndefined();
+    });
+
+    it("composeLaunchPrompt: no task prompt returns empty launchArgs", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = plugin.composeLaunchPrompt({
+        systemPrompt: "sys",
+        sessionId: "sess-g",
+        systemPromptFile: "/tmp/sp.md",
+        launchCfg: {} as LaunchConfig,
+      });
+      expect(result.launchArgs).toBeUndefined();
+      expect(result.postLaunchInput).toBeUndefined();
+    });
+
+    it("provideChatId returns a valid UUID", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const id = await plugin.provideChatId?.({
+        session: { id: "s1" } as never,
+        project: { id: "p1" } as never,
+        worktree: { id: "w1" } as never,
+      });
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
+
+    it("getRestoreCommand returns --resume argv with -m when specific model set", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = await plugin.getRestoreCommand?.({
+        session: { agentChatId: "abc-uuid" } as never,
+        project: { id: "p1" } as never,
+        worktree: { id: "w1" } as never,
+        model: "gemini-3.1-pro-preview",
+      });
+      expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid", "-m", "gemini-3.1-pro-preview"]);
+    });
+
+    it("getRestoreCommand omits -m when model is auto", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = await plugin.getRestoreCommand?.({
+        session: { agentChatId: "abc-uuid" } as never,
+        project: { id: "p1" } as never,
+        worktree: { id: "w1" } as never,
+        model: "auto",
+      });
+      expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid"]);
+    });
+
+    it("getRestoreCommand returns null when agentChatId is missing", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const result = await plugin.getRestoreCommand?.({
+        session: {} as never,
+        project: { id: "p1" } as never,
+        worktree: { id: "w1" } as never,
+      });
+      expect(result).toBeNull();
+    });
+
+    it("listModels returns auto + three preview model ids", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const plugin = resolvePlugin("gemini");
+      const { models } = await plugin.listModels();
+      expect(models).toEqual([
+        "auto",
+        "gemini-3.1-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+      ]);
+    });
+  });
+
   describe("Integration tests", () => {
     let app: FastifyInstance;
     let repoDir: string;
@@ -351,13 +518,11 @@ describe("Agent plugins", () => {
       expect(callArgs?.[0]?.plugin?.name).toBe("cursor");
     });
 
-    it("Phase 5 — T5.T4 (contract) — every registered plugin (claude, cursor, opencode) defines getRestoreCommand", async () => {
-      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+    it("Phase 5 — T5.T4 (contract) — every registered plugin defines getRestoreCommand", async () => {
+      const { resolvePlugin, SUPPORTED_CLIS } = await import("../agent-plugins/registry.js");
 
-      const pluginNames = ["claude", "cursor", "opencode"] as const;
-
-      for (const name of pluginNames) {
-        const plugin = resolvePlugin(name as any);
+      for (const name of SUPPORTED_CLIS) {
+        const plugin = resolvePlugin(name);
         // Plugin must have the method
         expect(typeof plugin.getRestoreCommand).toBe("function");
         // Calling with stub args must return either null or string[]
