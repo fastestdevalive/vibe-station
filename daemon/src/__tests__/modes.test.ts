@@ -58,7 +58,7 @@ describe("Mode routes", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json<Array<{ id: string; defaultModel: string }>>();
     const gemini = body.find((c) => c.id === "gemini");
-    expect(gemini).toEqual({ id: "gemini", defaultModel: "gemini-2.5-pro" });
+    expect(gemini).toEqual({ id: "gemini", defaultModel: "auto" });
     expect(body.map((c) => c.id).sort()).toEqual(["claude", "cursor", "gemini", "opencode"]);
   });
 
