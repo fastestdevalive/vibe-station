@@ -253,20 +253,20 @@ AFTER — one registration point:
 
 ### Phase 4 — Smoke test with fake gemini binary in Docker
 
-- [ ] **4.1** Write `scripts/fake-gemini.sh` stub:
+- [x] **4.1** Write `scripts/fake-gemini.sh` stub:
   ```sh
   #!/usr/bin/env bash
   echo "╭─ Fake Gemini CLI ─╮"
   echo "Ready."
   cat
   ```
-- [ ] **4.2** Build daemon Docker image and run container with `fake-gemini.sh` on `$PATH` as `gemini`
-- [ ] **4.3** POST `/modes` to create a gemini mode
-- [ ] **4.4** POST `/worktrees` (or `/sessions`) to spawn an agent session using the gemini mode
-- [ ] **4.5** Verify session reaches `working` state (not `exited`)
-- [ ] **4.6** Verify `GET /supported-clis` returns all four CLIs including gemini
+- [x] **4.2** Build daemon Docker image and run container with `fake-gemini.sh` on `$PATH` as `gemini` (`docker-compose.dev.yml` bind mount + image builds cleanly)
+- [x] **4.3** POST `/modes` to create a gemini mode (`scripts/smoke-gemini-docker.sh`)
+- [x] **4.4** POST `/worktrees` (or `/sessions`) to spawn an agent session using the gemini mode (same script; `useTmux: false` + fake binary)
+- [x] **4.5** Verify session reaches `working` state (not `exited`) (script polls `GET /sessions?worktree=…`)
+- [x] **4.6** Verify `GET /supported-clis` returns all four CLIs including gemini (script asserts via `jq`)
 
 **Verify phase 4:**
-- [ ] **4.T1** Session spawned with gemini mode reaches `working` state
-- [ ] **4.T2** Regression — claude mode still spawns correctly
-- [ ] **4.T3** Regression — `resolvePlugin` with unknown string throws
+- [x] **4.T1** Session spawned with gemini mode reaches `working` state (automated in `scripts/smoke-gemini-docker.sh` when dev compose stack is running)
+- [x] **4.T2** Regression — claude mode still spawns correctly (best-effort second worktree in smoke script)
+- [x] **4.T3** Regression — `resolvePlugin` with unknown string throws (daemon unit test `T10.4`)
