@@ -9,10 +9,17 @@ import { mkdir } from "node:fs/promises";
 import { modesPath, vstHome } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { getAllProjects } from "../state/project-store.js";
-import { resolvePlugin } from "../agent-plugins/registry.js";
-import type { CliId } from "../types.js";
+import {
+  PLUGIN_MAP,
+  resolvePlugin,
+  SUPPORTED_CLIS,
+  type CliId,
+} from "../agent-plugins/registry.js";
 
 const MAX_MODES = 10;
+
+const CLI_ENUM_TUPLE = SUPPORTED_CLIS as [CliId, ...CliId[]];
+const cliIdSchema = z.enum(CLI_ENUM_TUPLE);
 const MAX_CONTEXT_LEN = 10_000;
 const MAX_MODEL_LEN = 100;
 const CLI_MODEL_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -56,7 +63,7 @@ export function _resetModesCacheForTest(): void {
 
 const CreateModeBody = z.object({
   name: z.string().min(1).max(64),
-  cli: z.enum(["claude", "cursor", "opencode"]),
+  cli: cliIdSchema,
   context: z.string().min(1).max(MAX_CONTEXT_LEN),
   presetId: z.string().optional(),
   model: z.string().max(MAX_MODEL_LEN).optional(),
@@ -65,7 +72,7 @@ const CreateModeBody = z.object({
 const UpdateModeBody = z.object({
   name: z.string().min(1).max(64).optional(),
   context: z.string().min(1).max(MAX_CONTEXT_LEN).optional(),
-  cli: z.enum(["claude", "cursor", "opencode"]).optional(),
+  cli: cliIdSchema.optional(),
   model: z.string().max(MAX_MODEL_LEN).optional(),
 });
 
@@ -123,9 +130,18 @@ function isModeInUse(modeId: string): boolean {
 }
 
 export function registerModeRoutes(app: FastifyInstance): void {
+  // GET /supported-clis
+  app.get("/supported-clis", async (_req, reply) => {
+    const list = (SUPPORTED_CLIS as CliId[]).map((id) => ({
+      id,
+      defaultModel: PLUGIN_MAP[id]().defaultModel,
+    }));
+    return reply.send(list);
+  });
+
   // GET /cli-models?cli=
   app.get("/cli-models", async (req, reply) => {
-    const q = z.enum(["claude", "cursor", "opencode"]).safeParse(
+    const q = cliIdSchema.safeParse(
       typeof req.query === "object" && req.query !== null && "cli" in req.query
         ? (req.query as { cli?: string }).cli
         : undefined,
