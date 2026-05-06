@@ -1,9 +1,9 @@
 import { createClientApi } from "./client";
 import { createMockApi } from "./mock";
 
-/** Default mock unless `VITE_USE_MOCK=false`. */
+/** Default real API unless `VITE_USE_MOCK=true`. */
 export const api =
-  import.meta.env.VITE_USE_MOCK === "false" ? createClientApi() : createMockApi();
+  import.meta.env.VITE_USE_MOCK === "true" ? createMockApi() : createClientApi();
 
 export type ApiInstance = ReturnType<typeof createMockApi> | ReturnType<typeof createClientApi>;
 
