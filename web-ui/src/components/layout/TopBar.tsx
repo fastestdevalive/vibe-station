@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   Columns2,
   PanelLeft,
@@ -30,7 +30,7 @@ function shortcutHints() {
 
 interface TopBarProps {
   /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles. */
-  layoutMode?: "workspace" | "dashboard";
+  layoutMode?: "workspace" | "dashboard" | "settings";
   projects: Project[];
   worktrees: Worktree[];
   sessions: Session[];
@@ -54,7 +54,6 @@ export function TopBar({
   onOpenQuickOpen,
   leftColumnPx,
 }: TopBarProps) {
-  const navigate = useNavigate();
   const {
     activeProjectId,
     activeWorktreeId,
@@ -71,11 +70,6 @@ export function TopBar({
 
   const hints = shortcutHints();
 
-  function goHome() {
-    clearWorkspaceSelection();
-    navigate("/", { replace: true });
-  }
-
   const treeOn = !paneCollapsed[0];
   const previewOn = !paneCollapsed[1];
   const terminalOn = !paneCollapsed[2];
@@ -83,7 +77,7 @@ export function TopBar({
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
 
   // Measure the brand button so we can align the crumb to the sidebar's right edge.
-  const brandRef = useRef<HTMLButtonElement>(null);
+  const brandRef = useRef<HTMLAnchorElement>(null);
   const [brandWidth, setBrandWidth] = useState(0);
   useEffect(() => {
     if (brandRef.current) setBrandWidth(brandRef.current.offsetWidth);
@@ -98,6 +92,8 @@ export function TopBar({
   const crumbParts: { label: string; highlight?: boolean }[] = [];
   if (layoutMode === "dashboard") {
     crumbParts.push({ label: "Dashboard" });
+  } else if (layoutMode === "settings") {
+    crumbParts.push({ label: "Settings" });
   } else {
     if (project) crumbParts.push({ label: project.name });
     if (wt) crumbParts.push({ label: wt.branch, highlight: true });
@@ -109,7 +105,9 @@ export function TopBar({
   const mobileTitle =
     layoutMode === "dashboard"
       ? "Dashboard"
-      : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+      : layoutMode === "settings"
+        ? "Settings"
+        : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
     <span className="top-bar__crumb-seg">—</span>
@@ -138,9 +136,16 @@ export function TopBar({
       </button>
       {!isMobile ? (
         <>
-          <button ref={brandRef} type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
-            vibe-station
-          </button>
+          <Link
+            ref={brandRef}
+            to="/"
+            replace
+            className="top-bar__brand"
+            aria-label="Home"
+            onClick={() => clearWorkspaceSelection()}
+          >
+            Vibe Station
+          </Link>
           <div
             className="top-bar__crumb"
             title={crumbTitle}
@@ -153,6 +158,8 @@ export function TopBar({
         <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
           {layoutMode === "dashboard" ? (
             <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
+          ) : layoutMode === "settings" ? (
+            <span className="top-bar__crumb-seg top-bar__mobile-line">Settings</span>
           ) : (
             <>
               <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>

@@ -368,4 +368,30 @@ describe("Worktree routes", () => {
     spy.mockRestore();
     vi.mocked(spawnModule.spawnSession).mockResolvedValue(undefined);
   });
+
+  it("POST /worktrees/:id/done marks agent sessions as done", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `mark-done-${Date.now()}`, modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string }>();
+
+    const doneRes = await app.inject({
+      method: "POST",
+      url: `/worktrees/${wt.id}/done`,
+    });
+    expect(doneRes.statusCode).toBe(200);
+    const body = doneRes.json<{ ok: boolean; updated: number }>();
+    expect(body.ok).toBe(true);
+    expect(body.updated).toBeGreaterThanOrEqual(1);
+
+    const sessRes = await app.inject({
+      method: "GET",
+      url: `/sessions/${wt.id}-m`,
+    });
+    expect(sessRes.statusCode).toBe(200);
+    expect(sessRes.json<{ state: string }>().state).toBe("done");
+  });
 });

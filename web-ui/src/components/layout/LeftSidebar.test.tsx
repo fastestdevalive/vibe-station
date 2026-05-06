@@ -40,11 +40,11 @@ describe("LeftSidebar", () => {
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
-    await screen.findByRole("button", { name: /Select worktree wt-1/i });
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
     await user.click(screen.getByText("Proj A"));
-    expect(screen.queryByRole("button", { name: /Select worktree wt-1/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
     await user.click(screen.getByText("Proj A"));
-    await screen.findByRole("button", { name: /Select worktree wt-1/i });
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
   });
 
   it("clicking worktree sets active worktree", async () => {
@@ -54,8 +54,8 @@ describe("LeftSidebar", () => {
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
-    await screen.findByRole("button", { name: /Select worktree wt-2/i });
-    await user.click(screen.getByRole("button", { name: /Select worktree wt-2/i }));
+    await screen.findByRole("link", { name: /Open worktree wt-2/i });
+    await user.click(screen.getByRole("link", { name: /Open worktree wt-2/i }));
     expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-2");
   });
 
@@ -65,7 +65,7 @@ describe("LeftSidebar", () => {
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
-    await screen.findByRole("button", { name: /Select worktree wt-1/i });
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
     const menus = screen.getAllByRole("button", { name: /Worktree actions for/i });
     expect(menus[0]?.className).toContain("wt-menu-trigger");
   });
@@ -89,7 +89,7 @@ describe("LeftSidebar", () => {
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
-    await screen.findByRole("button", { name: /Select worktree wt-1/i });
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
     api.__test.emit({
       type: "session:created",
       sessionId: "sess-extra",
@@ -114,13 +114,15 @@ describe("LeftSidebar", () => {
     });
   });
 
-  it("Settings is an icon button with accessible name", async () => {
+  it("Settings is a link with accessible name", async () => {
     render(
       <MemoryRouter>
         <LeftSidebar api={api} />
       </MemoryRouter>,
     );
     await screen.findByText("Proj A");
-    expect(screen.getByRole("button", { name: /^Settings$/i })).toBeInTheDocument();
+    const settings = screen.getByRole("link", { name: /^Settings$/i });
+    expect(settings).toBeInTheDocument();
+    expect(settings).toHaveAttribute("href", "/settings");
   });
 });

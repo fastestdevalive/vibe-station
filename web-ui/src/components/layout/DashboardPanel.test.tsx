@@ -5,7 +5,7 @@ import { createMockApi } from "@/api/mock";
 import { DashboardPanel } from "./DashboardPanel";
 
 describe("DashboardPanel", () => {
-  it("renders daemon status and project list", async () => {
+  it("renders daemon status and project names on worktree cards", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -20,7 +20,7 @@ describe("DashboardPanel", () => {
     });
   });
 
-  it("renders working and idle session sections", async () => {
+  it("renders working, idle, and finished sections", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -32,9 +32,10 @@ describe("DashboardPanel", () => {
     });
     expect(screen.getByText("working")).toBeInTheDocument();
     expect(screen.getByText("idle")).toBeInTheDocument();
+    expect(screen.getByText("finished")).toBeInTheDocument();
   });
 
-  it("updates session row when session:state fires", async () => {
+  it("updates worktree row bucket when session:state fires", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -46,17 +47,24 @@ describe("DashboardPanel", () => {
     });
     const workingSection = screen.getByText("working").closest("section");
     expect(workingSection).not.toBeNull();
-    expect(within(workingSection!).getByText("main")).toBeInTheDocument();
+    expect(within(workingSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+      "href",
+      "/worktree/wt-1",
+    );
 
     api.__test.emit({ type: "session:state", sessionId: "sess-main", state: "idle" });
 
     await waitFor(() => {
-      expect(within(workingSection!).queryByText("main")).toBeNull();
+      // Bucket hides entirely when empty — old section refs would point at stale detached DOM.
+      expect(screen.queryByText("working")).toBeNull();
     });
     const idleSection = screen.getByText("idle").closest("section");
     expect(idleSection).not.toBeNull();
     await waitFor(() => {
-      expect(within(idleSection!).getAllByText("main").length).toBe(2);
+      expect(within(idleSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+        "href",
+        "/worktree/wt-1",
+      );
     });
   });
 });
