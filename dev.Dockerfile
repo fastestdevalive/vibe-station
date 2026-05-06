@@ -1,7 +1,7 @@
 # Dev sandbox for testing vibe-station on a feature branch.
 # Runs daemon + Vite dev server in one container.
-# Agent CLIs (opencode, cursor-agent, claude) are volume-mounted from the host
-# — only needed for GET /cli-models and session spawning; UI testing works without them.
+# Agent CLIs (opencode, cursor-agent, claude) are volume-mounted from the host.
+# Gemini can use `scripts/fake-gemini.sh` mounted as `/usr/local/bin/gemini` (see docker-compose.dev.yml).
 #
 # Usage:
 #   docker compose -f docker-compose.dev.yml up --build
