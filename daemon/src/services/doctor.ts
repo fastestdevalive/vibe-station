@@ -10,6 +10,7 @@
 import { exec as execCb } from "node:child_process";
 import { promisify } from "node:util";
 import { access } from "node:fs/promises";
+import { SUPPORTED_CLIS } from "../agent-plugins/registry.js";
 import { getAllProjects } from "../state/project-store.js";
 import { listSessions } from "./tmux.js";
 import { worktreePath as getWorktreePath } from "./paths.js";
@@ -114,7 +115,7 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
   checks.push(await checkGitVersion());
 
   // Plugin binaries (warn if missing)
-  for (const plugin of ["claude", "cursor", "opencode"]) {
+  for (const plugin of SUPPORTED_CLIS) {
     const found = await checkBinary(plugin);
     checks.push({
       name: `plugin-${plugin}`,

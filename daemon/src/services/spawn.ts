@@ -28,6 +28,8 @@ export function promptVerificationNeedle(sessionId: string): string {
 
 export interface AgentPlugin {
   readonly name: string;
+  /** Default model id for UI when creating modes for this CLI. */
+  readonly defaultModel: string;
   readonly promptDelivery: "inline" | "post-launch";
   /** Extra settle time after ready sentinel (or fallback delay), before stdin paste. */
   readonly postSentinelDelayMs?: number;

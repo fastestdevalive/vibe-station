@@ -114,8 +114,9 @@ async function runMainSpawnJob(opts: {
   plugin: AgentPlugin;
   daemonPort: number;
   builtPrompt: { systemPrompt: string; taskPrompt?: string };
+  model?: string;
 }): Promise<void> {
-  const { projectId, wtId, freshProject, worktreeRecord, mainSession, plugin, daemonPort, builtPrompt } =
+  const { projectId, wtId, freshProject, worktreeRecord, mainSession, plugin, daemonPort, builtPrompt, model } =
     opts;
 
   try {
@@ -127,6 +128,7 @@ async function runMainSpawnJob(opts: {
       daemonPort,
       systemPrompt: builtPrompt.systemPrompt,
       taskPrompt: builtPrompt.taskPrompt,
+      model,
     });
 
     mainSession.lifecycle = {
@@ -325,6 +327,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         plugin,
         daemonPort,
         builtPrompt,
+        model: mode.model,
       });
 
     } catch (err) {
