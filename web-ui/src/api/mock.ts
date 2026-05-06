@@ -9,6 +9,7 @@ import type {
   Project,
   SendInputBody,
   Session,
+  SupportedCli,
   TreeEntry,
   UpdateModeBody,
   WSEvent,
@@ -452,6 +453,15 @@ export function createMockApi() {
       return structuredClone(modes);
     },
 
+    async getSupportedClis(): Promise<SupportedCli[]> {
+      return [
+        { id: "claude", defaultModel: "sonnet" },
+        { id: "cursor", defaultModel: "auto" },
+        { id: "opencode", defaultModel: "opencode/big-pickle" },
+        { id: "gemini", defaultModel: "gemini-2.5-pro" },
+      ];
+    },
+
     async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
       if (cli === "claude") {
         return {
@@ -467,6 +477,11 @@ export function createMockApi() {
       }
       if (cli === "cursor") {
         return { models: ["auto", "composer-2-fast", "gpt-5.3-codex"] };
+      }
+      if (cli === "gemini") {
+        return {
+          models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
+        };
       }
       return { models: ["opencode/big-pickle", "opencode/other"] };
     },

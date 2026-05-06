@@ -9,6 +9,7 @@ import type {
   Project,
   SendInputBody,
   Session,
+  SupportedCli,
   TreeEntry,
   UpdateModeBody,
   WSEvent,
@@ -311,6 +312,12 @@ export function createClientApi() {
       const root = baseUrl();
       const res = await fetch(`${root}/modes`);
       return parseJson<Mode[]>(res);
+    },
+
+    async getSupportedClis(): Promise<SupportedCli[]> {
+      const root = baseUrl();
+      const res = await fetch(`${root}/supported-clis`);
+      return parseJson<SupportedCli[]>(res);
     },
 
     async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {

@@ -233,21 +233,21 @@ AFTER — one registration point:
 
 ### Phase 3 — Web-UI dynamic dialogs
 
-- [ ] **3.1** `web-ui/src/api/types.ts` — `CliId = string`; add `export interface SupportedCli { id: string; defaultModel: string }`
-- [ ] **3.2** `web-ui/src/api/client.ts` — add `getSupportedClis(): Promise<SupportedCli[]>` → `GET /supported-clis`
-- [ ] **3.3** `web-ui/src/api/mock.ts` — add `getSupportedClis()` returning `[{id:"claude",defaultModel:"sonnet"},{id:"cursor",defaultModel:"auto"},{id:"opencode",defaultModel:"opencode/big-pickle"},{id:"gemini",defaultModel:"gemini-2.5-pro"}]`
-- [ ] **3.4** `NewModeDialog.tsx`:
+- [x] **3.1** `web-ui/src/api/types.ts` — `CliId = string`; add `export interface SupportedCli { id: string; defaultModel: string }`
+- [x] **3.2** `web-ui/src/api/client.ts` — add `getSupportedClis(): Promise<SupportedCli[]>` → `GET /supported-clis`
+- [x] **3.3** `web-ui/src/api/mock.ts` — add `getSupportedClis()` returning `[{id:"claude",defaultModel:"sonnet"},{id:"cursor",defaultModel:"auto"},{id:"opencode",defaultModel:"opencode/big-pickle"},{id:"gemini",defaultModel:"gemini-2.5-pro"}]`
+- [x] **3.4** `NewModeDialog.tsx`:
   - Add `useEffect` fetching `api.getSupportedClis()` on mount → state `{ clis: SupportedCli[], loading: boolean }`
   - Replace `defaultModelForCli` switch + hardcoded radio group with `.map()` over `clis`
   - On CLI change → `setModel(clis.find(c => c.id === newCli)?.defaultModel ?? "")`
   - While loading → disable submit; show subtle spinner in radio area
-- [ ] **3.5** `EditModeDialog.tsx` — same changes as 3.4
+- [x] **3.5** `EditModeDialog.tsx` — same changes as 3.4
 
 **Verify phase 3:**
-- [ ] **3.T1** `tsc --noEmit` in `web-ui/` exits 0
-- [ ] **3.T2** `npm test` in `web-ui/` — all existing tests pass
-- [ ] **3.T3** Manual — New Mode dialog: fetches and renders claude/cursor/opencode/gemini; selecting gemini pre-fills `gemini-2.5-pro`
-- [ ] **3.T4** Manual — Edit Mode dialog: switching CLI updates model default from API
+- [x] **3.T1** `tsc --noEmit` in `web-ui/` exits 0
+- [x] **3.T2** `npm test` in `web-ui/` — all existing tests pass
+- [x] **3.T3** Manual — New Mode dialog: fetches and renders claude/cursor/opencode/gemini; selecting gemini pre-fills `gemini-2.5-pro`
+- [x] **3.T4** Manual — Edit Mode dialog: switching CLI updates model default from API
 
 ---
 

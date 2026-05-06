@@ -1,28 +1,19 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { CliId } from "@/api/types";
+import type { CliId, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { ModelPicker } from "../shared/ModelPicker";
 
-function defaultModelForCli(cli: CliId): string {
+function modelPreference(cliId: string, apiDefault: string): string {
   try {
-    const s = localStorage.getItem(`vst-last-model-${cli}`);
+    const s = localStorage.getItem(`vst-last-model-${cliId}`);
     if (s) return s;
   } catch {
     /* ignore */
   }
-  switch (cli) {
-    case "claude":
-      return "sonnet";
-    case "cursor":
-      return "auto";
-    case "opencode":
-      return "opencode/big-pickle";
-    default:
-      return "";
-  }
+  return apiDefault;
 }
 
 const PRESET_BUG =
@@ -47,12 +38,40 @@ export function NewModeDialog({
   existingNames = [],
   onSaved,
 }: NewModeDialogProps) {
+  const [clis, setClis] = useState<SupportedCli[]>([]);
+  const [clisLoading, setClisLoading] = useState(true);
   const [name, setName] = useState("");
-  const [cli, setCli] = useState<CliId>("claude");
+  const [cli, setCli] = useState<CliId>("");
   const [preset, setPreset] = useState<PresetId>("bug-fix-with-pr");
   const [context, setContext] = useState(PRESET_BUG);
-  const [model, setModel] = useState<string | undefined>(() => defaultModelForCli("claude"));
+  const [model, setModel] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setClisLoading(true);
+    void api
+      .getSupportedClis()
+      .then((list) => {
+        if (cancelled) return;
+        setClis(list);
+        setCli((prev) => {
+          const nextId =
+            list.some((c) => c.id === prev)
+              ? prev
+              : (list.find((c) => c.id === "claude") ?? list[0])?.id ?? "";
+          const def = list.find((c) => c.id === nextId)?.defaultModel ?? "";
+          setModel(modelPreference(nextId, def));
+          return nextId;
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setClisLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
 
   const namesLower = useMemo(
     () => new Set(existingNames.map((n) => n.toLowerCase())),
@@ -85,6 +104,10 @@ export function NewModeDialog({
       setError("A mode with this name already exists.");
       return;
     }
+    if (!cli || clisLoading) {
+      setError("CLIs are still loading.");
+      return;
+    }
     await api.createMode({
       name: trimmed,
       cli,
@@ -94,11 +117,10 @@ export function NewModeDialog({
     });
     onSaved?.();
     onClose();
-    // Reset name and context but preserve CLI so consecutive mode creation
-    // for the same CLI doesn't require re-selecting it each time.
     setName("");
     applyPreset("bug-fix-with-pr");
-    setModel(defaultModelForCli(cli));
+    const def = clis.find((c) => c.id === cli)?.defaultModel ?? "";
+    setModel(modelPreference(cli, def));
   }
 
   return (
@@ -111,7 +133,7 @@ export function NewModeDialog({
           <button type="button" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" onClick={() => void submit()}>
+          <button type="button" disabled={clisLoading} onClick={() => void submit()}>
             Save
           </button>
         </>
@@ -125,33 +147,30 @@ export function NewModeDialog({
         aria-label="Mode name"
       />
       <div className="field-label">CLI</div>
-      <Radio
-        name="cli"
-        label="claude"
-        checked={cli === "claude"}
-        onChange={() => {
-          setCli("claude");
-          setModel(defaultModelForCli("claude"));
-        }}
-      />
-      <Radio
-        name="cli"
-        label="cursor"
-        checked={cli === "cursor"}
-        onChange={() => {
-          setCli("cursor");
-          setModel(defaultModelForCli("cursor"));
-        }}
-      />
-      <Radio
-        name="cli"
-        label="opencode"
-        checked={cli === "opencode"}
-        onChange={() => {
-          setCli("opencode");
-          setModel(defaultModelForCli("opencode"));
-        }}
-      />
+      {clisLoading ? (
+        <div
+          style={{
+            fontSize: "var(--font-size-sm)",
+            color: "var(--fg-muted)",
+            marginBottom: "var(--space-2)",
+          }}
+        >
+          Loading CLIs…
+        </div>
+      ) : null}
+      {clis.map((c) => (
+        <Radio
+          key={c.id}
+          name="cli"
+          label={c.id}
+          checked={cli === c.id}
+          disabled={clisLoading}
+          onChange={() => {
+            setCli(c.id);
+            setModel(modelPreference(c.id, c.defaultModel));
+          }}
+        />
+      ))}
       <div className="field-label">Context preset</div>
       <Radio
         name="preset"
@@ -188,7 +207,7 @@ export function NewModeDialog({
         }}
       />
       <div className="field-label">Model</div>
-      <ModelPicker api={api} cli={cli} value={model} onChange={setModel} />
+      <ModelPicker api={api} cli={cli || null} value={model} onChange={setModel} />
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
   );
