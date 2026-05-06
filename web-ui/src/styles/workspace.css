@@ -414,7 +414,8 @@
 }
 
 .sidebar-projects-heading__gutter {
-  width: 28px;
+  /* match tree-row left padding so "Projects" label aligns with the status dot column */
+  width: var(--space-2);
   flex-shrink: 0;
 }
 
@@ -446,10 +447,11 @@
 
 .left-sidebar__brand {
   display: block;
-  padding: var(--space-3);
+  /* left padding matches scroll-area(8px) + tree-row(8px) so text sits
+     at the same x-position as the status dot column */
+  padding: var(--space-2) var(--space-4);
   font-weight: var(--font-weight-semibold);
   font-size: var(--font-size-base);
-  border-bottom: var(--border-width) solid var(--border-default);
   text-decoration: none;
   color: inherit;
   cursor: pointer;
@@ -489,7 +491,7 @@
 
 .left-sidebar__nav-item--active {
   background: var(--bg-active);
-  color: var(--accent, var(--fg-primary));
+  color: var(--fg-primary);
 }
 
 .left-sidebar--collapsed .left-sidebar__nav-item {
