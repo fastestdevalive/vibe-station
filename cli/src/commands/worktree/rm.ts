@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import prompts from "prompts";
 import { daemonDelete } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
 import { confirmByTypingName } from "../../lib/confirm.js";
@@ -16,13 +17,27 @@ export function registerWorktreeRm(worktree: Command): void {
         : `This will remove worktree "${id}" from vst and terminate its sessions. Files stay on disk.`;
       await confirmByTypingName(id, msg);
 
-      const url = opts.purge ? `/worktrees/${id}?purge=true` : `/worktrees/${id}`;
+      let shouldPurge = Boolean(opts.purge);
+      if (!opts.purge) {
+        const ans = await prompts({
+          type: "confirm",
+          name: "doPurge",
+          message: "Also delete files from disk?",
+          initial: false,
+        });
+        if (ans.doPurge === undefined) die("Cancelled.", 1);
+        shouldPurge = Boolean(ans.doPurge);
+      }
+
+      const url = shouldPurge ? `/worktrees/${id}?purge=true` : `/worktrees/${id}`;
       const result = await daemonDelete<void>(url);
 
       if (!result.ok) {
         die(result.error, result.status === 404 ? 2 : 1);
       }
 
-      success(opts.purge ? `Worktree purged: ${id}` : `Worktree removed: ${id}`);
+      success(
+        shouldPurge ? `Worktree purged: ${id}` : `Worktree removed (files kept on disk): ${id}`,
+      );
     });
 }

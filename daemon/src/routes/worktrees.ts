@@ -15,6 +15,7 @@ import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
+import { persistLifecycleState } from "../services/lifecycle.js";
 import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
@@ -351,6 +352,23 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const apiWorktree = serializeWorktree(projectId, createdWorktree!);
     return reply.status(201).send(apiWorktree);
+  });
+
+  // POST /worktrees/:id/done — mark all agent sessions as done (metadata only; no process kill)
+  app.post("/worktrees/:id/done", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const worktree = project.worktrees.find((w) => w.id === wtId)!;
+    let updated = 0;
+    for (const session of worktree.sessions.filter((s) => s.type === "agent")) {
+      session.lifecycle = { state: "done", lastTransitionAt: new Date().toISOString() };
+      await persistLifecycleState(project.id, wtId, session.id, "done");
+      broadcastAll({ type: "session:state", sessionId: session.id, state: "done" });
+      updated += 1;
+    }
+    return reply.send({ ok: true, updated });
   });
 
   // DELETE /worktrees/:id

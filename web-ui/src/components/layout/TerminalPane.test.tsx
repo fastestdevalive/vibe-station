@@ -17,6 +17,7 @@ vi.mock("@xterm/xterm", () => ({
     get rows() { return mockRows; }
     element = null;
     open() {}
+    focus() {}
     write = writeSpy;
     writeln() {}
     reset() {}

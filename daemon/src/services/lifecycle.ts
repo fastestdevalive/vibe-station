@@ -135,7 +135,7 @@ async function pollSession(
   // Tmux path (existing behavior).
   const alive = await hasSession(session.tmuxName);
 
-  if (!alive && session.lifecycle.state !== "exited") {
+  if (!alive && session.lifecycle.state !== "exited" && session.lifecycle.state !== "done") {
     idleTracking.delete(session.id);
     notifySession(session.id, {
       type: "session:exited",
