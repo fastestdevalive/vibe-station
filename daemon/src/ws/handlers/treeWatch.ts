@@ -2,11 +2,11 @@ import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import { FileWatcher } from "../streams/fileWatcher.js";
 import { join } from "node:path";
+import { getAllProjects } from "../../state/project-store.js";
+import { worktreePath as getWorktreePath } from "../../services/paths.js";
 
 /**
  * Handle tree:watch: start watching a directory tree for changes.
- * For Phase 7, we'll use a simple path construction.
- * In a real implementation, this would look up the worktree path from the project store.
  */
 export function handleTreeWatch(
   conn: WSConnection,
@@ -25,9 +25,15 @@ export function handleTreeWatch(
   }
 
   try {
-    // For Phase 7, construct the absolute path from worktreeId and path.
-    // In a real implementation, look up the worktree root from the project store.
-    const worktreeRoot = join(process.env.HOME || "/tmp", ".vibe-station", "projects", "test", "worktrees", worktreeId);
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === worktreeId));
+    if (!project) {
+      conn.send({
+        type: "system:error",
+        message: `Worktree '${worktreeId}' not found`,
+      });
+      return;
+    }
+    const worktreeRoot = getWorktreePath(project.id, worktreeId);
     const absPath = treePath ? join(worktreeRoot, treePath) : worktreeRoot;
 
     const watcher = new FileWatcher();

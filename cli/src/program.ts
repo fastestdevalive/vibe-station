@@ -12,6 +12,7 @@ import { registerProjectLs } from "./commands/project/ls.js";
 import { registerProjectInfo } from "./commands/project/info.js";
 import { registerWorktreeCreate } from "./commands/worktree/create.js";
 import { registerWorktreeRm } from "./commands/worktree/rm.js";
+import { registerWorktreeDone } from "./commands/worktree/done.js";
 import { registerWorktreeLs } from "./commands/worktree/ls.js";
 import { registerWorktreeInfo } from "./commands/worktree/info.js";
 import { registerSessionCreate } from "./commands/session/create.js";
@@ -76,6 +77,7 @@ export function buildProgram(): Command {
     .description("Manage worktrees");
   registerWorktreeCreate(worktree);
   registerWorktreeRm(worktree);
+  registerWorktreeDone(worktree);
   registerWorktreeLs(worktree);
   registerWorktreeInfo(worktree);
 

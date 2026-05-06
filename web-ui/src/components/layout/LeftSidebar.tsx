@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, FolderTree, Moon, MoreHorizontal, Plus, Slid
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -49,11 +49,12 @@ interface LeftSidebarProps {
   api: ApiInstance;
   /** Narrow desktop rail: abbreviated labels + compact controls */
   collapsed?: boolean;
+  /** Mobile drawer: show pinned brand link at top */
+  isMobile?: boolean;
   onWorktreeSelected?: (wtId: string) => void;
 }
 
-export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: LeftSidebarProps) {
-  const navigate = useNavigate();
+export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktreeSelected }: LeftSidebarProps) {
   const location = useLocation();
   const { theme, toggleTheme, toggleFont } = useTheme();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -69,6 +70,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
 
   const { activeWorktreeId, activeProjectId, activeSessionId, setActiveWorktree } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
+  const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
   const syncSessionsFromApi = useWorkspaceStore((s) => s.syncSessionsFromApi);
@@ -78,6 +80,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
+  const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const refreshProjects = useCallback(async () => {
     const ps = await api.listProjects();
     setProjects(ps);
@@ -215,6 +218,21 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
     }
   }
 
+  async function confirmDismissWorktree() {
+    if (!pendingDismiss) return;
+    const worktree = pendingDismiss;
+    setPendingDismiss(null);
+    try {
+      await api.dismissWorktree(worktree.id);
+      if (activeWorktreeId === worktree.id) {
+        clearWorkspaceSelection();
+      }
+      await refreshProjects();
+    } catch {
+      /* surface errors later */
+    }
+  }
+
   useEffect(() => {
     try {
       localStorage.setItem("sidebar:openProj", JSON.stringify([...openProj]));
@@ -250,11 +268,26 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
     onWorktreeSelected?.(w.id);
   }
 
+  const isSettings = location.pathname === "/settings";
+
   return (
     <div
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
+      {(isMobile || !collapsed) ? (
+        <Link
+          to="/"
+          className="left-sidebar__brand"
+          aria-label="Home"
+          onClick={() => {
+            clearWorkspaceSelection();
+            if (isMobile) setMobileSidebarOpen(false);
+          }}
+        >
+          vibe-station
+        </Link>
+      ) : null}
       <div
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
@@ -328,19 +361,16 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
                       <div
                         className="tree-row tree-row--worktree"
                         data-active={activeWorktreeId === w.id}
-                        onClick={() => void selectWorktree(p.id, w)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            void selectWorktree(p.id, w);
-                          }
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        aria-label={`Select worktree ${w.branch}`}
+                        style={{ position: "relative" }}
                         title={collapsed ? `${w.branch} — select worktree` : undefined}
                       >
-                        <div className="wt-row__expand">
+                        <Link
+                          to={`/worktree/${w.id}`}
+                          className="wt-row__stretch-link"
+                          aria-label={`Open worktree ${w.branch}`}
+                          onClick={() => selectWorktree(p.id, w)}
+                        />
+                        <div className="wt-row__expand" style={{ position: "relative", zIndex: 1 }}>
                           {!collapsed ? (
                             <span className="wt-leading-slot" aria-hidden>
                               <StatusDot
@@ -353,7 +383,7 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
                           </span>
                         </div>
                         {!collapsed ? (
-                          <div className="wt-row__trail">
+                          <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
                             <span className="wt-row__id" title={w.id}>
                               {w.id}
                             </span>
@@ -388,33 +418,39 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
         ))}
       </div>
       <div className="left-sidebar__footer">
-        <button
-          type="button"
-          className={location.pathname === "/settings" ? "icon-btn icon-btn--active" : "icon-btn"}
+        <Link
+          to="/settings"
+          className={`left-sidebar__nav-item${isSettings ? " left-sidebar__nav-item--active" : ""}`}
           title="Settings"
           aria-label="Settings"
-          onClick={() => navigate("/settings")}
+          aria-current={isSettings ? "page" : undefined}
+          onClick={() => {
+            if (isMobile) setMobileSidebarOpen(false);
+          }}
         >
-          <SlidersHorizontal size={16} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label="Toggle font"
-          title="Font"
-          onClick={toggleFont}
-        >
-          <Type size={16} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          aria-label="Toggle theme"
-          title={`Theme (${theme})`}
-          onClick={toggleTheme}
-        >
-          <Moon size={16} />
-        </button>
+          <SlidersHorizontal size={16} aria-hidden />
+          {!collapsed ? <span>Settings</span> : null}
+        </Link>
+        <div className="left-sidebar__icon-row">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Toggle font"
+            title="Font"
+            onClick={toggleFont}
+          >
+            <Type size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Toggle theme"
+            title={`Theme (${theme})`}
+            onClick={toggleTheme}
+          >
+            <Moon size={16} />
+          </button>
+        </div>
       </div>
 
       {newSessProject ? (
@@ -441,6 +477,19 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
         onCancel={() => setPendingDelete(null)}
       />
 
+      <ConfirmDialog
+        open={pendingDismiss !== null}
+        title="Dismiss worktree?"
+        message={
+          pendingDismiss
+            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk.`
+            : ""
+        }
+        confirmLabel="Dismiss"
+        onConfirm={() => void confirmDismissWorktree()}
+        onCancel={() => setPendingDismiss(null)}
+      />
+
       {wtMenu
         ? createPortal(
             <div
@@ -462,6 +511,37 @@ export function LeftSidebar({ api, collapsed = false, onWorktreeSelected }: Left
                 zIndex: 4000,
               }}
             >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void (async () => {
+                    try {
+                      await api.markWorktreeDone(wtMenu.worktree.id);
+                      await refreshProjects();
+                    } catch {
+                      /* surface errors later */
+                    }
+                    setWtMenu(null);
+                  })();
+                }}
+              >
+                Mark as done
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPendingDismiss(wtMenu.worktree);
+                  setWtMenu(null);
+                }}
+              >
+                Dismiss (keep files)
+              </button>
               <button
                 type="button"
                 role="menuitem"
