@@ -285,7 +285,7 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
             setMobileSidebarOpen(false);
           }}
         >
-          vibe-station
+          Vibe Station
         </Link>
       ) : null}
       <div

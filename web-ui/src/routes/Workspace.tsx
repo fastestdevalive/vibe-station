@@ -48,12 +48,12 @@ export function Workspace() {
   // Update browser tab title to reflect current context
   useEffect(() => {
     if (isSettings) {
-      document.title = "Settings — vibe-station";
+      document.title = "Settings — Vibe Station";
     } else if (isDashboard || !activeWorktreeId) {
-      document.title = "vibe-station";
+      document.title = "Vibe Station";
     } else {
       const wt = bundle.worktrees.find((w) => w.id === activeWorktreeId);
-      document.title = wt ? `${wt.branch} — vibe-station` : "vibe-station";
+      document.title = wt ? `${wt.branch} — Vibe Station` : "Vibe Station";
     }
   }, [activeWorktreeId, bundle.worktrees, isDashboard, isSettings]);
 
