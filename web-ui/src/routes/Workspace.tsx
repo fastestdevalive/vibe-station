@@ -111,6 +111,7 @@ export function Workspace() {
           <LeftSidebar
             api={api}
             collapsed={!isMobile && leftSidebarCollapsed}
+            isMobile={isMobile}
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
               if (isDashboard || isSettings) navigate(`/worktree/${wtId}`);

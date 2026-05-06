@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   Columns2,
   PanelLeft,
@@ -54,7 +54,6 @@ export function TopBar({
   onOpenQuickOpen,
   leftColumnPx,
 }: TopBarProps) {
-  const navigate = useNavigate();
   const {
     activeProjectId,
     activeWorktreeId,
@@ -71,11 +70,6 @@ export function TopBar({
 
   const hints = shortcutHints();
 
-  function goHome() {
-    clearWorkspaceSelection();
-    navigate("/", { replace: true });
-  }
-
   const treeOn = !paneCollapsed[0];
   const previewOn = !paneCollapsed[1];
   const terminalOn = !paneCollapsed[2];
@@ -83,7 +77,7 @@ export function TopBar({
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
 
   // Measure the brand button so we can align the crumb to the sidebar's right edge.
-  const brandRef = useRef<HTMLButtonElement>(null);
+  const brandRef = useRef<HTMLAnchorElement>(null);
   const [brandWidth, setBrandWidth] = useState(0);
   useEffect(() => {
     if (brandRef.current) setBrandWidth(brandRef.current.offsetWidth);
@@ -138,9 +132,16 @@ export function TopBar({
       </button>
       {!isMobile ? (
         <>
-          <button ref={brandRef} type="button" className="top-bar__brand" aria-label="Home" onClick={goHome}>
+          <Link
+            ref={brandRef}
+            to="/"
+            replace
+            className="top-bar__brand"
+            aria-label="Home"
+            onClick={() => clearWorkspaceSelection()}
+          >
             vibe-station
-          </button>
+          </Link>
           <div
             className="top-bar__crumb"
             title={crumbTitle}

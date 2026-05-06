@@ -286,6 +286,31 @@ export function createMockApi() {
       return { ok: true };
     },
 
+    async dismissWorktree(id: string): Promise<{ ok: true }> {
+      const idx = worktrees.findIndex((w) => w.id === id);
+      if (idx === -1) throw new ApiError("not found", 404);
+      worktrees.splice(idx, 1);
+      for (let i = sessions.length - 1; i >= 0; i--) {
+        if (sessions[i]!.worktreeId === id) sessions.splice(i, 1);
+      }
+      emit({ type: "worktree:deleted", worktreeId: id });
+      return { ok: true };
+    },
+
+    async markWorktreeDone(id: string): Promise<{ ok: true; updated: number }> {
+      const wtExists = worktrees.some((w) => w.id === id);
+      const agents = sessions.filter((s) => s.worktreeId === id && s.type === "agent");
+      if (!wtExists) throw new ApiError("not found", 404);
+      let updated = 0;
+      for (const s of agents) {
+        s.state = "done";
+        s.lifecycleState = "done";
+        emit({ type: "session:state", sessionId: s.id, state: "done" });
+        updated += 1;
+      }
+      return { ok: true, updated };
+    },
+
     async listSessions(worktreeId: string): Promise<Session[]> {
       return structuredClone(sessions.filter((s) => s.worktreeId === worktreeId));
     },

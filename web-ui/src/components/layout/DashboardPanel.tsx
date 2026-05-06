@@ -1,29 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Columns3, EyeOff, LayoutList } from "lucide-react";
+import { Link } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { HealthResponse, Project, Session, SessionState, Worktree } from "@/api/types";
+import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
-
-function stateColor(state: Session["state"]) {
-  switch (state) {
-    case "working": return "var(--success)";
-    case "done": return "var(--fg-muted)";
-    case "exited": return "var(--fg-muted)";
-    default: return "var(--fg-secondary)";
-  }
-}
-
-function stateDot(state: Session["state"], type: Session["type"]) {
-  if (type === "terminal") return "─";
-  switch (state) {
-    case "working": return "●";
-    case "idle": return "○";
-    case "done": return "✓";
-    case "exited": return "✕";
-    default: return "○";
-  }
-}
+import { type WorktreeRolledUpStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
 interface DashboardPanelProps {
   api: ApiInstance;
@@ -33,33 +17,69 @@ function applySessionState(s: Session, state: SessionState): Session {
   return { ...s, state, lifecycleState: state };
 }
 
+function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "idle" | "finished" {
+  if (r === "working" || r === "spawning") return "working";
+  if (r === "idle") return "idle";
+  return "finished";
+}
+
+const DASHBOARD_VIEW_KEY = "dashboard:view";
+
 export function DashboardPanel({ api }: DashboardPanelProps) {
-  const navigate = useNavigate();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
+  const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
+  const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
   const syncSessionsFromApi = useWorkspaceStore((s) => s.syncSessionsFromApi);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const h = await api.health();
-        setHealth(h);
-      } catch {
-        setHealth(null);
-      }
-      const ps = await api.listProjects();
-      setProjects(ps);
-      const wts = (await Promise.all(ps.map((p) => api.listWorktrees(p.id)))).flat();
-      setWorktrees(wts);
-      const ss = (await Promise.all(wts.map((w) => api.listSessions(w.id)))).flat();
-      setSessions(ss);
-      syncSessionsFromApi(ss);
-    })();
+  const refreshDashboard = useCallback(async () => {
+    try {
+      const h = await api.health();
+      setHealth(h);
+    } catch {
+      setHealth(null);
+    }
+    const ps = await api.listProjects();
+    setProjects(ps);
+    const wts = (await Promise.all(ps.map((p) => api.listWorktrees(p.id)))).flat();
+    setWorktrees(wts);
+    const ss = (await Promise.all(wts.map((w) => api.listSessions(w.id)))).flat();
+    setSessions(ss);
+    syncSessionsFromApi(ss);
   }, [api, syncSessionsFromApi]);
+
+  const [dashboardView, setDashboardView] = useState<"list" | "kanban">(() => {
+    try {
+      const v = localStorage.getItem(DASHBOARD_VIEW_KEY);
+      if (v === "kanban" || v === "list") return v;
+    } catch {
+      /* ignore */
+    }
+    return "list";
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_VIEW_KEY, dashboardView);
+    } catch {
+      /* ignore */
+    }
+  }, [dashboardView]);
+
+  useEffect(() => {
+    void refreshDashboard();
+  }, [refreshDashboard]);
+
+  useEffect(() => {
+    return api.on("*", (ev) => {
+      if (ev.type === "worktree:deleted") void refreshDashboard();
+    });
+  }, [api, refreshDashboard]);
 
   const sessionIdKey = useMemo(
     () =>
@@ -116,48 +136,86 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     };
   }, [api, patchSessionState]);
 
-  const workingSessions = sessions.filter((s) => s.state === "working");
-  const idleSessions = sessions.filter((s) => s.state === "idle");
-  const daemonOk = health !== null;
+  const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
 
-  const openSessionRow = useCallback(
-    (s: Session) => {
-      const wt = worktrees.find((w) => w.id === s.worktreeId);
-      if (wt) {
-        const sessionsForWorktree = sessions.filter((ss) => ss.worktreeId === wt.id);
-        setActiveWorktree(wt.projectId, wt.id, sessionsForWorktree);
-        void navigate(`/worktree/${wt.id}`);
-      }
-    },
-    [navigate, sessions, setActiveWorktree, worktrees],
+  /** Roll up from local session rows (same source as cards); avoids stale global sessionStates shadowing fresh WS updates. */
+  const rollupLive = useMemo(
+    () => Object.fromEntries(sessions.map((s) => [s.id, s.state])) as Record<string, SessionState>,
+    [sessions],
   );
 
-  const renderSessionCards = (list: Session[]) =>
-    list.map((s) => {
-      const wt = worktrees.find((w) => w.id === s.worktreeId);
-      const proj = projects.find((p) => p.id === wt?.projectId);
+  const { working, idle, finished } = useMemo(() => {
+    const wtsWorking: Worktree[] = [];
+    const wtsIdle: Worktree[] = [];
+    const wtsFinished: Worktree[] = [];
+    for (const wt of worktrees) {
+      const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
+      if (agentSessions.length === 0) continue;
+      const rolled = worktreeRolledUpStatus(agentSessions, rollupLive);
+      const b = bucketForRollup(rolled);
+      if (b === "working") wtsWorking.push(wt);
+      else if (b === "idle") wtsIdle.push(wt);
+      else wtsFinished.push(wt);
+    }
+    return { working: wtsWorking, idle: wtsIdle, finished: wtsFinished };
+  }, [worktrees, sessions, rollupLive]);
+
+  const daemonOk = health !== null;
+
+  const renderWorktreeCard = useCallback(
+    (wt: Worktree) => {
+      const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
+      const rolled = worktreeRolledUpStatus(agentSessions, rollupLive);
+      const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
+      const proj = projectById[wt.projectId];
+      const showDismiss = rolled === "done" || rolled === "exited";
       return (
-        <button
-          key={s.id}
-          type="button"
-          className="dashboard-card dashboard-card--session"
-          onClick={() => openSessionRow(s)}
+        <div
+          key={wt.id}
+          className={`dashboard-card-shell${showDismiss ? " dashboard-card-shell--dismissable" : ""}`}
         >
-          <span className="dashboard-card__dot" style={{ color: stateColor(s.state) }}>
-            {stateDot(s.state, s.type)}
-          </span>
-          <span className="dashboard-card__session-main">
-            <span className="dashboard-card__primary">{s.label}</span>
-            {wt ? <span className="dashboard-card__branch">{wt.branch}</span> : null}
-          </span>
-          <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
-        </button>
+          <Link
+            to={`/worktree/${wt.id}`}
+            className="dashboard-card dashboard-card--session dashboard-card--worktree"
+            onClick={() => setActiveWorktree(wt.projectId, wt.id, sessionsForWt)}
+          >
+            <span className="dashboard-card__dot dashboard-card__dot--status">
+              <StatusDot status={rolled} />
+            </span>
+            <span className="dashboard-card__session-main">
+              <span className="dashboard-card__primary">{wt.branch}</span>
+              <span className="dashboard-card__branch">{wt.id}</span>
+            </span>
+            <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
+          </Link>
+          {showDismiss ? (
+            <button
+              type="button"
+              className="icon-btn dashboard-card__dismiss"
+              aria-label={`Dismiss ${wt.branch} from tracking`}
+              title="Dismiss from tracking (keep files)"
+              onClick={(e) => {
+                e.preventDefault();
+                setPendingDismiss(wt);
+              }}
+            >
+              <EyeOff size={16} />
+            </button>
+          ) : null}
+        </div>
       );
-    });
+    },
+    [projectById, rollupLive, sessions, setActiveWorktree],
+  );
+
+  const toggleViewLabel =
+    dashboardView === "list" ? "Switch to kanban layout" : "Switch to list layout";
 
   return (
     <div className="dashboard-panel">
-      <div className="dashboard-panel__inner">
+      <div
+        className={`dashboard-panel__inner${dashboardView === "kanban" ? " dashboard-panel__inner--kanban" : ""}`}
+      >
         <div className="dashboard-header">
           <div className="dashboard-header__wordmark">vibe-station</div>
           <div className="dashboard-header__daemon">
@@ -171,50 +229,89 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               {daemonOk ? `daemon · port ${health.port}` : "daemon unreachable"}
             </span>
           </div>
+          <button
+            type="button"
+            className="icon-btn dashboard-header__view-toggle"
+            aria-label={toggleViewLabel}
+            title={toggleViewLabel}
+            onClick={() => setDashboardView((v) => (v === "list" ? "kanban" : "list"))}
+          >
+            {dashboardView === "list" ? <Columns3 size={18} /> : <LayoutList size={18} />}
+          </button>
         </div>
 
-        {workingSessions.length > 0 ? (
-          <section className="dashboard-section">
-            <div className="dashboard-section__label">working</div>
-            <div className="dashboard-card-list">{renderSessionCards(workingSessions)}</div>
-          </section>
-        ) : null}
+        {dashboardView === "list" ? (
+          <>
+            {working.length > 0 ? (
+              <section className="dashboard-section">
+                <div className="dashboard-section__label">working</div>
+                <div className="dashboard-card-list">{working.map((wt) => renderWorktreeCard(wt))}</div>
+              </section>
+            ) : null}
 
-        {idleSessions.length > 0 ? (
-          <section className="dashboard-section">
-            <div className="dashboard-section__label">idle</div>
-            <div className="dashboard-card-list">{renderSessionCards(idleSessions)}</div>
-          </section>
-        ) : null}
+            {idle.length > 0 ? (
+              <section className="dashboard-section">
+                <div className="dashboard-section__label">idle</div>
+                <div className="dashboard-card-list">{idle.map((wt) => renderWorktreeCard(wt))}</div>
+              </section>
+            ) : null}
 
-        <section className="dashboard-section">
-          <div className="dashboard-section__label">projects</div>
-          {projects.length === 0 ? (
-            <p className="dashboard-empty">No projects yet. Add one with the CLI.</p>
-          ) : (
-            <div className="dashboard-card-list">
-              {projects.map((p) => {
-                const wts = worktrees.filter((w) => w.projectId === p.id);
-                const count = wts.length;
-                const activeCount = wts.filter((w) =>
-                  sessions.some(
-                    (s) => s.worktreeId === w.id && (s.state === "working" || s.state === "idle"),
-                  ),
-                ).length;
-                return (
-                  <div key={p.id} className="dashboard-card dashboard-card--project">
-                    <span className="dashboard-card__primary">{p.name}</span>
-                    <span className="dashboard-card__secondary">
-                      {count} {count === 1 ? "worktree" : "worktrees"}
-                      {activeCount > 0 ? ` · ${activeCount} active` : ""}
-                    </span>
-                  </div>
-                );
-              })}
+            {finished.length > 0 ? (
+              <section className="dashboard-section">
+                <div className="dashboard-section__label">finished</div>
+                <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+              </section>
+            ) : null}
+          </>
+        ) : (
+          <div className="dashboard-kanban">
+            <div className="dashboard-kanban__col">
+              <div className="dashboard-kanban__col-header">
+                Working <span className="dashboard-kanban__col-count">({working.length})</span>
+              </div>
+              <div className="dashboard-card-list">{working.map((wt) => renderWorktreeCard(wt))}</div>
             </div>
-          )}
-        </section>
+            <div className="dashboard-kanban__col">
+              <div className="dashboard-kanban__col-header">
+                Idle <span className="dashboard-kanban__col-count">({idle.length})</span>
+              </div>
+              <div className="dashboard-card-list">{idle.map((wt) => renderWorktreeCard(wt))}</div>
+            </div>
+            <div className="dashboard-kanban__col">
+              <div className="dashboard-kanban__col-header">
+                Finished <span className="dashboard-kanban__col-count">({finished.length})</span>
+              </div>
+              <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+            </div>
+          </div>
+        )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDismiss !== null}
+        title="Dismiss worktree?"
+        message={
+          pendingDismiss
+            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk.`
+            : ""
+        }
+        confirmLabel="Dismiss"
+        onConfirm={() => {
+          void (async () => {
+            const wt = pendingDismiss;
+            if (!wt) return;
+            setPendingDismiss(null);
+            try {
+              await api.dismissWorktree(wt.id);
+              if (activeWorktreeId === wt.id) clearWorkspaceSelection();
+              await refreshDashboard();
+            } catch {
+              /* surface errors later */
+            }
+          })();
+        }}
+        onCancel={() => setPendingDismiss(null)}
+      />
     </div>
   );
 }

@@ -188,6 +188,22 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+    async dismissWorktree(id: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
+    async markWorktreeDone(id: string): Promise<{ ok: true; updated: number }> {
+      const root = baseUrl();
+      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}/done`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true; updated: number }>(res);
+    },
+
     async listSessions(worktreeId: string): Promise<Session[]> {
       const q = new URLSearchParams({ worktree: worktreeId });
       const root = baseUrl();
