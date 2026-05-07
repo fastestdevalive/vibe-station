@@ -1,0 +1,128 @@
+/* LoginScreen — uses 100gb-minimalist design system tokens */
+
+.login-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-primary);
+  padding: var(--space-6);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.login-card__brand {
+  font-family: var(--font-family);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.login-card__divider {
+  height: var(--border-width);
+  background: var(--border-subtle);
+  margin: 0 calc(var(--space-4) * -1);
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.login-field__label {
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-secondary);
+}
+
+.login-field__input {
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--fg-primary);
+  background: var(--bg-input);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.login-field__input:focus {
+  border-color: var(--accent-color, var(--border-strong));
+}
+
+.login-field__input--error {
+  border-color: var(--destructive);
+}
+
+.login-field__input--error:focus {
+  border-color: var(--destructive);
+}
+
+.login-field__input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.login-field__error {
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  color: var(--destructive);
+  margin: 0;
+}
+
+.login-btn {
+  margin-top: var(--space-3);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-inverse);
+  background: var(--accent-color, var(--fg-primary));
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  width: 100%;
+  cursor: pointer;
+  transition: opacity var(--transition-fast);
+  height: 36px;
+}
+
+.login-btn:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.login-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.login-card__hint {
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  text-align: center;
+  margin: 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.login-card__hint code {
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+}

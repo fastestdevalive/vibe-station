@@ -1102,6 +1102,15 @@
   gap: var(--space-1);
 }
 
+/* Login state — "● not signed in" chip shown in place of all workspace controls */
+.top-bar__login-status {
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  padding: 0 var(--space-3);
+  user-select: none;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;

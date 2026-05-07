@@ -1,9 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef } from "react";
 import mermaid from "mermaid";
-
-mermaid.initialize({ startOnLoad: false, securityLevel: "loose" });
-
-let idCounter = 0;
 
 interface MermaidViewProps {
   chart: string;
@@ -11,31 +7,24 @@ interface MermaidViewProps {
 }
 
 export function MermaidView({ chart, theme }: MermaidViewProps) {
-  const idRef = useRef<string>("");
-  if (!idRef.current) idRef.current = `mmd-${idCounter++}`;
-
-  const [svg, setSvg] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const uid = useId().replace(/:/g, "");
 
   useEffect(() => {
     mermaid.initialize({
       startOnLoad: false,
       theme: theme === "dark" ? "dark" : "neutral",
-      securityLevel: "loose",
+      securityLevel: "strict",
     });
-    let cancelled = false;
-    mermaid
-      .render(idRef.current, chart)
-      .then(({ svg: rendered }) => {
-        if (!cancelled) { setSvg(rendered); setError(null); }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) { setError(err instanceof Error ? err.message : String(err)); setSvg(""); }
-      });
-    return () => { cancelled = true; };
-  }, [chart, theme]);
+    const el = hostRef.current;
+    if (!el) return;
+    el.innerHTML = "";
+    const run = async () => {
+      const { svg } = await mermaid.render(`mmd-${uid}`, chart);
+      el.innerHTML = svg;
+    };
+    void run();
+  }, [chart, theme, uid]);
 
-  if (error) return <pre style={{ color: "var(--color-error, red)", fontSize: "0.8em" }}>{error}</pre>;
-  if (!svg) return null;
-  return <div dangerouslySetInnerHTML={{ __html: svg }} />;
+  return <div ref={hostRef} />;
 }

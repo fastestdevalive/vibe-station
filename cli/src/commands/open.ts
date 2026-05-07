@@ -7,7 +7,8 @@ export function registerOpen(program: Command): void {
     .command("open [target]")
     .description("Open the vibe-station IDE in browser")
     .action(async (target?: string) => {
-      const url = target ? `http://localhost:3000/${target}` : "http://localhost:3000";
+      const base = process.env.VST_UI_URL ?? "http://localhost:5173";
+      const url = target ? `${base}/${target}` : base;
 
       try {
         const platform = process.platform;
