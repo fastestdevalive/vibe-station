@@ -1,0 +1,51 @@
+# Self-contained image for capturing README screenshots.
+# Bakes the app + stub claude/cursor CLIs + demo seed script into the image,
+# so a single `docker compose up --build` gives you a Vite dev server at
+# http://localhost:5174 with realistic demo data ready for Playwright.
+#
+# Usage:
+#   docker compose -f docker-compose.screenshots.yml up --build -d
+#   pnpm tsx scripts/take-screenshots.ts
+#   docker compose -f docker-compose.screenshots.yml down
+
+FROM node:24-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tmux git procps curl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g pnpm@9.0.0
+
+# Stub CLIs so claude / cursor-agent appear on PATH (modes.json validates them).
+# Real spawn is never invoked because every demo session is pre-seeded as
+# idle/working/done.
+RUN printf '#!/usr/bin/env bash\nexec sleep infinity\n' > /usr/local/bin/claude  \
+ && printf '#!/usr/bin/env bash\nexec sleep infinity\n' > /usr/local/bin/cursor-agent  \
+ && chmod +x /usr/local/bin/claude /usr/local/bin/cursor-agent
+
+WORKDIR /app
+
+COPY . .
+
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @vibestation/cli build
+
+ENV HOME=/home/vst
+RUN mkdir -p /home/vst /home/vst/.vibe-station
+
+EXPOSE 5173
+
+# Boot order:
+#   1. demo-seed.sh — seeds modes, manifests, worktree files, tmux sessions
+#   2. daemon (background)
+#   3. wait for /health
+#   4. vite dev server (foreground)
+CMD ["sh", "-c", "\
+  bash /app/scripts/demo-seed.sh && \
+  rm -f /home/vst/.vibe-station/.daemon.lock && \
+  node /app/cli/dist/daemon/main.js & \
+  echo 'Waiting for daemon...' && \
+  until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done && \
+  echo 'Daemon ready.' && \
+  pnpm --filter @vibestation/web dev --host 0.0.0.0 \
+"]
