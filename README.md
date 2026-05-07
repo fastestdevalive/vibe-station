@@ -6,6 +6,8 @@ vibe-station lets you spawn multiple AI coding agents (Claude Code, Cursor, Open
 
 Instead of juggling tmux tabs and editor windows, you get a unified interface where every agent runs in its own branch, streams its output live, and can be messaged, paused, or replicated with a single command.
 
+![Dashboard — every active agent across every project on one kanban board](docs/screenshots/01-dashboard-kanban.png)
+
 ---
 
 ## What it does
@@ -16,6 +18,8 @@ Instead of juggling tmux tabs and editor windows, you get a unified interface wh
 - **File preview** — browse the working tree, view diffs, render markdown and diagrams
 - **CLI + web UI** — `vst` for scripting and automation, browser UI for interactive oversight
 - **Session persistence** — agents survive daemon restarts; Claude sessions resume with full history
+
+![Workspace — multiple agent tabs on a single worktree, terminal streaming live](docs/screenshots/03-workspace-tabs.png)
 
 ---
 
@@ -260,6 +264,20 @@ To view a diff of changes an agent made:
 1. Select a file in the file tree
 2. Click the **Diff** toggle in the preview panel
 3. Choose `local` (working tree vs HEAD) or `branch` (vs base branch)
+
+![Three-pane IDE — terminal, rendered markdown preview, file tree](docs/screenshots/04-file-tree-preview.png)
+
+### Mobile
+
+The UI collapses to a single-column layout on phones — the kanban becomes a stacked
+list, and the workspace stacks the markdown preview above the agent terminal so
+you can read a plan and watch the agent execute it without switching tabs.
+
+<p align="center">
+  <img alt="Mobile dashboard — stacked working / idle / finished list" src="docs/screenshots/02-dashboard-mobile.png" width="320" />
+  &nbsp;&nbsp;
+  <img alt="Mobile workspace — markdown plan above, agent terminal below" src="docs/screenshots/05-mobile-split.png" width="320" />
+</p>
 
 ---
 
