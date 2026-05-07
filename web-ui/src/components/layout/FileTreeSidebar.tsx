@@ -63,6 +63,7 @@ interface NodeProps {
   expanded: Set<string>;
   toggle: (path: string) => void;
   gitStatusByPath: Map<string, GitStatusChar>;
+  lastChanged: number;
 }
 
 function TreeNode({
@@ -73,6 +74,7 @@ function TreeNode({
   expanded,
   toggle,
   gitStatusByPath,
+  lastChanged,
 }: NodeProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
@@ -92,7 +94,7 @@ function TreeNode({
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, entry.path, isDir, isOpen]);
+  }, [api, worktreeId, entry.path, isDir, isOpen, lastChanged]);
 
   function openFile() {
     if (!worktreeId) return;
@@ -154,6 +156,7 @@ function TreeNode({
               expanded={expanded}
               toggle={toggle}
               gitStatusByPath={gitStatusByPath}
+              lastChanged={lastChanged}
             />
           ))
         : null}
@@ -427,6 +430,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
                 expanded={expanded}
                 toggle={toggle}
                 gitStatusByPath={gitStatusByPath}
+                lastChanged={lastChanged}
               />
             ))
           )}

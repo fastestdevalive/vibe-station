@@ -41,11 +41,23 @@ export class FileWatcher extends EventEmitter {
         depth: undefined,
       });
 
+      this.watcher.on("add", (path: string) => {
+        this._debounceEvent("change", path);
+      });
+
       this.watcher.on("change", (path: string) => {
         this._debounceEvent("change", path);
       });
 
+      this.watcher.on("addDir", (path: string) => {
+        this._debounceEvent("change", path);
+      });
+
       this.watcher.on("unlink", (path: string) => {
+        this._debounceEvent("unlink", path);
+      });
+
+      this.watcher.on("unlinkDir", (path: string) => {
         this._debounceEvent("unlink", path);
       });
 
