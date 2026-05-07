@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { resolve } from "node:path";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
 import { die, success } from "../../lib/output.js";
@@ -19,7 +20,7 @@ export function registerProjectAdd(project: Command): void {
       await preflight();
 
       const result = await daemonPost<ProjectAddResponse>("/projects", {
-        path,
+        path: resolve(path),
         name: opts.name,
         prefix: opts.prefix,
       });
