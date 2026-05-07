@@ -1,0 +1,21 @@
+# Self-contained screenshot sandbox.
+#
+# Boots a fresh vibe-station with realistic demo data (3 projects, 9 worktrees,
+# 14 sessions). No host bind-mounts — everything is baked into the image.
+#
+# Usage:
+#   docker compose -f docker-compose.screenshots.yml up --build -d
+#   pnpm tsx scripts/take-screenshots.ts
+#   docker compose -f docker-compose.screenshots.yml down -v
+
+services:
+  vst-screenshots:
+    build:
+      context: .
+      dockerfile: Dockerfile.screenshots
+    image: vst-screenshots:latest
+    container_name: vst-screenshots
+    ports:
+      - "5174:5173"
+    stdin_open: true
+    tty: true
