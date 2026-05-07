@@ -318,6 +318,52 @@ The daemon manages this automatically. You shouldn't need to edit these files ma
 
 ---
 
+## Architecture
+
+```mermaid
+flowchart LR
+  user([👤 You])
+
+  subgraph clients [Clients]
+    direction TB
+    cli["vst CLI<br/>scripting + automation"]
+    webui["Web UI<br/>React + Vite"]
+  end
+
+  subgraph daemon ["Daemon — localhost:7421"]
+    direction TB
+    rest["REST<br/>/projects · /worktrees · /sessions"]
+    ws["WebSocket<br/>terminal stream + lifecycle events"]
+    state[("~/.vibe-station<br/>manifest.json · modes.json")]
+  end
+
+  subgraph runtime ["Per-worktree runtime"]
+    direction TB
+    tmux["tmux session"]
+    pty["PTY"]
+    agent["claude / cursor / opencode"]
+    repo[("git worktree<br/>isolated branch")]
+  end
+
+  user --> cli
+  user --> webui
+  cli -->|HTTP| rest
+  webui -->|HTTP| rest
+  webui <-->|WebSocket| ws
+  rest --- state
+  rest -->|spawn / kill| tmux
+  ws -.->|attach| tmux
+  tmux --> pty --> agent
+  agent --> repo
+```
+
+- **CLI and Web UI** are thin clients — every action (create worktree, send message, kill session) is an HTTP call to the daemon.
+- **The daemon** is the only stateful component. It owns the manifest, spawns agents into tmux, and broadcasts terminal output + lifecycle changes over WebSocket.
+- **Each worktree** is an isolated `git worktree` checkout on its own branch, with one or more tmux sessions running an AI CLI inside it. Agents in different worktrees never see each other.
+- **Persistence**: tmux sessions outlive the daemon, so a daemon restart reattaches without losing agent state. Claude sessions additionally resume their conversation history via `claude --resume`.
+
+---
+
 ## Development
 
 ```bash
