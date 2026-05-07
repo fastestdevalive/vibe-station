@@ -29,8 +29,9 @@ function shortcutHints() {
 }
 
 interface TopBarProps {
-  /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles. */
-  layoutMode?: "workspace" | "dashboard" | "settings";
+  /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles.
+   *  login = unauthenticated state — only shows brand + "not signed in" chip, no sidebar. */
+  layoutMode?: "workspace" | "dashboard" | "settings" | "login";
   projects: Project[];
   worktrees: Worktree[];
   sessions: Session[];
@@ -121,6 +122,20 @@ export function TopBar({
       </span>
     ))
   );
+
+  // Login mode — minimal header, no sidebar or workspace controls
+  if (layoutMode === "login") {
+    return (
+      <header className="top-bar">
+        <span className="top-bar__brand" style={{ marginLeft: "var(--space-3)" }}>
+          Vibe Station
+        </span>
+        <div className="top-bar__end">
+          <span className="top-bar__login-status">● not signed in</span>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="top-bar">
