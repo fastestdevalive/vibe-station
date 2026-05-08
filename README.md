@@ -2,7 +2,7 @@
 
 **Orchestrate parallel AI coding agents from a single web UI.**
 
-vibe-station lets you spawn multiple AI coding agents (Claude Code, Cursor, OpenCode) working simultaneously on isolated git branches — each with its own worktree, terminal, and file preview — all managed from your browser.
+vibe-station lets you spawn multiple AI coding agents (Claude Code, Cursor, OpenCode, Gemini CLI) working simultaneously on isolated git branches — each with its own worktree, terminal, and file preview — all managed from your browser.
 
 Instead of juggling tmux tabs and editor windows, you get a unified interface where every agent runs in its own branch, streams its output live, and can be messaged, paused, or replicated with a single command.
 
@@ -12,14 +12,23 @@ Instead of juggling tmux tabs and editor windows, you get a unified interface wh
 
 ## What it does
 
-- **Parallel agents** — run Claude Code, Cursor, and OpenCode side-by-side on separate branches
+- **Parallel agents** — run Claude Code, Cursor, OpenCode, and Gemini CLI side-by-side on separate branches
 - **Isolated worktrees** — each agent gets its own `git worktree` checkout, so they never conflict
 - **Live terminal streaming** — watch agents work in real time, send messages mid-task
-- **File preview** — browse the working tree, view diffs, render markdown and diagrams
+- **File preview** — browse the working tree, view diffs, render markdown and Mermaid diagrams
 - **CLI + web UI** — `vst` for scripting and automation, browser UI for interactive oversight
-- **Session persistence** — agents survive daemon restarts; Claude sessions resume with full history
 
 ![Workspace — multiple agent tabs on a single worktree, terminal streaming live](docs/screenshots/03-workspace-tabs.png)
+
+![Three-pane IDE — terminal, rendered markdown preview, file tree](docs/screenshots/04-file-tree-preview.png)
+
+**Mobile**
+
+<p align="center">
+  <img alt="Mobile dashboard — stacked working / idle / finished list" src="docs/screenshots/02-dashboard-mobile.png" width="320" />
+  &nbsp;&nbsp;
+  <img alt="Mobile workspace — markdown plan above, agent terminal below" src="docs/screenshots/05-mobile-split.png" width="320" />
+</p>
 
 ---
 
@@ -29,7 +38,7 @@ Instead of juggling tmux tabs and editor windows, you get a unified interface wh
 - **pnpm** ≥ 9 — `npm install -g pnpm`
 - **tmux** — `brew install tmux` / `apt install tmux`
 - **git** ≥ 2.5 (worktree support)
-- At least one AI CLI installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), or [OpenCode](https://opencode.ai)
+- At least one AI CLI installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
 
 ---
 
@@ -90,7 +99,7 @@ A **mode** pairs an AI CLI with an optional system context. You need at least on
 vst mode add --name="Claude Coder" --cli=claude --context="You are an expert TypeScript engineer."
 ```
 
-Supported `--cli` values: `claude`, `cursor`, `opencode`.
+Supported `--cli` values: `claude`, `cursor`, `opencode`, `gemini`.
 
 List your modes:
 
@@ -265,19 +274,7 @@ To view a diff of changes an agent made:
 2. Click the **Diff** toggle in the preview panel
 3. Choose `local` (working tree vs HEAD) or `branch` (vs base branch)
 
-![Three-pane IDE — terminal, rendered markdown preview, file tree](docs/screenshots/04-file-tree-preview.png)
-
-### Mobile
-
-The UI collapses to a single-column layout on phones — the kanban becomes a stacked
-list, and the workspace stacks the markdown preview above the agent terminal so
-you can read a plan and watch the agent execute it without switching tabs.
-
-<p align="center">
-  <img alt="Mobile dashboard — stacked working / idle / finished list" src="docs/screenshots/02-dashboard-mobile.png" width="320" />
-  &nbsp;&nbsp;
-  <img alt="Mobile workspace — markdown plan above, agent terminal below" src="docs/screenshots/05-mobile-split.png" width="320" />
-</p>
+The UI collapses to a single-column layout on phones — the kanban becomes a stacked list, and the workspace stacks the markdown preview above the agent terminal so you can read a plan and watch the agent execute it without switching tabs.
 
 ---
 
@@ -341,7 +338,7 @@ flowchart LR
     direction TB
     tmux["tmux session"]
     pty["PTY"]
-    agent["claude / cursor / opencode"]
+    agent["claude / cursor / opencode / gemini"]
     repo[("git worktree<br/>isolated branch")]
   end
 
@@ -436,3 +433,16 @@ The daemon auto-picks the next free port. Check `~/.vibe-station/config.json` fo
 
 **Claude sessions not resuming:**
 Make sure you're on Claude Code ≥ 1.x with the `--resume` flag available. Run `claude --version` to check.
+
+---
+
+## What makes it different
+
+vibe-station is inspired by [agent-orchestrator](https://github.com/ComposioHQ/agent-orchestrator), [emdash](https://github.com/generalaction/emdash), and [claudecodeui](https://github.com/siteboon/claudecodeui) — but built from the ground up to be extremely lightweight and minimal. No cloud, no accounts, no platform. Just a local daemon, a browser tab, and your agents.
+
+- **Zero dependencies at runtime** — a single `vst daemon start` is all it takes; no Docker, no databases, no external services
+- **Minimal UI, zero noise** — the interface is stripped to what matters: watching agents work, reading their output, and navigating the files they produce
+- **Built for reading plans** — the preview pane renders markdown with full GFM support and Mermaid diagram rendering, so agent-written specs and plans are readable without leaving the UI
+- **Live file tree** — the file tree updates in real time as agents create, rename, and delete files; no manual refresh needed
+- **Agent-agnostic** — Claude Code, Cursor, OpenCode, and Gemini CLI all plug in identically; swap or mix them per worktree without changing anything else
+- **Sessions outlive the daemon** — tmux-backed sessions survive restarts; Claude sessions even resume their full conversation history
