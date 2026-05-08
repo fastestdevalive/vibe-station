@@ -5,6 +5,7 @@ import { die } from "./output.js";
 
 interface ConfigFile {
   port: number;
+  token?: string;
 }
 
 export function getDaemonUrl(): string | null {
@@ -32,4 +33,16 @@ export function getDaemonUrlOrThrow(): string {
     die("Daemon is not running. Run `vst daemon start`.", 4);
   }
   return url;
+}
+
+/** Read the auth token from config.json. Returns null if missing or unreadable. */
+export function getDaemonToken(): string | null {
+  try {
+    const configPath = join(homedir(), ".vibe-station", "config.json");
+    const content = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(content) as ConfigFile;
+    return config.token ?? null;
+  } catch {
+    return null;
+  }
 }

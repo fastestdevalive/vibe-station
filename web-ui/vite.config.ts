@@ -17,10 +17,12 @@ export default defineConfig({
       "/api": {
         target: "http://127.0.0.1:7421",
         rewrite: (p) => p.replace(/^\/api/, ""),
+        changeOrigin: true, // ensures Cookie / Set-Cookie headers flow correctly
       },
       "/ws": {
         target: "ws://127.0.0.1:7421",
         ws: true,
+        changeOrigin: true,
       },
     },
   },

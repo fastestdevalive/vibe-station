@@ -1,4 +1,4 @@
-import { getDaemonUrl } from "./daemon-url.js";
+import { getDaemonToken, getDaemonUrl } from "./daemon-url.js";
 import { die } from "./output.js";
 
 export type DaemonResult<T> =
@@ -21,6 +21,10 @@ async function daemonRequest<T>(
     // which broke `vst worktree rm` (DELETE without body).
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
+
+    // Add Bearer token if the daemon has auth enabled
+    const token = getDaemonToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const response = await fetch(`${url}${path}`, {
       method,
