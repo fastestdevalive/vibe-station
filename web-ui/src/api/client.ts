@@ -261,7 +261,7 @@ export function createClientApi() {
 
     async sendInput(sessionId: string, body: SendInputBody): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await fetch(
+      const res = await apiFetch(
         `${root}/sessions/${encodeURIComponent(sessionId)}/input`,
         {
           method: "POST",
@@ -277,7 +277,15 @@ export function createClientApi() {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
       if (res.status === 422) throw new ApiError("File too large to preview", 422);
-      if (!res.ok) throw new ApiError(await res.text(), res.status);
+      if (!res.ok) {
+        const text = await res.text();
+        let msg = text;
+        try {
+          const j = JSON.parse(text) as { error?: string; message?: string };
+          msg = j.error ?? j.message ?? text;
+        } catch { /* not JSON, keep raw text */ }
+        throw new ApiError(msg, res.status);
+      }
       return res.text();
     },
 
@@ -289,7 +297,7 @@ export function createClientApi() {
       const path = filePath.replace(/^\/+/, "");
       const q = new URLSearchParams({ scope });
       const root = baseUrl();
-      const res = await fetch(
+      const res = await apiFetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/diff/${path}?${q}`,
       );
       const text = await res.text();
@@ -311,7 +319,7 @@ export function createClientApi() {
     async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
       const q = new URLSearchParams({ path: path.replace(/^\/+/, "") });
       const root = baseUrl();
-      const res = await fetch(
+      const res = await apiFetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/tree?${q}`,
       );
       return parseJson<TreeEntry[]>(res);
@@ -323,7 +331,7 @@ export function createClientApi() {
     ): Promise<ChangedPathEntry[]> {
       const q = new URLSearchParams({ scope });
       const root = baseUrl();
-      const res = await fetch(
+      const res = await apiFetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths?${q}`,
       );
       return parseJson<ChangedPathEntry[]>(res);

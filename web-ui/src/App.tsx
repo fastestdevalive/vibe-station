@@ -10,7 +10,7 @@ function AppShell() {
   if (loading) {
     // Minimal loading state — TopBar with login mode, blank content area
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
         <TopBar
           layoutMode="login"
           projects={[]}
@@ -28,7 +28,7 @@ function AppShell() {
 
   if (!authed) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
         <TopBar
           layoutMode="login"
           projects={[]}
