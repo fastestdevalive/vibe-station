@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import fastifyWebsocket from "@fastify/websocket";
 import { ClientMessage } from "./protocol.js";
@@ -14,15 +14,73 @@ import { handleFileUnwatch } from "./handlers/fileUnwatch.js";
 import { handleTreeWatch } from "./handlers/treeWatch.js";
 import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
+import { COOKIE_NAME, validateSessionCookie } from "../auth.js";
+
+/** Origins allowed to connect to the WebSocket endpoint. */
+const ALLOWED_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+
+/**
+ * Parse a raw Cookie header string and return the value for a given cookie name.
+ * Reuses @fastify/cookie parsing logic when available; falls back to manual split.
+ */
+function parseCookieValue(cookieHeader: string, name: string): string {
+  for (const part of cookieHeader.split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx === -1) continue;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k === name) return v;
+  }
+  return "";
+}
+
+/**
+ * Authenticate a WebSocket upgrade request.
+ * Returns true if allowed, false if rejected (caller should close the socket).
+ */
+function authenticateWS(req: FastifyRequest, daemonToken: string | undefined): boolean {
+  if (!daemonToken) return true; // auth disabled (dev/test)
+
+  // 1. Origin check — reject connections from unexpected origins
+  const origin = req.headers.origin;
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    console.warn(`[WS] Rejected connection from disallowed origin: ${origin}`);
+    return false;
+  }
+
+  // 2. Cookie check — validate the vst-session cookie
+  const cookieHeader = req.headers.cookie ?? "";
+  const sessionCookie = parseCookieValue(cookieHeader, COOKIE_NAME);
+  if (validateSessionCookie(sessionCookie, daemonToken)) return true;
+
+  // 3. Bearer fallback — allows CLI tooling to open a WS if needed
+  const auth = req.headers.authorization;
+  if (auth?.startsWith("Bearer ")) {
+    return auth.slice(7) === daemonToken;
+  }
+
+  return false;
+}
 
 /**
  * Register the /ws WebSocket endpoint on the Fastify instance.
  */
-export async function registerWSEndpoint(app: FastifyInstance): Promise<void> {
+export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: string): Promise<void> {
   // Ensure the websocket plugin is registered
   await app.register(fastifyWebsocket);
 
-  app.get("/ws", { websocket: true }, (socket: WebSocket, _req) => {
+  app.get("/ws", { websocket: true }, (socket: WebSocket, req) => {
+    // Auth gate — reject before registering the connection
+    if (!authenticateWS(req, daemonToken)) {
+      socket.close(4401, "Unauthorized");
+      return;
+    }
+
     const conn = new WSConnection(socket);
 
     // Register connection for broadcasts

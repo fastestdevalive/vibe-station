@@ -43,7 +43,20 @@ async function parseJson<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Thin fetch wrapper that always sends credentials (session cookie).
+ *  credentials: 'include' is required because in dev the web UI (port 5173)
+ *  and daemon (port 7421) are different origins — 'same-origin' would silently
+ *  drop the cookie. */
+function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    credentials: "include",
+    headers: { ...init?.headers },
+  });
+}
+
 export type ConnectionState = "online" | "connecting" | "offline";
+export type AuthEvent = { type: "auth:expired" };
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 15000;
@@ -124,10 +137,18 @@ export function createClientApi() {
       socket.onerror = () => {
         // close handler will follow and own the reconnect
       };
-      socket.onclose = () => {
+      socket.onclose = (ev) => {
         if (ws === socket) ws = null;
         wsReadyPromise = null;
         setConnState("offline");
+        // Code 4401 = daemon rejected the WS connection due to expired/missing
+        // session. Do NOT reconnect — that would hammer the daemon in a tight loop.
+        // Instead emit an auth:expired event so the UI can show the LoginScreen.
+        if (ev.code === 4401) {
+          emit({ type: "auth:expired" } as unknown as WSEvent);
+          resolve();
+          return;
+        }
         scheduleReconnect();
         resolve();
       };
@@ -145,19 +166,19 @@ export function createClientApi() {
   const api = {
     async health(): Promise<HealthResponse> {
       const root = baseUrl();
-      const res = await fetch(`${root}/health`);
+      const res = await apiFetch(`${root}/health`);
       return parseJson<HealthResponse>(res);
     },
 
     async listProjects(): Promise<Project[]> {
       const root = baseUrl();
-      const res = await fetch(`${root}/projects`);
+      const res = await apiFetch(`${root}/projects`);
       return parseJson<Project[]>(res);
     },
 
     async deleteProject(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await fetch(`${root}/projects/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${root}/projects/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -166,13 +187,13 @@ export function createClientApi() {
     async listWorktrees(projectId: string): Promise<Worktree[]> {
       const q = new URLSearchParams({ project: projectId });
       const root = baseUrl();
-      const res = await fetch(`${root}/worktrees?${q}`);
+      const res = await apiFetch(`${root}/worktrees?${q}`);
       return parseJson<Worktree[]>(res);
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
       const root = baseUrl();
-      const res = await fetch(`${root}/worktrees`, {
+      const res = await apiFetch(`${root}/worktrees`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -183,7 +204,7 @@ export function createClientApi() {
     async deleteWorktree(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
       // UI always purges (removes files from disk)
-      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}?purge=true`, {
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}?purge=true`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -191,7 +212,7 @@ export function createClientApi() {
 
     async dismissWorktree(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -199,7 +220,7 @@ export function createClientApi() {
 
     async markWorktreeDone(id: string): Promise<{ ok: true; updated: number }> {
       const root = baseUrl();
-      const res = await fetch(`${root}/worktrees/${encodeURIComponent(id)}/done`, {
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/done`, {
         method: "POST",
       });
       return parseJson<{ ok: true; updated: number }>(res);
@@ -208,13 +229,13 @@ export function createClientApi() {
     async listSessions(worktreeId: string): Promise<Session[]> {
       const q = new URLSearchParams({ worktree: worktreeId });
       const root = baseUrl();
-      const res = await fetch(`${root}/sessions?${q}`);
+      const res = await apiFetch(`${root}/sessions?${q}`);
       return parseJson<Session[]>(res);
     },
 
     async createSession(body: CreateSessionBody): Promise<Session> {
       const root = baseUrl();
-      const res = await fetch(`${root}/sessions`, {
+      const res = await apiFetch(`${root}/sessions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -224,7 +245,7 @@ export function createClientApi() {
 
     async deleteSession(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await fetch(`${root}/sessions/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -232,7 +253,7 @@ export function createClientApi() {
 
     async resumeSession(id: string): Promise<Session> {
       const root = baseUrl();
-      const res = await fetch(`${root}/sessions/${encodeURIComponent(id)}/resume`, {
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/resume`, {
         method: "POST",
       });
       return parseJson<Session>(res);
@@ -254,7 +275,7 @@ export function createClientApi() {
     async getFile(worktreeId: string, filePath: string): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const root = baseUrl();
-      const res = await fetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
       if (res.status === 422) throw new ApiError("File too large to preview", 422);
       if (!res.ok) throw new ApiError(await res.text(), res.status);
       return res.text();
@@ -310,26 +331,26 @@ export function createClientApi() {
 
     async listModes(): Promise<Mode[]> {
       const root = baseUrl();
-      const res = await fetch(`${root}/modes`);
+      const res = await apiFetch(`${root}/modes`);
       return parseJson<Mode[]>(res);
     },
 
     async getSupportedClis(): Promise<SupportedCli[]> {
       const root = baseUrl();
-      const res = await fetch(`${root}/supported-clis`);
+      const res = await apiFetch(`${root}/supported-clis`);
       return parseJson<SupportedCli[]>(res);
     },
 
     async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
       const root = baseUrl();
       const q = new URLSearchParams({ cli });
-      const res = await fetch(`${root}/cli-models?${q}`);
+      const res = await apiFetch(`${root}/cli-models?${q}`);
       return parseJson<{ models: string[]; error?: string }>(res);
     },
 
     async createMode(body: CreateModeBody): Promise<Mode> {
       const root = baseUrl();
-      const res = await fetch(`${root}/modes`, {
+      const res = await apiFetch(`${root}/modes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -339,7 +360,7 @@ export function createClientApi() {
 
     async updateMode(id: string, body: UpdateModeBody): Promise<Mode> {
       const root = baseUrl();
-      const res = await fetch(`${root}/modes/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${root}/modes/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -349,7 +370,7 @@ export function createClientApi() {
 
     async deleteMode(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await fetch(`${root}/modes/${encodeURIComponent(id)}`, {
+      const res = await apiFetch(`${root}/modes/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
@@ -428,6 +449,36 @@ export function createClientApi() {
      *  the first subscription. */
     startConnection(): void {
       void ensureWs();
+    },
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
+
+    /** Exchange the daemon token for a session cookie. Throws ApiError on failure. */
+    async login(token: string): Promise<void> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      await parseJson<{ ok: true }>(res);
+    },
+
+    /** Clear the session cookie (server side). */
+    async logout(): Promise<void> {
+      const root = baseUrl();
+      await apiFetch(`${root}/auth/logout`, { method: "POST" });
+    },
+
+    /** Returns true if the current session cookie is valid. */
+    async checkAuth(): Promise<boolean> {
+      try {
+        const root = baseUrl();
+        const res = await apiFetch(`${root}/auth/check`);
+        return res.ok;
+      } catch {
+        return false;
+      }
     },
 
     getConnectionState(): ConnectionState {

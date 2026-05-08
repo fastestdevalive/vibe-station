@@ -565,6 +565,11 @@ export function createMockApi() {
       handler("online");
       return () => {};
     },
+
+    // Auth — mock always succeeds (no auth in test/mock mode)
+    async login(_token: string): Promise<void> {},
+    async logout(): Promise<void> {},
+    async checkAuth(): Promise<boolean> { return true; },
   };
 
   return api;

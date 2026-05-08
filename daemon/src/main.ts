@@ -5,7 +5,8 @@
  * Acquires ~/.vibe-station/.daemon.lock, starts Fastify on port 7421 (or next free),
  * writes pid + port to ~/.vibe-station/config.json.
  */
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -70,10 +71,13 @@ async function acquireLock(): Promise<void> {
   await fh.close();
 }
 
-async function writeConfig(port: number): Promise<void> {
+async function writeConfig(port: number, token: string): Promise<void> {
   await mkdir(VST_HOME, { recursive: true });
-  const config = { port, pid: process.pid, startedAt: new Date().toISOString() };
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
+  const config = { port, pid: process.pid, startedAt: new Date().toISOString(), token };
+  // mode 0o600 — owner read/write only; no other user on the machine can read the token
+  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { encoding: "utf8", mode: 0o600 });
+  // Ensure correct permissions even if the file already existed with wrong mode
+  await chmod(CONFIG_PATH, 0o600);
 }
 
 async function releaseLock(): Promise<void> {
@@ -113,9 +117,15 @@ async function main() {
   await sweepDirectPtySessionsOnBoot();
 
   const port = await findFreePort(DEFAULT_PORT);
-  await writeConfig(port);
 
-  const app = await buildServer({ port, logger: true });
+  // Generate a fresh random token each daemon start.
+  // The token never travels via argv — it lives only in memory + config.json.
+  const token = randomBytes(32).toString("hex");
+  await writeConfig(port, token);
+
+  console.log(`Browser token: ${token.slice(0, 8)}...  (full token in ${CONFIG_PATH})`);
+
+  const app = await buildServer({ port, logger: true, token });
 
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
