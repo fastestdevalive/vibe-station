@@ -71,16 +71,14 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // Parse Cookie headers so req.cookies is available in hooks and routes
   await app.register(fastifyCookie);
 
-  // CORS — required for credentials: 'include' fetch calls from the web UI
-  // (dev server runs on :5173, daemon on :7421 — different origins)
+  // CORS — reflect the request origin (any origin) and allow credentials.
+  // CSRF defense lives at the cookie layer: HMAC-signed session token +
+  // SameSite=Strict. An origin allowlist here would block legitimate LAN /
+  // Tailscale / reverse-proxy access without adding meaningful protection,
+  // since unauthenticated origins still can't forge a valid cookie.
   await app.register(fastifyCors, {
-    origin: [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-    ],
-    credentials: true, // allow Set-Cookie to be respected by the browser
+    origin: true,
+    credentials: true,
   });
 
   // ── Auth guard ───────────────────────────────────────────────────────────────

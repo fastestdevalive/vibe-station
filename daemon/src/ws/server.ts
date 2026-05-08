@@ -16,14 +16,6 @@ import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
 import { COOKIE_NAME, validateSessionCookie } from "../auth.js";
 
-/** Origins allowed to connect to the WebSocket endpoint. */
-const ALLOWED_ORIGINS = new Set([
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-]);
-
 /**
  * Parse a raw Cookie header string and return the value for a given cookie name.
  * Reuses @fastify/cookie parsing logic when available; falls back to manual split.
@@ -46,19 +38,17 @@ function parseCookieValue(cookieHeader: string, name: string): string {
 function authenticateWS(req: FastifyRequest, daemonToken: string | undefined): boolean {
   if (!daemonToken) return true; // auth disabled (dev/test)
 
-  // 1. Origin check — reject connections from unexpected origins
-  const origin = req.headers.origin;
-  if (origin && !ALLOWED_ORIGINS.has(origin)) {
-    console.warn(`[WS] Rejected connection from disallowed origin: ${origin}`);
-    return false;
-  }
+  // CSRF protection here is the cookie itself: HMAC-signed with the daemon
+  // secret + SameSite=Strict means a malicious cross-site page can neither
+  // forge nor send the cookie. We deliberately don't gate on Origin — that
+  // would block legitimate LAN / Tailscale / reverse-proxy access.
 
-  // 2. Cookie check — validate the vst-session cookie
+  // Cookie check — validate the vst-session cookie
   const cookieHeader = req.headers.cookie ?? "";
   const sessionCookie = parseCookieValue(cookieHeader, COOKIE_NAME);
   if (validateSessionCookie(sessionCookie, daemonToken)) return true;
 
-  // 3. Bearer fallback — allows CLI tooling to open a WS if needed
+  // Bearer fallback — allows CLI tooling to open a WS if needed
   const auth = req.headers.authorization;
   if (auth?.startsWith("Bearer ")) {
     return auth.slice(7) === daemonToken;

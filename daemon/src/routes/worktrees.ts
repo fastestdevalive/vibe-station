@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, normalize, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import ignore from "ignore";
 import { getProject, getAllProjects, mutateProject } from "../state/project-store.js";
@@ -23,6 +23,25 @@ import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
 
 const MAX_DIFF_BYTES = 512 * 1024;
+
+/**
+ * Resolve a user-supplied relative path against a worktree root and assert it
+ * stays inside the root. Throws a 403-friendly error on traversal attempts.
+ * Uses normalize() (pure path math) so it works even when the path doesn't
+ * exist yet; symlinks pointing outside the root are NOT blocked here but are
+ * an accepted trade-off for a local dev tool where the repo owner controls
+ * the tree.
+ */
+function resolveInsideWorktree(wtPath: string, filePath: string): string {
+  const abs = normalize(join(wtPath, filePath));
+  const root = normalize(wtPath);
+  if (abs !== root && !abs.startsWith(root + sep)) {
+    const err = new Error("Path traversal attempt") as Error & { code: string };
+    err.code = "ETRAVERSAL";
+    throw err;
+  }
+  return abs;
+}
 
 /** Parse `git status -z --porcelain=v1`; handles rename/copy second path record. */
 function parsePorcelainZ(stdout: string): { path: string; status: string }[] {
@@ -434,7 +453,12 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
 
     const wtPath = getWorktreePath(project.id, wtId);
-    const targetPath = join(wtPath, subPath);
+    let targetPath: string;
+    try {
+      targetPath = resolveInsideWorktree(wtPath, subPath);
+    } catch {
+      return reply.status(403).send({ error: "Access denied." });
+    }
 
     // Build gitignore filter
     let ig: ReturnType<typeof ignore> | null = null;
@@ -496,7 +520,12 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
 
     const wtPath = getWorktreePath(project.id, wtId);
-    const absPath = join(wtPath, filePath);
+    let absPath: string;
+    try {
+      absPath = resolveInsideWorktree(wtPath, filePath);
+    } catch {
+      return reply.status(403).send({ error: "Access denied." });
+    }
 
     try {
       const stats = await stat(absPath);

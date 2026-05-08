@@ -72,6 +72,25 @@ export function Workspace() {
       const sessions = (
         await Promise.all(worktrees.map((w) => api.listSessions(w.id)))
       ).flat();
+
+      // Drop persisted selections that no longer exist on the daemon (e.g. the
+      // worktree was deleted between sessions). Without this the FilePreviewPane
+      // fires a doomed getFile() with a stale path the moment the workspace mounts.
+      const s = useWorkspaceStore.getState();
+      const wtStillExists = s.activeWorktreeId && worktrees.some((w) => w.id === s.activeWorktreeId);
+      const sessStillExists =
+        s.activeSessionId && sessions.some((ss) => ss.id === s.activeSessionId);
+      if (!wtStillExists) {
+        useWorkspaceStore.setState({
+          activeProjectId: null,
+          activeWorktreeId: null,
+          activeSessionId: null,
+          activeFilePath: null,
+        });
+      } else if (!sessStillExists) {
+        useWorkspaceStore.setState({ activeSessionId: null });
+      }
+
       setBundle({ projects, worktrees, sessions });
       setBundleLoaded(true);
     })();
