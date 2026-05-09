@@ -76,14 +76,26 @@ export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: str
     // Register connection for broadcasts
     registerConnection(conn);
 
-    // Monitor buffered amount for backpressure
+    // Monitor buffered amount for backpressure. The hard close threshold is
+    // intentionally very generous (50MB) — terminal scrollback replay across
+    // many subscribed sessions can briefly buffer multiple MB at once and we
+    // don't want to kill the connection over transient pressure. We also poll
+    // periodically instead of only on the next session:input, so a truly
+    // runaway producer is bounded even if the user isn't typing.
+    const HARD_LIMIT = 50 * 1024 * 1024;
+    let lastWarnAt = 0;
     const checkBackpressure = () => {
       const buffered = socket.bufferedAmount || 0;
-      if (buffered > 1_000_000) {
-        console.warn(`[WS] Write buffer exceeded 1MB (${buffered} bytes), closing connection`);
+      if (buffered > 5 * 1024 * 1024 && Date.now() - lastWarnAt > 5000) {
+        console.warn(`[WS] Write buffer at ${(buffered / 1_048_576).toFixed(1)}MB`);
+        lastWarnAt = Date.now();
+      }
+      if (buffered > HARD_LIMIT) {
+        console.warn(`[WS] Write buffer exceeded ${HARD_LIMIT} bytes (${buffered}), closing connection`);
         socket.close(1009, "Message Too Big");
       }
     };
+    const backpressureTimer = setInterval(checkBackpressure, 5000);
 
     socket.on("message", async (data: Buffer) => {
       try {
@@ -153,6 +165,7 @@ export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: str
     });
 
     socket.on("close", async () => {
+      clearInterval(backpressureTimer);
       unregisterConnection(conn);
       await conn.cleanup();
     });

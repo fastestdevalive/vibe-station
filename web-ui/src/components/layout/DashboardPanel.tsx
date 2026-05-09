@@ -3,6 +3,7 @@ import { Columns3, EyeOff, LayoutList } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
+import type { ConnectionState } from "@/api/client";
 import type { HealthResponse, Project, Session, SessionState, Worktree } from "@/api/types";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { StatusDot } from "@/components/layout/StatusDot";
@@ -12,6 +13,9 @@ import { type WorktreeRolledUpStatus, worktreeRolledUpStatus } from "@/lib/workt
 
 interface DashboardPanelProps {
   api: ApiInstance;
+  initialProjects?: Project[];
+  initialWorktrees?: Worktree[];
+  initialSessions?: Session[];
 }
 
 function applySessionState(s: Session, state: SessionState): Session {
@@ -26,11 +30,25 @@ function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "idle" | "finis
 
 const DASHBOARD_VIEW_KEY = "dashboard:view";
 
-export function DashboardPanel({ api }: DashboardPanelProps) {
+export function DashboardPanel({ api, initialProjects, initialWorktrees, initialSessions }: DashboardPanelProps) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [connState, setConnState] = useState<ConnectionState>(() => api.getConnectionState());
+
+  useEffect(() => api.subscribeConnection(setConnState), [api]);
+
+  // Fetch the daemon health snapshot once for the port label. The live "is the
+  // daemon reachable?" indicator comes from the WS connection state — the
+  // health endpoint is just for the metadata.
+  useEffect(() => {
+    let cancelled = false;
+    void api.health()
+      .then((h) => { if (!cancelled) setHealth(h); })
+      .catch(() => { if (!cancelled) setHealth(null); });
+    return () => { cancelled = true; };
+  }, [api]);
+  const [projects, setProjects] = useState<Project[]>(initialProjects ?? []);
+  const [worktrees, setWorktrees] = useState<Worktree[]>(initialWorktrees ?? []);
+  const [sessions, setSessions] = useState<Session[]>(initialSessions ?? []);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
@@ -45,11 +63,13 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     } catch {
       setHealth(null);
     }
-    const ps = await api.listProjects();
+    const [ps, wts, ss] = await Promise.all([
+      api.listProjects(),
+      api.listWorktrees(),
+      api.listSessions(),
+    ]);
     setProjects(ps);
-    const wts = (await Promise.all(ps.map((p) => api.listWorktrees(p.id)))).flat();
     setWorktrees(wts);
-    const ss = (await Promise.all(wts.map((w) => api.listSessions(w.id)))).flat();
     setSessions(ss);
     syncSessionsFromApi(ss);
   }, [api, syncSessionsFromApi]);
@@ -75,8 +95,29 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
   }, [dashboardView]);
 
   useEffect(() => {
+    // Skip initial fetch when the parent passed bundle data in — Workspace already
+    // loaded everything and we don't want a second round-trip on mount.
+    if (initialProjects) return;
     void refreshDashboard();
-  }, [refreshDashboard]);
+  }, [refreshDashboard, initialProjects]);
+
+  // Mirror parent bundle into local state when it changes. The bundle is empty
+  // on the very first render (before Workspace's load resolves) — without this
+  // sync, the dashboard shows blank until you navigate away and back.
+  useEffect(() => {
+    if (initialProjects) setProjects(initialProjects);
+  }, [initialProjects]);
+  useEffect(() => {
+    if (initialWorktrees) setWorktrees(initialWorktrees);
+  }, [initialWorktrees]);
+  useEffect(() => {
+    // Don't call syncSessionsFromApi here — initialSessions is the frozen
+    // bundle from app load, so writing it back into the global store on every
+    // remount would clobber live state that arrived via WS while the panel
+    // was unmounted. The rollup falls back to s.state when sessionStates has
+    // no entry, so the bundle's stale state never wins over fresh WS data.
+    if (initialSessions) setSessions(initialSessions);
+  }, [initialSessions]);
 
   useEffect(() => {
     return api.on("*", (ev) => {
@@ -141,11 +182,11 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
 
-  /** Roll up from local session rows (same source as cards); avoids stale global sessionStates shadowing fresh WS updates. */
-  const rollupLive = useMemo(
-    () => Object.fromEntries(sessions.map((s) => [s.id, s.state])) as Record<string, SessionState>,
-    [sessions],
-  );
+  /** Live states from the global store. Same source LeftSidebar reads — keeps
+   *  the rollup correct across remounts, since the store is updated via WS
+   *  even when DashboardPanel was unmounted. The bundle's session.state is
+   *  used as a fallback inside worktreeRolledUpStatus when no live entry. */
+  const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
   const { working, idle, finished } = useMemo(() => {
     const wtsWorking: Worktree[] = [];
@@ -154,21 +195,21 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     for (const wt of worktrees) {
       const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
       if (agentSessions.length === 0) continue;
-      const rolled = worktreeRolledUpStatus(agentSessions, rollupLive);
+      const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const b = bucketForRollup(rolled);
       if (b === "working") wtsWorking.push(wt);
       else if (b === "idle") wtsIdle.push(wt);
       else wtsFinished.push(wt);
     }
     return { working: wtsWorking, idle: wtsIdle, finished: wtsFinished };
-  }, [worktrees, sessions, rollupLive]);
+  }, [worktrees, sessions, sessionStates]);
 
-  const daemonOk = health !== null;
+  const daemonOk = connState === "online";
 
   const renderWorktreeCard = useCallback(
     (wt: Worktree) => {
       const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
-      const rolled = worktreeRolledUpStatus(agentSessions, rollupLive);
+      const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
       const proj = projectById[wt.projectId];
       const showDismiss = rolled === "done" || rolled === "exited";
@@ -209,7 +250,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
         </div>
       );
     },
-    [projectById, rollupLive, sessions, setActiveWorktree],
+    [projectById, sessionStates, sessions, setActiveWorktree],
   );
 
   const toggleViewLabel =
@@ -230,7 +271,11 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               {daemonOk ? "●" : "○"}
             </span>
             <span className="dashboard-header__daemon-label">
-              {daemonOk ? `daemon · port ${health.port}` : "daemon unreachable"}
+              {daemonOk
+                ? `daemon · port ${health?.port ?? "—"}`
+                : connState === "connecting"
+                  ? "connecting…"
+                  : "daemon unreachable"}
             </span>
           </div>
           {!isMobile ? (

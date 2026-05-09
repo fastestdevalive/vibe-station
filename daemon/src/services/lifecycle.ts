@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { hasSession, capturePane } from "./tmux.js";
 import { getAllProjects, mutateProject } from "../state/project-store.js";
-import { notifySession } from "../broadcaster.js";
+import { broadcastAll } from "../broadcaster.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
 
@@ -51,7 +51,9 @@ export async function persistLifecycleState(
   sessionId: string,
   newState: LifecycleState,
 ): Promise<void> {
-  notifySession(sessionId, {
+  // Broadcast — every viewer (dashboard, sidebar, etc.) needs lifecycle state,
+  // not just the one subscribed to this session's terminal output.
+  broadcastAll({
     type: "session:state",
     sessionId,
     state: newState,
@@ -102,6 +104,9 @@ async function pollSession(
       return;
     }
 
+    // Terminals: skip idle/working churn — they're meaningless for shell sessions.
+    if (session.type === "terminal") return;
+
     if (session.lifecycle.state !== "working" && session.lifecycle.state !== "idle") {
       return;
     }
@@ -137,7 +142,7 @@ async function pollSession(
 
   if (!alive && session.lifecycle.state !== "exited" && session.lifecycle.state !== "done") {
     idleTracking.delete(session.id);
-    notifySession(session.id, {
+    broadcastAll({
       type: "session:exited",
       sessionId: session.id,
     });
@@ -166,6 +171,10 @@ async function pollSession(
   }
 
   if (!alive) return;
+
+  // Terminal sessions don't have user-meaningful idle/working states — skip
+  // the hash-based detection. They stay "working" until exited (handled above).
+  if (session.type === "terminal") return;
 
   if (session.lifecycle.state !== "working" && session.lifecycle.state !== "idle") {
     return;
@@ -218,7 +227,7 @@ export async function markSessionExited(
   if (!session || session.lifecycle.state === "exited") return;
 
   idleTracking.delete(sessionId);
-  notifySession(sessionId, { type: "session:exited", sessionId });
+  broadcastAll({ type: "session:exited", sessionId });
   await persistLifecycleState(projectId, worktreeId, sessionId, "exited");
 }
 

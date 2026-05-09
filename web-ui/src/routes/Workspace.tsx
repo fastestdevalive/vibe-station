@@ -65,13 +65,11 @@ export function Workspace() {
 
   useEffect(() => {
     void (async () => {
-      const projects = await api.listProjects();
-      const worktrees = (
-        await Promise.all(projects.map((p) => api.listWorktrees(p.id)))
-      ).flat();
-      const sessions = (
-        await Promise.all(worktrees.map((w) => api.listSessions(w.id)))
-      ).flat();
+      const [projects, worktrees, sessions] = await Promise.all([
+        api.listProjects(),
+        api.listWorktrees(),
+        api.listSessions(),
+      ]);
 
       // Drop persisted selections that no longer exist on the daemon (e.g. the
       // worktree was deleted between sessions). Without this the FilePreviewPane
@@ -147,10 +145,20 @@ export function Workspace() {
               if (isMobile) setMobileSidebarOpen(false);
               if (isDashboard || isSettings) navigate(`/worktree/${wtId}`);
             }}
+            initialProjects={bundle.projects}
+            initialWorktrees={bundle.worktrees}
+            initialSessions={bundle.sessions}
           />
         }
         dashboardPane={
-          isDashboard ? <DashboardPanel api={api} /> : isSettings ? <SettingsPanel api={api} /> : undefined
+          isDashboard ? (
+            <DashboardPanel
+              api={api}
+              initialProjects={bundle.projects}
+              initialWorktrees={bundle.worktrees}
+              initialSessions={bundle.sessions}
+            />
+          ) : isSettings ? <SettingsPanel api={api} /> : undefined
         }
         leftColumnPx={leftColumnPx}
         isMobile={isMobile}
@@ -161,7 +169,7 @@ export function Workspace() {
           : {
               terminalPane: terminalColumn,
               previewPane: (
-                <FilePreviewPane api={api} sessionId={activeSessionId} worktreeId={activeWorktreeId} />
+                <FilePreviewPane api={api} sessionId={activeSessionId} worktreeId={activeWorktreeId} bundle={bundle} />
               ),
               fileTree: <FileTreeSidebar api={api} />,
             })}
