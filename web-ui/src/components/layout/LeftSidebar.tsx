@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, FolderTree, Moon, MoreHorizontal, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Filter, FolderTree, Moon, MoreHorizontal, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -38,8 +38,9 @@ function disambiguatedAbbrev(
 }
 
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
-  if (sessions.length === 0) return true;
-  return sessions.every((s) => {
+  const agents = sessions.filter((s) => s.type === "agent");
+  if (agents.length === 0) return true;
+  return agents.every((s) => {
     const st = live[s.id] ?? s.state;
     return st === "done" || st === "exited";
   });
@@ -91,6 +92,7 @@ export function LeftSidebar({
 
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
+  const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const refreshProjects = useCallback(async () => {
@@ -239,6 +241,31 @@ export function LeftSidebar({
     };
   }, [wtMenu]);
 
+  useEffect(() => {
+    if (!filterMenuRect) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-filter-menu-panel]") || t.closest("[data-filter-menu-trigger]")) return;
+        setFilterMenuRect(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setFilterMenuRect(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [filterMenuRect]);
+
   async function confirmDeleteWorktree() {
     if (!pendingDelete) return;
     const worktree = pendingDelete;
@@ -337,10 +364,24 @@ export function LeftSidebar({
           ) : (
             <>
               <span className="sidebar-projects-heading__title">Projects</span>
-              <label className="sidebar-projects-heading__filter">
-                <input type="checkbox" checked={hideInactiveWorktrees} onChange={toggleInactiveWorktreesFilter} />
-                hide done
-              </label>
+              <button
+                type="button"
+                data-filter-menu-trigger
+                className="icon-btn"
+                title={hideInactiveWorktrees ? "Showing active only" : "Filter worktrees"}
+                aria-label="Filter worktrees"
+                aria-pressed={hideInactiveWorktrees}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setFilterMenuRect((r) => (r ? null : rect));
+                }}
+              >
+                <Filter
+                  size={13}
+                  fill={hideInactiveWorktrees ? "currentColor" : "none"}
+                  color={hideInactiveWorktrees ? "var(--accent-color, var(--fg-primary))" : undefined}
+                />
+              </button>
             </>
           )}
         </div>
@@ -598,6 +639,43 @@ export function LeftSidebar({
                 }}
               >
                 Delete worktree…
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+      {filterMenuRect
+        ? createPortal(
+            <div
+              className="menu-pop wt-menu-pop--portal"
+              data-filter-menu-panel
+              role="menu"
+              aria-label="Filter options"
+              style={{
+                position: "fixed",
+                top: filterMenuRect.bottom + 6,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    filterMenuRect.right - 140,
+                    typeof window !== "undefined" ? window.innerWidth - 148 : 8,
+                  ),
+                ),
+                minWidth: 140,
+                zIndex: 4000,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={hideInactiveWorktrees}
+                className={`menu-pop__item menu-pop__item--check${hideInactiveWorktrees ? " menu-pop__item--active" : ""}`}
+                onClick={() => { toggleInactiveWorktreesFilter(); setFilterMenuRect(null); }}
+              >
+                <span className="menu-pop__check" aria-hidden>
+                  {hideInactiveWorktrees ? <Check size={13} strokeWidth={2.5} /> : null}
+                </span>
+                Hide done
               </button>
             </div>,
             document.body,

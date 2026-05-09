@@ -774,6 +774,25 @@
   pointer-events: auto;
 }
 
+.menu-pop button.menu-pop__item--active {
+  color: var(--accent-color, var(--fg-primary));
+  font-weight: var(--font-weight-medium);
+}
+
+.menu-pop button.menu-pop__item--check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.menu-pop__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  flex: 0 0 14px;
+}
+
 .menu-pop button.menu-pop__item--danger {
   color: var(--destructive);
 }
