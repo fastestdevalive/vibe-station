@@ -254,8 +254,8 @@ export function createMockApi() {
       return { ok: true };
     },
 
-    async listWorktrees(projectId: string): Promise<Worktree[]> {
-      return structuredClone(worktrees.filter((w) => w.projectId === projectId));
+    async listWorktrees(projectId?: string): Promise<Worktree[]> {
+      return structuredClone(projectId ? worktrees.filter((w) => w.projectId === projectId) : worktrees);
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
@@ -312,8 +312,8 @@ export function createMockApi() {
       return { ok: true, updated };
     },
 
-    async listSessions(worktreeId: string): Promise<Session[]> {
-      return structuredClone(sessions.filter((s) => s.worktreeId === worktreeId));
+    async listSessions(worktreeId?: string): Promise<Session[]> {
+      return structuredClone(worktreeId ? sessions.filter((s) => s.worktreeId === worktreeId) : sessions);
     },
 
     async createSession(body: CreateSessionBody): Promise<Session> {

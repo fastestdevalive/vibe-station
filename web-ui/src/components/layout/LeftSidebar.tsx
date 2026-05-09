@@ -52,9 +52,21 @@ interface LeftSidebarProps {
   /** Mobile drawer: show pinned brand link at top */
   isMobile?: boolean;
   onWorktreeSelected?: (wtId: string) => void;
+  /** Bundle from Workspace; when provided, sidebar skips its own fetch and mirrors the parent. */
+  initialProjects?: Project[];
+  initialWorktrees?: Worktree[];
+  initialSessions?: Session[];
 }
 
-export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktreeSelected }: LeftSidebarProps) {
+export function LeftSidebar({
+  api,
+  collapsed = false,
+  isMobile = false,
+  onWorktreeSelected,
+  initialProjects,
+  initialWorktrees,
+  initialSessions,
+}: LeftSidebarProps) {
   const location = useLocation();
   const { theme, toggleTheme, toggleFont } = useTheme();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -82,26 +94,50 @@ export function LeftSidebar({ api, collapsed = false, isMobile = false, onWorktr
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const refreshProjects = useCallback(async () => {
-    const ps = await api.listProjects();
+    const [ps, wts, ss] = await Promise.all([
+      api.listProjects(),
+      api.listWorktrees(),
+      api.listSessions(),
+    ]);
     setProjects(ps);
     const wtM: Record<string, Worktree[]> = {};
-    const sM: Record<string, Session[]> = {};
-    for (const p of ps) {
-      const wts = await api.listWorktrees(p.id);
-      wtM[p.id] = wts;
-      for (const w of wts) {
-        const ss = await api.listSessions(w.id);
-        sM[w.id] = ss;
-        syncSessionsFromApi(ss);
-      }
-    }
+    for (const w of wts) (wtM[w.projectId] ??= []).push(w);
     setWorktreeMap(wtM);
+    const sM: Record<string, Session[]> = {};
+    for (const s of ss) (sM[s.worktreeId] ??= []).push(s);
     setSessionMap(sM);
+    syncSessionsFromApi(ss);
   }, [api, syncSessionsFromApi]);
 
   useEffect(() => {
+    // Skip own fetch when Workspace passed bundle data in.
+    if (initialProjects) return;
     void refreshProjects();
-  }, [refreshProjects]);
+  }, [refreshProjects, initialProjects]);
+
+  // Mirror parent bundle into local maps when it arrives / changes.
+  useEffect(() => {
+    if (initialProjects) setProjects(initialProjects);
+  }, [initialProjects]);
+  useEffect(() => {
+    if (!initialWorktrees) return;
+    const wtM: Record<string, Worktree[]> = {};
+    for (const w of initialWorktrees) {
+      (wtM[w.projectId] ??= []).push(w);
+    }
+    setWorktreeMap(wtM);
+  }, [initialWorktrees]);
+  useEffect(() => {
+    if (!initialSessions) return;
+    const sM: Record<string, Session[]> = {};
+    for (const s of initialSessions) {
+      (sM[s.worktreeId] ??= []).push(s);
+    }
+    setSessionMap(sM);
+    // Intentionally not calling syncSessionsFromApi — see DashboardPanel for
+    // the same reasoning. WS events keep sessionStates current; the bundle's
+    // session.state is used as a fallback in the rollup when no live entry.
+  }, [initialSessions]);
 
   const sessionIdKey = useMemo(
     () =>

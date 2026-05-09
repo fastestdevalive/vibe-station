@@ -19,17 +19,22 @@ const rank: Record<WorktreeRolledUpStatus, number> = {
 
 /**
  * Single status for a worktree row: working > spawning (not_started) > idle > done > exited > none.
+ *
+ * Only agent sessions contribute. Terminal sessions don't have user-meaningful
+ * lifecycle states — including them lets a transiently-idle terminal dominate
+ * a fully-done worktree (idle outranks done in the rollup).
  */
 export function worktreeRolledUpStatus(
   sessions: Session[],
   live: Record<string, SessionState>,
 ): WorktreeRolledUpStatus {
-  if (sessions.length === 0) return "none";
+  const agents = sessions.filter((s) => s.type === "agent");
+  if (agents.length === 0) return "none";
 
   let best: WorktreeRolledUpStatus = "none";
   let bestRank = 0;
 
-  for (const s of sessions) {
+  for (const s of agents) {
     const st = live[s.id] ?? s.state;
     let step: WorktreeRolledUpStatus;
     if (st === "not_started") step = "spawning";

@@ -1,7 +1,7 @@
 import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { DiffScope } from "@/api/types";
+import type { DiffScope, Project, Session, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
@@ -19,9 +19,10 @@ interface FilePreviewPaneProps {
   api: ApiInstance;
   sessionId: string | null;
   worktreeId: string | null;
+  bundle?: { projects: Project[]; worktrees: Worktree[]; sessions: Session[] };
 }
 
-export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneProps) {
+export function FilePreviewPane({ api, sessionId, worktreeId, bundle }: FilePreviewPaneProps) {
   const path = useWorkspaceStore((s) => s.activeFilePath);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
@@ -169,7 +170,12 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
           {previewFullscreenBtn}
         </div>
         <div className="preview-body" style={{ padding: 0 }}>
-          <DashboardPanel api={api} />
+          <DashboardPanel
+              api={api}
+              initialProjects={bundle?.projects}
+              initialWorktrees={bundle?.worktrees}
+              initialSessions={bundle?.sessions}
+            />
         </div>
       </div>
     );

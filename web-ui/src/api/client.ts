@@ -184,10 +184,12 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
-    async listWorktrees(projectId: string): Promise<Worktree[]> {
-      const q = new URLSearchParams({ project: projectId });
+    async listWorktrees(projectId?: string): Promise<Worktree[]> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees?${q}`);
+      const url = projectId
+        ? `${root}/worktrees?${new URLSearchParams({ project: projectId })}`
+        : `${root}/worktrees`;
+      const res = await apiFetch(url);
       return parseJson<Worktree[]>(res);
     },
 
@@ -226,10 +228,12 @@ export function createClientApi() {
       return parseJson<{ ok: true; updated: number }>(res);
     },
 
-    async listSessions(worktreeId: string): Promise<Session[]> {
-      const q = new URLSearchParams({ worktree: worktreeId });
+    async listSessions(worktreeId?: string): Promise<Session[]> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/sessions?${q}`);
+      const url = worktreeId
+        ? `${root}/sessions?${new URLSearchParams({ worktree: worktreeId })}`
+        : `${root}/sessions`;
+      const res = await apiFetch(url);
       return parseJson<Session[]>(res);
     },
 

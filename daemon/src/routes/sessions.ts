@@ -10,7 +10,7 @@ import { killSession, newSession, pasteBuffer, capturePane } from "../services/t
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
 import { cleanupSessionDataDir, worktreePath } from "../services/paths.js";
-import { notifySession, broadcastAll } from "../broadcaster.js";
+import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
@@ -312,7 +312,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       ),
     }));
 
-    notifySession(id, { type: "session:deleted", sessionId: id });
+    broadcastAll({ type: "session:deleted", sessionId: id });
     return reply.send({ ok: true });
   });
 
@@ -455,7 +455,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       ),
     }));
 
-    notifySession(id, {
+    broadcastAll({
       type: "session:resumed",
       sessionId: id,
       restoredFromHistory,
