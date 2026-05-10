@@ -68,6 +68,11 @@ export function createClientApi() {
   /** Ref-counted subs: multiple components can sub to the same sessionId without
    *  one cleanup tearing down the others. */
   const subRefs = new Map<string, number>();
+  /** Active file/tree watchers — replayed on WS reconnect so the daemon's
+   *  per-connection chokidar state survives a drop. Keyed by stringified
+   *  payload to deduplicate. */
+  const fileWatches = new Map<string, { worktreeId: string; path: string }>();
+  const treeWatches = new Map<string, { worktreeId: string }>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
@@ -130,6 +135,15 @@ export function createClientApi() {
         setConnState("online");
         if (subRefs.size > 0) {
           socket.send(JSON.stringify({ type: "subscribe", sessionIds: [...subRefs.keys()] }));
+        }
+        // Replay file/tree watches — daemon's per-connection chokidar state
+        // is gone after a drop, so without this the FilePreviewPane silently
+        // stops receiving file:changed events until the user remounts it.
+        for (const w of fileWatches.values()) {
+          socket.send(JSON.stringify({ type: "file:watch", worktreeId: w.worktreeId, path: w.path }));
+        }
+        for (const w of treeWatches.values()) {
+          socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
         }
         wsReadyPromise = null;
         resolve();
@@ -393,6 +407,21 @@ export function createClientApi() {
       worktreeId?: string;
       path?: string;
     }): Promise<void> {
+      // Track watches so they can be re-sent on reconnect.
+      if (message.worktreeId) {
+        if (message.type === "file:watch" && message.path) {
+          fileWatches.set(`${message.worktreeId}:${message.path}`, {
+            worktreeId: message.worktreeId,
+            path: message.path,
+          });
+        } else if (message.type === "file:unwatch" && message.path) {
+          fileWatches.delete(`${message.worktreeId}:${message.path}`);
+        } else if (message.type === "tree:watch") {
+          treeWatches.set(message.worktreeId, { worktreeId: message.worktreeId });
+        } else if (message.type === "tree:unwatch") {
+          treeWatches.delete(message.worktreeId);
+        }
+      }
       await sendWs(message);
     },
 
