@@ -1,5 +1,5 @@
 import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope, Project, Session, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
@@ -97,34 +97,61 @@ export function FilePreviewPane({ api, sessionId, worktreeId, bundle }: FilePrev
   }, [api, worktreeId, path, scope, lastChanged]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
-  const bodyRef = useRef<HTMLDivElement>(null);
-  // Kept current by onScroll — avoids reading bodyRef.current in cleanup
-  // (React clears refs before running effect cleanups when a node unmounts).
-  const scrollTopRef = useRef(0);
-  const pendingScrollRef = useRef<number | null>(null);
+  // Why a callback ref instead of useEffect: fullscreen toggling moves the
+  // pane between two parents in the layout tree (Panel ↔ fullscreenOverlay),
+  // which remounts FilePreviewPane. We need to restore the scrollTop the
+  // moment the new body element attaches, before the user perceives a jump.
+  // Effect-based restore relied on RAF + content load timing and was racy.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const scrollKey = worktreeId && path ? `${worktreeId}:${path}` : null;
 
-  useEffect(() => {
-    if (scrollKey) {
-      pendingScrollRef.current = useWorkspaceStore.getState().fileScrollByKey[scrollKey] ?? 0;
-    }
-    return () => {
-      if (worktreeId && path) {
-        useWorkspaceStore.getState().setFileScroll(worktreeId, path, scrollTopRef.current);
+  // Restore scroll the instant the body element mounts. Stored value comes
+  // from the global store, kept fresh by the rAF-throttled onScroll handler.
+  const setBodyRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      bodyRef.current = el;
+      if (el && scrollKey) {
+        const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
+        if (saved != null) el.scrollTop = saved;
       }
-    };
-  }, [scrollKey, worktreeId, path]);
+    },
+    [scrollKey],
+  );
 
-  useEffect(() => {
-    if (pendingScrollRef.current === null) return;
-    const el = bodyRef.current;
-    if (!el) return;
-    const target = pendingScrollRef.current;
-    pendingScrollRef.current = null;
-    requestAnimationFrame(() => {
-      if (bodyRef.current) bodyRef.current.scrollTop = target;
+  // rAF-throttle persistence so a fast scroll doesn't fire setFileScroll
+  // (and the persist middleware's localStorage write) hundreds of times.
+  const scrollRafRef = useRef<number | null>(null);
+  const handleScroll = useCallback(() => {
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      if (worktreeId && path && bodyRef.current) {
+        useWorkspaceStore
+          .getState()
+          .setFileScroll(worktreeId, path, bodyRef.current.scrollTop);
+      }
     });
-  }, [fileBody, diffBody]);
+  }, [worktreeId, path]);
+
+  useEffect(
+    () => () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    },
+    [],
+  );
+
+  // Re-apply scroll when content loads on the same body node (switching files
+  // doesn't remount the div; only the children change). Without this, the
+  // pre-content-load scrollTop assignment in setBodyRef gets clamped against
+  // the OLD content's scrollHeight.
+  useEffect(() => {
+    if (!bodyRef.current || !scrollKey) return;
+    const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
+    if (saved != null) bodyRef.current.scrollTop = saved;
+  }, [fileBody, diffBody, scrollKey]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -303,8 +330,8 @@ export function FilePreviewPane({ api, sessionId, worktreeId, bundle }: FilePrev
     <div className="pane pane-stack">
       {header}
       <div
-        ref={bodyRef}
-        onScroll={() => { scrollTopRef.current = bodyRef.current?.scrollTop ?? scrollTopRef.current; }}
+        ref={setBodyRef}
+        onScroll={handleScroll}
         className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`}
         style={previewScaleStyle}
       >
