@@ -12,6 +12,7 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
+import { Logo } from "@/components/shared/Logo";
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
 function abbrevLabel(name: string): string {
@@ -347,7 +348,9 @@ export function LeftSidebar({
             clearWorkspaceSelection();
             setMobileSidebarOpen(false);
           }}
+          style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
         >
+          <Logo />
           Vibe Station
         </Link>
       ) : null}
