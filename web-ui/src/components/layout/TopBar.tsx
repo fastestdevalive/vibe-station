@@ -11,6 +11,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import type { Project, Session, Worktree } from "@/api/types";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
+import { Logo } from "@/components/shared/Logo";
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
@@ -127,7 +128,16 @@ export function TopBar({
   if (layoutMode === "login") {
     return (
       <header className="top-bar">
-        <span className="top-bar__brand" style={{ marginLeft: "var(--space-3)" }}>
+        <span
+          className="top-bar__brand"
+          style={{
+            marginLeft: "var(--space-3)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+          }}
+        >
+          <Logo />
           Vibe Station
         </span>
         <div className="top-bar__end">
@@ -158,7 +168,9 @@ export function TopBar({
             className="top-bar__brand"
             aria-label="Home"
             onClick={() => clearWorkspaceSelection()}
+            style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
           >
+            <Logo />
             Vibe Station
           </Link>
           <div
