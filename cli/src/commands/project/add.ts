@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { Command } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
@@ -18,8 +19,13 @@ export function registerProjectAdd(project: Command): void {
     .action(async (path: string, opts: { name?: string; prefix?: string }) => {
       await preflight();
 
+      // Resolve against the CLI's cwd before sending — the daemon runs in a
+      // different working directory, so relative paths would otherwise be
+      // interpreted against the daemon's cwd and fail.
+      const absPath = resolve(path);
+
       const result = await daemonPost<ProjectAddResponse>("/projects", {
-        path,
+        path: absPath,
         name: opts.name,
         prefix: opts.prefix,
       });
