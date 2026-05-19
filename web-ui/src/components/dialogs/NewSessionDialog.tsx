@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode, Worktree } from "@/api/types";
+import { ApiError } from "@/api/errors";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
@@ -34,6 +35,7 @@ export function NewSessionDialog({
   const [initialPrompt, setInitialPrompt] = useState("");
   const [useTmux, setUseTmux] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
 
   useEffect(() => {
@@ -52,36 +54,51 @@ export function NewSessionDialog({
 
   async function submit() {
     setError(null);
-    if (wtChoice === "new") {
-      if (!newWtBranch.trim()) {
-        setError("New worktree requires branch.");
-        return;
-      }
-      // POST /worktrees already spawns the main `m` agent session with the
-      // selected mode + prompt. No additional createSession needed.
-      await api.createWorktree({
-        projectId,
-        branch: newWtBranch.trim(),
-        modeId: modeId || "mode-1",
-        baseBranch: baseBranch.trim() || undefined,
-        prompt: initialPrompt.trim() || undefined,
-        useTmux,
-      });
-    } else {
-      if (!existingWtId) {
-        setError("Select a worktree.");
-        return;
-      }
-      await api.createSession({
-        worktreeId: existingWtId,
-        modeId: modeId || null,
-        type: "agent",
-        prompt: initialPrompt.trim() || undefined,
-        useTmux,
-      });
+    if (wtChoice === "new" && !newWtBranch.trim()) {
+      setError("New worktree requires branch.");
+      return;
     }
-    onCreated?.();
-    onClose();
+    if (wtChoice === "existing" && !existingWtId) {
+      setError("Select a worktree.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      if (wtChoice === "new") {
+        // POST /worktrees already spawns the main `m` agent session with the
+        // selected mode + prompt. No additional createSession needed.
+        await api.createWorktree({
+          projectId,
+          branch: newWtBranch.trim(),
+          modeId: modeId || "mode-1",
+          baseBranch: baseBranch.trim() || undefined,
+          prompt: initialPrompt.trim() || undefined,
+          useTmux,
+        });
+      } else {
+        await api.createSession({
+          worktreeId: existingWtId,
+          modeId: modeId || null,
+          type: "agent",
+          prompt: initialPrompt.trim() || undefined,
+          useTmux,
+        });
+      }
+      onCreated?.();
+      onClose();
+    } catch (err) {
+      // Surface server errors (and offline daemon) in-dialog so the user gets
+      // feedback instead of a silently dismissed click.
+      const msg =
+        err instanceof ApiError
+          ? err.message || `Request failed (HTTP ${err.status})`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -92,11 +109,11 @@ export function NewSessionDialog({
       onClose={onClose}
       footer={
         <>
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={onClose} disabled={submitting}>
             Cancel
           </button>
-          <button type="button" onClick={() => void submit()}>
-            Create
+          <button type="button" onClick={() => void submit()} disabled={submitting}>
+            {submitting ? "Creating…" : "Create"}
           </button>
         </>
       }
