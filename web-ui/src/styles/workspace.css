@@ -560,6 +560,7 @@
   display: flex;
   justify-content: center;
   padding: var(--space-1);
+  margin-left: 0;
 }
 
 .left-sidebar--collapsed .wt-align-gutter {
@@ -577,8 +578,8 @@
 
 
 .tree-row__chevron {
-  width: 28px;
-  height: 28px;
+  width: 12px;
+  height: 12px;
   flex-shrink: 0;
 }
 
@@ -671,8 +672,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  min-width: 28px;
+  width: 12px;
+  min-width: 12px;
   flex-shrink: 0;
   align-self: center;
 }
@@ -1176,10 +1177,13 @@
   border-radius: var(--radius-sm);
 }
 
-/* Worktrees only: shorter row than default `.tree-row` (project font bumped below) */
+/* Worktrees only: shorter row than default `.tree-row` (project font bumped below),
+ * indented under the project row. Collapsed rail overrides this back to 0 so
+ * the centered abbreviation chip stays centered. */
 .tree-row.tree-row--worktree {
   font-size: var(--font-size-sm);
   min-height: 28px;
+  margin-left: 12px;
 }
 
 .left-sidebar .tree-row--project {

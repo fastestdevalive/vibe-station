@@ -413,7 +413,7 @@ export function LeftSidebar({
                 onClick={() => toggleProj(p.id)}
               >
                 <span className="tree-row__chevron tree-row__project-chevron" aria-hidden>
-                  {openProj.has(p.id) ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  {openProj.has(p.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 </span>
                 <span className="tree-row__label">
                   {collapsed ? disambiguatedAbbrev(p.name, p.id, projects) : p.name}
