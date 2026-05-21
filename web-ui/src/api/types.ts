@@ -163,6 +163,13 @@ export type WSEvent =
       type: "pong";
     }
   | {
+      /** Synthetic event emitted from the client on initial connect and every
+       *  reconnect. Consumers use this to refetch server state — the client's
+       *  persisted live caches (e.g. sessionStates) survive cold loads and can
+       *  be stale, so we trust the server on every fresh handshake. */
+      type: "ws:open";
+    }
+  | {
       type: "system:error";
       message: string;
     };

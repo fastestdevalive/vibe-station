@@ -1,11 +1,12 @@
 import { Check, ChevronDown, ChevronRight, Filter, FolderTree, Moon, MoreHorizontal, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
@@ -54,10 +55,6 @@ interface LeftSidebarProps {
   /** Mobile drawer: show pinned brand link at top */
   isMobile?: boolean;
   onWorktreeSelected?: (wtId: string) => void;
-  /** Bundle from Workspace; when provided, sidebar skips its own fetch and mirrors the parent. */
-  initialProjects?: Project[];
-  initialWorktrees?: Worktree[];
-  initialSessions?: Session[];
 }
 
 export function LeftSidebar({
@@ -65,15 +62,26 @@ export function LeftSidebar({
   collapsed = false,
   isMobile = false,
   onWorktreeSelected,
-  initialProjects,
-  initialWorktrees,
-  initialSessions,
 }: LeftSidebarProps) {
   const location = useLocation();
   const { theme, toggleTheme, toggleFont } = useTheme();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [worktreeMap, setWorktreeMap] = useState<Record<string, Worktree[]>>({});
-  const [sessionMap, setSessionMap] = useState<Record<string, Session[]>>({});
+  // Server data comes from the central store, populated and refreshed by
+  // `useServerSync` (mounted once in Workspace). LeftSidebar derives the
+  // by-project / by-worktree maps it needs from those flat arrays — keeping
+  // a single source of truth instead of mirroring it into local state.
+  const projects = useServerStore((s) => s.projects);
+  const worktrees = useServerStore((s) => s.worktrees);
+  const sessions = useServerStore((s) => s.sessions);
+  const worktreeMap = useMemo(() => {
+    const m: Record<string, Worktree[]> = {};
+    for (const w of worktrees) (m[w.projectId] ??= []).push(w);
+    return m;
+  }, [worktrees]);
+  const sessionMap = useMemo(() => {
+    const m: Record<string, Session[]> = {};
+    for (const s of sessions) (m[s.worktreeId] ??= []).push(s);
+    return m;
+  }, [sessions]);
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("sidebar:openProj");
@@ -86,8 +94,6 @@ export function LeftSidebar({
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
-  const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
-  const syncSessionsFromApi = useWorkspaceStore((s) => s.syncSessionsFromApi);
   const hideInactiveWorktrees = useWorkspaceStore((s) => s.hideInactiveWorktrees);
   const toggleInactiveWorktreesFilter = useWorkspaceStore((s) => s.toggleInactiveWorktreesFilter);
 
@@ -96,125 +102,15 @@ export function LeftSidebar({
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
-  const refreshProjects = useCallback(async () => {
-    const [ps, wts, ss] = await Promise.all([
-      api.listProjects(),
-      api.listWorktrees(),
-      api.listSessions(),
-    ]);
-    setProjects(ps);
-    const wtM: Record<string, Worktree[]> = {};
-    for (const w of wts) (wtM[w.projectId] ??= []).push(w);
-    setWorktreeMap(wtM);
-    const sM: Record<string, Session[]> = {};
-    for (const s of ss) (sM[s.worktreeId] ??= []).push(s);
-    setSessionMap(sM);
-    syncSessionsFromApi(ss);
-  }, [api, syncSessionsFromApi]);
 
-  useEffect(() => {
-    // Skip own fetch when Workspace passed bundle data in.
-    if (initialProjects) return;
-    void refreshProjects();
-  }, [refreshProjects, initialProjects]);
-
-  // Mirror parent bundle into local maps when it arrives / changes.
-  useEffect(() => {
-    if (initialProjects) setProjects(initialProjects);
-  }, [initialProjects]);
-  useEffect(() => {
-    if (!initialWorktrees) return;
-    const wtM: Record<string, Worktree[]> = {};
-    for (const w of initialWorktrees) {
-      (wtM[w.projectId] ??= []).push(w);
-    }
-    setWorktreeMap(wtM);
-  }, [initialWorktrees]);
-  useEffect(() => {
-    if (!initialSessions) return;
-    const sM: Record<string, Session[]> = {};
-    for (const s of initialSessions) {
-      (sM[s.worktreeId] ??= []).push(s);
-    }
-    setSessionMap(sM);
-    // Intentionally not calling syncSessionsFromApi — see DashboardPanel for
-    // the same reasoning. WS events keep sessionStates current; the bundle's
-    // session.state is used as a fallback in the rollup when no live entry.
-  }, [initialSessions]);
-
+  // Subscribe to live session output for every session we know about so the
+  // rollup picks up state transitions in real time. The set of ids comes from
+  // the central store, recomputed cheaply via useMemo+sort+join.
   const sessionIdKey = useMemo(
-    () =>
-      Object.values(sessionMap)
-        .flat()
-        .map((s) => s.id)
-        .sort()
-        .join(","),
-    [sessionMap],
+    () => sessions.map((s) => s.id).sort().join(","),
+    [sessions],
   );
-
-  useEffect(() => {
-    const off = api.on("session:state", (ev) => {
-      if (ev.type === "session:state") {
-        patchSessionState(ev.sessionId, ev.state);
-      }
-    });
-    return off;
-  }, [api, patchSessionState]);
-
   useSubscription(sessionIdKey ? sessionIdKey.split(",").filter(Boolean) : [], api);
-
-  useEffect(() => {
-    return api.on("*", (ev) => {
-      if (ev.type === "project:created") {
-        setProjects((prev) => [...prev, ev.project]);
-      }
-      if (ev.type === "project:deleted") {
-        setProjects((prev) => prev.filter((p) => p.id !== ev.projectId));
-        setWorktreeMap((prev) => {
-          const next = { ...prev };
-          delete next[ev.projectId];
-          return next;
-        });
-      }
-      if (ev.type === "worktree:created") {
-        setWorktreeMap((prev) => ({
-          ...prev,
-          [ev.worktree.projectId]: [...(prev[ev.worktree.projectId] ?? []), ev.worktree],
-        }));
-        setSessionMap((prev) => ({
-          ...prev,
-          [ev.worktree.id]: prev[ev.worktree.id] ?? [],
-        }));
-      }
-      if (ev.type === "session:created") {
-        const snap = ev.snapshot;
-        if (!snap) return;
-        setSessionMap((prev) => {
-          const list = prev[snap.worktreeId] ?? [];
-          const exists = list.some((s) => s.id === snap.id);
-          const nextList = exists
-            ? list.map((s) => (s.id === snap.id ? snap : s))
-            : [...list, snap];
-          return { ...prev, [snap.worktreeId]: nextList };
-        });
-        patchSessionState(snap.id, snap.state);
-      }
-      if (ev.type === "worktree:deleted") {
-        setWorktreeMap((prev) => {
-          const next: Record<string, Worktree[]> = {};
-          for (const [projectId, list] of Object.entries(prev)) {
-            next[projectId] = list.filter((w) => w.id !== ev.worktreeId);
-          }
-          return next;
-        });
-        setSessionMap((prev) => {
-          const next = { ...prev };
-          delete next[ev.worktreeId];
-          return next;
-        });
-      }
-    });
-  }, [api, patchSessionState]);
 
   /** Close-on-outside must attach after the opening click finishes (same tap was closing the menu / breaking UI). */
   useEffect(() => {
@@ -276,7 +172,8 @@ export function LeftSidebar({
       if (activeWorktreeId === worktree.id) {
         clearWorkspaceSelection();
       }
-      await refreshProjects();
+      // Store stays current via the `worktree:deleted` WS event handled in
+      // useServerSync — no manual refresh needed.
     } catch {
       /* surface errors later */
     }
@@ -291,7 +188,6 @@ export function LeftSidebar({
       if (activeWorktreeId === worktree.id) {
         clearWorkspaceSelection();
       }
-      await refreshProjects();
     } catch {
       /* surface errors later */
     }
@@ -549,7 +445,7 @@ export function LeftSidebar({
           projectName={newSessProject.name}
           api={api}
           onClose={() => setNewSessProject(null)}
-          onCreated={() => void refreshProjects()}
+          onCreated={() => { /* store stays current via session:created WS event */ }}
         />
       ) : null}
 
@@ -609,7 +505,8 @@ export function LeftSidebar({
                   void (async () => {
                     try {
                       await api.markWorktreeDone(wtMenu.worktree.id);
-                      await refreshProjects();
+                      // Store stays current via per-session `session:state`
+                      // events emitted by the daemon when marking done.
                     } catch {
                       /* surface errors later */
                     }

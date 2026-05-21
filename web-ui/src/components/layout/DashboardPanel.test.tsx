@@ -1,15 +1,32 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import type { ReactNode } from "react";
+import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
 import { DashboardPanel } from "./DashboardPanel";
+import { useServerStore } from "@/hooks/useServerStore";
+import { useServerSync } from "@/hooks/useServerSync";
+
+/** Mirrors production wiring (useServerSync lives in Workspace) so WS events
+ *  emitted via api.__test.emit flow into the central store. */
+function Harness({ api, children }: { api: ApiInstance; children: ReactNode }) {
+  useServerSync(api);
+  return <>{children}</>;
+}
 
 describe("DashboardPanel", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+  });
+
   it("renders daemon status and project names on worktree cards", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
-        <DashboardPanel api={api} />
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await waitFor(() => {
@@ -24,7 +41,9 @@ describe("DashboardPanel", () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
-        <DashboardPanel api={api} />
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await waitFor(() => {
@@ -39,7 +58,9 @@ describe("DashboardPanel", () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
-        <DashboardPanel api={api} />
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await waitFor(() => {

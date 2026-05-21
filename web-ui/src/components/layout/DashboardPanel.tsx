@@ -4,22 +4,16 @@ import { Link } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { ConnectionState } from "@/api/client";
-import type { HealthResponse, Project, Session, SessionState, Worktree } from "@/api/types";
+import type { HealthResponse, Worktree } from "@/api/types";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
 import { type WorktreeRolledUpStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
 interface DashboardPanelProps {
   api: ApiInstance;
-  initialProjects?: Project[];
-  initialWorktrees?: Worktree[];
-  initialSessions?: Session[];
-}
-
-function applySessionState(s: Session, state: SessionState): Session {
-  return { ...s, state, lifecycleState: state };
 }
 
 function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "idle" | "finished" {
@@ -30,7 +24,7 @@ function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "idle" | "finis
 
 const DASHBOARD_VIEW_KEY = "dashboard:view";
 
-export function DashboardPanel({ api, initialProjects, initialWorktrees, initialSessions }: DashboardPanelProps) {
+export function DashboardPanel({ api }: DashboardPanelProps) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [connState, setConnState] = useState<ConnectionState>(() => api.getConnectionState());
 
@@ -46,33 +40,15 @@ export function DashboardPanel({ api, initialProjects, initialWorktrees, initial
       .catch(() => { if (!cancelled) setHealth(null); });
     return () => { cancelled = true; };
   }, [api]);
-  const [projects, setProjects] = useState<Project[]>(initialProjects ?? []);
-  const [worktrees, setWorktrees] = useState<Worktree[]>(initialWorktrees ?? []);
-  const [sessions, setSessions] = useState<Session[]>(initialSessions ?? []);
+  // Server data + live state both come from central stores — see useServerSync
+  // (mounted in Workspace) for the fetch + WS event reducers.
+  const projects = useServerStore((s) => s.projects);
+  const worktrees = useServerStore((s) => s.worktrees);
+  const sessions = useServerStore((s) => s.sessions);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
-  const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
-  const syncSessionsFromApi = useWorkspaceStore((s) => s.syncSessionsFromApi);
-
-  const refreshDashboard = useCallback(async () => {
-    try {
-      const h = await api.health();
-      setHealth(h);
-    } catch {
-      setHealth(null);
-    }
-    const [ps, wts, ss] = await Promise.all([
-      api.listProjects(),
-      api.listWorktrees(),
-      api.listSessions(),
-    ]);
-    setProjects(ps);
-    setWorktrees(wts);
-    setSessions(ss);
-    syncSessionsFromApi(ss);
-  }, [api, syncSessionsFromApi]);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
@@ -94,98 +70,20 @@ export function DashboardPanel({ api, initialProjects, initialWorktrees, initial
     }
   }, [dashboardView]);
 
-  useEffect(() => {
-    // Skip initial fetch when the parent passed bundle data in — Workspace already
-    // loaded everything and we don't want a second round-trip on mount.
-    if (initialProjects) return;
-    void refreshDashboard();
-  }, [refreshDashboard, initialProjects]);
-
-  // Mirror parent bundle into local state when it changes. The bundle is empty
-  // on the very first render (before Workspace's load resolves) — without this
-  // sync, the dashboard shows blank until you navigate away and back.
-  useEffect(() => {
-    if (initialProjects) setProjects(initialProjects);
-  }, [initialProjects]);
-  useEffect(() => {
-    if (initialWorktrees) setWorktrees(initialWorktrees);
-  }, [initialWorktrees]);
-  useEffect(() => {
-    // Don't call syncSessionsFromApi here — initialSessions is the frozen
-    // bundle from app load, so writing it back into the global store on every
-    // remount would clobber live state that arrived via WS while the panel
-    // was unmounted. The rollup falls back to s.state when sessionStates has
-    // no entry, so the bundle's stale state never wins over fresh WS data.
-    if (initialSessions) setSessions(initialSessions);
-  }, [initialSessions]);
-
-  useEffect(() => {
-    return api.on("*", (ev) => {
-      if (ev.type === "worktree:deleted") void refreshDashboard();
-    });
-  }, [api, refreshDashboard]);
-
+  // Subscribe to live session output for every session in the store so the
+  // rollup updates in real time. The set of ids comes from the central store
+  // (single source of truth) — no local fetch, no local listeners.
   const sessionIdKey = useMemo(
-    () =>
-      sessions
-        .map((s) => s.id)
-        .sort()
-        .join(","),
+    () => sessions.map((s) => s.id).sort().join(","),
     [sessions],
   );
   useSubscription(sessionIdKey ? sessionIdKey.split(",").filter(Boolean) : [], api);
 
-  useEffect(() => {
-    const offState = api.on("session:state", (ev) => {
-      if (ev.type !== "session:state") return;
-      setSessions((prev) =>
-        prev.map((s) => (s.id === ev.sessionId ? applySessionState(s, ev.state) : s)),
-      );
-      patchSessionState(ev.sessionId, ev.state);
-    });
-    const offCreated = api.on("session:created", (ev) => {
-      if (ev.type !== "session:created" || !ev.snapshot) return;
-      const snap = ev.snapshot;
-      setSessions((prev) => {
-        const exists = prev.some((s) => s.id === snap.id);
-        if (exists) return prev.map((s) => (s.id === snap.id ? snap : s));
-        return [...prev, snap];
-      });
-      patchSessionState(snap.id, snap.state);
-    });
-    const offDeleted = api.on("session:deleted", (ev) => {
-      if (ev.type !== "session:deleted") return;
-      setSessions((prev) => prev.filter((s) => s.id !== ev.sessionId));
-    });
-    const offExited = api.on("session:exited", (ev) => {
-      if (ev.type !== "session:exited") return;
-      setSessions((prev) =>
-        prev.map((s) => (s.id === ev.sessionId ? applySessionState(s, "exited") : s)),
-      );
-      patchSessionState(ev.sessionId, "exited");
-    });
-    const offResumed = api.on("session:resumed", (ev) => {
-      if (ev.type !== "session:resumed") return;
-      setSessions((prev) =>
-        prev.map((s) => (s.id === ev.sessionId ? applySessionState(s, "working") : s)),
-      );
-      patchSessionState(ev.sessionId, "working");
-    });
-    return () => {
-      offState();
-      offCreated();
-      offDeleted();
-      offExited();
-      offResumed();
-    };
-  }, [api, patchSessionState]);
-
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
 
-  /** Live states from the global store. Same source LeftSidebar reads — keeps
-   *  the rollup correct across remounts, since the store is updated via WS
-   *  even when DashboardPanel was unmounted. The bundle's session.state is
-   *  used as a fallback inside worktreeRolledUpStatus when no live entry. */
+  /** Live state map (persisted across page loads, refreshed on every ws:open
+   *  by useServerSync). The rollup uses it as the primary signal and falls
+   *  back to the REST session's `state` field. */
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
   const { working, idle, finished } = useMemo(() => {
@@ -386,7 +284,8 @@ export function DashboardPanel({ api, initialProjects, initialWorktrees, initial
             try {
               await api.dismissWorktree(wt.id);
               if (activeWorktreeId === wt.id) clearWorkspaceSelection();
-              await refreshDashboard();
+              // Store stays current via the `worktree:deleted` WS event handled
+              // by useServerSync.
             } catch {
               /* surface errors later */
             }
