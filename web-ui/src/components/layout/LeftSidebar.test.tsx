@@ -2,9 +2,21 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach } from "vitest";
+import type { ReactNode } from "react";
+import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
 import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
+import { useServerSync } from "@/hooks/useServerSync";
+
+/** In production `useServerSync` is mounted by `Workspace`. Tests render
+ *  LeftSidebar in isolation, so this harness wires the same hook above it so
+ *  WS events emitted via `api.__test.emit` flow into the central store. */
+function Harness({ api, children }: { api: ApiInstance; children: ReactNode }) {
+  useServerSync(api);
+  return <>{children}</>;
+}
 
 describe("LeftSidebar", () => {
   const api = createMockApi();
@@ -20,12 +32,17 @@ describe("LeftSidebar", () => {
       lastSessionByWorktree: {},
       diffScopeByWorktree: {},
     });
+    // Reset central server store between tests. Harness (via useServerSync)
+    // will refill it from the mock api on mount.
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
   });
 
   it("renders projects from mock api", async () => {
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await waitFor(() => {
@@ -37,7 +54,9 @@ describe("LeftSidebar", () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
@@ -51,7 +70,9 @@ describe("LeftSidebar", () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByRole("link", { name: /Open worktree wt-2/i });
@@ -62,7 +83,9 @@ describe("LeftSidebar", () => {
   it("worktree row exposes overflow menu control", async () => {
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
@@ -73,7 +96,9 @@ describe("LeftSidebar", () => {
   it("collapsed rail shows abbreviated labels and hides worktree overflow menu", async () => {
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} collapsed />
+        <Harness api={api}>
+          <LeftSidebar api={api} collapsed />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByText("Pra");
@@ -86,7 +111,9 @@ describe("LeftSidebar", () => {
   it("session:created with snapshot appends session and updates rolled-up status dot", async () => {
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
@@ -117,7 +144,9 @@ describe("LeftSidebar", () => {
   it("Settings is a link with accessible name", async () => {
     render(
       <MemoryRouter>
-        <LeftSidebar api={api} />
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
       </MemoryRouter>,
     );
     await screen.findByText("Proj A");

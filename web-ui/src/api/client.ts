@@ -145,6 +145,10 @@ export function createClientApi() {
         for (const w of treeWatches.values()) {
           socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
         }
+        // Notify consumers that a fresh handshake landed so they can refetch
+        // any server state that might have drifted (persisted caches go stale
+        // when the client was offline and another client mutated state).
+        emit({ type: "ws:open" });
         wsReadyPromise = null;
         resolve();
       };
