@@ -14,6 +14,7 @@ import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
+import { listFiles } from "../services/fileList.js";
 import { broadcastAll } from "../broadcaster.js";
 import { persistLifecycleState } from "../services/lifecycle.js";
 import { serializeSession } from "./sessions.js";
@@ -508,6 +509,30 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       return reply.send(result);
     } catch {
       return reply.status(404).send({ error: `Path not found: ${subPath}` });
+    }
+  });
+
+  // GET /worktrees/:id/file-list
+  //
+  // Flat list of every file path in the worktree, for Quick Open / fuzzy
+  // search. Distinct from `/tree` (which is lazy per-directory for the
+  // sidebar) and from `/files/*path` (which serves file content).
+  //
+  // Backed by `rg --files` when available; falls back to a Node recursive
+  // walker. See services/fileList.ts for the semantic gap between backends.
+  app.get("/worktrees/:id/file-list", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const wtPath = getWorktreePath(project.id, wtId);
+    try {
+      const result = await listFiles(wtPath);
+      return reply.send(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: `Failed to list files: ${msg}` });
     }
   });
 

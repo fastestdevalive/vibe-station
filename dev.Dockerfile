@@ -11,7 +11,7 @@
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tmux git procps curl \
+    tmux git procps curl ripgrep \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm@9.0.0 @google/gemini-cli
@@ -37,5 +37,6 @@ CMD ["sh", "-c", "\
   echo 'Waiting for daemon...' && \
   until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done && \
   echo 'Daemon ready.' && \
+  bash /app/scripts/seed-file-search-demo.sh || echo '[seed] non-fatal seed error — continuing' ; \
   pnpm --filter @vibestation/web dev \
 "]

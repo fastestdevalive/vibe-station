@@ -41,6 +41,12 @@ services:
       # Remove this volume to start completely fresh: docker volume rm vst-dev-data
       - vst-dev-data:/home/vst/.vibe-station
 
+      # Persist seeded source repos so their .git/ dirs survive rebuilds.
+      # Without this, /home/vst/projects/ is wiped on `up --build`, which
+      # orphans the worktree checkouts in vst-dev-data (their `.git` pointer
+      # files reference `.git/worktrees/<id>` metadata that no longer exists).
+      - vst-dev-projects:/home/vst/projects
+
     # Rebuild daemon when its source changes:
     #   docker compose -f docker-compose.dev.yml up --build
     stdin_open: true
@@ -49,3 +55,5 @@ services:
 volumes:
   vst-dev-data:
     name: vst-dev-data
+  vst-dev-projects:
+    name: vst-dev-projects

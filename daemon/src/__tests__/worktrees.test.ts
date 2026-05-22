@@ -181,6 +181,68 @@ describe("Worktree routes", () => {
     expect(res.body).toContain("+");
   });
 
+  it("GET /worktrees/:id/file-list returns flat list of files", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "file-list-basic", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "alpha.txt"), "1\n");
+    await writeFile(join(wtPath, "beta.txt"), "2\n");
+    execSync(`mkdir -p "${wtPath}/sub" && echo c > "${wtPath}/sub/gamma.txt"`, { stdio: "ignore" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/file-list`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ files: string[]; truncated: boolean; source: string }>();
+    expect(body.files).toEqual(expect.arrayContaining(["alpha.txt", "beta.txt", "sub/gamma.txt"]));
+    expect(body.truncated).toBe(false);
+    expect(["ripgrep", "node"]).toContain(body.source);
+    // .git/ must be excluded.
+    expect(body.files.some((f) => f.startsWith(".git/"))).toBe(false);
+  });
+
+  it("GET /worktrees/:id/file-list respects .gitignore", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "file-list-ignore", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, ".gitignore"), "ignored.txt\nsecret/\n");
+    await writeFile(join(wtPath, "kept.txt"), "k\n");
+    await writeFile(join(wtPath, "ignored.txt"), "i\n");
+    execSync(`mkdir -p "${wtPath}/secret" && echo s > "${wtPath}/secret/x.txt"`, {
+      stdio: "ignore",
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/file-list`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ files: string[] }>();
+    expect(body.files).toContain("kept.txt");
+    expect(body.files).toContain(".gitignore");
+    expect(body.files).not.toContain("ignored.txt");
+    expect(body.files.some((f) => f.startsWith("secret/"))).toBe(false);
+  });
+
+  it("GET /worktrees/:id/file-list 404 for unknown worktree", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/does-not-exist/file-list`,
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
   it("POST /worktrees 400 on invalid branch name", async () => {
     const res = await app.inject({
       method: "POST",
