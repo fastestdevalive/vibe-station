@@ -1,27 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import { useWorkspaceStore } from "@/hooks/useStore";
-
-async function collectFiles(
-  api: ApiInstance,
-  worktreeId: string,
-): Promise<{ path: string; name: string }[]> {
-  const out: { path: string; name: string }[] = [];
-
-  async function walk(dir: string) {
-    const entries = await api.tree(worktreeId, dir);
-    for (const e of entries) {
-      if (e.type === "dir") {
-        await walk(e.path);
-      } else {
-        out.push({ path: e.path, name: e.name });
-      }
-    }
-  }
-
-  await walk("");
-  return out;
-}
+import { useWorktreeFiles } from "@/hooks/useWorktreeFiles";
 
 interface QuickOpenProps {
   api: ApiInstance;
@@ -30,45 +10,26 @@ interface QuickOpenProps {
   onClose: () => void;
 }
 
+function basename(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i >= 0 ? path.slice(i + 1) : path;
+}
+
 export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [allFiles, setAllFiles] = useState<{ path: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open || !worktreeId) {
-      setAllFiles([]);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void (async () => {
-      try {
-        const files = await collectFiles(api, worktreeId);
-        if (!cancelled) {
-          setAllFiles(files);
-          setLoading(false);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load files");
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [api, open, worktreeId]);
+  // Pass `null` when closed so the hook does not open a tree:watch we
+  // don't need. The cache still survives in module state across re-opens.
+  const { files, loading, error, truncated } = useWorktreeFiles(
+    api,
+    open ? worktreeId : null,
+  );
 
   useEffect(() => {
     if (open) {
@@ -86,19 +47,21 @@ export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   }, [selectedIndex]);
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return allFiles.slice(0, 50);
+    if (!query.trim()) {
+      return files.slice(0, 50).map((path) => ({ path, name: basename(path), score: 0 }));
+    }
     const q = query.toLowerCase();
-    const scored = allFiles
-      .map((f) => {
-        const nameMatch = f.name.toLowerCase().indexOf(q);
-        const pathMatch = f.path.toLowerCase().indexOf(q);
-        const score = nameMatch === 0 ? 3 : nameMatch > 0 ? 2 : pathMatch >= 0 ? 1 : 0;
-        return { ...f, score };
-      })
-      .filter((f) => f.score > 0)
-      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    const scored: { path: string; name: string; score: number }[] = [];
+    for (const path of files) {
+      const name = basename(path);
+      const nameMatch = name.toLowerCase().indexOf(q);
+      const pathMatch = path.toLowerCase().indexOf(q);
+      const score = nameMatch === 0 ? 3 : nameMatch > 0 ? 2 : pathMatch >= 0 ? 1 : 0;
+      if (score > 0) scored.push({ path, name, score });
+    }
+    scored.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     return scored.slice(0, 50);
-  }, [query, allFiles]);
+  }, [query, files]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -172,7 +135,7 @@ export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search files by name…"
+            placeholder={truncated ? "Search files by name (list truncated)…" : "Search files by name…"}
             className="quick-open-input"
             autoComplete="off"
             spellCheck={false}
@@ -184,7 +147,7 @@ export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
             <div className="quick-open-empty">
               {error
                 ? error
-                : loading && allFiles.length === 0
+                : loading && files.length === 0
                   ? "Loading files…"
                   : "No files found"}
             </div>

@@ -34,11 +34,21 @@ export class FileWatcher extends EventEmitter {
         // No .gitignore — use default
       }
 
-      // Create watcher with gitignore filtering
+      // Create watcher with gitignore filtering.
+      // `ignoreInitial: true` is critical — without it, chokidar fires an
+      // `add`/`addDir` event for every file/dir that already exists when
+      // the watch starts. That produces a flood of `tree:changed` /
+      // `file:changed` broadcasts on every watch open, which thrashes UI
+      // consumers (Quick Open refetches the file list, FileTreeSidebar
+      // refetches every open directory). Consumers always have a fresh
+      // initial snapshot via their own GET (`/tree`, `/file-list`,
+      // `/files/*path`); the watcher's only job is to notify of REAL
+      // changes after that.
       this.watcher = watch(absPath, {
         ignored: ignoreFilter,
         persistent: true,
         depth: undefined,
+        ignoreInitial: true,
       });
 
       this.watcher.on("add", (path: string) => {
