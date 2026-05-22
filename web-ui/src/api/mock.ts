@@ -438,6 +438,27 @@ export function createMockApi() {
       return structuredClone(entries);
     },
 
+    async fileList(
+      worktreeId: string,
+      _signal?: AbortSignal,
+    ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      // Walk the mock treeStore to produce a flat list of file paths.
+      const out: string[] = [];
+      const visited = new Set<string>();
+      const walk = (dir: string) => {
+        if (visited.has(dir)) return;
+        visited.add(dir);
+        const entries = treeStore[worktreeId]?.[dir] ?? [];
+        for (const e of entries) {
+          if (e.type === "dir") walk(e.path);
+          else out.push(e.path);
+        }
+      };
+      walk("");
+      return { files: out, truncated: false, source: "node" };
+    },
+
     async listChangedPaths(
       worktreeId: string,
       _scope: "local" | "branch" = "local",

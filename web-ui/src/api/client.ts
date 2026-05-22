@@ -347,6 +347,27 @@ export function createClientApi() {
       return parseJson<TreeEntry[]>(res);
     },
 
+    /**
+     * Flat list of every file path in the worktree, for Quick Open fuzzy
+     * search. Cheap to call once per worktree (~50-100 ms on most repos);
+     * the caller should cache and invalidate on `tree:changed`.
+     *
+     * Accepts an optional `AbortSignal` so callers can cancel the in-flight
+     * request — important under React 18 strict mode where effects double-
+     * invoke (without abort we'd fire two HTTP requests on every mount).
+     */
+    async fileList(
+      worktreeId: string,
+      signal?: AbortSignal,
+    ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/file-list`,
+        { signal },
+      );
+      return parseJson<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }>(res);
+    },
+
     async listChangedPaths(
       worktreeId: string,
       scope: "local" | "branch" = "local",
