@@ -53,6 +53,7 @@ export function createMockApi() {
       baseBranch: "main",
       baseSha: "abc123",
       createdAt: nowIso(),
+      pinnedAt: null,
     },
     {
       id: "wt-2",
@@ -61,6 +62,7 @@ export function createMockApi() {
       baseBranch: "main",
       baseSha: "def456",
       createdAt: nowIso(),
+      pinnedAt: null,
     },
     {
       id: "wt-3",
@@ -69,6 +71,7 @@ export function createMockApi() {
       baseBranch: "develop",
       baseSha: "fed789",
       createdAt: nowIso(),
+      pinnedAt: null,
     },
   ];
 
@@ -266,6 +269,7 @@ export function createMockApi() {
         baseBranch: body.baseBranch ?? "main",
         baseSha: "mock-base-sha",
         createdAt: nowIso(),
+        pinnedAt: null,
       };
       worktrees.push(wt);
       treeStore[wt.id] = {
@@ -310,6 +314,26 @@ export function createMockApi() {
         updated += 1;
       }
       return { ok: true, updated };
+    },
+
+    async pinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      if (wt.pinnedAt == null) {
+        wt.pinnedAt = new Date().toISOString();
+        emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      }
+      return { ok: true, worktree: structuredClone(wt) };
+    },
+
+    async unpinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      if (wt.pinnedAt != null) {
+        wt.pinnedAt = null;
+        emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      }
+      return { ok: true, worktree: structuredClone(wt) };
     },
 
     async listSessions(worktreeId?: string): Promise<Session[]> {

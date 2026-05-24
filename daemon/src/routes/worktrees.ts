@@ -113,6 +113,8 @@ function serializeWorktree(projectId: string, w: WorktreeRecord) {
     baseBranch: w.baseBranch,
     baseSha: w.baseSha,
     createdAt: w.createdAt,
+    // Always emit pinnedAt so the client doesn't have to special-case undefined.
+    pinnedAt: w.pinnedAt ?? null,
   };
 }
 
@@ -377,7 +379,97 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     return reply.status(201).send(apiWorktree);
   });
 
+  // PATCH /worktrees/:id/pin   { pinned: boolean }
+  // Toggles WorktreeRecord.pinnedAt. Idempotent: no-op when already in the
+  // requested state — important so cross-tab pins don't bounce the timestamp.
+  app.patch("/worktrees/:id/pin", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const bodySchema = z.object({ pinned: z.boolean() });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { pinned } = parsed.data;
+
+    // Locate the owning project. Project ids are stable, but the worktree
+    // could vanish between this lookup and the lock acquiring inside
+    // `mutateProject`. We re-check membership inside the mutator and signal
+    // the outcome via a closure variable so a concurrent DELETE produces a
+    // clean 404 instead of throwing on a non-null assertion.
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    // Outcome reported by the mutator. Typed wide so the post-await reads
+    // aren't narrowed by TS to the initial value.
+    let outcome:
+      | { kind: "not_found" }
+      | { kind: "noop"; worktree: WorktreeRecord }
+      | { kind: "updated"; worktree: WorktreeRecord } = { kind: "not_found" } as
+      | { kind: "not_found" }
+      | { kind: "noop"; worktree: WorktreeRecord }
+      | { kind: "updated"; worktree: WorktreeRecord };
+
+    try {
+      await mutateProject(project.id, (p) => {
+        const wt = p.worktrees.find((w) => w.id === wtId);
+        if (!wt) {
+          // Worktree was deleted between the outer find and this lock.
+          outcome = { kind: "not_found" };
+          return p;
+        }
+        const alreadyPinned = wt.pinnedAt != null;
+        if (alreadyPinned === pinned) {
+          // No state change — return the project unchanged so the manifest
+          // is rewritten identically (cheap; happens only on race / dup).
+          outcome = { kind: "noop", worktree: wt };
+          return p;
+        }
+        const next: ProjectRecord = {
+          ...p,
+          worktrees: p.worktrees.map((w) => {
+            if (w.id !== wtId) return w;
+            if (pinned) {
+              return { ...w, pinnedAt: new Date().toISOString() };
+            }
+            // Drop the field rather than setting undefined so the JSON
+            // manifest stays clean.
+            const { pinnedAt: _drop, ...rest } = w;
+            void _drop;
+            return rest;
+          }),
+        };
+        const after = next.worktrees.find((w) => w.id === wtId);
+        if (!after) {
+          // Defensive — should never happen because we just mapped the array.
+          outcome = { kind: "not_found" };
+          return p;
+        }
+        outcome = { kind: "updated", worktree: after };
+        return next;
+      });
+    } catch (err) {
+      // The project itself was deleted between the outer find and the lock.
+      if (err instanceof Error && /not found/i.test(err.message)) {
+        return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+      }
+      throw err;
+    }
+
+    if (outcome.kind === "not_found") {
+      return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+    }
+    const apiWorktree = serializeWorktree(project.id, outcome.worktree);
+    if (outcome.kind === "updated") {
+      // Broadcast after the lock has been released — `applyWorktreeUpdated`
+      // on the client drops unknown ids, so any reorder with a concurrent
+      // `worktree:deleted` is benign.
+      broadcastAll({ type: "worktree:updated", worktree: apiWorktree });
+    }
+    return reply.send({ ok: true, worktree: apiWorktree });
+  });
+
   // POST /worktrees/:id/done — mark all agent sessions as done (metadata only; no process kill)
+
   app.post("/worktrees/:id/done", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));

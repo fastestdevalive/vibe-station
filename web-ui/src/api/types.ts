@@ -22,6 +22,12 @@ export interface Worktree {
   baseBranch: string;
   baseSha?: string;
   createdAt: string;
+  /**
+   * ISO8601 timestamp set when the user pins this worktree to the top of the
+   * sidebar; null when unpinned. The timestamp also encodes recency for
+   * default sort order (newest first).
+   */
+  pinnedAt: string | null;
 }
 
 export type SessionType = "agent" | "terminal";
@@ -146,6 +152,10 @@ export type WSEvent =
   | {
       type: "worktree:deleted";
       worktreeId: string;
+    }
+  | {
+      type: "worktree:updated";
+      worktree: Worktree;
     }
   | {
       type: "mode:created";
