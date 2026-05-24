@@ -197,6 +197,11 @@ const WorktreeDeletedEvent = z.object({
   worktreeId: z.string(),
 });
 
+const WorktreeUpdatedEvent = z.object({
+  type: z.literal("worktree:updated"),
+  worktree: z.record(z.string(), z.unknown()),
+});
+
 const ModeCreatedEvent = z.object({
   type: z.literal("mode:created"),
   mode: z.record(z.string(), z.unknown()),
@@ -240,6 +245,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ProjectDeletedEvent,
   WorktreeCreatedEvent,
   WorktreeDeletedEvent,
+  WorktreeUpdatedEvent,
   ModeCreatedEvent,
   ModeUpdatedEvent,
   ModeDeletedEvent,

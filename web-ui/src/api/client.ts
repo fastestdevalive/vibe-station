@@ -246,6 +246,26 @@ export function createClientApi() {
       return parseJson<{ ok: true; updated: number }>(res);
     },
 
+    async pinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/pin`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: true }),
+      });
+      return parseJson<{ ok: true; worktree: Worktree }>(res);
+    },
+
+    async unpinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/pin`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: false }),
+      });
+      return parseJson<{ ok: true; worktree: Worktree }>(res);
+    },
+
     async listSessions(worktreeId?: string): Promise<Session[]> {
       const root = baseUrl();
       const url = worktreeId
