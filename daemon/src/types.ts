@@ -39,6 +39,12 @@ export interface WorktreeRecord {
   baseBranch: string;
   baseSha: string;
   createdAt: string; // ISO8601
+  /**
+   * When set, this worktree is pinned to the top of the sidebar.
+   * Absent / undefined ≡ unpinned. The timestamp also encodes recency order
+   * (newest pinned first), so we don't need a separate sort field.
+   */
+  pinnedAt?: string; // ISO8601
   sessions: SessionRecord[];
 }
 

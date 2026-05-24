@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Filter, FolderTree, Moon, MoreHorizontal, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Filter, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useState } from "react";
@@ -82,6 +82,26 @@ export function LeftSidebar({
     for (const s of sessions) (m[s.worktreeId] ??= []).push(s);
     return m;
   }, [sessions]);
+  /** Project lookup for the project-name subheader on pinned rows. */
+  const projectById = useMemo(() => {
+    const m: Record<string, Project> = {};
+    for (const p of projects) m[p.id] = p;
+    return m;
+  }, [projects]);
+  /**
+   * Pinned worktrees in display order: ISO timestamp DESC (newest pinned first).
+   * Filter out anything no longer present on the server (defense-in-depth — the
+   * server-side delete naturally removes pinned worktrees, but a stale id from
+   * an in-flight event shouldn't crash render).
+   */
+  const pinnedWorktrees = useMemo(
+    () =>
+      worktrees
+        .filter((w) => w.pinnedAt != null)
+        .slice()
+        .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
+    [worktrees],
+  );
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("sidebar:openProj");
@@ -254,6 +274,79 @@ export function LeftSidebar({
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
+        {!collapsed && pinnedWorktrees.length > 0 ? (
+          <section className="pinned-section" aria-label="Pinned worktrees">
+            <div className="sidebar-projects-heading pinned-section__heading">
+              <span className="sidebar-projects-heading__gutter" aria-hidden />
+              <span className="sidebar-projects-heading__title">Pinned</span>
+            </div>
+            {pinnedWorktrees.map((w) => {
+              const proj = projectById[w.projectId];
+              const isActive = activeWorktreeId === w.id && location.pathname.startsWith("/worktree/");
+              return (
+                <div key={`pinned-${w.id}`} className="wt-row-wrap">
+                  <div
+                    className="tree-row tree-row--worktree pinned-row"
+                    data-active={isActive}
+                    style={{ position: "relative" }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        selectWorktree(w.projectId, w);
+                      }
+                    }}
+                  >
+                    <Link
+                      to={`/worktree/${w.id}`}
+                      className="wt-row__stretch-link"
+                      aria-label={`Open pinned worktree ${w.branch}`}
+                      onClick={() => selectWorktree(w.projectId, w)}
+                      tabIndex={-1}
+                    />
+                    <span className="wt-leading-slot pinned-row__leading" aria-hidden>
+                      <StatusDot
+                        status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
+                      />
+                    </span>
+                    <div className="pinned-row__text">
+                      <span className="pinned-row__primary">{w.branch}</span>
+                      <span className="pinned-row__subhead" title={proj?.path}>
+                        {proj?.name ?? w.projectId}
+                      </span>
+                    </div>
+                    <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                      <span className="wt-row__id" title={w.id}>
+                        {w.id}
+                      </span>
+                      <button
+                        type="button"
+                        data-wt-menu-trigger
+                        className="icon-btn wt-menu-trigger tree-row__action"
+                        aria-label={`Worktree actions for ${w.branch}`}
+                        aria-expanded={wtMenu?.worktree.id === w.id}
+                        aria-haspopup="menu"
+                        title="Worktree menu"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setWtMenu((prev) =>
+                            prev?.worktree.id === w.id
+                              ? null
+                              : { projectId: w.projectId, worktree: w, rect },
+                          );
+                        }}
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        ) : null}
         <div className="sidebar-projects-heading">
           <span className="sidebar-projects-heading__gutter" aria-hidden />
           {collapsed ? (
@@ -496,6 +589,33 @@ export function LeftSidebar({
                 zIndex: 4000,
               }}
             >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const wtId = wtMenu.worktree.id;
+                  const wasPinned = wtMenu.worktree.pinnedAt != null;
+                  setWtMenu(null);
+                  void (async () => {
+                    try {
+                      if (wasPinned) await api.unpinWorktree(wtId);
+                      else await api.pinWorktree(wtId);
+                      // Store stays current via the `worktree:updated` WS event.
+                    } catch {
+                      /* surface errors later */
+                    }
+                  })();
+                }}
+              >
+                <Pin
+                  size={13}
+                  aria-hidden
+                  fill={wtMenu.worktree.pinnedAt != null ? "currentColor" : "none"}
+                />
+                {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
+              </button>
               <button
                 type="button"
                 role="menuitem"

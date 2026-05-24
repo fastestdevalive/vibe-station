@@ -38,6 +38,7 @@ export function useServerSync(api: ApiInstance): void {
   const applyProjectDeleted = useServerStore((s) => s.applyProjectDeleted);
   const applyWorktreeCreated = useServerStore((s) => s.applyWorktreeCreated);
   const applyWorktreeDeleted = useServerStore((s) => s.applyWorktreeDeleted);
+  const applyWorktreeUpdated = useServerStore((s) => s.applyWorktreeUpdated);
   const applySessionCreated = useServerStore((s) => s.applySessionCreated);
   const applySessionUpdated = useServerStore((s) => s.applySessionUpdated);
   const applySessionDeleted = useServerStore((s) => s.applySessionDeleted);
@@ -93,6 +94,9 @@ export function useServerSync(api: ApiInstance): void {
     const offWtDeleted = api.on("worktree:deleted", (ev) => {
       if (ev.type === "worktree:deleted") applyWorktreeDeleted(ev.worktreeId);
     });
+    const offWtUpdated = api.on("worktree:updated", (ev) => {
+      if (ev.type === "worktree:updated") applyWorktreeUpdated(ev.worktree);
+    });
     const offSessCreated = api.on("session:created", (ev) => {
       if (ev.type === "session:created" && ev.snapshot) {
         applySessionCreated(ev.snapshot);
@@ -125,6 +129,7 @@ export function useServerSync(api: ApiInstance): void {
       offProjDeleted();
       offWtCreated();
       offWtDeleted();
+      offWtUpdated();
       offSessCreated();
       offSessState();
       offSessExited();
@@ -137,6 +142,7 @@ export function useServerSync(api: ApiInstance): void {
     applyProjectDeleted,
     applyWorktreeCreated,
     applyWorktreeDeleted,
+    applyWorktreeUpdated,
     applySessionCreated,
     applySessionUpdated,
     applySessionDeleted,

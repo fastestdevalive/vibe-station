@@ -33,6 +33,7 @@ interface ServerData {
   applyProjectDeleted: (projectId: string) => void;
   applyWorktreeCreated: (w: Worktree) => void;
   applyWorktreeDeleted: (worktreeId: string) => void;
+  applyWorktreeUpdated: (w: Worktree) => void;
   applySessionCreated: (s: Session) => void;
   applySessionUpdated: (sessionId: string, patch: Partial<Session>) => void;
   applySessionDeleted: (sessionId: string) => void;
@@ -70,6 +71,17 @@ export const useServerStore = create<ServerData>((set) => ({
       worktrees: s.worktrees.filter((w) => w.id !== worktreeId),
       sessions: s.sessions.filter((sess) => sess.worktreeId !== worktreeId),
     })),
+
+  applyWorktreeUpdated: (w) =>
+    set((s) => {
+      const idx = s.worktrees.findIndex((x) => x.id === w.id);
+      // Drop silently if we don't know about this id — avoids surprise inserts
+      // from a server that's racing ahead of our initial list.
+      if (idx === -1) return s;
+      const next = s.worktrees.slice();
+      next[idx] = w;
+      return { worktrees: next };
+    }),
 
   applySessionCreated: (sess) =>
     set((s) => {

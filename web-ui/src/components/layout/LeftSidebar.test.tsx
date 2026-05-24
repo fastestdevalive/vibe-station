@@ -141,6 +141,179 @@ describe("LeftSidebar", () => {
     });
   });
 
+  // ─── Pinning ───────────────────────────────────────────────────────────
+  describe("worktree pinning", () => {
+    it("does not render the pinned section when no worktrees are pinned", async () => {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+    });
+
+    it("pin action in the ⋯ menu calls api.pinWorktree and the row appears in the pinned section", async () => {
+      const localApi = createMockApi();
+      // Ensure mock starts unpinned (each createMockApi has its own state).
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      // Open the menu for wt-1
+      const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
+      const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(trigger);
+
+      const pinItem = await screen.findByRole("menuitem", { name: /pin to top/i });
+      await user.click(pinItem);
+
+      // The pinned section should appear; the mock api emits worktree:updated
+      // synchronously so useServerSync will re-render in a microtask.
+      await waitFor(() => {
+        expect(screen.getByRole("region", { name: /pinned worktrees/i })).toBeInTheDocument();
+      });
+      // The pinned-row link is labelled differently to disambiguate.
+      expect(screen.getByRole("link", { name: /Open pinned worktree wt-1/i })).toBeInTheDocument();
+    });
+
+    it("pinned section shows project name as subheader", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /pinned worktrees/i });
+      // The mock seeds "Proj A" as the name for proj-a (the project that owns wt-1)
+      const subheads = document.querySelectorAll(".pinned-row__subhead");
+      expect(Array.from(subheads).some((s) => s.textContent === "Proj A")).toBe(true);
+    });
+
+    it("⋯ menu on a pinned row reads 'Unpin' and calls api.unpinWorktree", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /pinned worktrees/i });
+
+      const pinnedLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
+      const pinnedRow = pinnedLink.closest(".pinned-row")! as HTMLElement;
+      const trigger = pinnedRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      expect(trigger).toBeTruthy();
+      await user.click(trigger);
+
+      const unpinItem = await screen.findByRole("menuitem", { name: /^unpin$/i });
+      await user.click(unpinItem);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+      });
+    });
+
+    it("pinned-row ⋯ button carries data-wt-menu-trigger", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-2");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /pinned worktrees/i });
+      const pinnedRow = screen
+        .getByRole("link", { name: /Open pinned worktree wt-2/i })
+        .closest(".pinned-row")! as HTMLElement;
+      const trigger = pinnedRow.querySelector("[data-wt-menu-trigger]");
+      expect(trigger).not.toBeNull();
+    });
+
+    it("pinned section is hidden when collapsed=true even with pinned worktrees", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} collapsed />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Pra");
+      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+    });
+
+    it("pinned rows render in pinnedAt DESC order (newest first)", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-2"); // older
+      await new Promise((r) => setTimeout(r, 5));
+      await localApi.pinWorktree("wt-3"); // newer
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /pinned worktrees/i });
+      const region = screen.getByRole("region", { name: /pinned worktrees/i });
+      const labels = Array.from(region.querySelectorAll(".pinned-row__primary")).map(
+        (n) => n.textContent,
+      );
+      // wt-3 is "wt-main" in the mock; wt-2 is "wt-2"
+      expect(labels[0]).toBe("wt-main");
+      expect(labels[1]).toBe("wt-2");
+    });
+
+    it("worktree:updated event from another tab updates the pinned section", async () => {
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+
+      // Simulate another tab pinning wt-1
+      localApi.__test.emit({
+        type: "worktree:updated",
+        worktree: {
+          id: "wt-1",
+          projectId: "proj-a",
+          branch: "wt-1",
+          baseBranch: "main",
+          baseSha: "abc123",
+          createdAt: new Date().toISOString(),
+          pinnedAt: new Date().toISOString(),
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByRole("region", { name: /pinned worktrees/i })).toBeInTheDocument();
+      });
+    });
+  });
+
   it("Settings is a link with accessible name", async () => {
     render(
       <MemoryRouter>

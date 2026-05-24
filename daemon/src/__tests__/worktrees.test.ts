@@ -456,4 +456,131 @@ describe("Worktree routes", () => {
     expect(sessRes.statusCode).toBe(200);
     expect(sessRes.json<{ state: string }>().state).toBe("done");
   });
+
+  // ─── PATCH /worktrees/:id/pin ───────────────────────────────────────────
+  describe("PATCH /worktrees/:id/pin", () => {
+    async function createWorktree(branchSuffix: string) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/worktrees",
+        payload: { projectId, branch: `pin-${branchSuffix}-${Date.now()}`, modeId: "bug-fix" },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json<{ id: string; pinnedAt: string | null }>();
+    }
+
+    it("serializes pinnedAt as null for an unpinned worktree", async () => {
+      const wt = await createWorktree("unpinned");
+      expect(wt.pinnedAt).toBeNull();
+    });
+
+    it("PATCH { pinned: true } sets pinnedAt to an ISO timestamp", async () => {
+      const wt = await createWorktree("set");
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ ok: boolean; worktree: { id: string; pinnedAt: string | null } }>();
+      expect(body.ok).toBe(true);
+      expect(body.worktree.id).toBe(wt.id);
+      expect(body.worktree.pinnedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it("PATCH { pinned: false } clears pinnedAt", async () => {
+      const wt = await createWorktree("clear");
+      await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/pin`, payload: { pinned: true } });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ worktree: { pinnedAt: string | null } }>().worktree.pinnedAt).toBeNull();
+    });
+
+    it("is idempotent: pinning twice keeps the original timestamp", async () => {
+      const wt = await createWorktree("idempotent");
+      const first = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: true },
+      });
+      const ts1 = first.json<{ worktree: { pinnedAt: string } }>().worktree.pinnedAt;
+      // Wait so a re-stamp would be observable.
+      await new Promise((r) => setTimeout(r, 10));
+      const second = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: true },
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ worktree: { pinnedAt: string } }>().worktree.pinnedAt).toBe(ts1);
+    });
+
+    it("returns 404 for an unknown worktree id", async () => {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/worktrees/does-not-exist/pin",
+        payload: { pinned: true },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("returns 400 for an invalid body", async () => {
+      const wt = await createWorktree("badbody");
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: "yes" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("returns 404 (not 500) when the worktree is deleted concurrently with the PATCH", async () => {
+      // Simulates the TOCTOU window between the outer find and the lock by
+      // monkey-patching mutateProject to delete the worktree just before our
+      // mutator runs. Without the in-lock re-check, the non-null assertion
+      // in the route would throw and Fastify would reply 500.
+      const wt = await createWorktree("toctou");
+      const store = await import("../state/project-store.js");
+      const orig = store.mutateProject;
+      const spy = vi.spyOn(store, "mutateProject").mockImplementation(async (id, fn) => {
+        return orig(id, (p) => {
+          // Drop the worktree under the lock right before the route's mutator
+          // is invoked, mimicking a racing DELETE that wins the lock first.
+          const stripped = { ...p, worktrees: p.worktrees.filter((w) => w.id !== wt.id) };
+          return fn(stripped);
+        });
+      });
+      try {
+        const res = await app.inject({
+          method: "PATCH",
+          url: `/worktrees/${wt.id}/pin`,
+          payload: { pinned: true },
+        });
+        expect(res.statusCode).toBe(404);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("GET /worktrees response includes pinnedAt for every record", async () => {
+      const wt = await createWorktree("listshape");
+      await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/pin`,
+        payload: { pinned: true },
+      });
+      const res = await app.inject({ method: "GET", url: "/worktrees" });
+      expect(res.statusCode).toBe(200);
+      const items = res.json<Array<{ id: string; pinnedAt: string | null }>>();
+      for (const w of items) {
+        expect(w).toHaveProperty("pinnedAt");
+      }
+      const pinned = items.find((w) => w.id === wt.id);
+      expect(pinned?.pinnedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
 });
