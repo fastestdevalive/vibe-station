@@ -8,7 +8,7 @@ import {
   addProject,
   deleteProject,
 } from "../state/project-store.js";
-import { isGitRepo, detectDefaultBranch } from "../services/git.js";
+import { isGitRepo, detectDefaultBranch, listBranches } from "../services/git.js";
 import { generateProjectPrefix } from "../services/prefix.js";
 import { slugify } from "../services/slugify.js";
 import { projectDir } from "../services/paths.js";
@@ -52,6 +52,30 @@ export function registerProjectRoutes(app: FastifyInstance): void {
     });
     return reply.send(sorted.map(serializeProject));
   });
+
+  // GET /projects/:projectId/branches
+  // Lists local git branches for the project's repo plus the detected default
+  // branch, so the New Session dialog can offer a real branch picker instead of
+  // a hardcoded "main".
+  app.get<{ Params: { projectId: string } }>(
+    "/projects/:projectId/branches",
+    async (req, reply) => {
+      const { projectId } = req.params;
+      const project = getProject(projectId);
+      if (!project) {
+        return reply.status(404).send({ error: `Project '${projectId}' not found` });
+      }
+      if (!(await isGitRepo(project.absolutePath))) {
+        return reply
+          .status(400)
+          .send({ error: `'${project.absolutePath}' is not a git repository` });
+      }
+      const branches = await listBranches(project.absolutePath);
+      const detected = await detectDefaultBranch(project.absolutePath);
+      const defaultBranch = detected ?? project.defaultBranch;
+      return reply.send({ branches, defaultBranch });
+    },
+  );
 
   // POST /projects
   app.post("/projects", async (req, reply) => {

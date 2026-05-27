@@ -139,4 +139,33 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     const res = await app.inject({ method: "GET", url: "/projects" });
     expect(res.json<ProjectRecord[]>()).toHaveLength(1);
   });
+
+  it("GET /projects/:id/branches returns local branches and the default branch", async () => {
+    // Add a couple of extra branches to the repo.
+    execSync(
+      `git -C "${repoDir}" branch feature-a && git -C "${repoDir}" branch feature-b`,
+      { stdio: "ignore" },
+    );
+    const created = await app.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { path: repoDir },
+    });
+    const project = created.json<ProjectRecord>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/projects/${project.id}/branches`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ branches: string[]; defaultBranch: string }>();
+    expect(body.branches).toEqual(expect.arrayContaining(["feature-a", "feature-b"]));
+    expect(body.branches).toContain(body.defaultBranch);
+    expect(body.defaultBranch).toBeTruthy();
+  });
+
+  it("GET /projects/:id/branches 404 for unknown project", async () => {
+    const res = await app.inject({ method: "GET", url: "/projects/nonexistent/branches" });
+    expect(res.statusCode).toBe(404);
+  });
 });

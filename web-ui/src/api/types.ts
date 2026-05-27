@@ -193,6 +193,11 @@ export interface ChangedPathEntry {
   status: GitStatusChar;
 }
 
+export interface ProjectBranchesResponse {
+  branches: string[];
+  defaultBranch: string;
+}
+
 export interface CreateWorktreeBody {
   projectId: string;
   branch: string;
