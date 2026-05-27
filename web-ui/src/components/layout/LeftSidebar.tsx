@@ -248,6 +248,14 @@ export function LeftSidebar({
     onWorktreeSelected?.(w.id);
   }
 
+  // A modified click (ctrl/cmd/shift/alt or non-primary button) lets React
+  // Router's <Link> fall through to the browser's default "open in new tab"
+  // behavior without in-app navigation. We must NOT call selectWorktree() in
+  // that case, otherwise the current tab would also navigate to the worktree.
+  function isModifiedClick(e: React.MouseEvent) {
+    return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
+  }
+
   const isSettings = location.pathname === "/settings";
 
   return (
@@ -302,7 +310,10 @@ export function LeftSidebar({
                       to={`/worktree/${w.id}`}
                       className="wt-row__stretch-link"
                       aria-label={`Open pinned worktree ${w.branch}`}
-                      onClick={() => selectWorktree(w.projectId, w)}
+                      onClick={(e) => {
+                        if (isModifiedClick(e)) return;
+                        selectWorktree(w.projectId, w);
+                      }}
                       tabIndex={-1}
                     />
                     <span className="wt-leading-slot pinned-row__leading" aria-hidden>
@@ -445,7 +456,10 @@ export function LeftSidebar({
                           to={`/worktree/${w.id}`}
                           className="wt-row__stretch-link"
                           aria-label={`Open worktree ${w.branch}`}
-                          onClick={() => selectWorktree(p.id, w)}
+                          onClick={(e) => {
+                            if (isModifiedClick(e)) return;
+                            selectWorktree(p.id, w);
+                          }}
                           tabIndex={-1}
                         />
                         <div className="wt-row__expand">
