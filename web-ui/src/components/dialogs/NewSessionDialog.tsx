@@ -29,7 +29,9 @@ export function NewSessionDialog({
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [existingWtId, setExistingWtId] = useState("");
   const [newWtBranch, setNewWtBranch] = useState("");
-  const [baseBranch, setBaseBranch] = useState("main");
+  const [baseBranch, setBaseBranch] = useState("");
+  const [branches, setBranches] = useState<string[]>([]);
+  const [branchesError, setBranchesError] = useState<string | null>(null);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -49,6 +51,30 @@ export function NewSessionDialog({
       setModes(ms);
       if (wts[0]) setExistingWtId(wts[0].id);
       if (ms[0]) setModeId(ms[0].id);
+    })();
+    // Fetch branches independently — a failure here must NOT break worktree/mode
+    // loading. On error we fall back to a free-text branch input.
+    void (async () => {
+      setBranchesError(null);
+      try {
+        const res = await api.listProjectBranches(projectId);
+        setBranches(res.branches);
+        // Coerce baseBranch to a value present in the rendered options so the
+        // controlled <select> never points at a missing <option>.
+        const def = res.branches.includes(res.defaultBranch)
+          ? res.defaultBranch
+          : (res.branches[0] ?? res.defaultBranch);
+        setBaseBranch(def);
+      } catch (err) {
+        setBranches([]);
+        setBranchesError(
+          err instanceof ApiError
+            ? err.message || `Could not load branches (HTTP ${err.status})`
+            : err instanceof Error
+              ? err.message
+              : String(err),
+        );
+      }
     })();
   }, [open, api, projectId]);
 
@@ -148,16 +174,43 @@ export function NewSessionDialog({
         <>
           <div className="field-label">Branch</div>
           <Input
+            data-autofocus
             aria-label="New worktree branch"
             value={newWtBranch}
             onChange={(e) => setNewWtBranch(e.target.value)}
           />
           <div className="field-label">Base branch</div>
-          <Input
-            aria-label="Base branch"
-            value={baseBranch}
-            onChange={(e) => setBaseBranch(e.target.value)}
-          />
+          {branches.length > 0 ? (
+            <Select
+              aria-label="Base branch"
+              value={baseBranch}
+              onChange={(e) => setBaseBranch(e.target.value)}
+            >
+              {branches.map((b) => (
+                <option key={b} value={b}>
+                  {b}
+                </option>
+              ))}
+            </Select>
+          ) : (
+            <>
+              <Input
+                aria-label="Base branch"
+                placeholder="main"
+                value={baseBranch}
+                onChange={(e) => setBaseBranch(e.target.value)}
+              />
+              {branchesError ? (
+                <div className="field-error">
+                  Couldn’t load branches ({branchesError}). Type a base branch name.
+                </div>
+              ) : (
+                <div className="field-label" style={{ fontWeight: "normal", color: "var(--fg-muted)" }}>
+                  No branches found — type a base branch name.
+                </div>
+              )}
+            </>
+          )}
         </>
       ) : null}
       <div className="field-label">Mode</div>

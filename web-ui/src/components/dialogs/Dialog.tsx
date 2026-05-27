@@ -26,47 +26,62 @@ export function Dialog({
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-      if (e.key === "Tab" && cardRef.current) {
-        const focusables = cardRef.current.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        );
-        const list = [...focusables].filter((el) => !el.hasAttribute("disabled"));
-        if (list.length === 0) return;
-        const first = list[0];
-        const last = list[list.length - 1];
-        if (!first || !last) return;
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    },
-    [onClose],
-  );
+  // Keep the latest `onClose` in a ref so the keydown handler can stay
+  // permanently stable. Callers commonly pass a new inline `onClose` on every
+  // render; if the handler's identity tracked `onClose`, the focus effect below
+  // would re-run on every background re-render (e.g. an agent chat streaming
+  // output) and yank focus back to the first focusable element mid-typing.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onCloseRef.current();
+    }
+    if (e.key === "Tab" && cardRef.current) {
+      const focusables = cardRef.current.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      const list = [...focusables].filter((el) => !el.hasAttribute("disabled"));
+      if (list.length === 0) return;
+      const first = list[0];
+      const last = list[list.length - 1];
+      if (!first || !last) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }, []);
+
+  // Keydown listener — attached once per open. `handleKeyDown` is stable.
   useEffect(() => {
     if (!open) return undefined;
     document.addEventListener("keydown", handleKeyDown);
-    const t = window.setTimeout(() => {
-      const first = cardRef.current?.querySelector<HTMLElement>(
-        'button, [href], input, select, textarea',
-      );
-      first?.focus();
-    }, 0);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      window.clearTimeout(t);
-    };
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [open, handleKeyDown]);
+
+  // Auto-focus on open — keyed on `open` ONLY so background re-renders never
+  // re-steal focus. Target priority: an explicit [data-autofocus] field, else
+  // the first non-button form control, else the dialog card itself (a neutral
+  // fallback via tabIndex=-1). The Close button is never an auto-focus target.
+  useEffect(() => {
+    if (!open) return undefined;
+    const t = window.setTimeout(() => {
+      const card = cardRef.current;
+      if (!card) return;
+      const target =
+        card.querySelector<HTMLElement>("[data-autofocus]") ??
+        card.querySelector<HTMLElement>("input, select, textarea") ??
+        card;
+      target.focus();
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [open]);
 
   if (!open) return null;
 
@@ -85,6 +100,7 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="dialog-card__header">

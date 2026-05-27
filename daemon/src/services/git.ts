@@ -90,6 +90,21 @@ export async function branchExists(repoPath: string, branch: string): Promise<bo
   }
 }
 
+/**
+ * List local branch names in the repo, sorted by most-recent commit first.
+ * The `--format` string is single-quoted because `()` are shell metacharacters
+ * (commands here are interpolated into a /bin/sh string — see `run`).
+ */
+export async function listBranches(repoPath: string): Promise<string[]> {
+  const out = await run(
+    `git -C "${repoPath}" branch --list --sort=-committerdate --format='%(refname:short)'`,
+  );
+  return out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
 /** Returns the full SHA of `ref` in the repo. */
 export async function revParse(repoPath: string, ref: string): Promise<string> {
   return run(`git -C "${repoPath}" rev-parse "${ref}"`);

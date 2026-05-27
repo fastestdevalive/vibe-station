@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   Mode,
   Project,
+  ProjectBranchesResponse,
   SendInputBody,
   Session,
   SupportedCli,
@@ -259,6 +260,19 @@ export function createMockApi() {
 
     async listWorktrees(projectId?: string): Promise<Worktree[]> {
       return structuredClone(projectId ? worktrees.filter((w) => w.projectId === projectId) : worktrees);
+    },
+
+    async listProjectBranches(projectId: string): Promise<ProjectBranchesResponse> {
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) throw new ApiError("not found", 404);
+      // Derive a stable branch set: the project default plus any branches its
+      // worktrees were based on, deduped with the default listed first.
+      const defaultBranch = project.defaultBranch;
+      const others = worktrees
+        .filter((w) => w.projectId === projectId)
+        .map((w) => w.baseBranch);
+      const branches = [...new Set([defaultBranch, ...others, "feature/example"])];
+      return { branches, defaultBranch };
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
