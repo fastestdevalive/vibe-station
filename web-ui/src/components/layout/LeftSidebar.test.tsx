@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach } from "vitest";
@@ -78,6 +78,30 @@ describe("LeftSidebar", () => {
     await screen.findByRole("link", { name: /Open worktree wt-2/i });
     await user.click(screen.getByRole("link", { name: /Open worktree wt-2/i }));
     expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-2");
+  });
+
+  it("ctrl/meta/middle-clicking a worktree does NOT change the active worktree (new-tab open)", async () => {
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+    // Active worktree starts at wt-1 (set in beforeEach).
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+
+    // Each modified click should let the browser open a new tab without
+    // mutating the current tab's active worktree.
+    fireEvent.click(link, { ctrlKey: true });
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+
+    fireEvent.click(link, { metaKey: true });
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+
+    fireEvent.click(link, { button: 1 });
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
   });
 
   it("worktree row exposes overflow menu control", async () => {
