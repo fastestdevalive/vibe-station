@@ -7,6 +7,7 @@ import type {
   HealthResponse,
   Mode,
   Project,
+  ProjectBranchesResponse,
   SendInputBody,
   Session,
   SupportedCli,
@@ -209,6 +210,14 @@ export function createClientApi() {
         : `${root}/worktrees`;
       const res = await apiFetch(url);
       return parseJson<Worktree[]>(res);
+    },
+
+    async listProjectBranches(projectId: string): Promise<ProjectBranchesResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/projects/${encodeURIComponent(projectId)}/branches`,
+      );
+      return parseJson<ProjectBranchesResponse>(res);
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
