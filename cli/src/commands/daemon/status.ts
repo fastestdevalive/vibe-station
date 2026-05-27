@@ -20,6 +20,7 @@ export function registerDaemonStatus(daemon: Command): void {
 
       if (opts.json) {
         printJson(result.data);
+        return;
       }
 
       success("Daemon is running");
@@ -27,7 +28,9 @@ export function registerDaemonStatus(daemon: Command): void {
       if (result.data.version) {
         console.log(`  Version: ${result.data.version}`);
       }
-      if (result.data.uptime) {
+      // Show uptime even when zero so a just-started daemon prints "0s" instead
+      // of hiding the row entirely.
+      if (result.data.uptime != null) {
         console.log(`  Uptime: ${formatSeconds(result.data.uptime)}`);
       }
     });
