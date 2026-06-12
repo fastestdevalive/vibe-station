@@ -9,6 +9,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
 import { attachMobileInputFix } from "@/lib/mobile-input-fix";
+import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 interface TerminalPaneProps {
@@ -134,6 +135,16 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     // see mobile-input-fix.ts for the full root-cause writeup. Gated so it can
     // be disabled in a pinch with `localStorage.terminalInputFix = "0"`.
     const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+
+    // Diagnostic logger (mobile double-text investigation). Enabled per-device
+    // with ?debugInput=1; records the full input pipeline to the daemon log so a
+    // live repro can be audited. No-op when disabled.
+    let inputDebug: InputDebugger | null = null;
+    if (isInputDebugEnabled()) {
+      inputDebug = createInputDebugger(api, activeSessionId);
+      inputDebug.attachTextarea(helperTextarea);
+    }
+
     const inputFixOn = (() => {
       try {
         return localStorage.getItem("terminalInputFix") !== "0";
@@ -141,10 +152,13 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
         return true;
       }
     })();
+    inputDebug?.log({ kind: "fix-config", inputFixOn, hasTextarea: !!helperTextarea });
     let disposeInputFix: (() => void) | null = null;
     if (helperTextarea && inputFixOn) {
-      disposeInputFix = attachMobileInputFix(helperTextarea, (data) =>
-        void api.sendKeystroke(activeSessionId, data),
+      disposeInputFix = attachMobileInputFix(
+        helperTextarea,
+        (data) => void api.sendKeystroke(activeSessionId, data),
+        inputDebug ? (entry) => inputDebug!.log(entry) : undefined,
       );
     }
 
@@ -247,6 +261,9 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       // appearing as if typed). On a noisy connection this also turns into
       // a tight loop because the agent's redraw retriggers the query.
       if (isXtermAutoResponse(data)) return;
+      // Diagnostic: what xterm actually emitted. If a printable chunk shows up
+      // here while the fix also sent the char, that's the double-text smoking gun.
+      inputDebug?.log({ kind: "onData", chunk: data, chunkLen: data.length });
       void api.sendKeystroke(activeSessionId, data);
     });
     const r = term.onResize(({ cols, rows }) => {
@@ -256,6 +273,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     return () => {
       mounted = false;
       disposeInputFix?.();
+      inputDebug?.dispose();
       offOutput();
       d.dispose();
       r.dispose();

@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import { findSessionRecord } from "./sessionLookup.js";
+import { appendDebug } from "../../debugLog.js";
 
 /**
  * Forward client keystrokes to the session.
@@ -25,6 +26,23 @@ export function handleSessionInput(
 ): void {
   const { sessionId, data } = msg;
   if (!data || data.length === 0) return;
+
+  // Diagnostic ground truth (mobile double-text investigation): on a
+  // debug-active connection, record the exact bytes that reached the daemon per
+  // WS message. Buffer-replay shows up here as one message whose `text` is the
+  // whole prompt; a per-keystroke double shows up as two single-char messages.
+  if (conn.debugInput) {
+    appendDebug({
+      src: "server",
+      kind: "ws-recv",
+      conn: conn.id,
+      t: Date.now(),
+      sessionId,
+      dataLen: data.length,
+      text: data,
+      hex: Buffer.from(data, "utf8").toString("hex"),
+    });
+  }
 
   const result = findSessionRecord(sessionId);
   if (!result) {

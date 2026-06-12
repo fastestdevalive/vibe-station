@@ -449,6 +449,9 @@ export function createMockApi() {
 
     async resizeSession(_sessionId: string, _cols: number, _rows: number): Promise<void> {},
 
+    // Diagnostic channel (mobile double-text investigation) — no-op in the mock.
+    async sendDebug(): Promise<void> {},
+
     async getFile(worktreeId: string, filePath: string): Promise<string> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (filePath === "HUGE.bin") {

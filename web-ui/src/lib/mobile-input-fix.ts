@@ -36,6 +36,9 @@
 export function attachMobileInputFix(
   textarea: HTMLTextAreaElement,
   send: (data: string) => void,
+  // Optional diagnostic hook (mobile double-text investigation): records what
+  // the fix decided for each beforeinput. Off in normal operation.
+  log?: (entry: Record<string, unknown>) => void,
 ): () => void {
   let composing = false;
 
@@ -48,7 +51,10 @@ export function attachMobileInputFix(
 
   const onBeforeInput = (e: InputEvent) => {
     // Let the IME drive composition (CJK, emoji pickers, dead keys/accents).
-    if (composing || e.isComposing) return;
+    if (composing || e.isComposing) {
+      log?.({ kind: "fix", inputType: e.inputType, decision: "skip-composing", composing, isComposing: e.isComposing });
+      return;
+    }
 
     let handled = true;
     let out: string | null = null;
@@ -82,12 +88,16 @@ export function attachMobileInputFix(
         // leave to xterm rather than guessing.
         handled = false;
     }
-    if (!handled) return;
+    if (!handled) {
+      log?.({ kind: "fix", inputType: e.inputType, decision: "passthrough" });
+      return;
+    }
 
     // We own this event: cancel it so xterm's keyCode-229 textarea diff can
     // neither accumulate nor re-send. `out` may be null/"" (e.g. insertText with
     // no data) — still cancel to starve the textarea, and just send nothing.
     e.preventDefault();
+    log?.({ kind: "fix", inputType: e.inputType, decision: "send", out, outLen: out ? out.length : 0 });
     if (out) send(out);
   };
 
