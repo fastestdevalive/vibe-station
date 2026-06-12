@@ -68,6 +68,15 @@ const PingMessage = z.object({
   type: z.literal("ping"),
 });
 
+// Diagnostic channel (mobile double-text investigation): the client ships
+// terminal input + IME/composition events here when ?debugInput=1 is enabled,
+// and the daemon writes them to input-debug.log. Gated entirely on the client;
+// when debugging is off, no debug:log messages are sent.
+const DebugLogMessage = z.object({
+  type: z.literal("debug:log"),
+  entries: z.array(z.record(z.string(), z.unknown())),
+});
+
 export const ClientMessage = z.discriminatedUnion("type", [
   SubscribeMessage,
   UnsubscribeMessage,
@@ -80,6 +89,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   TreeWatchMessage,
   TreeUnwatchMessage,
   PingMessage,
+  DebugLogMessage,
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessage>;

@@ -491,6 +491,17 @@ export function createClientApi() {
       await sendWs({ type: "session:input", sessionId, data });
     },
 
+    // Diagnostic channel (mobile double-text investigation): ship batched input/
+    // composition events to the daemon's input-debug log. Best-effort — never
+    // throw into the caller (the terminal hot path).
+    async sendDebug(entries: Record<string, unknown>[]): Promise<void> {
+      try {
+        await sendWs({ type: "debug:log", entries });
+      } catch {
+        /* ignore */
+      }
+    },
+
     async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
       await sendWs({ type: "session:resize", sessionId, cols, rows });
     },
