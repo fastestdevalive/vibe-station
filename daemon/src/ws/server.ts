@@ -13,6 +13,7 @@ import { handleFileWatch } from "./handlers/fileWatch.js";
 import { handleFileUnwatch } from "./handlers/fileUnwatch.js";
 import { handleTreeWatch } from "./handlers/treeWatch.js";
 import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
+import { handleDebugLog } from "./handlers/debugLog.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
 import { COOKIE_NAME, validateSessionCookie } from "../auth.js";
 
@@ -141,6 +142,10 @@ export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: str
             break;
           case "tree:unwatch":
             await handleTreeUnwatch(conn, msg);
+            break;
+          // Diagnostic channel (mobile double-text investigation)
+          case "debug:log":
+            handleDebugLog(conn, msg);
             break;
         }
       } catch (err) {

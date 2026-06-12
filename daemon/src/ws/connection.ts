@@ -25,6 +25,14 @@ export class WSConnection {
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   readonly id: string; // Unique identifier for this connection
+  /**
+   * Diagnostic flag (mobile double-text investigation). Set once a client sends
+   * a `debug:log` message — the client only does so when input debugging is
+   * enabled (?debugInput=1). When true, this connection's `session:input` bytes
+   * are also written to the input-debug log so we have ground truth of what the
+   * daemon actually received vs. what the client thought it sent.
+   */
+  debugInput = false;
 
   constructor(private ws: WebSocket) {
     this.id = Math.random().toString(36).slice(2);

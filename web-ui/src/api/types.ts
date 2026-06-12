@@ -240,4 +240,8 @@ export interface TerminalApi {
   closeSession: (sessionId: string) => Promise<void>;
   sendKeystroke: (sessionId: string, data: string) => Promise<void>;
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<void>;
+  /** Diagnostic channel (mobile double-text investigation): ship batched input/
+   *  composition events to the daemon's input-debug log. Optional so the mock
+   *  can omit it. */
+  sendDebug?: (entries: Record<string, unknown>[]) => Promise<void>;
 }
