@@ -8,6 +8,7 @@ import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
+import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 interface TerminalPaneProps {
@@ -125,6 +126,28 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     term.loadAddon(new WebLinksAddon((_, url) => window.open(url, "_blank", "noopener,noreferrer")));
 
     term.open(host);
+
+    // xterm creates a hidden helper textarea inside open(). On mobile soft
+    // keyboards (Android/Gboard etc.) xterm's keyCode-229 textarea-diff path
+    // re-sends the whole accumulated buffer on a single keypress. The fix
+    // intercepts beforeinput and forwards the reliable single char instead —
+    // see mobile-input-fix.ts for the full root-cause writeup. Gated so it can
+    // be disabled in a pinch with `localStorage.terminalInputFix = "0"`.
+    const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+    const inputFixOn = (() => {
+      try {
+        return localStorage.getItem("terminalInputFix") !== "0";
+      } catch {
+        return true;
+      }
+    })();
+    let disposeInputFix: (() => void) | null = null;
+    if (helperTextarea && inputFixOn) {
+      disposeInputFix = attachMobileInputFix(helperTextarea, (data) =>
+        void api.sendKeystroke(activeSessionId, data),
+      );
+    }
+
     // Take keyboard focus so the user can start typing immediately when a tab
     // or worktree is opened. The effect re-runs on activeSessionId change, so
     // tab switches refocus the new tab's terminal too.
@@ -232,6 +255,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
     return () => {
       mounted = false;
+      disposeInputFix?.();
       offOutput();
       d.dispose();
       r.dispose();
