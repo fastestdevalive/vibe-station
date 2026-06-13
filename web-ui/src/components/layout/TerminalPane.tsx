@@ -8,7 +8,6 @@ import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
-import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
@@ -128,38 +127,20 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
     term.open(host);
 
-    // xterm creates a hidden helper textarea inside open(). On mobile soft
-    // keyboards (Android/Gboard etc.) xterm's keyCode-229 textarea-diff path
-    // re-sends the whole accumulated buffer on a single keypress. The fix
-    // intercepts beforeinput and forwards the reliable single char instead —
-    // see mobile-input-fix.ts for the full root-cause writeup. Gated so it can
-    // be disabled in a pinch with `localStorage.terminalInputFix = "0"`.
-    const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
-
     // Diagnostic logger (mobile double-text investigation). Enabled per-device
     // with ?debugInput=1; records the full input pipeline to the daemon log so a
     // live repro can be audited. No-op when disabled.
+    //
+    // NOTE: the previous beforeinput-based mobile fix was reverted — it
+    // double-sent space and capital letters on desktop (those keys fire
+    // beforeinput *and* xterm's keydown path, so both sent the char). The real
+    // mobile fix is pending root-cause from these logs.
+    const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
     let inputDebug: InputDebugger | null = null;
     if (isInputDebugEnabled()) {
       inputDebug = createInputDebugger(api, activeSessionId);
       inputDebug.attachTextarea(helperTextarea);
-    }
-
-    const inputFixOn = (() => {
-      try {
-        return localStorage.getItem("terminalInputFix") !== "0";
-      } catch {
-        return true;
-      }
-    })();
-    inputDebug?.log({ kind: "fix-config", inputFixOn, hasTextarea: !!helperTextarea });
-    let disposeInputFix: (() => void) | null = null;
-    if (helperTextarea && inputFixOn) {
-      disposeInputFix = attachMobileInputFix(
-        helperTextarea,
-        (data) => void api.sendKeystroke(activeSessionId, data),
-        inputDebug ? (entry) => inputDebug!.log(entry) : undefined,
-      );
+      inputDebug.log({ kind: "fix-config", hasTextarea: !!helperTextarea });
     }
 
     // Take keyboard focus so the user can start typing immediately when a tab
@@ -272,7 +253,6 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
     return () => {
       mounted = false;
-      disposeInputFix?.();
       inputDebug?.dispose();
       offOutput();
       d.dispose();
