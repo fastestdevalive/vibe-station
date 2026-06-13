@@ -4,10 +4,10 @@
  * Captures the full keystroke pipeline on the device and ships it to the daemon
  * over the WS (the phone's browser console is unreachable). For every key it
  * records keydown / composition* / beforeinput / input (with inputType, data,
- * isComposing, and the hidden textarea's value+selection), what
- * attachMobileInputFix decided, and what xterm finally emitted via onData. The
- * daemon writes these — interleaved with the bytes it actually received — to
- * <data-dir>/input-debug.log so a maintainer can audit a live repro.
+ * isComposing, and the hidden textarea's value+selection) and what xterm
+ * finally emitted via onData. The daemon writes these — interleaved with the
+ * bytes it actually received — to <data-dir>/input-debug.log so a maintainer
+ * can audit a live repro.
  *
  * OFF by default. Enable on mobile by opening the app with `?debugInput=1`
  * (persisted to localStorage); disable with `?debugInput=0`. No console access
@@ -88,8 +88,8 @@ export function createInputDebugger(api: DebugSink, sessionId: string): InputDeb
     textarea = el;
     log({ kind: "attach", hasTextarea: true });
 
-    // Capture phase so we observe the raw event before attachMobileInputFix's
-    // (bubble-phase) listener can preventDefault it.
+    // Capture phase so we observe the raw event first, before any other
+    // listener could preventDefault it.
     const add = (type: string, fn: (e: Event) => void) => {
       el.addEventListener(type, fn, true);
       listeners.push([type, fn]);
