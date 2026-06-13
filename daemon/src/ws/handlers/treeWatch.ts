@@ -60,7 +60,10 @@ export function handleTreeWatch(
     });
 
     watcher.on("error", (message: string) => {
-      // On error, stop watching
+      // On error, stop watching. Close first so the underlying chokidar
+      // instance releases its inotify handles — unregistering before closing
+      // would orphan the watcher (cleanup() can no longer find it).
+      void watcher.close();
       conn.unregisterTreeWatcher(watchKey);
       conn.send({
         type: "system:error",

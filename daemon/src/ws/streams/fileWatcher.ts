@@ -1,8 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
-import ignore from "ignore";
-import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import type { Stats } from "node:fs";
 import { EventEmitter } from "node:events";
+import { buildIgnoreMatcher } from "../../services/ignoreFilter.js";
 
 /**
  * Wraps chokidar to watch files with gitignore filtering and debouncing.
@@ -19,20 +18,14 @@ export class FileWatcher extends EventEmitter {
    */
   watch(absPath: string, worktreeRoot: string): void {
     try {
-      // Build gitignore filter
-      let ignoreFilter = (_: string) => false; // default: don't ignore anything
-
-      const gitignorePath = join(worktreeRoot, ".gitignore");
-      try {
-        const gitignoreContent = readFileSync(gitignorePath, "utf8");
-        const ig = ignore().add(gitignoreContent);
-        ignoreFilter = (path: string) => {
-          const rel = relative(worktreeRoot, path);
-          return !!rel && !rel.startsWith("..") && ig.ignores(rel);
-        };
-      } catch {
-        // No .gitignore — use default
-      }
+      // Build a nested-gitignore-aware filter that ALSO hard-excludes
+      // node_modules/.git. Critical: without the node_modules exclusion a
+      // single recursive watch on a JS repo allocates tens of thousands of
+      // inotify watches and exhausts the kernel limit (which then starves
+      // Vite's HMR watcher → ENOSPC). See services/ignoreFilter.ts.
+      const matcher = buildIgnoreMatcher(worktreeRoot);
+      const ignoreFilter = (path: string, stats?: Stats) =>
+        matcher.ignores(path, stats ? stats.isDirectory() : false);
 
       // Create watcher with gitignore filtering.
       // `ignoreInitial: true` is critical — without it, chokidar fires an
