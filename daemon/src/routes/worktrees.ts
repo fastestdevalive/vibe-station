@@ -2,9 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { join, normalize, relative, sep } from "node:path";
+import { join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
-import ignore from "ignore";
 import { getProject, getAllProjects, mutateProject } from "../state/project-store.js";
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
 import { reserveNextWorktreeNum, buildTmuxName } from "../services/sessionId.js";
@@ -15,6 +14,7 @@ import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
+import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
 import { broadcastAll } from "../broadcaster.js";
 import { persistLifecycleState } from "../services/lifecycle.js";
 import { serializeSession } from "./sessions.js";
@@ -553,14 +553,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       return reply.status(403).send({ error: "Access denied." });
     }
 
-    // Build gitignore filter
-    let ig: ReturnType<typeof ignore> | null = null;
-    try {
-      const gitignoreContent = await readFile(join(wtPath, ".gitignore"), "utf8");
-      ig = ignore().add(gitignoreContent);
-    } catch {
-      // No .gitignore
-    }
+    // Nested-gitignore-aware filter that also hard-excludes node_modules/.git.
+    const ignoreMatcher = buildIgnoreMatcher(wtPath);
 
     // Dotfiles are shown by default; pass showHidden=false to filter them out.
     const hideDotfiles = showHidden === "false";
@@ -576,14 +570,9 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const mapped = entries
         .filter((e) => {
           if (hideDotfiles && e.name.startsWith(".")) return false;
-          // Always hide .git directory — it's noise.
-          if (e.name === ".git") return false;
-          // Filter gitignored paths; skip check when the real path escapes the worktree.
-          if (ig) {
-            const rel = relative(wtPath, join(resolvedTarget, e.name));
-            if (rel && !rel.startsWith("..") && ig.ignores(rel)) return false;
-          }
-          return true;
+          // Filter gitignored paths (node_modules/.git always excluded);
+          // computed against the real location so escaped symlinks are skipped.
+          return !ignoreMatcher.ignores(join(resolvedTarget, e.name), e.isDirectory());
         })
         .map(async (e) => {
           let type: "dir" | "file" = e.isDirectory() ? "dir" : "file";

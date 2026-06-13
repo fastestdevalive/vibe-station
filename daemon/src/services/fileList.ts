@@ -201,7 +201,10 @@ async function listFilesWithNode(wtPath: string): Promise<FileListResult> {
 
     for (const e of entries) {
       if (truncated) return;
-      if (e.name === ".git") continue;
+      // Always skip node_modules/.git. The root-only gitignore loaded above
+      // often misses node_modules (the rule lives in a nested .gitignore),
+      // and walking it on a JS repo means tens of thousands of wasted stats.
+      if (e.name === ".git" || e.name === "node_modules") continue;
       const abs = join(dir, e.name);
       const rel = toPosix(relative(wtPath, abs));
 
