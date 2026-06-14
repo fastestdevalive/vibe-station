@@ -2,7 +2,12 @@
 <html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- interactive-widget=resizes-content: when the mobile soft keyboard opens,
+         shrink the LAYOUT viewport (not just the visual viewport) so the full-height
+         (height:100%) UI reflows above the keyboard instead of being overlaid by it.
+         Chromium/Android honors this; iOS Safari ignores it (would need a
+         visualViewport JS handler). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <title>Vibe Station</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />

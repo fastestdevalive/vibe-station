@@ -8,6 +8,7 @@ import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
+import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
@@ -127,15 +128,26 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
     term.open(host);
 
+    const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
+
+    // Mobile soft-keyboard fix. On Android the hidden textarea accumulates and
+    // xterm's keyCode-229 diff re-sends the whole buffer / lets Gboard mangle
+    // input. attachMobileInputFix forwards single chars on the 229 path only
+    // (desktop physical keys fall through untouched — see mobile-input-fix.ts).
+    // Belt-and-braces: turn off the IME features that drive autocorrect churn.
+    if (helperTextarea) {
+      helperTextarea.setAttribute("autocomplete", "off");
+      helperTextarea.setAttribute("autocorrect", "off");
+      helperTextarea.setAttribute("autocapitalize", "off");
+      helperTextarea.setAttribute("spellcheck", "false");
+    }
+    const disposeInputFix = helperTextarea
+      ? attachMobileInputFix(helperTextarea, (data) => void api.sendKeystroke(activeSessionId, data))
+      : null;
+
     // Diagnostic logger (mobile double-text investigation). Enabled per-device
     // with ?debugInput=1; records the full input pipeline to the daemon log so a
     // live repro can be audited. No-op when disabled.
-    //
-    // NOTE: the previous beforeinput-based mobile fix was reverted — it
-    // double-sent space and capital letters on desktop (those keys fire
-    // beforeinput *and* xterm's keydown path, so both sent the char). The real
-    // mobile fix is pending root-cause from these logs.
-    const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
     let inputDebug: InputDebugger | null = null;
     if (isInputDebugEnabled()) {
       inputDebug = createInputDebugger(api, activeSessionId);
@@ -215,6 +227,18 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
         try {
           fit.fit();
           void api.resizeSession(activeSessionId, term.cols, term.rows);
+          // Bug #2 (resize doubling): switching the workspace layout (e.g. to a
+          // vertical split) remounts the terminal — see Layout.tsx, the
+          // terminalPosition left/bottom branches are different React subtrees —
+          // and the remount's scrollback replay reflowed at an unstable width
+          // leaves duplicated rows on the canvas. Forcing a full redraw from the
+          // buffer after the fit settles clears those stale rows (the same thing
+          // a workspace-switch remount does, which is why it "self-heals").
+          // NOTE for reviewer: this is a render-level mitigation. The root fix is
+          // to stop the terminal remounting on a layout-position change (keep it
+          // in a stable React position). Evaluate whether that larger Layout
+          // change is worth doing instead of / in addition to this.
+          if (term.rows > 0) term.refresh(0, term.rows - 1);
         } catch {
           /* ignore */
         }
@@ -253,6 +277,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
     return () => {
       mounted = false;
+      disposeInputFix?.();
       inputDebug?.dispose();
       offOutput();
       d.dispose();
