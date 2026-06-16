@@ -168,4 +168,72 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     const res = await app.inject({ method: "GET", url: "/projects/nonexistent/branches" });
     expect(res.statusCode).toBe(404);
   });
+
+  it("new projects serialize hidden:false by default", async () => {
+    const res = await app.inject({ method: "POST", url: "/projects", payload: { path: repoDir } });
+    expect(res.json<{ hidden: boolean }>().hidden).toBe(false);
+  });
+
+  it("PATCH /projects/:id { hidden:true } hides the project and persists across reload", async () => {
+    const created = await app.inject({ method: "POST", url: "/projects", payload: { path: repoDir } });
+    const project = created.json<ProjectRecord>();
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/projects/${project.id}`,
+      payload: { hidden: true },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<{ ok: boolean; project: { hidden: boolean } }>().project.hidden).toBe(true);
+
+    // GET reflects it.
+    const list = await app.inject({ method: "GET", url: "/projects" });
+    expect(list.json<{ id: string; hidden: boolean }[]>().find((p) => p.id === project.id)?.hidden).toBe(true);
+
+    // Persisted on disk: reload manifest from a fresh store.
+    const { _clearStoreForTest, loadAll, getProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    await loadAll();
+    expect(getProject(project.id)?.hidden).toBe(true);
+  });
+
+  it("PATCH /projects/:id { hidden:false } drops the field (clean manifest)", async () => {
+    const created = await app.inject({ method: "POST", url: "/projects", payload: { path: repoDir } });
+    const project = created.json<ProjectRecord>();
+
+    await app.inject({ method: "PATCH", url: `/projects/${project.id}`, payload: { hidden: true } });
+    const unhide = await app.inject({
+      method: "PATCH",
+      url: `/projects/${project.id}`,
+      payload: { hidden: false },
+    });
+    expect(unhide.statusCode).toBe(200);
+    expect(unhide.json<{ project: { hidden: boolean } }>().project.hidden).toBe(false);
+
+    const { _clearStoreForTest, loadAll, getProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    await loadAll();
+    const reloaded = getProject(project.id);
+    expect(reloaded?.hidden).toBeUndefined();
+  });
+
+  it("PATCH /projects/:id 404 for unknown project", async () => {
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/projects/nonexistent",
+      payload: { hidden: true },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("PATCH /projects/:id 400 on invalid body", async () => {
+    const created = await app.inject({ method: "POST", url: "/projects", payload: { path: repoDir } });
+    const project = created.json<ProjectRecord>();
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/projects/${project.id}`,
+      payload: { hidden: "yes" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
 });

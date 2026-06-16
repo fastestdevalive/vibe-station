@@ -31,6 +31,7 @@ interface ServerData {
   // for a single state transition.
   applyProjectCreated: (p: Project) => void;
   applyProjectDeleted: (projectId: string) => void;
+  applyProjectUpdated: (p: Project) => void;
   applyWorktreeCreated: (w: Worktree) => void;
   applyWorktreeDeleted: (worktreeId: string) => void;
   applyWorktreeUpdated: (w: Worktree) => void;
@@ -60,6 +61,17 @@ export const useServerStore = create<ServerData>((set) => ({
         (sess) => !s.worktrees.some((w) => w.projectId === projectId && w.id === sess.worktreeId),
       ),
     })),
+
+  applyProjectUpdated: (p) =>
+    set((s) => {
+      const idx = s.projects.findIndex((x) => x.id === p.id);
+      // Drop silently if we don't know this id — avoids surprise inserts from a
+      // server racing ahead of our initial list (mirrors applyWorktreeUpdated).
+      if (idx === -1) return s;
+      const next = s.projects.slice();
+      next[idx] = p;
+      return { projects: next };
+    }),
 
   applyWorktreeCreated: (w) =>
     set((s) =>

@@ -7,6 +7,7 @@ import {
   getProject,
   addProject,
   deleteProject,
+  mutateProject,
 } from "../state/project-store.js";
 import { isGitRepo, detectDefaultBranch, listBranches } from "../services/git.js";
 import { generateProjectPrefix } from "../services/prefix.js";
@@ -24,6 +25,8 @@ function serializeProject(p: ProjectRecord) {
     prefix: p.prefix,
     defaultBranch: p.defaultBranch,
     createdAt: p.createdAt,
+    // Always emit so the client never has to special-case undefined.
+    hidden: !!p.hidden,
   };
 }
 
@@ -148,6 +151,69 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       project: apiProject as unknown as Record<string, unknown>,
     });
     return reply.status(201).send(apiProject);
+  });
+
+  // PATCH /projects/:id   { hidden: boolean }
+  // Toggles ProjectRecord.hidden — a visibility-only flag (sidebar + dashboard).
+  // Idempotent: no-op + no broadcast when already in the requested state, so
+  // cross-tab toggles don't churn the manifest. Drops the field when false to
+  // keep the manifest clean (mirrors worktree pinnedAt at worktrees.ts).
+  app.patch("/projects/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const bodySchema = z.object({ hidden: z.boolean() });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { hidden } = parsed.data;
+
+    const current = getProject(id);
+    if (!current) {
+      return reply.status(404).send({ error: `Project '${id}' not found` });
+    }
+
+    // Idempotent fast-path: already in the requested state — return without
+    // touching disk (mutateProject always rewrites the manifest, even on a
+    // no-op fn) and without broadcasting. Avoids needless fsync churn from
+    // cross-tab toggles.
+    if (!!current.hidden === hidden) {
+      return reply.send({ ok: true, project: serializeProject(current) });
+    }
+
+    let changed = false;
+    let updated: ProjectRecord;
+    try {
+      updated = await mutateProject(id, (p) => {
+        const isHidden = !!p.hidden;
+        if (isHidden === hidden) {
+          // No state change — return unchanged (cheap idempotent rewrite).
+          return p;
+        }
+        changed = true;
+        if (hidden) {
+          return { ...p, hidden: true };
+        }
+        // Drop the field rather than setting false so the JSON stays clean.
+        const { hidden: _drop, ...rest } = p;
+        void _drop;
+        return rest as ProjectRecord;
+      });
+    } catch (err) {
+      // Project deleted between the check and the lock.
+      if (err instanceof Error && /not found/i.test(err.message)) {
+        return reply.status(404).send({ error: `Project '${id}' not found` });
+      }
+      throw err;
+    }
+
+    const apiProject = serializeProject(updated);
+    if (changed) {
+      broadcastAll({
+        type: "project:updated",
+        project: apiProject as unknown as Record<string, unknown>,
+      });
+    }
+    return reply.send({ ok: true, project: apiProject });
   });
 
   // DELETE /projects/:id
