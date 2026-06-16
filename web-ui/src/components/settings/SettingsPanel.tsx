@@ -4,6 +4,7 @@ import type { ApiInstance } from "@/api";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
+import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
 
 interface Section {
   id: string;
@@ -20,6 +21,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const isMobile = useMediaQuery("(max-width: 768px)");
   const modesRef = useRef<HTMLElement | null>(null);
   const appearanceRef = useRef<HTMLElement | null>(null);
+  const hiddenProjectsRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState("modes");
   const tabLayoutId = useId();
 
@@ -35,6 +37,12 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
       label: "Appearance",
       ref: appearanceRef,
       content: <AppearanceSetting />,
+    },
+    {
+      id: "hidden-projects",
+      label: "Hidden projects",
+      ref: hiddenProjectsRef,
+      content: <HiddenProjectsSetting api={api} />,
     },
   ];
 
@@ -188,17 +196,36 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         style={{ overflow: "auto", minHeight: 0 }}
       >
         {sections.map((section, i) => (
-          <section
+          <div
             key={section.id}
-            id={`settings-${section.id}`}
-            ref={section.ref}
-            style={{
-              scrollMarginTop: "var(--space-3)",
-              marginBottom: i < sections.length - 1 ? "var(--space-7)" : 0,
-            }}
+            style={{ marginBottom: i < sections.length - 1 ? "var(--space-6)" : 0 }}
           >
-            {section.content}
-          </section>
+            <div
+              style={{
+                fontSize: "var(--font-size-xs)",
+                fontWeight: "var(--font-weight-medium)",
+                color: "var(--fg-muted)",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                marginBottom: "var(--space-2)",
+              }}
+            >
+              {section.label}
+            </div>
+            <section
+              id={`settings-${section.id}`}
+              ref={section.ref}
+              style={{
+                scrollMarginTop: "var(--space-5)",
+                border: "var(--border-width) solid var(--border-default)",
+                borderRadius: "var(--radius-lg, var(--radius-md))",
+                background: "var(--bg-card)",
+                padding: "var(--space-4) var(--space-5)",
+              }}
+            >
+              {section.content}
+            </section>
+          </div>
         ))}
       </div>
     </div>

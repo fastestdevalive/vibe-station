@@ -203,6 +203,26 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+    async hideProject(id: string): Promise<{ ok: true; project: Project }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
+      });
+      return parseJson<{ ok: true; project: Project }>(res);
+    },
+
+    async unhideProject(id: string): Promise<{ ok: true; project: Project }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: false }),
+      });
+      return parseJson<{ ok: true; project: Project }>(res);
+    },
+
     async listWorktrees(projectId?: string): Promise<Worktree[]> {
       const root = baseUrl();
       const url = projectId

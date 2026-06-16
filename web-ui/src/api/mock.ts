@@ -35,6 +35,7 @@ export function createMockApi() {
       prefix: "pa",
       defaultBranch: "main",
       createdAt: nowIso(),
+      hidden: false,
     },
     {
       id: "proj-b",
@@ -43,6 +44,7 @@ export function createMockApi() {
       prefix: "pb",
       defaultBranch: "develop",
       createdAt: nowIso(),
+      hidden: false,
     },
   ];
 
@@ -256,6 +258,26 @@ export function createMockApi() {
     async deleteProject(_id: string): Promise<{ ok: true }> {
       emit({ type: "project:deleted", projectId: _id });
       return { ok: true };
+    },
+
+    async hideProject(id: string): Promise<{ ok: true; project: Project }> {
+      const project = projects.find((p) => p.id === id);
+      if (!project) throw new ApiError("not found", 404);
+      if (!project.hidden) {
+        project.hidden = true;
+        emit({ type: "project:updated", project: structuredClone(project) });
+      }
+      return { ok: true, project: structuredClone(project) };
+    },
+
+    async unhideProject(id: string): Promise<{ ok: true; project: Project }> {
+      const project = projects.find((p) => p.id === id);
+      if (!project) throw new ApiError("not found", 404);
+      if (project.hidden) {
+        project.hidden = false;
+        emit({ type: "project:updated", project: structuredClone(project) });
+      }
+      return { ok: true, project: structuredClone(project) };
     },
 
     async listWorktrees(projectId?: string): Promise<Worktree[]> {

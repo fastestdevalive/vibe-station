@@ -13,6 +13,9 @@ export interface Project {
   prefix: string;
   defaultBranch: string;
   createdAt: string;
+  /** When true, the project and all its worktrees are hidden from the sidebar
+   *  and dashboard. Always emitted by the daemon (defaults to false). */
+  hidden: boolean;
 }
 
 export interface Worktree {
@@ -144,6 +147,10 @@ export type WSEvent =
   | {
       type: "project:deleted";
       projectId: string;
+    }
+  | {
+      type: "project:updated";
+      project: Project;
     }
   | {
       type: "worktree:created";

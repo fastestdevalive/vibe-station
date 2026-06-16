@@ -96,7 +96,6 @@ export function AppearanceSetting() {
   return (
     <div>
       <SectionHeader
-        title="Appearance"
         description="Customize how vibe-station looks on your device."
       />
 

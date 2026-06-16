@@ -197,6 +197,11 @@ const ProjectDeletedEvent = z.object({
   projectId: z.string(),
 });
 
+const ProjectUpdatedEvent = z.object({
+  type: z.literal("project:updated"),
+  project: z.record(z.string(), z.unknown()),
+});
+
 const WorktreeCreatedEvent = z.object({
   type: z.literal("worktree:created"),
   worktree: z.record(z.string(), z.unknown()),
@@ -253,6 +258,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   // Broadcast events
   ProjectCreatedEvent,
   ProjectDeletedEvent,
+  ProjectUpdatedEvent,
   WorktreeCreatedEvent,
   WorktreeDeletedEvent,
   WorktreeUpdatedEvent,

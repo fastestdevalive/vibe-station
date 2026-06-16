@@ -68,7 +68,6 @@ export function ModesSetting({ api }: ModesSettingProps) {
   return (
     <div style={{ paddingBottom: "var(--space-8)" }}>
       <SectionHeader
-        title="Modes"
         description="Orchestrator modes define the CLI, system prompt, and model used when starting a new agent session."
       />
 

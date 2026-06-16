@@ -80,6 +80,13 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
   useSubscription(sessionIdKey ? sessionIdKey.split(",").filter(Boolean) : [], api);
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
+  /** Hidden projects (and all their worktrees) are excluded from every dashboard
+   *  list — visibility only; unhide from Settings. */
+  const hiddenProjectIds = useMemo(
+    () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
+    [projects],
+  );
+  const visibleProjects = useMemo(() => projects.filter((p) => !p.hidden), [projects]);
 
   /** Live state map (persisted across page loads, refreshed on every ws:open
    *  by useServerSync). The rollup uses it as the primary signal and falls
@@ -91,6 +98,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     const wtsIdle: Worktree[] = [];
     const wtsFinished: Worktree[] = [];
     for (const wt of worktrees) {
+      if (hiddenProjectIds.has(wt.projectId)) continue;
       const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
       if (agentSessions.length === 0) continue;
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
@@ -100,7 +108,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       else wtsFinished.push(wt);
     }
     return { working: wtsWorking, idle: wtsIdle, finished: wtsFinished };
-  }, [worktrees, sessions, sessionStates]);
+  }, [worktrees, sessions, sessionStates, hiddenProjectIds]);
 
   const daemonOk = connState === "online";
 
@@ -240,12 +248,12 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
           </div>
         )}
 
-        {/* Projects — always shown below worktree sections */}
-        {projects.length > 0 ? (
+        {/* Projects — always shown below worktree sections (hidden projects excluded) */}
+        {visibleProjects.length > 0 ? (
           <section className="dashboard-section">
             <div className="dashboard-section__label">projects</div>
             <div className="dashboard-card-list">
-              {projects.map((p) => {
+              {visibleProjects.map((p) => {
                 const wts = worktrees.filter((w) => w.projectId === p.id);
                 const activeCount = wts.filter((w) =>
                   sessions.some(

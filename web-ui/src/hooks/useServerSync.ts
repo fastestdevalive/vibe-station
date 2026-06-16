@@ -36,6 +36,7 @@ export function useServerSync(api: ApiInstance): void {
   const replaceAll = useServerStore((s) => s.replaceAll);
   const applyProjectCreated = useServerStore((s) => s.applyProjectCreated);
   const applyProjectDeleted = useServerStore((s) => s.applyProjectDeleted);
+  const applyProjectUpdated = useServerStore((s) => s.applyProjectUpdated);
   const applyWorktreeCreated = useServerStore((s) => s.applyWorktreeCreated);
   const applyWorktreeDeleted = useServerStore((s) => s.applyWorktreeDeleted);
   const applyWorktreeUpdated = useServerStore((s) => s.applyWorktreeUpdated);
@@ -88,6 +89,9 @@ export function useServerSync(api: ApiInstance): void {
     const offProjDeleted = api.on("project:deleted", (ev) => {
       if (ev.type === "project:deleted") applyProjectDeleted(ev.projectId);
     });
+    const offProjUpdated = api.on("project:updated", (ev) => {
+      if (ev.type === "project:updated") applyProjectUpdated(ev.project);
+    });
     const offWtCreated = api.on("worktree:created", (ev) => {
       if (ev.type === "worktree:created") applyWorktreeCreated(ev.worktree);
     });
@@ -127,6 +131,7 @@ export function useServerSync(api: ApiInstance): void {
     return () => {
       offProjCreated();
       offProjDeleted();
+      offProjUpdated();
       offWtCreated();
       offWtDeleted();
       offWtUpdated();
@@ -140,6 +145,7 @@ export function useServerSync(api: ApiInstance): void {
     api,
     applyProjectCreated,
     applyProjectDeleted,
+    applyProjectUpdated,
     applyWorktreeCreated,
     applyWorktreeDeleted,
     applyWorktreeUpdated,
