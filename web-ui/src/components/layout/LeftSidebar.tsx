@@ -1,7 +1,7 @@
-import { Check, ChevronDown, ChevronRight, Filter, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
@@ -88,19 +88,30 @@ export function LeftSidebar({
     for (const p of projects) m[p.id] = p;
     return m;
   }, [projects]);
+  /** Ids of hidden projects — their rows + all their worktrees are filtered out
+   *  of the sidebar everywhere (projects list AND pinned section). */
+  const hiddenProjectIds = useMemo(
+    () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
+    [projects],
+  );
+  /** Visible (non-hidden) projects — the only ones rendered in the tree. */
+  const visibleProjects = useMemo(
+    () => projects.filter((p) => !p.hidden),
+    [projects],
+  );
   /**
    * Pinned worktrees in display order: ISO timestamp DESC (newest pinned first).
    * Filter out anything no longer present on the server (defense-in-depth — the
    * server-side delete naturally removes pinned worktrees, but a stale id from
-   * an in-flight event shouldn't crash render).
+   * an in-flight event shouldn't crash render) and any worktree of a hidden project.
    */
   const pinnedWorktrees = useMemo(
     () =>
       worktrees
-        .filter((w) => w.pinnedAt != null)
+        .filter((w) => w.pinnedAt != null && !hiddenProjectIds.has(w.projectId))
         .slice()
         .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
-    [worktrees],
+    [worktrees, hiddenProjectIds],
   );
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
     try {
@@ -113,12 +124,23 @@ export function LeftSidebar({
   const { activeWorktreeId, activeProjectId, activeSessionId, setActiveWorktree } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
+  const mobileSidebarOpen = useWorkspaceStore((s) => s.mobileSidebarOpen);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const hideInactiveWorktrees = useWorkspaceStore((s) => s.hideInactiveWorktrees);
   const toggleInactiveWorktreesFilter = useWorkspaceStore((s) => s.toggleInactiveWorktreesFilter);
 
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
+  const [projMenu, setProjMenu] = useState<{ project: Project; rect: DOMRect } | null>(null);
+
+  /** Scroll container — used to snap the active worktree into view when the
+   *  sidebar is reopened (see effect below). */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** Whether the sidebar was visible on the previous render, to detect the
+   *  hidden→visible (reopen) rising edge. Seeded to the current visibility so a
+   *  mount with an already-open sidebar still snaps once. */
+  const visible = isMobile ? mobileSidebarOpen : !collapsed;
+  const prevVisibleRef = useRef<boolean>(!visible);
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
@@ -157,6 +179,31 @@ export function LeftSidebar({
       removeListeners?.();
     };
   }, [wtMenu]);
+
+  useEffect(() => {
+    if (!projMenu) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-proj-menu-panel]") || t.closest("[data-proj-menu-trigger]")) return;
+        setProjMenu(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setProjMenu(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [projMenu]);
 
   useEffect(() => {
     if (!filterMenuRect) return undefined;
@@ -229,6 +276,43 @@ export function LeftSidebar({
     });
   }, [activeProjectId]);
 
+  // When the sidebar is reopened (desktop collapse→expand, mobile drawer open),
+  // snap the selected worktree into view if it scrolled out of sight. Only on
+  // the hidden→visible rising edge so we never fight the user mid-scroll.
+  // `block: "nearest"` self-no-ops when the row is already visible.
+  useEffect(() => {
+    const wasVisible = prevVisibleRef.current;
+    prevVisibleRef.current = visible;
+    if (!visible || wasVisible) return undefined;
+
+    let raf1 = 0;
+    let raf2 = 0;
+    let raf3 = 0;
+    function snap(): boolean {
+      const el = scrollRef.current?.querySelector<HTMLElement>('[data-active="true"]');
+      if (!el) return false;
+      // Guard: jsdom (test env) and very old browsers lack scrollIntoView.
+      if (typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ block: "nearest" });
+      }
+      return true;
+    }
+    // Double rAF: the expand changes width + swaps abbreviated→full labels +
+    // the active project auto-expands in the same commit; wait for layout to
+    // settle before measuring. Retry one more frame if the row isn't in the DOM
+    // yet (auto-expand may not have inserted it).
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        if (!snap()) raf3 = window.requestAnimationFrame(snap);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+      window.cancelAnimationFrame(raf3);
+    };
+  }, [visible]);
+
   function toggleProj(id: string) {
     setOpenProj((prev) => {
       const n = new Set(prev);
@@ -279,6 +363,7 @@ export function LeftSidebar({
         </Link>
       ) : null}
       <div
+        ref={scrollRef}
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
@@ -388,7 +473,7 @@ export function LeftSidebar({
             </>
           )}
         </div>
-        {projects.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <div className={`empty-state ${collapsed ? "empty-state--collapsed-rail" : ""}`} style={{ padding: collapsed ? "var(--space-2)" : "var(--space-4)" }}>
             {collapsed ? (
               <span title="No projects yet — add one with the CLI">∅</span>
@@ -397,7 +482,7 @@ export function LeftSidebar({
             )}
           </div>
         ) : null}
-        {projects.map((p) => (
+        {visibleProjects.map((p) => (
           <div key={p.id}>
             <div className="tree-row tree-row--project">
               <button
@@ -416,7 +501,7 @@ export function LeftSidebar({
                   {openProj.has(p.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 </span>
                 <span className="tree-row__label">
-                  {collapsed ? disambiguatedAbbrev(p.name, p.id, projects) : p.name}
+                  {collapsed ? disambiguatedAbbrev(p.name, p.id, visibleProjects) : p.name}
                 </span>
               </button>
               <button
@@ -428,6 +513,26 @@ export function LeftSidebar({
               >
                 <Plus size={16} />
               </button>
+              {!collapsed ? (
+                <button
+                  type="button"
+                  data-proj-menu-trigger
+                  className="icon-btn tree-row__action"
+                  aria-label={`Project actions for ${p.name}`}
+                  aria-expanded={projMenu?.project.id === p.id}
+                  aria-haspopup="menu"
+                  title="Project menu"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setProjMenu((prev) =>
+                      prev?.project.id === p.id ? null : { project: p, rect },
+                    );
+                  }}
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+              ) : null}
             </div>
             {openProj.has(p.id)
               ? (() => {
@@ -673,6 +778,66 @@ export function LeftSidebar({
                 }}
               >
                 Delete worktree…
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+      {projMenu
+        ? createPortal(
+            <div
+              className="menu-pop wt-menu-pop--portal"
+              data-proj-menu-panel
+              role="menu"
+              aria-label="Project actions"
+              style={{
+                position: "fixed",
+                top: projMenu.rect.bottom + 6,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    projMenu.rect.right - 176,
+                    typeof window !== "undefined" ? window.innerWidth - 184 : 8,
+                  ),
+                ),
+                minWidth: 160,
+                zIndex: 4000,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNewSessProject(projMenu.project);
+                  setProjMenu(null);
+                }}
+              >
+                <Plus size={13} aria-hidden />
+                New worktree
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const projectId = projMenu.project.id;
+                  setProjMenu(null);
+                  void (async () => {
+                    try {
+                      await api.hideProject(projectId);
+                      // Store stays current via the `project:updated` WS event;
+                      // the active-project redirect is handled in Workspace.
+                    } catch {
+                      /* surface errors later */
+                    }
+                  })();
+                }}
+              >
+                <EyeOff size={13} aria-hidden />
+                Hide project
               </button>
             </div>,
             document.body,

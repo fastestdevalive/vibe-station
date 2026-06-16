@@ -1,7 +1,7 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
@@ -335,6 +335,134 @@ describe("LeftSidebar", () => {
       await waitFor(() => {
         expect(screen.getByRole("region", { name: /pinned worktrees/i })).toBeInTheDocument();
       });
+    });
+  });
+
+  // ─── Project hiding ──────────────────────────────────────────────────────
+  describe("project hiding", () => {
+    it("project row exposes a project actions (⋮) menu with Hide project + New worktree", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      const trigger = screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!;
+      await user.click(trigger);
+      expect(await screen.findByRole("menuitem", { name: /Hide project/i })).toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: /New worktree/i })).toBeInTheDocument();
+    });
+
+    it("clicking Hide project calls api.hideProject", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const spy = vi.spyOn(localApi, "hideProject");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
+      await user.click(await screen.findByRole("menuitem", { name: /Hide project/i }));
+      expect(spy).toHaveBeenCalledWith("proj-a");
+    });
+
+    it("a hidden project (and its worktrees) is filtered out of the sidebar", async () => {
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      // Another tab hides proj-a.
+      localApi.__test.emit({
+        type: "project:updated",
+        project: {
+          id: "proj-a",
+          name: "Proj A",
+          path: "/home/dev/proj-a",
+          prefix: "pa",
+          defaultBranch: "main",
+          createdAt: new Date().toISOString(),
+          hidden: true,
+        },
+      });
+      await waitFor(() => {
+        expect(screen.queryByText("Proj A")).toBeNull();
+      });
+      // Worktrees of the hidden project are gone too.
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+      // A different (visible) project remains.
+      expect(screen.getByText("Proj B")).toBeInTheDocument();
+    });
+  });
+
+  // ─── Scroll-to-selected on reopen ────────────────────────────────────────
+  describe("scroll-to-selected worktree", () => {
+    beforeEach(() => {
+      // jsdom doesn't implement scrollIntoView — provide a spy so the guarded
+      // call runs and we can assert on it.
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    it("snaps the active worktree into view when the sidebar transitions hidden→visible", async () => {
+      const localApi = createMockApi();
+      const { rerender } = render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} collapsed />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Pra"); // collapsed (not visible) — abbreviated label
+      (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+
+      // Reopen: collapsed → expanded (rising edge).
+      rerender(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await waitFor(() => {
+        expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+      });
+    });
+
+    it("does not scroll when there is no active worktree", async () => {
+      useWorkspaceStore.setState({ activeWorktreeId: null, activeProjectId: null });
+      const localApi = createMockApi();
+      const { rerender } = render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} collapsed />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Pra");
+      (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+      rerender(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      // Give the double-rAF a chance to (not) fire.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
     });
   });
 

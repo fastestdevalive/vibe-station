@@ -54,5 +54,11 @@ export interface ProjectRecord {
   prefix: string;
   defaultBranch: string;
   createdAt: string; // ISO8601
+  /**
+   * When true, the project (and all its worktrees) is hidden from the sidebar
+   * and dashboard. Absent / undefined ≡ visible. Visibility-only — never
+   * affects sessions, worktrees, or files. Unhide via Settings.
+   */
+  hidden?: boolean;
   worktrees: WorktreeRecord[];
 }

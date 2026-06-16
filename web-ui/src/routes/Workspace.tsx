@@ -74,20 +74,33 @@ export function Workspace() {
   useEffect(() => {
     if (!bundleLoaded) return;
     const s = useWorkspaceStore.getState();
-    const wtStillExists = s.activeWorktreeId && worktrees.some((w) => w.id === s.activeWorktreeId);
+    const activeWt = s.activeWorktreeId
+      ? worktrees.find((w) => w.id === s.activeWorktreeId)
+      : undefined;
+    const wtStillExists = !!activeWt;
+    // The active worktree's project may have been hidden (this tab, another tab,
+    // or via a deep-link to a hidden project's worktree — url-sync sets it active
+    // from the unfiltered list and has no hidden check, so the gate lives here).
+    const activeProjectHidden =
+      !!activeWt && projects.some((p) => p.id === activeWt.projectId && p.hidden);
     const sessStillExists =
       s.activeSessionId && sessions.some((ss) => ss.id === s.activeSessionId);
-    if (!wtStillExists) {
+    if (!wtStillExists || activeProjectHidden) {
       useWorkspaceStore.setState({
         activeProjectId: null,
         activeWorktreeId: null,
         activeSessionId: null,
         activeFilePath: null,
       });
+      // A hidden-project worktree is no longer browseable — leave the now-empty
+      // /worktree/:id route for the dashboard.
+      if (activeProjectHidden && location.pathname.startsWith("/worktree")) {
+        navigate("/", { replace: true });
+      }
     } else if (!sessStillExists) {
       useWorkspaceStore.setState({ activeSessionId: null });
     }
-  }, [bundleLoaded, worktrees, sessions]);
+  }, [bundleLoaded, worktrees, sessions, projects, location.pathname, navigate]);
 
   useEffect(() => {
     if (!isMobile && mobileSidebarOpen) {

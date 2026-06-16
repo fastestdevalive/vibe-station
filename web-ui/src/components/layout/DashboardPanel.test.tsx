@@ -88,4 +88,42 @@ describe("DashboardPanel", () => {
       );
     });
   });
+
+  it("excludes a hidden project's worktree cards and its project card", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    // proj-a's worktree wt-1 has agent sessions → a worktree card linking to it.
+    await waitFor(() => {
+      expect(document.querySelector('a[href="/worktree/wt-1"]')).not.toBeNull();
+    });
+
+    api.__test.emit({
+      type: "project:updated",
+      project: {
+        id: "proj-a",
+        name: "Proj A",
+        path: "/home/dev/proj-a",
+        prefix: "pa",
+        defaultBranch: "main",
+        createdAt: new Date().toISOString(),
+        hidden: true,
+      },
+    });
+
+    // The hidden project's worktree cards disappear.
+    await waitFor(() => {
+      expect(document.querySelector('a[href="/worktree/wt-1"]')).toBeNull();
+    });
+    // No "Proj A" trace remains anywhere on the dashboard (worktree cards or
+    // the projects section).
+    expect(screen.queryByText("Proj A")).toBeNull();
+    // A visible project's worktree (proj-b / wt-3) is unaffected.
+    expect(document.querySelector('a[href="/worktree/wt-3"]')).not.toBeNull();
+  });
 });
