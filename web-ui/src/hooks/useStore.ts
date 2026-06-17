@@ -40,7 +40,7 @@ export interface WorkspaceState {
   previewFontScale: number;
   terminalFontScale: number;
   leftSidebarCollapsed: boolean;
-  /** Hide worktrees whose sessions are all done or exited */
+  /** Hide worktrees whose agent sessions are all explicitly marked done (not exited) */
   hideInactiveWorktrees: boolean;
   mobileSidebarOpen: boolean;
   /** Transient attach state between openSession and session:opened */
