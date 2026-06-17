@@ -42,9 +42,14 @@ function disambiguatedAbbrev(
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
   const agents = sessions.filter((s) => s.type === "agent");
   if (agents.length === 0) return true;
+  // "Hide done" hides only worktrees the user explicitly marked done — NOT
+  // `exited`. Exited is involuntary (agent crashed, tmux pane died, or the
+  // tmux server was lost on reboot), and after a restart every session lands
+  // in `exited`. Folding it in here hid all previously-active worktrees behind
+  // a filter labelled "done", so keep exited visible.
   return agents.every((s) => {
     const st = live[s.id] ?? s.state;
-    return st === "done" || st === "exited";
+    return st === "done";
   });
 }
 
