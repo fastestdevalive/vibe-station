@@ -4,6 +4,7 @@ import {
   Columns2,
   PanelLeft,
   PanelRight,
+  Rows2,
   Search,
   SquareTerminal,
 } from "lucide-react";
@@ -60,6 +61,7 @@ export function TopBar({
     activeProjectId,
     activeWorktreeId,
     activeSessionId,
+    terminalPosition,
     toggleTerminalPosition,
     paneCollapsed,
     togglePaneCollapsed,
@@ -214,12 +216,12 @@ export function TopBar({
           {layoutMode === "workspace" ? (
             <button
               type="button"
-              className="icon-btn"
+              className="icon-btn icon-btn--active"
               aria-label="Toggle terminal pane layout"
               onClick={toggleTerminalPosition}
-              title="Terminal layout"
+              title={terminalPosition === "left" ? "Vertical split" : "Horizontal split"}
             >
-              <Columns2 size={18} />
+              {terminalPosition === "left" ? <Columns2 size={18} /> : <Rows2 size={18} />}
             </button>
           ) : null}
         </div>
