@@ -196,10 +196,30 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       }
     });
 
-    // Open session synchronously after fit. Daemon won't emit chunks
-    // until openSession lands.
-    markSessionAttachPending(activeSessionId);
-    void api.openSession(activeSessionId, term.cols, term.rows);
+    // Gated diagnostic logger for terminal sizing (squished-width
+    // investigation). Behind the existing input-debug gate so it never logs
+    // unless ?debugInput is enabled.
+    const logSize = (kind: "openSession" | "resize", cols: number, rows: number) => {
+      inputDebug?.log({ kind, cols, rows });
+    };
+
+    // Bug #4 (squished width): the FIRST openSession must NOT fire synchronously
+    // here. react-resizable-panels restores the saved per-worktree panel size
+    // AFTER mount, so a synchronous fit()+open sends the transient 33.4%-default
+    // (narrow) cols and the daemon bakes tmux/Claude history at the wrong width.
+    // Instead, the ResizeObserver below performs the initial open on its FIRST
+    // fire — which is the post-restore resize, the deterministic "layout
+    // settled" signal. The session:output subscription above is already wired
+    // synchronously, so the first replay chunk is still captured.
+    let initialOpenDone = false;
+    const doInitialOpen = () => {
+      if (initialOpenDone) return;
+      initialOpenDone = true;
+      // (fit() has already run in applySettledSize before this is called.)
+      markSessionAttachPending(activeSessionId);
+      logSize("openSession", term.cols, term.rows);
+      void api.openSession(activeSessionId, term.cols, term.rows);
+    };
 
     // Mobile vertical-swipe scrolling. In normal buffer it scrolls xterm's
     // scrollback; in alternate buffer (vim/htop/tmux copy-mode) it sends
@@ -218,43 +238,46 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       setAtBottom(b.viewportY >= b.length - term.rows);
     });
 
-    let roPendingRaf: number | null = null;
-    const ro = new ResizeObserver(() => {
-      if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
-      roPendingRaf = requestAnimationFrame(() => {
-        roPendingRaf = null;
-        if (!mounted) return;
-        try {
-          fit.fit();
-          void api.resizeSession(activeSessionId, term.cols, term.rows);
-          // Bug #2 (resize doubling): switching the workspace layout (e.g. to a
-          // vertical split) remounts the terminal — see Layout.tsx, the
-          // terminalPosition left/bottom branches are different React subtrees —
-          // and the remount's scrollback replay reflowed at an unstable width
-          // leaves duplicated rows on the canvas. Forcing a full redraw from the
-          // buffer after the fit settles clears those stale rows (the same thing
-          // a workspace-switch remount does, which is why it "self-heals").
-          // NOTE for reviewer: this is a render-level mitigation. The root fix is
-          // to stop the terminal remounting on a layout-position change (keep it
-          // in a stable React position). Evaluate whether that larger Layout
-          // change is worth doing instead of / in addition to this.
-          if (term.rows > 0) term.refresh(0, term.rows - 1);
-        } catch {
-          /* ignore */
-        }
-      });
-    });
-    ro.observe(host);
-
-    const handleWindowResize = () => {
+    // Bug #4 (squished width), part 2 — the ONGOING resize. Switching to a
+    // worktree whose layout differs (e.g. one that shows the file preview) makes
+    // the terminal's host width transiently COLLAPSE (~80px) while the panels
+    // re-lay-out. Firing fit()+resizeSession per frame ships that transient
+    // narrow width to the daemon → tmux/Claude reflow history to ~10 cols and
+    // bake it. So we settle-debounce: only act once the size has been STABLE
+    // for a beat, and never send an implausibly small width (the panel's
+    // minSize means a real terminal is never ~10 cols — small == transition
+    // artifact). The local terminal also only fits on settle, so it can't flash
+    // narrow either.
+    const MIN_COLS = 20;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const applySettledSize = () => {
+      settleTimer = null;
       if (!mounted) return;
       try {
         fit.fit();
-        void api.resizeSession(activeSessionId, term.cols, term.rows);
       } catch {
-        /* ignore */
+        return;
       }
+      if (term.cols < MIN_COLS) return; // transient narrow — don't tell the daemon
+      if (!initialOpenDone) {
+        doInitialOpen(); // first open, now at the settled width
+        return;
+      }
+      logSize("resize", term.cols, term.rows);
+      void api.resizeSession(activeSessionId, term.cols, term.rows);
+      // Bug #2 mitigation: force a full redraw to clear any reflow-duplicated
+      // rows left by a remount's replay.
+      if (term.rows > 0) term.refresh(0, term.rows - 1);
     };
+    const scheduleSettle = () => {
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      settleTimer = setTimeout(applySettledSize, 150);
+    };
+
+    const ro = new ResizeObserver(() => scheduleSettle());
+    ro.observe(host);
+
+    const handleWindowResize = () => scheduleSettle();
     window.addEventListener("resize", handleWindowResize);
 
     const d = term.onData((data) => {
@@ -272,6 +295,10 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       void api.sendKeystroke(activeSessionId, data);
     });
     const r = term.onResize(({ cols, rows }) => {
+      // Guard (squished-history): xterm fits can momentarily report a collapsed
+      // width during a remount; never forward a sub-20 width to the daemon —
+      // tmux's lossy scrollback reflow would bake history at that transient.
+      if (cols < MIN_COLS) return;
       void api.resizeSession(activeSessionId, cols, rows);
     });
 
@@ -286,7 +313,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       ro.disconnect();
       window.removeEventListener("resize", handleWindowResize);
       cleanupTouchScroll();
-      if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
+      if (settleTimer !== null) clearTimeout(settleTimer);
       void api.closeSession(activeSessionId);
       term.dispose();
       termRef.current = null;
@@ -306,7 +333,10 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     term.options.fontSize = Math.round(14 * terminalFontScale);
     term.clearTextureAtlas?.();
     fitRef.current?.fit();
-    if (activeSessionId) {
+    // Guard (squished-history): never ship a sub-20 width — on an activeSessionId
+    // toggle this effect runs while the host is mid-collapse, and tmux's lossy
+    // reflow bakes history at that transient. A real terminal is never this narrow.
+    if (activeSessionId && term.cols >= 20) {
       void api.resizeSession(activeSessionId, term.cols, term.rows);
     }
   }, [terminalFontScale, activeSessionId, api, mountTerminal]);
@@ -332,6 +362,9 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       ) {
         termRef.current.reset();
         markSessionAttachPending(activeSessionId);
+        // No width deferral needed here: this reconnect open reuses the
+        // already-fitted termRef.current.cols and runs after layout has settled
+        // (only the initial mount open races the panel-size restore — Bug #4).
         void api.openSession(activeSessionId, termRef.current.cols, termRef.current.rows);
       }
       if (s === "online") everOnline = true;
@@ -353,6 +386,8 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
       if (term) {
         term.reset();
         markSessionAttachPending(activeSessionId);
+        // Reuses the already-fitted term.cols and runs after layout settled, so
+        // no width deferral is needed (unlike the initial mount open — Bug #4).
         void api.openSession(activeSessionId, term.cols, term.rows);
       }
     } finally {

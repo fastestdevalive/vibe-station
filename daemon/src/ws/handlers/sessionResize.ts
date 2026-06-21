@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import { findSessionRecord } from "./sessionLookup.js";
+import { MIN_TMUX_COLS } from "../streams/tmuxOutput.js";
 
 /**
  * Resize the session's PTY to match the client viewport.
@@ -34,6 +35,14 @@ export function handleSessionResize(
   const entry = conn.openStreams.get(sessionId);
 
   if (session.useTmux) {
+    // Authoritative squished-history guard. tmux's scrollback reflow is lossy:
+    // an implausibly narrow width permanently mangles the pane's history and
+    // widening can't restore it (only a fresh attach can). A usable terminal is
+    // never this narrow, so any such value is a transient layout artifact (e.g.
+    // a remounting pane's host collapsing to ~0). Drop it here — the single
+    // chokepoint for BOTH the stream-resize and the no-stream resize-window
+    // paths below — so no client code path can ever bake the history.
+    if (cols < MIN_TMUX_COLS) return;
     if (entry) {
       try {
         entry.stream.resize(cols, rows, entry.subscriberId);
