@@ -37,14 +37,49 @@ import type { SessionStream } from "./sessionStream.js";
  * The subscriberId parameter is ignored because each TmuxOutputStream is owned by
  * one WSConnection, not shared across subscribers.
  */
+/**
+ * Module-level count of TmuxOutputStream instances with a LIVE attach PTY.
+ * Incremented when the attach PTY spawns, decremented when it is killed
+ * (detach / exit). This is the only reliable way to observe orphaned streams:
+ * the per-connection openStreams map is single-slot and can't see a stream that
+ * a re-open race overwrote, so a map-size count would read "1" while N PTYs
+ * leak. Diagnostic only (read behind the debug gate).
+ */
+let liveTmuxStreamCount = 0;
+
+/** Current number of TmuxOutputStream instances with a live attach PTY. */
+export function getLiveTmuxStreamCount(): number {
+  return liveTmuxStreamCount;
+}
+
+/**
+ * Minimum tmux window width we will ever apply. tmux scrollback reflow is lossy
+ * (a narrow width permanently mangles history; widening can't restore it), so a
+ * transient sub-this width from a layout remount must never reach the pane.
+ * Usable terminals are always wider than this — any narrower value is an
+ * artifact, not a real client size.
+ */
+export const MIN_TMUX_COLS = 20;
+
 export class TmuxOutputStream extends EventEmitter implements SessionStream {
   private tmuxName: string;
   private pty: IPty | null = null;
   private closed = false;
+  /** True while this instance is counted in liveTmuxStreamCount. Guards against
+   *  double-decrement when both onExit and detach() run for the same PTY. */
+  private counted = false;
 
   constructor(tmuxName: string) {
     super();
     this.tmuxName = tmuxName;
+  }
+
+  /** Decrement the live counter at most once for this instance. */
+  private uncount(): void {
+    if (this.counted) {
+      this.counted = false;
+      liveTmuxStreamCount--;
+    }
   }
 
   /**
@@ -57,6 +92,10 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
    * subscriberId: ignored (single-subscriber per instance)
    */
   async attach(cols: number, rows: number, subscriberId: string): Promise<void> {
+    // Never size the pane below a usable minimum on attach either (see
+    // resize()) — an implausibly narrow initial width would bake the replayed
+    // history narrow with no way back short of a restart.
+    cols = Math.max(cols, MIN_TMUX_COLS);
     try {
       // Pre-flight: confirm the tmux session exists. Without this check, a
       // missing/dead session causes `tmux attach-session` to print
@@ -111,6 +150,8 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
       });
 
       this.pty = pty;
+      this.counted = true;
+      liveTmuxStreamCount++;
 
       pty.onData((data: string) => {
         if (this.closed) return;
@@ -118,6 +159,7 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
       });
 
       pty.onExit(({ exitCode }) => {
+        this.uncount();
         if (this.closed) return;
         this.closed = true;
         // Exit code 0 from `tmux attach-session` is a clean detach (the
@@ -146,6 +188,13 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
 
   /** Resize the PTY (and through it, tmux's pane) to match the client. subscriberId ignored (single subscriber). */
   resize(cols: number, rows: number, _subscriberId?: string): void {
+    // Squished-history guard: tmux's scrollback reflow is LOSSY — once the
+    // window is shrunk to an implausibly narrow width it permanently wraps the
+    // pane's history, and widening back cannot restore it (only a fresh attach
+    // can). A usable terminal is never this narrow, so such a value is always a
+    // transient layout artifact from a remount/relayout — ignore it and keep
+    // the current (wider) size; the next real resize corrects it.
+    if (cols < MIN_TMUX_COLS) return;
     if (this.pty && !this.closed) {
       try {
         this.pty.resize(cols, rows);
@@ -179,6 +228,8 @@ export class TmuxOutputStream extends EventEmitter implements SessionStream {
   async detach(subscriberId: string): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+
+    this.uncount();
 
     if (this.pty) {
       try {

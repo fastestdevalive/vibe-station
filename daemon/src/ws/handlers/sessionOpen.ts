@@ -1,20 +1,34 @@
 import type { WSConnection } from "../connection.js";
 import type { OpenStreamEntry } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
-import { TmuxOutputStream } from "../streams/tmuxOutput.js";
+import { TmuxOutputStream, getLiveTmuxStreamCount } from "../streams/tmuxOutput.js";
 import { findSessionRecord } from "./sessionLookup.js";
 import { directPtyRegistry } from "../../state/directPtyRegistry.js";
 import type { SessionStream } from "../streams/sessionStream.js";
+import { appendDebug } from "../../debugLog.js";
 
-export async function handleSessionOpen(
+export function handleSessionOpen(
+  conn: WSConnection,
+  msg: Extract<ClientMessage, { type: "session:open" }>,
+): Promise<void> {
+  // Serialize the ENTIRE open (incl. the `await stream.attach` park-point) under
+  // this connection's per-session lock so a concurrent open#2 can't run while
+  // open#1 is parked on attach and overwrite the single-slot openStreams entry
+  // (which would orphan open#1's PTY but leave it live — the N-client leak).
+  return conn.withSessionLock(msg.sessionId, () => openSessionLocked(conn, msg));
+}
+
+async function openSessionLocked(
   conn: WSConnection,
   msg: Extract<ClientMessage, { type: "session:open" }>,
 ): Promise<void> {
   const { sessionId, cols, rows } = msg;
 
-  // If a stale stream is still registered (e.g. user clicked Resume after the
-  // tmux pane died — the FIFO close didn't unregister), tear it down so this
-  // open can attach to the freshly-spawned pane.
+  // Structural invariant: never create a 2nd attach while one is registered for
+  // this (conn, session). Detach any prior stream UNCONDITIONALLY before the new
+  // attach — this survives future async reordering and complements the lock.
+  // (Also covers the legitimate stale case: user clicked Resume after the tmux
+  // pane died and the FIFO close didn't unregister.)
   const stale = conn.openStreams.get(sessionId);
   if (stale) {
     try {
@@ -45,6 +59,18 @@ export async function handleSessionOpen(
     if (session.useTmux) {
       // Tmux mode: one PTY per connection
       stream = new TmuxOutputStream(session.tmuxName);
+      if (conn.debugInput) {
+        appendDebug({
+          src: "daemon",
+          conn: conn.id,
+          kind: "stream:create",
+          sessionId,
+          tmuxName: session.tmuxName,
+          cols,
+          rows,
+          liveTmuxStreams: getLiveTmuxStreamCount(),
+        });
+      }
     } else {
       // Direct-pty mode: shared stream from registry
       const existing = directPtyRegistry.get(sessionId);
@@ -107,8 +133,21 @@ export async function handleSessionOpen(
       }
     });
 
-    // Start attachment
+    // Start attachment. The lock is held across this await, so the attach
+    // park-point is inside the critical section.
     await stream.attach(cols, rows, subscriberId);
+
+    if (conn.debugInput) {
+      appendDebug({
+        src: "daemon",
+        conn: conn.id,
+        kind: "stream:attached",
+        sessionId,
+        cols,
+        rows,
+        liveTmuxStreams: getLiveTmuxStreamCount(),
+      });
+    }
   } catch (err) {
     conn.send({
       type: "session:error",

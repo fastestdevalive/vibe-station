@@ -22,6 +22,18 @@ export type OpenStreamEntry = {
 export class WSConnection {
   private subscriptions: Set<string> = new Set();
   openStreams: Map<string, OpenStreamEntry> = new Map(); // sessionId -> OpenStreamEntry (public for handlers)
+  /**
+   * Per-(conn, sessionId) async lock (a promise chain). Serializes
+   * session:open / session:close for the SAME session on THIS connection so an
+   * open#2 can't run while open#1 is parked on `await stream.attach` and
+   * overwrite the single-slot openStreams entry — which orphans open#1's tmux
+   * PTY but leaves it live (the N-client echo leak).
+   *
+   * Scoped to this connection only: two browsers are two WSConnections and
+   * legitimately hold two tmux clients, so this lock must never serialize
+   * across connections or across tmux names.
+   */
+  private sessionLocks: Map<string, Promise<void>> = new Map(); // sessionId -> tail of chain
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   readonly id: string; // Unique identifier for this connection
@@ -83,6 +95,32 @@ export class WSConnection {
    */
   isSubscribedTo(sessionId: string): boolean {
     return this.subscriptions.has(sessionId);
+  }
+
+  /**
+   * Run `fn` under this connection's per-session lock, serializing it against
+   * any other open/close for the same sessionId on this connection. The
+   * critical section spans the entire `fn` — callers must keep the
+   * `await stream.attach(...)` park-point inside `fn` so a concurrent open can't
+   * interleave during the attach.
+   */
+  withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sessionLocks.get(sessionId) ?? Promise.resolve();
+    // Run fn only after the prior op for this session settles (success or not).
+    const run = prev.then(fn, fn);
+    // Advance the chain tail; swallow rejections so a failed op doesn't poison
+    // the chain for the next waiter. Clean up the map entry when we're the tail.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.sessionLocks.set(sessionId, tail);
+    void tail.finally(() => {
+      if (this.sessionLocks.get(sessionId) === tail) {
+        this.sessionLocks.delete(sessionId);
+      }
+    });
+    return run;
   }
 
   /**

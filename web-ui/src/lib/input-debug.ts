@@ -27,6 +27,9 @@ export function isInputDebugEnabled(): boolean {
     const q = new URLSearchParams(window.location.search).get("debugInput");
     if (q === "1") localStorage.setItem(STORAGE_KEY, "1");
     else if (q === "0") localStorage.setItem(STORAGE_KEY, "0");
+    // Default OFF (opt-in). Enable per-browser with ?debugInput=1 to capture a
+    // recurrence; this gates both the input logging and the daemon-side terminal
+    // diagnostics (sizes, stream create/detach, live tmux-attach count).
     return localStorage.getItem(STORAGE_KEY) === "1";
   } catch {
     return false;
