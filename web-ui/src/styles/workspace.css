@@ -1574,7 +1574,7 @@
 .terminal-wrap {
   flex: 1;
   min-height: 0;
-  padding: var(--space-2);
+  padding: 0;
   background: var(--bg-primary);
   overflow: hidden;
   display: flex;
@@ -1587,6 +1587,16 @@
   min-height: 0;
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+/* xterm renders an integer number of rows, so its root `.xterm` element (which
+ * has no intrinsic height and sizes to the screen) ends up to one line shorter
+ * than the flex-filled host — leaving a gap at the bottom. Force it to fill the
+ * host: `.xterm-viewport` is absolutely positioned (top/bottom:0) and carries
+ * the terminal background, so it then stretches to cover the sub-row leftover
+ * and the gap disappears. */
+.terminal-host .xterm {
+  height: 100%;
 }
 
 .terminal-resume-banner {
