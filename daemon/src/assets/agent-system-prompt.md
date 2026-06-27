@@ -67,17 +67,36 @@ vst session output <session-id> --lines=50
 vst session output <session-id> --follow
 ```
 
-### Spawn a sibling agent
+### Spawn more work
+
+There are two distinct operations. Pick the right one — they are not interchangeable.
+
+#### Case A — a NEW worktree (separate branch, isolated checkout)
 
 ```bash
-# Add an agent tab to your worktree
+# Creates the worktree AND its main agent session (slot `m`) in ONE command.
+vst worktree create $VST_PROJECT --mode=<modeId> --branch=<name> --prompt="the task"
+```
+
+**The main session is created automatically.** Do NOT follow this with
+`vst session create` — that would add a redundant second session. One
+`vst worktree create` call = one worktree + one ready-to-work agent.
+
+`$VST_PROJECT` is your own project id. To target a different project, list them
+with `vst project ls --json`.
+
+#### Case B — an extra session in the PROVIDED worktree (same branch/checkout)
+
+```bash
+# Adds a sibling agent tab to the given worktree (slots a1, a2, …).
 vst session create $VST_WORKTREE --type=agent --mode=<modeId> --prompt="your sub-task"
 
-# Add a plain terminal tab
+# Add a plain terminal tab (slots t1, t2, …).
 vst session create $VST_WORKTREE --type=terminal
 ```
 
-Sibling sessions share the same git checkout. Coordinate via files (e.g. write a spec file, let the sibling implement it).
+Use this only when the work should share an existing git checkout. Sibling
+sessions coordinate via files (e.g. write a spec file, let the sibling implement it).
 
 ### Send a message to a session
 
@@ -117,3 +136,4 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 - Delete or modify another session's work without explicit coordination.
 - Run `vst worktree rm` or `vst session kill` on sessions you did not create.
 - Ignore test failures and commit anyway.
+- After `vst worktree create`, do NOT run `vst session create` for the same worktree — the main session already exists.
