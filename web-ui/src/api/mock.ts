@@ -474,6 +474,10 @@ export function createMockApi() {
     // Diagnostic channel (mobile double-text investigation) — no-op in the mock.
     async sendDebug(): Promise<void> {},
 
+    async getFileBlob(_worktreeId: string, _filePath: string): Promise<Blob> {
+      return new Blob([], { type: "image/png" });
+    },
+
     async getFile(worktreeId: string, filePath: string): Promise<string> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (filePath === "HUGE.bin") {

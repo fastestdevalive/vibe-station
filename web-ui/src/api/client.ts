@@ -343,6 +343,14 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+    async getFileBlob(worktreeId: string, filePath: string): Promise<Blob> {
+      const path = filePath.replace(/^\/+/, "");
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
+      if (!res.ok) throw new ApiError("Failed to fetch file", res.status);
+      return res.blob();
+    },
+
     async getFile(worktreeId: string, filePath: string): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const root = baseUrl();
