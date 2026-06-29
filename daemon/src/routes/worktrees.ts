@@ -25,6 +25,15 @@ import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
 
 const MAX_DIFF_BYTES = 512 * 1024;
 
+const IMAGE_MIME: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
 /**
  * Resolve a user-supplied relative path against a worktree root and assert it
  * stays inside the root. Throws a 403-friendly error on traversal attempts.
@@ -646,6 +655,17 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
       // Read as buffer to detect binary
       const buf = await readFile(absPath);
+
+      // Serve image files directly with the correct MIME type — skip the
+      // binary/UTF-8 path entirely so bytes aren't mangled.
+      const ext = absPath.split(".").pop()?.toLowerCase() ?? "";
+      const imageMime = IMAGE_MIME[ext];
+      if (imageMime) {
+        return reply
+          .header("Cache-Control", "private, max-age=60")
+          .header("Content-Type", imageMime)
+          .send(buf);
+      }
 
       // Binary detection: look for null bytes in first 8KB
       const sampleSize = Math.min(buf.length, 8192);

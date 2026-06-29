@@ -307,7 +307,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           {segments.map((seg, i) =>
             seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} />
+              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} filePath={path} />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={themeMode} />
             ),
