@@ -57,6 +57,21 @@ async function saveModes(modes: Mode[]): Promise<void> {
   modesCache = modes;
 }
 
+/**
+ * Resolve a modeId that may be either an `id` or a `name` to the canonical
+ * mode `id`. Accepts either so that CLI callers using `--mode claude-plan-hard`
+ * work the same as callers using the opaque id string.
+ * Throws if no match is found.
+ */
+export async function resolveModeId(input: string): Promise<string> {
+  const modes = await loadModes();
+  const byId = modes.find((m) => m.id === input);
+  if (byId) return byId.id;
+  const byName = modes.find((m) => m.name === input);
+  if (byName) return byName.id;
+  throw new Error(`Mode '${input}' not found`);
+}
+
 export function _resetModesCacheForTest(): void {
   modesCache = null;
 }

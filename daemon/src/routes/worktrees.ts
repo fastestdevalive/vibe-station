@@ -235,8 +235,17 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { projectId, branch, baseBranch: baseBranchInput, modeId, useTmux: rawUseTmux } = result.data;
+    const { projectId, branch, baseBranch: baseBranchInput, useTmux: rawUseTmux } = result.data;
+    let { modeId } = result.data;
     const useTmux = resolveUseTmux(rawUseTmux);
+
+    // Resolve modeId by name fallback so CLI callers using --mode <name> work.
+    try {
+      const { resolveModeId } = await import("../routes/modes.js");
+      modeId = await resolveModeId(modeId);
+    } catch {
+      return reply.status(400).send({ error: `Mode '${modeId}' not found` });
+    }
 
     const project = getProject(projectId);
     if (!project) return reply.status(404).send({ error: `Project '${projectId}' not found` });
