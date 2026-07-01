@@ -178,11 +178,22 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { worktreeId, type, modeId, prompt, useTmux: rawUseTmux } = result.data;
+    const { worktreeId, type, prompt, useTmux: rawUseTmux } = result.data;
+    let { modeId } = result.data;
     const useTmux = resolveUseTmux(rawUseTmux);
 
     if (type === "agent" && !modeId) {
       return reply.status(400).send({ error: "'modeId' is required for agent sessions" });
+    }
+
+    // Resolve modeId by name fallback so CLI callers using --mode <name> work.
+    if (type === "agent" && modeId) {
+      try {
+        const { resolveModeId } = await import("../routes/modes.js");
+        modeId = await resolveModeId(modeId);
+      } catch {
+        return reply.status(400).send({ error: `Mode '${modeId}' not found` });
+      }
     }
 
     const ctx = findWorktreeContext(worktreeId);
