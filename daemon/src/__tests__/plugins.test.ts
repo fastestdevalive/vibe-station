@@ -91,6 +91,13 @@ describe("Agent plugins", () => {
       expect(cmd[0]).toBe("claude");
     });
 
+    it("listModels() includes the fable alias and full name", async () => {
+      const { resolvePlugin } = await import("../agent-plugins/registry.js");
+      const { models } = await resolvePlugin("claude").listModels();
+      expect(models).toContain("fable");
+      expect(models).toContain("claude-fable-5");
+    });
+
     it("T10.6 — composeLaunchPrompt with both system + task: useShell=true, shellLine contains --dangerously-skip-permissions, $(cat ...), task; postLaunchInput is undefined", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
       const plugin = resolvePlugin("claude");
