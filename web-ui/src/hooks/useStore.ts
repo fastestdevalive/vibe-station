@@ -61,6 +61,8 @@ export interface WorkspaceState {
   lastTerminalByWorktree: Record<string, string>;
   diffScopeByWorktree: Record<string, DiffScope>;
   previewFontScale: number;
+  /** Whether the Files tool shows its file-tree column (persisted, view pref). */
+  fileTreeVisible: boolean;
   terminalFontScale: number;
   leftSidebarCollapsed: boolean;
   /** Hide worktrees whose agent sessions are all explicitly marked done (not exited) */
@@ -86,6 +88,8 @@ export interface WorkspaceState {
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   bumpPreviewFont: (delta: number) => void;
+  /** Show/hide the Files tool's file-tree column. */
+  toggleFileTree: () => void;
   bumpTerminalFont: (delta: number) => void;
   toggleLeftSidebarCollapsed: () => void;
   setMobileSidebarOpen: (open: boolean) => void;
@@ -114,6 +118,7 @@ const initial = {
   lastTerminalByWorktree: {} as Record<string, string>,
   diffScopeByWorktree: {} as Record<string, DiffScope>,
   previewFontScale: 1,
+  fileTreeVisible: true,
   terminalFontScale: 1,
   leftSidebarCollapsed: false,
   hideInactiveWorktrees: false,
@@ -248,6 +253,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             previewFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.previewFontScale + delta) * 100) / 100)),
           })),
+        toggleFileTree: () => set((s) => ({ fileTreeVisible: !s.fileTreeVisible })),
         bumpTerminalFont: (delta) =>
           set((s) => ({
             terminalFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.terminalFontScale + delta) * 100) / 100)),
@@ -425,6 +431,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lastTerminalByWorktree: s.lastTerminalByWorktree,
         diffScopeByWorktree: s.diffScopeByWorktree,
         previewFontScale: s.previewFontScale,
+        fileTreeVisible: s.fileTreeVisible,
         terminalFontScale: s.terminalFontScale,
         leftSidebarCollapsed: s.leftSidebarCollapsed,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
