@@ -314,6 +314,14 @@ export function createClientApi() {
       return parseJson<Session>(res);
     },
 
+    /** Default name the next terminal in this worktree would get ("Terminal N"). */
+    async nextTerminalName(worktreeId: string): Promise<string> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/next-terminal-name`);
+      const { name } = await parseJson<{ name: string }>(res);
+      return name;
+    },
+
     async deleteSession(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}`, {

@@ -123,9 +123,17 @@ async function main() {
   const token = randomBytes(32).toString("hex");
   await writeConfig(port, token);
 
-  console.log(`Browser token: ${token.slice(0, 8)}...  (full token in ${CONFIG_PATH})`);
+  // Dev escape hatch: VST_NO_AUTH=1 disables the auth guard so the web UI loads
+  // with no login (e.g. behind Tailscale on a trusted tailnet). The token is
+  // still written to config.json so the CLI keeps working either way.
+  const noAuth = process.env.VST_NO_AUTH === "1" || process.env.VST_NO_AUTH === "true";
+  if (noAuth) {
+    console.warn("⚠  VST_NO_AUTH set — authentication is DISABLED. Do not expose this daemon to untrusted networks.");
+  } else {
+    console.log(`Browser token: ${token.slice(0, 8)}...  (full token in ${CONFIG_PATH})`);
+  }
 
-  const app = await buildServer({ port, logger: true, token });
+  const app = await buildServer({ port, logger: true, token, noAuth });
 
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();

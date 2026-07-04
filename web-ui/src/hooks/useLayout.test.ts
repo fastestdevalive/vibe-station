@@ -13,40 +13,48 @@ describe("useLayout", () => {
       layoutByWorktree: {},
       activeWorktreeId: WT_ID,
       activeSessionId: null,
+      activeTerminalSessionId: null,
       activeProjectId: null,
     });
   });
 
-  it("exposes pane visibility flags", () => {
+  it("exposes region flags from defaults", () => {
     const { result } = renderHook(() => useLayout());
-    expect(result.current.treePaneVisible).toBe(false);
-    expect(result.current.previewPaneVisible).toBe(false);
-    expect(result.current.terminalPaneVisible).toBe(true);
+    expect(result.current.toolPanelVisible).toBe(DEFAULT_WORKTREE_LAYOUT.toolPanelVisible);
+    expect(result.current.toolPanelTab).toBe(DEFAULT_WORKTREE_LAYOUT.toolPanelTab);
+    expect(result.current.terminalDockVisible).toBe(DEFAULT_WORKTREE_LAYOUT.terminalDockVisible);
   });
 
-  it("toggleSidebar flips file tree pane", () => {
-    act(() => useWorkspaceStore.getState().toggleSidebar());
+  it("toggleToolPanel flips tool panel visibility", () => {
+    act(() => useWorkspaceStore.getState().toggleToolPanel());
     const layout = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
-    expect(layout.paneCollapsed[0]).toBe(false);
-    act(() => useWorkspaceStore.getState().toggleSidebar());
+    expect(layout.toolPanelVisible).toBe(!DEFAULT_WORKTREE_LAYOUT.toolPanelVisible);
+    act(() => useWorkspaceStore.getState().toggleToolPanel());
     const layout2 = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
-    expect(layout2.paneCollapsed[0]).toBe(true);
+    expect(layout2.toolPanelVisible).toBe(DEFAULT_WORKTREE_LAYOUT.toolPanelVisible);
   });
 
-  it("persists paneCollapsed in layoutByWorktree", () => {
-    act(() => useWorkspaceStore.getState().togglePaneCollapsed(1));
+  it("setToolPanelTab selects a tab and makes the panel visible", () => {
+    act(() => useWorkspaceStore.getState().toggleToolPanel()); // hide
+    act(() => useWorkspaceStore.getState().setToolPanelTab("devices"));
+    const layout = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
+    expect(layout.toolPanelTab).toBe("devices");
+    expect(layout.toolPanelVisible).toBe(true);
+  });
+
+  it("persists layoutByWorktree", () => {
+    act(() => useWorkspaceStore.getState().setToolPanelTab("artifacts"));
     const raw = localStorage.getItem("vibestation:workspace");
     expect(raw).toBeTruthy();
-    const parsed = JSON.parse(raw!) as { state?: { layoutByWorktree?: Record<string, { paneCollapsed?: boolean[] }> } };
-    expect(parsed.state?.layoutByWorktree?.[WT_ID]?.paneCollapsed?.[1]).toBe(false);
+    const parsed = JSON.parse(raw!) as {
+      state?: { layoutByWorktree?: Record<string, { toolPanelTab?: string }> };
+    };
+    expect(parsed.state?.layoutByWorktree?.[WT_ID]?.toolPanelTab).toBe("artifacts");
   });
 
-  it("does not hide last visible workspace pane", () => {
-    useWorkspaceStore.setState({
-      layoutByWorktree: { [WT_ID]: { ...DEFAULT_WORKTREE_LAYOUT, paneCollapsed: [true, true, false] } },
-    });
-    act(() => useWorkspaceStore.getState().togglePaneCollapsed(2));
+  it("toggleTerminalDock flips the bottom dock", () => {
+    act(() => useWorkspaceStore.getState().toggleTerminalDock());
     const layout = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
-    expect(layout.paneCollapsed).toEqual([true, true, false]);
+    expect(layout.terminalDockVisible).toBe(!DEFAULT_WORKTREE_LAYOUT.terminalDockVisible);
   });
 });

@@ -68,12 +68,12 @@ describe("TerminalPane", () => {
       sessionStates: { "sess-main": "not_started" },
       sessionAttachState: {},
     });
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
   });
 
   it("resume banner hidden when state !== exited", () => {
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     expect(screen.queryByText(/Session exited/i)).toBeNull();
   });
 
@@ -81,7 +81,7 @@ describe("TerminalPane", () => {
     useWorkspaceStore.setState({
       sessionStates: { "sess-main": "exited" },
     });
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     expect(screen.getByText(/Session exited/i)).toBeInTheDocument();
   });
 
@@ -91,7 +91,7 @@ describe("TerminalPane", () => {
     useWorkspaceStore.setState({
       sessionStates: { "sess-main": "exited" },
     });
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     await user.click(screen.getByRole("button", { name: /Resume/i }));
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith("sess-main");
@@ -109,7 +109,7 @@ describe("TerminalPane", () => {
     useWorkspaceStore.setState({
       sessionStates: { "sess-main": "exited" },
     });
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     await user.click(screen.getByRole("button", { name: /Resume/i }));
     await waitFor(() => {
       expect(screen.queryByRole("button", { name: /Resume/i })).toBeNull();
@@ -139,7 +139,7 @@ describe("TerminalPane", () => {
   it("opens session on mount and closes on unmount", async () => {
     const open = vi.spyOn(api, "openSession");
     const close = vi.spyOn(api, "closeSession");
-    const { unmount } = render(<TerminalPane api={api} />);
+    const { unmount } = render(<TerminalPane api={api} sessionId="sess-main" />);
     // fonts.ready resolves synchronously in jsdom (undefined), so the settle
     // timer (100ms) fires and openSession is called.
     await waitFor(
@@ -152,7 +152,7 @@ describe("TerminalPane", () => {
 
   it("writes terminal output chunks", async () => {
     const open = vi.spyOn(api, "openSession");
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     // Wait for the terminal to be constructed and subscription installed
     // before emitting — chunks arriving before the terminal exists have
     // nowhere to land (production daemon doesn't emit until openSession).
@@ -166,7 +166,7 @@ describe("TerminalPane", () => {
     const open = vi.spyOn(api, "openSession");
     const resizeSpy = vi.spyOn(api, "resizeSession");
 
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
 
     // Wait for the terminal to be constructed (dynamic import + fonts.ready)
     // before mutating the store — the font-scale effect short-circuits when
@@ -190,7 +190,7 @@ describe("TerminalPane", () => {
 
   it("ResizeObserver triggers fit and resizeSession", async () => {
     const resizeSpy = vi.spyOn(api, "resizeSession");
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
 
     // Trigger the ResizeObserver callback
     await act(async () => {
@@ -213,7 +213,7 @@ describe("TerminalPane", () => {
       sessionStates: { "sess-main": "working" },
       sessionAttachState: { "sess-main": "pending" },
     });
-    render(<TerminalPane api={api} />);
+    render(<TerminalPane api={api} sessionId="sess-main" />);
     expect(screen.getByRole("status", { name: /starting|reconnecting/i })).toBeInTheDocument();
   });
 
@@ -225,7 +225,7 @@ describe("TerminalPane", () => {
       sessionStates: { "sess-main": "working" },
       sessionAttachState: { "sess-main": "pending" },
     });
-    const { rerender } = render(<TerminalPane api={api} />);
+    const { rerender } = render(<TerminalPane api={api} sessionId="sess-main" />);
 
     // Initially shows spawning placeholder
     expect(screen.getByRole("status", { name: /starting|reconnecting/i })).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe("TerminalPane", () => {
       useWorkspaceStore.setState({
         sessionAttachState: { "sess-main": "attached" },
       });
-      rerender(<TerminalPane api={api} />);
+      rerender(<TerminalPane api={api} sessionId="sess-main" />);
     });
 
     // After attach completes, spawning placeholder should be gone

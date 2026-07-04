@@ -7,6 +7,7 @@ import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
 import { NewModeDialog } from "./NewModeDialog";
+import { InitialArtifactsField } from "./InitialArtifactsField";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -233,6 +234,7 @@ export function NewSessionDialog({
         value={initialPrompt}
         onChange={(e) => setInitialPrompt(e.target.value)}
       />
+      <InitialArtifactsField />
       <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <input
           type="checkbox"

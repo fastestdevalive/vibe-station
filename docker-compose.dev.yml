@@ -23,6 +23,11 @@ services:
     environment:
       HOME: /home/vst
       # Vite proxy already points to 127.0.0.1:7421 — no change needed
+      # Dev sandbox: disable daemon auth (no login screen) and let Vite accept
+      # any Host header so Tailscale / LAN access works. Sandbox-only — do not
+      # mirror these onto a network-exposed production daemon.
+      VST_NO_AUTH: "1"
+      VITE_DEV_ALLOW_ALL_HOSTS: "1"
     volumes:
       # Mount CLI binaries read-only so the daemon can shell out to them.
       # Paths use $HOME — override with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN if yours differ.
