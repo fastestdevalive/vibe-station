@@ -2,9 +2,9 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 /**
- * Fullscreen toggle for a tool panel. Each tool (Files / Devices / Artifacts)
- * owns its own copy in its top bar, so fullscreen reads as a control of that
- * tool rather than of the tool-selector strip.
+ * Fullscreen toggle for the tool panel. Rendered once on the shared
+ * Files / Devices / Artifacts selector bar — fullscreen acts on the whole
+ * panel (whichever tool is shown), so it's a panel-level control.
  */
 export function ToolFullscreenButton() {
   const fullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
@@ -13,7 +13,7 @@ export function ToolFullscreenButton() {
   return (
     <button
       type="button"
-      className={`tab tab--icon tool-fs-btn${active ? " tab--fs-active" : ""}`}
+      className={`tab tab--icon tool-bar-btn${active ? " tab--fs-active" : ""}`}
       aria-label={active ? "Exit fullscreen" : "Fullscreen"}
       aria-pressed={active}
       title={active ? "Exit fullscreen" : "Fullscreen"}

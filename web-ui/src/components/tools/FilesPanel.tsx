@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { FileText, FolderTree, Minus, Plus, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
@@ -9,8 +8,6 @@ import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 interface FilesPanelProps {
   api: ApiInstance;
   worktreeId: string | null;
-  /** Active agent session — drives the preview. */
-  sessionId: string | null;
 }
 
 /** Last path segment — the file name shown on the tab. */
@@ -26,15 +23,16 @@ function baseName(path: string): string {
  * time), and the panel controls (zoom / fullscreen / close). The tree column is
  * collapsible via the toggle.
  */
-export function FilesPanel({ api, worktreeId, sessionId }: FilesPanelProps) {
+export function FilesPanel({ api, worktreeId }: FilesPanelProps) {
   const wt = worktreeId ?? "__none__";
-  const [treeVisible, setTreeVisible] = useState(true);
 
+  const treeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
+  const toggleFileTree = useWorkspaceStore((s) => s.toggleFileTree);
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
 
-  const preview = <FilePreviewPane api={api} sessionId={sessionId} worktreeId={worktreeId} />;
+  const preview = <FilePreviewPane api={api} worktreeId={worktreeId} />;
 
   return (
     <div className="files-panel">
@@ -45,19 +43,15 @@ export function FilesPanel({ api, worktreeId, sessionId }: FilesPanelProps) {
           aria-label={treeVisible ? "Hide file tree" : "Show file tree"}
           aria-pressed={treeVisible}
           title={treeVisible ? "Hide file tree" : "Show file tree"}
-          onClick={() => setTreeVisible((v) => !v)}
+          onClick={() => toggleFileTree()}
         >
           <FolderTree size={15} />
         </button>
-        <div className="files-topbar__tabs" role="tablist" aria-label="Open files">
+        {/* Open-file tabs. Only one file is open at a time today, so this is a
+            single chip; ARIA tab roles are deferred until real multi-tab lands. */}
+        <div className="files-topbar__tabs">
           {activeFilePath ? (
-            <span
-              className="files-topbar__tab"
-              role="tab"
-              aria-selected
-              data-active
-              title={activeFilePath}
-            >
+            <span className="files-topbar__tab" data-active title={activeFilePath}>
               <FileText size={13} aria-hidden />
               <span className="files-topbar__tab-name">{baseName(activeFilePath)}</span>
               <button
@@ -65,10 +59,7 @@ export function FilesPanel({ api, worktreeId, sessionId }: FilesPanelProps) {
                 className="files-topbar__tab-close"
                 aria-label={`Close ${baseName(activeFilePath)}`}
                 title="Close file"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setActiveFile(null);
-                }}
+                onClick={() => setActiveFile(null)}
               >
                 <X size={12} />
               </button>
