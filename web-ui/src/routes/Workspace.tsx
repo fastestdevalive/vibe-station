@@ -6,8 +6,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { TerminalPane } from "@/components/layout/TerminalPane";
-import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
-import { FileTreeSidebar } from "@/components/layout/FileTreeSidebar";
+import { ToolPanel } from "@/components/layout/ToolPanel";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -110,14 +109,25 @@ export function Workspace() {
 
   const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : 220;
 
+  const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
   const activeSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
     : undefined;
+  const activeTerminalSession = activeTerminalSessionId
+    ? sessions.find((s) => s.id === activeTerminalSessionId)
+    : undefined;
 
-  const terminalColumn = (
+  const agentPane = (
     <div className="pane-stack">
-      <TabsStrip api={api} worktreeId={activeWorktreeId} />
-      <TerminalPane api={api} activeSession={activeSession} />
+      <TabsStrip api={api} worktreeId={activeWorktreeId} kind="agent" />
+      <TerminalPane api={api} sessionId={activeSessionId} session={activeSession} />
+    </div>
+  );
+
+  const terminalDock = (
+    <div className="pane-stack">
+      <TabsStrip api={api} worktreeId={activeWorktreeId} kind="terminal" />
+      <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} />
     </div>
   );
 
@@ -167,11 +177,11 @@ export function Workspace() {
         {...(isFullWidthPane
           ? {}
           : {
-              terminalPane: terminalColumn,
-              previewPane: (
-                <FilePreviewPane api={api} sessionId={activeSessionId} worktreeId={activeWorktreeId} />
+              agentPane,
+              toolPanel: (
+                <ToolPanel api={api} worktreeId={activeWorktreeId} sessionId={activeSessionId} />
               ),
-              fileTree: <FileTreeSidebar api={api} />,
+              terminalDock,
             })}
       />
     </div>

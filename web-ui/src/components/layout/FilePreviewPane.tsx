@@ -1,4 +1,3 @@
-import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope } from "@/api/types";
@@ -28,10 +27,6 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   );
   const scope: DiffScope = scopeFromStore ?? "none";
   const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
-  const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
-  const togglePaneCollapsed = useWorkspaceStore((s) => s.togglePaneCollapsed);
-  const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
-  const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
 
   const { theme } = useTheme();
   const themeMode = theme;
@@ -167,34 +162,9 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     return summarizeDiffLines(hunks);
   }, [scope, diffBody, fileBody]);
 
-  const previewFullscreenBtn = (
-    <div className="preview-header__fs">
-      <button
-        type="button"
-        className={`tab tab--icon${workspacePaneFullscreen === "preview" ? " tab--fs-active" : ""}`}
-        aria-label={workspacePaneFullscreen === "preview" ? "Exit fullscreen preview" : "Fullscreen preview"}
-        aria-pressed={workspacePaneFullscreen === "preview"}
-        title={workspacePaneFullscreen === "preview" ? "Exit fullscreen preview" : "Fullscreen preview"}
-        onClick={() =>
-          setWorkspacePaneFullscreen(workspacePaneFullscreen === "preview" ? null : "preview")
-        }
-      >
-        {workspacePaneFullscreen === "preview" ? (
-          <Minimize2 size={13} strokeWidth={2} aria-hidden />
-        ) : (
-          <Maximize2 size={13} strokeWidth={2} aria-hidden />
-        )}
-      </button>
-    </div>
-  );
-
   if (!worktreeId) {
     return (
       <div className="pane pane-stack">
-        <div className="preview-header">
-          <span className="preview-header__title">Overview</span>
-          {previewFullscreenBtn}
-        </div>
         <div className="preview-body" style={{ padding: 0 }}>
           <DashboardPanel api={api} />
         </div>
@@ -206,74 +176,35 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
     fontSize: `calc(var(--font-size-base) * ${previewFontScale})`,
   };
 
-  const closeBtn = (
-    <button
-      type="button"
-      className="tab tab--icon"
-      aria-label="Close preview"
-      title="Close preview (⌘⇧P)"
-      onClick={() => togglePaneCollapsed(1)}
-    >
-      <X size={13} />
-    </button>
-  );
-
-  const zoomControls = (
-    <div className="preview-header__zoom">
-      <span className="preview-header__zoom-label">Aa</span>
-      <button type="button" className="tab tab--icon" aria-label="Decrease preview font" onClick={() => bumpPreviewFont(-0.05)}>
-        <Minus size={11} />
-      </button>
-      <button type="button" className="tab tab--icon" aria-label="Increase preview font" onClick={() => bumpPreviewFont(0.05)}>
-        <Plus size={11} />
-      </button>
-    </div>
-  );
-
   if (!path) {
     return (
       <div className="pane pane-stack">
-        <div className="preview-header">
-          <span className="preview-header__title">Preview</span>
-          {zoomControls}
-          <div className="preview-header__tail">
-            {previewFullscreenBtn}
-            {closeBtn}
-          </div>
-        </div>
         <div className="empty-state">Select a file from the tree</div>
       </div>
     );
   }
 
-  const header = (
-    <div className="preview-header">
-      <div className="preview-header__main">
-        <span className="preview-header__path">{path}</span>
-        {(scope === "local" || scope === "branch") && diffStats ? (
-          <span className="preview-header__diff-stats" aria-label="Diff line counts">
+  // Slim, content-scoped strip shown only in diff mode — line counts + which
+  // baseline. File name + panel controls now live on the Files bar above.
+  const diffInfo =
+    scope === "local" || scope === "branch" ? (
+      <div className="preview-diffinfo">
+        {diffStats ? (
+          <span className="preview-diffinfo__stats" aria-label="Diff line counts">
             <span className="preview-header__diff-stats-plus">+{diffStats.additions}</span>{" "}
             <span className="preview-header__diff-stats-minus">−{diffStats.deletions}</span>
           </span>
         ) : null}
-        {scope === "local" || scope === "branch" ? (
-          <span className="preview-header__diff-scope">
-            {scope === "branch" ? "Compared to fork base" : "Compared to HEAD"}
-          </span>
-        ) : null}
+        <span className="preview-diffinfo__scope">
+          {scope === "branch" ? "Compared to fork base" : "Compared to HEAD"}
+        </span>
       </div>
-      {zoomControls}
-      <div className="preview-header__tail">
-        {previewFullscreenBtn}
-        {closeBtn}
-      </div>
-    </div>
-  );
+    ) : null;
 
   if (tooLarge) {
     return (
       <div className="pane pane-stack">
-        {header}
+        {diffInfo}
         <div className="empty-state">File too large to preview</div>
       </div>
     );
@@ -282,7 +213,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
   if (error) {
     return (
       <div className="pane pane-stack">
-        {header}
+        {diffInfo}
         <div className="empty-state">{error}</div>
       </div>
     );
@@ -322,7 +253,7 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
 
   return (
     <div className="pane pane-stack">
-      {header}
+      {diffInfo}
       <div
         ref={setBodyRef}
         onScroll={handleScroll}

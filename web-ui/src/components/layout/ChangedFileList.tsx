@@ -70,7 +70,7 @@ interface ChangedFileListProps {
 export function ChangedFileList({ entries, loading, error }: ChangedFileListProps) {
   const activePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
-  const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
+  const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
   const flatFiles = useMemo(() => flattenChanged(entries), [entries]);
@@ -95,7 +95,7 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         setActiveFile(path);
-        ensurePaneVisible(1);
+        setToolPanelTab("files");
       }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -105,12 +105,12 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
         if (next) setActiveFile(next.path);
       }
     },
-    [visibleFiles, setActiveFile, ensurePaneVisible],
+    [visibleFiles, setActiveFile, setToolPanelTab],
   );
 
   function selectFile(path: string) {
     setActiveFile(path);
-    ensurePaneVisible(1);
+    setToolPanelTab("files");
   }
 
   if (error) {

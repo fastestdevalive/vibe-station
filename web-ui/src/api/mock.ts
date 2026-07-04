@@ -382,12 +382,17 @@ export function createMockApi() {
       const nextTerm = wtSessions.filter((s) => s.slot.startsWith("t")).length + 1;
       const slot =
         body.type === "terminal" ? `t${nextTerm}` : `a${nextAgent}`;
+      const termName =
+        body.type === "terminal"
+          ? (body.name?.trim() || `Terminal ${nextTerm}`)
+          : undefined;
       const sess: Session = {
         id: `sess-${Date.now()}`,
         worktreeId: body.worktreeId,
         modeId: body.modeId,
         type: body.type,
-        label: body.type === "terminal" ? `term-${nextTerm}` : `agent-${nextAgent}`,
+        label: termName ?? `agent-${nextAgent}`,
+        name: termName ?? null,
         slot,
         state: "working",
         lifecycleState: "working",
@@ -404,6 +409,11 @@ export function createMockApi() {
         snapshot: sess,
       });
       return structuredClone(sess);
+    },
+
+    async nextTerminalName(worktreeId: string): Promise<string> {
+      const n = sessions.filter((s) => s.worktreeId === worktreeId && s.slot.startsWith("t")).length + 1;
+      return `Terminal ${n}`;
     },
 
     async deleteSession(id: string): Promise<{ ok: true }> {

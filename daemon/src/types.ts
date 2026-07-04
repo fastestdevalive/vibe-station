@@ -26,6 +26,13 @@ export interface SessionRecord {
   slot: SessionSlot;
   type: SessionType;
   modeId?: string;
+  /**
+   * User-facing display name. Currently set for terminals (defaults to
+   * "Terminal N" from the worktree's monotonic counter, or a custom name).
+   * Mutable — a rename endpoint can update it. When absent the UI falls back
+   * to a slot-derived label.
+   */
+  name?: string;
   tmuxName: string;
   useTmux: boolean;
   lifecycle: SessionLifecycle;
@@ -45,6 +52,12 @@ export interface WorktreeRecord {
    * (newest pinned first), so we don't need a separate sort field.
    */
   pinnedAt?: string; // ISO8601
+  /**
+   * Monotonic counter for default terminal names ("Terminal N"). Only ever
+   * increments — numbers are never reused even after a terminal is deleted, so
+   * names stay stable/unambiguous across a worktree's lifetime.
+   */
+  terminalSeq?: number;
   sessions: SessionRecord[];
 }
 
