@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode } from "@/api/types";
 import { Dialog } from "./Dialog";
-import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
+import { InitialArtifactsField } from "./InitialArtifactsField";
 
 interface NewTabDialogProps {
   open: boolean;
@@ -13,6 +13,7 @@ interface NewTabDialogProps {
   onCreated?: () => void;
 }
 
+/** Create a new agent session. Terminals use NewTerminalDialog. */
 export function NewTabDialog({
   open,
   onClose,
@@ -20,7 +21,6 @@ export function NewTabDialog({
   worktreeId,
   onCreated,
 }: NewTabDialogProps) {
-  const [tabType, setTabType] = useState<"agent" | "terminal">("agent");
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -28,6 +28,7 @@ export function NewTabDialog({
 
   useEffect(() => {
     if (!open) return;
+    setPrompt("");
     void (async () => {
       const ms = await api.listModes();
       setModes(ms);
@@ -38,9 +39,9 @@ export function NewTabDialog({
   async function submit() {
     await api.createSession({
       worktreeId,
-      modeId: tabType === "agent" ? modeId || null : null,
-      type: tabType === "agent" ? "agent" : "terminal",
-      prompt: tabType === "agent" ? prompt.trim() || undefined : undefined,
+      modeId: modeId || null,
+      type: "agent",
+      prompt: prompt.trim() || undefined,
       useTmux,
     });
     onCreated?.();
@@ -50,7 +51,7 @@ export function NewTabDialog({
   return (
     <Dialog
       open={open}
-      title="New tab"
+      title="New agent"
       onClose={onClose}
       footer={
         <>
@@ -63,62 +64,37 @@ export function NewTabDialog({
         </>
       }
     >
-      <div className="field-label">Type</div>
-      <Radio
-        name="tabtype"
-        label="Agent"
-        checked={tabType === "agent"}
-        onChange={() => {
-          setTabType("agent");
-          setPrompt("");
-        }}
+      <div className="field-label">Mode</div>
+      <Select value={modeId} onChange={(e) => setModeId(e.target.value)} aria-label="Mode">
+        {modes.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+          </option>
+        ))}
+      </Select>
+      <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
+        Prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
+      </div>
+      <textarea
+        className="field-textarea"
+        aria-label="Prompt"
+        placeholder="Describe what you want the agent to do…"
+        rows={4}
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
       />
-      <Radio
-        name="tabtype"
-        label="Terminal"
-        checked={tabType === "terminal"}
-        onChange={() => {
-          setTabType("terminal");
-          setPrompt("");
-        }}
-      />
-      {tabType === "agent" ? (
-        <>
-          <div className="field-label">Mode</div>
-          <Select value={modeId} onChange={(e) => setModeId(e.target.value)} aria-label="Mode">
-            {modes.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </Select>
-          <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
-          <textarea
-            className="field-textarea"
-            aria-label="Prompt"
-            placeholder="Describe what you want the agent to do…"
-            rows={4}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-          />
-        </>
-      ) : null}
+      <InitialArtifactsField />
       <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
         <input
           type="checkbox"
-          id="new-tab-use-tmux-checkbox"
+          id="new-agent-use-tmux-checkbox"
           checked={useTmux}
           onChange={(e) => setUseTmux(e.target.checked)}
         />
-        <label htmlFor="new-tab-use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
+        <label htmlFor="new-agent-use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
           Use tmux (recommended — survives daemon restart, better concurrent device support)
         </label>
       </div>
-      {!useTmux && tabType === "terminal" ? (
-        <div style={{ marginTop: "var(--space-2)", color: "var(--fg-muted)", fontSize: "0.85em" }}>
-          Note: without tmux, restarting the daemon will end this terminal and lose its scrollback history.
-        </div>
-      ) : null}
     </Dialog>
   );
 }

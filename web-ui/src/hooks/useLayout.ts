@@ -1,37 +1,38 @@
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "./useStore";
 
-/** Layout slice: terminal orientation + pane visibility + active ids (persisted via useWorkspaceStore). */
+/** Layout slice: region visibility + active tool tab + active ids (persisted via useWorkspaceStore). */
 export function useLayout() {
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
-  const activeLayout = activeWorktreeId ? (layoutByWorktree[activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT) : DEFAULT_WORKTREE_LAYOUT;
-  const terminalPosition = activeLayout.terminalPosition;
-  const paneCollapsed = activeLayout.paneCollapsed;
+  const activeLayout = activeWorktreeId
+    ? (layoutByWorktree[activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT)
+    : DEFAULT_WORKTREE_LAYOUT;
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
+  const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
   const activeProjectId = useWorkspaceStore((s) => s.activeProjectId);
-  const toggleTerminalPosition = useWorkspaceStore((s) => s.toggleTerminalPosition);
-  const toggleSidebar = useWorkspaceStore((s) => s.toggleSidebar);
-  const togglePaneCollapsed = useWorkspaceStore((s) => s.togglePaneCollapsed);
+  const toggleToolPanel = useWorkspaceStore((s) => s.toggleToolPanel);
+  const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
+  const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
+  const toggleToolSplitOrientation = useWorkspaceStore((s) => s.toggleToolSplitOrientation);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
+  const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
 
-  const treePaneVisible = !paneCollapsed[0];
-  const previewPaneVisible = !paneCollapsed[1];
-  const terminalPaneVisible = !paneCollapsed[2];
-
   return {
-    terminalPosition,
-    paneCollapsed,
-    treePaneVisible,
-    previewPaneVisible,
-    terminalPaneVisible,
+    toolPanelVisible: activeLayout.toolPanelVisible,
+    toolPanelTab: activeLayout.toolPanelTab,
+    terminalDockVisible: activeLayout.terminalDockVisible,
+    toolSplitOrientation: activeLayout.toolSplitOrientation ?? "horizontal",
     activeWorktreeId,
     activeSessionId,
+    activeTerminalSessionId,
     activeProjectId,
-    toggleTerminalPosition,
-    toggleSidebar,
-    togglePaneCollapsed,
+    toggleToolPanel,
+    setToolPanelTab,
+    toggleTerminalDock,
+    toggleToolSplitOrientation,
     setActiveSession,
+    setActiveTerminalSession,
     setActiveWorktree,
   };
 }

@@ -52,12 +52,19 @@ export interface BuildServerOptions {
   logger?: boolean;
   /** Daemon token for auth. When omitted all requests are allowed (dev/test). */
   token?: string;
+  /**
+   * Dev escape hatch (VST_NO_AUTH): disable the auth guard entirely so the web
+   * UI loads with no login. The auth routes are still served as no-op stubs so
+   * GET /auth/check returns ok (the frontend gates on it) instead of 404.
+   * NEVER enable on a network-exposed daemon without another access control.
+   */
+  noAuth?: boolean;
 }
 
 export async function buildServer(opts: BuildServerOptions = {}) {
   const startedAt = Date.now();
   const version = readVersion();
-  const { token } = opts;
+  const { token, noAuth } = opts;
 
   const app = Fastify({
     logger: opts.logger ?? false,
@@ -82,7 +89,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   });
 
   // ── Auth guard ───────────────────────────────────────────────────────────────
-  if (token) {
+  if (token && !noAuth) {
     app.addHook("onRequest", async (req, reply) => {
       const key = `${req.method} ${req.routeOptions?.url ?? new URL(req.url, "http://x").pathname}`;
       if (AUTH_EXEMPT.has(key)) return;
@@ -111,12 +118,21 @@ export async function buildServer(opts: BuildServerOptions = {}) {
 
   // ── Routes ───────────────────────────────────────────────────────────────────
   registerHealthRoute(app, startedAt);
-  if (token) registerAuthRoutes(app, token);
+  if (noAuth) {
+    // No-auth dev mode: stub the auth routes so the web UI's /auth/check gate
+    // passes (returning 404 would strand it on the LoginScreen with no working
+    // login). The guard above is skipped, so these are purely cosmetic.
+    app.get("/auth/check", async (_req, reply) => reply.send({ ok: true }));
+    app.post("/auth/login", async (_req, reply) => reply.send({ ok: true }));
+    app.post("/auth/logout", async (_req, reply) => reply.send({ ok: true }));
+  } else if (token) {
+    registerAuthRoutes(app, token);
+  }
   registerProjectRoutes(app);
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);
   registerModeRoutes(app);
-  await registerWSEndpoint(app, token);
+  await registerWSEndpoint(app, noAuth ? undefined : token);
 
   return app;
 }

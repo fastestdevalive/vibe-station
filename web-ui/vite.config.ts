@@ -11,6 +11,10 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // Vite 5.4+ rejects requests whose Host header isn't in the allowlist
+    // (DNS-rebinding protection). Set VITE_DEV_ALLOW_ALL_HOSTS=1 (dev sandbox /
+    // Tailscale access) to accept any host instead of seeing "Blocked request".
+    allowedHosts: process.env.VITE_DEV_ALLOW_ALL_HOSTS ? true : undefined,
     port: Number(process.env.PORT ?? 5173),
     strictPort: !!process.env.PORT,
     proxy: {

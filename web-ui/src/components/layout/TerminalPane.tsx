@@ -14,7 +14,11 @@ import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 interface TerminalPaneProps {
   api: ApiInstance;
-  activeSession?: Session;
+  /** The session this pane renders. The agent pane and terminal dock each pass
+   *  their own active session so the two xterms stream independently. */
+  sessionId: string | null;
+  /** Full session record for the rendered session (used for useTmux). */
+  session?: Session;
 }
 
 /**
@@ -36,13 +40,17 @@ function isXtermAutoResponse(data: string): boolean {
   );
 }
 
-export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
+export function TerminalPane({ api, sessionId, session }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const prevActiveSessionRef = useRef<string | null>(null);
 
-  const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
+  // This pane is driven by the `sessionId` prop, not the global active session,
+  // so the agent pane and terminal dock can each show a different session.
+  const activeSessionId = sessionId;
+  const activeSessionIdRef = useRef<string | null>(sessionId);
+  activeSessionIdRef.current = sessionId;
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   const sessionAttachState = useWorkspaceStore((s) => s.sessionAttachState);
   const patchSessionState = useWorkspaceStore((s) => s.patchSessionState);
@@ -77,7 +85,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
 
   const { sessionState } = useSessionOutput(api, activeSessionId);
 
-  const enableCopyModeScroll = activeSession?.useTmux !== false;
+  const enableCopyModeScroll = session?.useTmux !== false;
 
   useEffect(() => {
     const cur = activeSessionId;
@@ -91,7 +99,7 @@ export function TerminalPane({ api, activeSession }: TerminalPaneProps) {
     return api.on("session:opened", (ev) => {
       if (
         ev.type === "session:opened" &&
-        ev.sessionId === useWorkspaceStore.getState().activeSessionId
+        ev.sessionId === activeSessionIdRef.current
       ) {
         markSessionAttached(ev.sessionId);
       }

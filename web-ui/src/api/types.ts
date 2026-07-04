@@ -42,8 +42,10 @@ export interface Session {
   worktreeId: string;
   modeId: string | null;
   type: SessionType;
-  /** Display label in tabs / sidebar */
+  /** Display label in tabs / sidebar (custom name when set, else slot-derived) */
   label: string;
+  /** User-set/default display name (terminals). null when slot-derived. */
+  name?: string | null;
   /** Stable slot: `m` = main (non-closable), `a{n}`, `t{n}` */
   slot: string;
   state: SessionState;
@@ -220,6 +222,8 @@ export interface CreateSessionBody {
   type: SessionType;
   prompt?: string;
   useTmux?: boolean;
+  /** Optional display name for terminals; blank → daemon assigns "Terminal N". */
+  name?: string;
 }
 
 export interface SendInputBody {

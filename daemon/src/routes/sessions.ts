@@ -21,6 +21,8 @@ const CreateSessionBody = z.object({
   modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
+  /** Optional display name (terminals). Blank → daemon assigns "Terminal N". */
+  name: z.string().trim().max(60).optional(),
 });
 
 const InputBody = z.object({
@@ -114,6 +116,11 @@ function labelForSlot(slot: SessionRecord["slot"], type: SessionRecord["type"]):
   return `term ${String(slot).slice(1)}`;
 }
 
+/** Display label: the stored custom/default name when set, else slot-derived. */
+function labelForSession(s: SessionRecord): string {
+  return s.name && s.name.length > 0 ? s.name : labelForSlot(s.slot, s.type);
+}
+
 /** Flatten SessionRecord's nested lifecycle and add UI-required fields (REST + WS snapshot). */
 export function serializeSession(worktreeId: string, s: SessionRecord) {
   return {
@@ -122,7 +129,8 @@ export function serializeSession(worktreeId: string, s: SessionRecord) {
     slot: s.slot,
     type: s.type,
     modeId: s.modeId ?? null,
-    label: labelForSlot(s.slot, s.type),
+    name: s.name ?? null,
+    label: labelForSession(s),
     tmuxName: s.tmuxName,
     useTmux: s.useTmux,
     state: s.lifecycle.state,
@@ -144,6 +152,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       p.worktrees.flatMap((w) => w.sessions.map((s) => serializeSession(w.id, s))),
     );
     return reply.send(all);
+  });
+
+  // GET /worktrees/:worktreeId/next-terminal-name — the default name the next
+  // terminal would get (monotonic; does not increment). Used to prefill the
+  // New Terminal dialog with an editable suggestion.
+  app.get("/worktrees/:worktreeId/next-terminal-name", async (req, reply) => {
+    const { worktreeId } = req.params as { worktreeId: string };
+    const ctx = findWorktreeContext(worktreeId);
+    if (!ctx) return reply.status(404).send({ error: `Worktree '${worktreeId}' not found` });
+    const next = (ctx.worktree.terminalSeq ?? 0) + 1;
+    return reply.send({ name: `Terminal ${next}` });
   });
 
   // GET /sessions/:id
@@ -202,11 +221,23 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const tmuxName = useTmux ? buildTmuxName(project.prefix, wtNum, slot) : `__direct__-${`${worktreeId}-${slot}`}`;
     const sessionId = `${worktreeId}-${slot}`;
 
+    // Terminal naming: monotonic per-worktree counter (never reused). A custom
+    // name from the request wins; otherwise default to "Terminal N". The counter
+    // bumps on every terminal create so the next default keeps advancing.
+    let nextTerminalSeq: number | undefined;
+    let terminalName: string | undefined;
+    if (type === "terminal") {
+      nextTerminalSeq = (worktree.terminalSeq ?? 0) + 1;
+      const provided = result.data.name;
+      terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextTerminalSeq}`;
+    }
+
     const sessionRecord: SessionRecord = {
       id: sessionId,
       slot,
       type,
       modeId: type === "agent" ? (modeId ?? undefined) : undefined,
+      name: terminalName,
       tmuxName,
       useTmux,
       lifecycle: {
@@ -245,11 +276,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
     }
 
-    // Persist
+    // Persist (also advance the worktree's terminal counter for terminals)
     await mutateProject(project.id, (p) => ({
       ...p,
       worktrees: p.worktrees.map((w) =>
-        w.id === worktreeId ? { ...w, sessions: [...w.sessions, sessionRecord] } : w,
+        w.id === worktreeId
+          ? {
+              ...w,
+              ...(nextTerminalSeq != null ? { terminalSeq: nextTerminalSeq } : {}),
+              sessions: [...w.sessions, sessionRecord],
+            }
+          : w,
       ),
     }));
 

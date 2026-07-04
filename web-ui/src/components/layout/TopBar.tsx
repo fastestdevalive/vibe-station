@@ -61,10 +61,12 @@ export function TopBar({
     activeProjectId,
     activeWorktreeId,
     activeSessionId,
-    terminalPosition,
-    toggleTerminalPosition,
-    paneCollapsed,
-    togglePaneCollapsed,
+    toolPanelVisible,
+    toggleToolPanel,
+    terminalDockVisible,
+    toggleTerminalDock,
+    toolSplitOrientation,
+    toggleToolSplitOrientation,
   } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
 
@@ -73,10 +75,6 @@ export function TopBar({
   const session = sessions.find((s) => s.id === activeSessionId);
 
   const hints = shortcutHints();
-
-  const treeOn = !paneCollapsed[0];
-  const previewOn = !paneCollapsed[1];
-  const terminalOn = !paneCollapsed[2];
 
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
 
@@ -212,19 +210,6 @@ export function TopBar({
       )}
       <div className="top-bar__end">
         <ConnectionStatus />
-        <div className="top-bar__actions">
-          {layoutMode === "workspace" ? (
-            <button
-              type="button"
-              className="icon-btn icon-btn--active"
-              aria-label="Toggle terminal pane layout"
-              onClick={toggleTerminalPosition}
-              title={terminalPosition === "left" ? "Vertical split" : "Horizontal split"}
-            >
-              {terminalPosition === "left" ? <Columns2 size={18} /> : <Rows2 size={18} />}
-            </button>
-          ) : null}
-        </div>
         {layoutMode === "workspace" ? (
           <>
             <button
@@ -239,21 +224,35 @@ export function TopBar({
             <div className="top-bar__pane-toggles" role="toolbar" aria-label="Workspace panes">
               <button
                 type="button"
-                className={`top-bar__pane-btn ${terminalOn ? "top-bar__pane-btn--on" : ""}`}
-                aria-pressed={terminalOn}
-                aria-label="Toggle terminal"
-                title={`Toggle terminal (${hints.terminal})`}
-                onClick={() => togglePaneCollapsed(2)}
+                className="top-bar__pane-btn"
+                aria-label="Toggle agent/tools split orientation"
+                title={
+                  toolSplitOrientation === "horizontal"
+                    ? "Stack agent and tools vertically"
+                    : "Place agent and tools side by side"
+                }
+                onClick={toggleToolSplitOrientation}
+                disabled={!toolPanelVisible}
+              >
+                {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
+              </button>
+              <button
+                type="button"
+                className={`top-bar__pane-btn ${terminalDockVisible ? "top-bar__pane-btn--on" : ""}`}
+                aria-pressed={terminalDockVisible}
+                aria-label="Toggle terminal dock"
+                title={`Toggle terminal dock (${hints.terminal})`}
+                onClick={toggleTerminalDock}
               >
                 <SquareTerminal size={17} />
               </button>
               <button
                 type="button"
-                className={`top-bar__pane-btn ${treeOn ? "top-bar__pane-btn--on" : ""}`}
-                aria-pressed={treeOn}
-                aria-label="Toggle file tree"
-                title={`Toggle file tree (${hints.fileTree})`}
-                onClick={() => togglePaneCollapsed(0)}
+                className={`top-bar__pane-btn ${toolPanelVisible ? "top-bar__pane-btn--on" : ""}`}
+                aria-pressed={toolPanelVisible}
+                aria-label="Toggle tool panel"
+                title="Toggle tool panel"
+                onClick={toggleToolPanel}
               >
                 <PanelRight size={17} />
               </button>

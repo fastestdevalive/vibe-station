@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
-/** ao-142 parity: ⌘/Ctrl+Shift+F/P/Z toggles file tree / preview / terminal; ⌘/Ctrl+P quick-open files */
+/** ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock; ⌘/Ctrl+P quick-open files */
 export function useWorkspaceKeyboardShortcuts(
   setQuickOpen: (v: boolean | ((p: boolean) => boolean)) => void,
   enabled = true,
@@ -9,7 +9,8 @@ export function useWorkspaceKeyboardShortcuts(
   useEffect(() => {
     if (!enabled) return;
 
-    const togglePane = useWorkspaceStore.getState().togglePaneCollapsed;
+    const setToolPanelTab = useWorkspaceStore.getState().setToolPanelTab;
+    const toggleTerminalDock = useWorkspaceStore.getState().toggleTerminalDock;
 
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -35,13 +36,13 @@ export function useWorkspaceKeyboardShortcuts(
         const k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
         if (k === "F") {
           e.preventDefault();
-          togglePane(0);
+          setToolPanelTab("files");
         } else if (k === "P") {
           e.preventDefault();
-          togglePane(1);
+          setToolPanelTab("files");
         } else if (k === "Z") {
           e.preventDefault();
-          togglePane(2);
+          toggleTerminalDock();
         }
       }
     };

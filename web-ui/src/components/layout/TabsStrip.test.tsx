@@ -20,7 +20,7 @@ describe("TabsStrip", () => {
   it("main tab has no close control", async () => {
     render(
       <MemoryRouter>
-        <TabsStrip api={api} worktreeId="wt-1" />
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
     await waitFor(() => {
@@ -33,7 +33,7 @@ describe("TabsStrip", () => {
   it("non-main tab exposes close via aria-label", async () => {
     render(
       <MemoryRouter>
-        <TabsStrip api={api} worktreeId="wt-1" />
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
     await waitFor(() => {
@@ -45,7 +45,7 @@ describe("TabsStrip", () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <TabsStrip api={api} worktreeId="wt-1" />
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
     await screen.findByRole("button", { name: /Close agent-2/i });
@@ -57,10 +57,10 @@ describe("TabsStrip", () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
-        <TabsStrip api={api} worktreeId="wt-1" />
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await user.click(screen.getByRole("button", { name: /New tab/i }));
-    expect(screen.getByRole("dialog", { name: /New tab/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /New agent/i }));
+    expect(screen.getByRole("dialog", { name: /New agent/i })).toBeInTheDocument();
   });
 });

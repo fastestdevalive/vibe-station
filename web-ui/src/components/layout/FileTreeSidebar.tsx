@@ -1,4 +1,4 @@
-import { File, FileText, Folder, FolderOpen, FolderTree, GitCompare } from "lucide-react";
+import { File, FileText, Folder, FolderOpen, GitCompare } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { ChangedPathEntry, DiffScope, GitStatusChar, TreeEntry } from "@/api/types";
@@ -77,7 +77,7 @@ function TreeNode({
   lastChanged,
 }: NodeProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
-  const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
+  const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const activePath = useWorkspaceStore((s) => s.activeFilePath);
   const [children, setChildren] = useState<TreeEntry[] | null>(null);
 
@@ -99,7 +99,7 @@ function TreeNode({
   function openFile() {
     if (!worktreeId) return;
     setActiveFile(entry.path);
-    ensurePaneVisible(1);
+    setToolPanelTab("files");
   }
 
   const gitRowClass = rowGitModifier(entry, gitStatusByPath);
@@ -330,25 +330,9 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     }
   }
 
-  const rightSidebarTabs = (
-    <div className="right-sidebar-tabs" role="tablist" aria-label="Right sidebar">
-      <button
-        type="button"
-        role="tab"
-        aria-selected
-        className="right-sidebar-tab right-sidebar-tab--active"
-        title="Files"
-        aria-label="Files"
-      >
-        <FolderTree size={14} />
-      </button>
-    </div>
-  );
-
   if (!activeWorktreeId) {
     return (
       <div className="pane pane-stack">
-        {rightSidebarTabs}
         <div className="pane-header pane-header--compact">Files</div>
         <div className="empty-state">Select a worktree to view files</div>
       </div>
@@ -357,7 +341,6 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
 
   return (
     <div className="pane pane-stack">
-      {rightSidebarTabs}
       <div className="pane-header pane-header--compact file-tree-sidebar-header">
         <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>
         <div className="file-tree-sidebar-header__tail">

@@ -17,7 +17,7 @@ function basename(path: string): string {
 
 export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
-  const ensurePaneVisible = useWorkspaceStore((s) => s.ensurePaneVisible);
+  const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -70,10 +70,10 @@ export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   const selectFile = useCallback(
     (path: string) => {
       setActiveFile(path);
-      ensurePaneVisible(1);
+      setToolPanelTab("files");
       onClose();
     },
-    [setActiveFile, ensurePaneVisible, onClose],
+    [setActiveFile, setToolPanelTab, onClose],
   );
 
   const handleKeyDown = useCallback(
