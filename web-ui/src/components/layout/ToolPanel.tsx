@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import { type ToolTab } from "@/hooks/useStore";
+import type { ToolTab } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
@@ -10,8 +10,6 @@ import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 interface ToolPanelProps {
   api: ApiInstance;
   worktreeId: string | null;
-  /** Active agent session — drives the file preview. */
-  sessionId: string | null;
 }
 
 const TABS: { id: ToolTab; label: string }[] = [
@@ -26,7 +24,7 @@ const TABS: { id: ToolTab; label: string }[] = [
  * (web browser + emulators) and Artifacts are placeholders until their backends
  * land.
  */
-export function ToolPanel({ api, worktreeId, sessionId }: ToolPanelProps) {
+export function ToolPanel({ api, worktreeId }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
 
   return (
@@ -53,7 +51,7 @@ export function ToolPanel({ api, worktreeId, sessionId }: ToolPanelProps) {
           <ToolFullscreenButton />
           <button
             type="button"
-            className="tab tab--icon tool-fs-btn"
+            className="tab tab--icon tool-bar-btn"
             aria-label="Close tool panel"
             title="Close tool panel"
             onClick={() => toggleToolPanel()}
@@ -64,7 +62,7 @@ export function ToolPanel({ api, worktreeId, sessionId }: ToolPanelProps) {
       </div>
       <div className="tool-panel__body">
         {toolPanelTab === "files" ? (
-          <FilesPanel api={api} worktreeId={worktreeId} sessionId={sessionId} />
+          <FilesPanel api={api} worktreeId={worktreeId} />
         ) : null}
         {toolPanelTab === "devices" ? <DevicesPanel /> : null}
         {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}

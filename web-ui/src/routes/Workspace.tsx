@@ -179,7 +179,7 @@ export function Workspace() {
           : {
               agentPane,
               toolPanel: (
-                <ToolPanel api={api} worktreeId={activeWorktreeId} sessionId={activeSessionId} />
+                <ToolPanel api={api} worktreeId={activeWorktreeId} />
               ),
               terminalDock,
             })}

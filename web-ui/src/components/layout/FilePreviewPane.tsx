@@ -16,11 +16,10 @@ import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
-  sessionId: string | null;
   worktreeId: string | null;
 }
 
-export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneProps) {
+export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
   const path = useWorkspaceStore((s) => s.activeFilePath);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
@@ -191,8 +190,8 @@ export function FilePreviewPane({ api, sessionId, worktreeId }: FilePreviewPaneP
       <div className="preview-diffinfo">
         {diffStats ? (
           <span className="preview-diffinfo__stats" aria-label="Diff line counts">
-            <span className="preview-header__diff-stats-plus">+{diffStats.additions}</span>{" "}
-            <span className="preview-header__diff-stats-minus">−{diffStats.deletions}</span>
+            <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
+            <span className="preview-diffinfo__stats-minus">−{diffStats.deletions}</span>
           </span>
         ) : null}
         <span className="preview-diffinfo__scope">
