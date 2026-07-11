@@ -16,6 +16,10 @@ interface NewSessionDialogProps {
   projectId: string;
   projectName: string;
   onCreated?: () => void;
+  /** Prefill for the initial prompt (e.g. carried over from another dialog). */
+  initialPrompt?: string;
+  /** Preselect this mode on open when it exists in the mode list. */
+  initialModeId?: string;
 }
 
 export function NewSessionDialog({
@@ -25,6 +29,8 @@ export function NewSessionDialog({
   projectId,
   projectName,
   onCreated,
+  initialPrompt: initialPromptProp,
+  initialModeId,
 }: NewSessionDialogProps) {
   const [wtChoice, setWtChoice] = useState<"new" | "existing">("new");
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
@@ -43,6 +49,7 @@ export function NewSessionDialog({
 
   useEffect(() => {
     if (!open) return;
+    if (initialPromptProp) setInitialPrompt(initialPromptProp);
     void (async () => {
       const [wts, ms] = await Promise.all([
         api.listWorktrees(projectId),
@@ -51,7 +58,11 @@ export function NewSessionDialog({
       setWorktrees(wts);
       setModes(ms);
       if (wts[0]) setExistingWtId(wts[0].id);
-      if (ms[0]) setModeId(ms[0].id);
+      const preferred =
+        initialModeId && ms.some((m) => m.id === initialModeId)
+          ? initialModeId
+          : ms[0]?.id;
+      if (preferred) setModeId(preferred);
     })();
     // Fetch branches independently — a failure here must NOT break worktree/mode
     // loading. On error we fall back to a free-text branch input.
@@ -61,13 +72,18 @@ export function NewSessionDialog({
         const res = await api.listProjectBranches(projectId);
         setBranches(res.branches);
         // Coerce baseBranch to a value present in the rendered options so the
-        // controlled <select> never points at a missing <option>.
-        const def = res.branches.includes(res.defaultBranch)
-          ? res.defaultBranch
-          : (res.branches[0] ?? res.defaultBranch);
+        // controlled <select> never points at a missing <option>. defaultBranch
+        // may be null (non-git) — fall back to the first branch / empty string.
+        const preferred = res.defaultBranch ?? "";
+        const def =
+          preferred && res.branches.includes(preferred)
+            ? preferred
+            : (res.branches[0] ?? preferred);
         setBaseBranch(def);
       } catch (err) {
         setBranches([]);
+        // Detail logged (not surfaced) — UI shows a concise fallback message.
+        console.warn("Failed to load project branches:", err);
         setBranchesError(
           err instanceof ApiError
             ? err.message || `Could not load branches (HTTP ${err.status})`
@@ -77,7 +93,7 @@ export function NewSessionDialog({
         );
       }
     })();
-  }, [open, api, projectId]);
+  }, [open, api, projectId, initialPromptProp, initialModeId]);
 
   async function submit() {
     setError(null);
@@ -203,7 +219,7 @@ export function NewSessionDialog({
               />
               {branchesError ? (
                 <div className="field-error">
-                  Couldn’t load branches ({branchesError}). Type a base branch name.
+                  Couldn’t load branches — type a base branch name above.
                 </div>
               ) : (
                 <div className="field-label" style={{ fontWeight: "normal", color: "var(--fg-muted)" }}>

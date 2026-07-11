@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
 import { TopBar } from "@/components/layout/TopBar";
@@ -20,8 +20,10 @@ import { QuickOpen } from "@/components/dialogs/QuickOpen";
 export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
+  const params = useParams<{ directSessionId?: string }>();
   const isDashboard = location.pathname === "/";
   const isSettings = location.pathname === "/settings";
+  const isDirectSession = location.pathname.startsWith("/session/");
   const isFullWidthPane = isDashboard || isSettings;
 
   // Server data lives in `useServerStore`, populated and refreshed by
@@ -45,20 +47,67 @@ export function Workspace() {
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
+  // Derive direct session context from URL
+  const directSession = useMemo(() => {
+    if (!isDirectSession || !params.directSessionId) return null;
+    return sessions.find((s) => s.id === params.directSessionId) ?? null;
+  }, [isDirectSession, params.directSessionId, sessions]);
+
+  const directSessionProject = useMemo(() => {
+    if (!directSession) return null;
+    return projects.find((p) => p.id === directSession.projectId) ?? null;
+  }, [directSession, projects]);
+
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
+  // Quick Open + pane shortcuts work in both worktree and direct-session modes
+  // (direct sessions browse the project base dir); only full-width panes opt out.
   useWorkspaceKeyboardShortcuts(setQuickOpen, !isFullWidthPane);
+
+  // Clear worktree context when entering direct session mode (mutual exclusion)
+  useEffect(() => {
+    if (!isDirectSession || !bundleLoaded) return;
+    const s = useWorkspaceStore.getState();
+    if (s.activeWorktreeId || s.activeSessionId) {
+      useWorkspaceStore.setState({
+        activeWorktreeId: null,
+        activeSessionId: null,
+        activeFilePath: null,
+      });
+    }
+  }, [isDirectSession, bundleLoaded]);
+
+  // Bind the direct-session layout context (project id) so the tool panel /
+  // terminal dock toggles persist per project, and the Files tree + terminals
+  // resolve to the project base dir. Cleared when leaving direct-session mode.
+  useEffect(() => {
+    const pid = isDirectSession ? (directSessionProject?.id ?? null) : null;
+    if (useWorkspaceStore.getState().activeDirectContextId !== pid) {
+      useWorkspaceStore.getState().setActiveDirectContext(pid);
+    }
+  }, [isDirectSession, directSessionProject]);
+
+  // Redirect to dashboard if direct session not found
+  useEffect(() => {
+    if (!isDirectSession || !bundleLoaded) return;
+    if (params.directSessionId && !directSession) {
+      navigate("/", { replace: true });
+    }
+  }, [isDirectSession, bundleLoaded, params.directSessionId, directSession, navigate]);
 
   // Update browser tab title to reflect current context
   useEffect(() => {
     if (isSettings) {
       document.title = "Settings — Vibe Station";
+    } else if (isDirectSession && directSession) {
+      const projectName = directSessionProject?.name ?? "Direct";
+      document.title = `${directSession.label} — ${projectName} — Vibe Station`;
     } else if (isDashboard || !activeWorktreeId) {
       document.title = "Vibe Station";
     } else {
       const wt = worktrees.find((w) => w.id === activeWorktreeId);
       document.title = wt ? `${wt.branch} — Vibe Station` : "Vibe Station";
     }
-  }, [activeWorktreeId, worktrees, isDashboard, isSettings]);
+  }, [activeWorktreeId, worktrees, isDashboard, isSettings, isDirectSession, directSession, directSessionProject]);
 
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
   // even before the first session subscription. The api client owns reconnects.
@@ -131,18 +180,64 @@ export function Workspace() {
     </div>
   );
 
+  // Direct session: identical to the worktree layout, minus the agent TabsStrip
+  // (a direct session is a single agent — no agent tabs). The tool panel and
+  // terminal dock are wired to the PROJECT base dir via scope="project".
+  const directAgentPane = directSession ? (
+    <div className="pane-stack">
+      {/* No agent TabsStrip — single agent, no tabs. */}
+      <TerminalPane
+        api={api}
+        sessionId={directSession.id}
+        session={directSession}
+      />
+    </div>
+  ) : null;
+
+  const directToolPanel = directSessionProject ? (
+    <ToolPanel api={api} worktreeId={directSessionProject.id} scope="project" />
+  ) : null;
+
+  const directTerminalDock = directSessionProject ? (
+    <div className="pane-stack">
+      <TabsStrip api={api} worktreeId={directSessionProject.id} kind="terminal" scope="project" />
+      <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} />
+    </div>
+  ) : null;
+
+  // Compute layout mode for TopBar
+  const layoutMode = isSettings
+    ? "settings"
+    : isDashboard
+      ? "dashboard"
+      : isDirectSession
+        ? "direct-session"
+        : "workspace";
+
   return (
     <div className="workspace-route">
       {!isFullWidthPane ? (
-        <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
+        isDirectSession ? (
+          <QuickOpen
+            api={api}
+            worktreeId={directSessionProject?.id ?? null}
+            scope="project"
+            open={quickOpen}
+            onClose={() => setQuickOpen(false)}
+          />
+        ) : (
+          <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
+        )
       ) : null}
       <Layout
         topBar={
           <TopBar
-            layoutMode={isSettings ? "settings" : isDashboard ? "dashboard" : "workspace"}
+            layoutMode={layoutMode}
             projects={projects}
             worktrees={worktrees}
             sessions={sessions}
+            directSession={directSession ?? undefined}
+            directSessionProject={directSessionProject ?? undefined}
             isMobile={isMobile}
             onToggleLeftSidebar={() => {
               if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
@@ -161,7 +256,7 @@ export function Workspace() {
             isMobile={isMobile}
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard || isSettings) navigate(`/worktree/${wtId}`);
+              if (isDashboard || isSettings || isDirectSession) navigate(`/worktree/${wtId}`);
             }}
           />
         }
@@ -176,13 +271,22 @@ export function Workspace() {
         onMobileSidebarClose={() => setMobileSidebarOpen(false)}
         {...(isFullWidthPane
           ? {}
-          : {
-              agentPane,
-              toolPanel: (
-                <ToolPanel api={api} worktreeId={activeWorktreeId} />
-              ),
-              terminalDock,
-            })}
+          : isDirectSession
+            ? {
+                // Direct session: full worktree layout minus the agent tabs.
+                // Tool panel (Files) + terminal dock resolve to the project
+                // base dir (scope="project").
+                agentPane: directAgentPane,
+                toolPanel: directToolPanel,
+                terminalDock: directTerminalDock,
+              }
+            : {
+                agentPane,
+                toolPanel: (
+                  <ToolPanel api={api} worktreeId={activeWorktreeId} />
+                ),
+                terminalDock,
+              })}
       />
     </div>
   );

@@ -9,8 +9,10 @@ const makeProject = (path: string): ProjectRecord => ({
   id: "my-project",
   absolutePath: path,
   prefix: "mypr",
+  isGit: true,
   defaultBranch: "main",
   createdAt: new Date().toISOString(),
+  directSessions: [],
   worktrees: [],
 });
 

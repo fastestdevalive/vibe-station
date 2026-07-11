@@ -4,40 +4,68 @@ import { getAllProjects, getProject, mutateProject } from "../state/project-stor
 import {
   reserveNextAgentSlot,
   reserveNextTerminalSlot,
+  reserveNextDirectSlot,
   buildTmuxName,
+  buildDirectTmuxName,
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
-import { spawnSession, spawnSessionFromArgv } from "../services/spawn.js";
-import { cleanupSessionDataDir, worktreePath } from "../services/paths.js";
+import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
+import { cleanupSessionDataDir, cleanupDirectSessionDataDir, worktreePath } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
+import { persistLifecycleState } from "../services/lifecycle.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
 
-const CreateSessionBody = z.object({
+/**
+ * Session creation supports two targets:
+ * 1. Worktree session: runs in a git worktree (branch isolation)
+ * 2. Direct session: runs in the project directory (no isolation)
+ *
+ * For backward compatibility, if `target` is absent, we infer from worktreeId presence.
+ */
+const WorktreeSessionBody = z.object({
+  target: z.literal("worktree").optional(),
   worktreeId: z.string().min(1),
   type: z.enum(["agent", "terminal"]),
   modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
-  /** Optional display name (terminals). Blank → daemon assigns "Terminal N". */
   name: z.string().trim().max(60).optional(),
 });
+
+const DirectSessionBody = z.object({
+  target: z.literal("direct"),
+  projectId: z.string().min(1),
+  type: z.enum(["agent", "terminal"]),
+  modeId: z.string().min(1).nullish(),
+  prompt: z.string().optional(),
+  useTmux: z.boolean().optional(),
+  name: z.string().trim().max(60).optional(),
+});
+
+const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
 
 const InputBody = z.object({
   data: z.string().min(1),
   sendEnter: z.boolean().optional(),
 });
 
-function findSessionContext(
-  sessionId: string,
-): { project: ProjectRecord; worktree: WorktreeRecord; session: SessionRecord } | null {
+type SessionContext =
+  | { kind: "worktree"; project: ProjectRecord; worktree: WorktreeRecord; session: SessionRecord }
+  | { kind: "direct"; project: ProjectRecord; session: SessionRecord };
+
+function findSessionContext(sessionId: string): SessionContext | null {
   for (const project of getAllProjects()) {
+    // Check worktree sessions first
     for (const worktree of project.worktrees) {
       const session = worktree.sessions.find((s) => s.id === sessionId);
-      if (session) return { project, worktree, session };
+      if (session) return { kind: "worktree", project, worktree, session };
     }
+    // Then check direct sessions
+    const directSession = project.directSessions.find((s) => s.id === sessionId);
+    if (directSession) return { kind: "direct", project, session: directSession };
   }
   return null;
 }
@@ -110,8 +138,62 @@ async function runAgentSpawnJob(opts: {
   }
 }
 
+/**
+ * Background job to spawn a direct agent session (no worktree).
+ */
+async function runDirectAgentSpawnJob(opts: {
+  project: ProjectRecord;
+  session: SessionRecord;
+  modeId: string;
+  prompt: string | undefined;
+  daemonPort: number;
+}): Promise<void> {
+  const { project, session, modeId, prompt, daemonPort } = opts;
+  const sessionId = session.id;
+  try {
+    const modes = await (await import("../routes/modes.js")).loadModes();
+    const mode = modes.find((m) => m.id === modeId);
+    if (!mode) throw new Error(`Mode '${modeId}' not found`);
+    const plugin = resolvePlugin(mode.cli);
+    const { buildDirectPrompt } = await import("../services/promptBuilder.js");
+    const builtPrompt = await buildDirectPrompt({
+      project,
+      modeContext: mode.context,
+      userPrompt: prompt,
+    });
+    await spawnDirectSession({
+      project,
+      session,
+      plugin,
+      daemonPort,
+      systemPrompt: builtPrompt.systemPrompt,
+      taskPrompt: builtPrompt.taskPrompt,
+      model: mode.model,
+    });
+    session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      directSessions: p.directSessions.map((s) => (s.id === sessionId ? session : s)),
+    }));
+    broadcastAll({ type: "session:state", sessionId, state: "working" });
+  } catch (err) {
+    const reason = String(err);
+    session.lifecycle = { state: "exited", lastTransitionAt: new Date().toISOString() };
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      directSessions: p.directSessions.map((s) => (s.id === sessionId ? session : s)),
+    }));
+    broadcastAll({ type: "session:state", sessionId, state: "exited", reason });
+  }
+}
+
 function labelForSlot(slot: SessionRecord["slot"], type: SessionRecord["type"]): string {
   if (slot === "m") return "main";
+  // Direct sessions use d-prefix slots
+  if (String(slot).startsWith("d")) {
+    if (type === "agent") return `direct ${String(slot).slice(1)}`;
+    return `term ${String(slot).slice(1)}`;
+  }
   if (type === "agent") return `agent ${String(slot).slice(1)}`;
   return `term ${String(slot).slice(1)}`;
 }
@@ -122,10 +204,11 @@ function labelForSession(s: SessionRecord): string {
 }
 
 /** Flatten SessionRecord's nested lifecycle and add UI-required fields (REST + WS snapshot). */
-export function serializeSession(worktreeId: string, s: SessionRecord) {
+export function serializeSession(worktreeId: string | null, projectId: string, s: SessionRecord) {
   return {
     id: s.id,
     worktreeId,
+    projectId,
     slot: s.slot,
     type: s.type,
     modeId: s.modeId ?? null,
@@ -136,21 +219,37 @@ export function serializeSession(worktreeId: string, s: SessionRecord) {
     state: s.lifecycle.state,
     lifecycleState: s.lifecycle.state,
     createdAt: s.lifecycle.lastTransitionAt,
+    pinnedAt: s.pinnedAt ?? null,
   };
 }
 
 export function registerSessionRoutes(app: FastifyInstance): void {
-  // GET /sessions?worktree=:id
+  // GET /sessions?worktree=:id or GET /sessions?project=:id or GET /sessions (all)
   app.get("/sessions", async (req, reply) => {
-    const { worktree: wtId } = req.query as { worktree?: string };
+    const { worktree: wtId, project: projectId } = req.query as { worktree?: string; project?: string };
+
     if (wtId) {
       const ctx = findWorktreeContext(wtId);
       if (!ctx) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
-      return reply.send(ctx.worktree.sessions.map((s) => serializeSession(ctx.worktree.id, s)));
+      return reply.send(ctx.worktree.sessions.map((s) => serializeSession(ctx.worktree.id, ctx.project.id, s)));
     }
-    const all = getAllProjects().flatMap((p) =>
-      p.worktrees.flatMap((w) => w.sessions.map((s) => serializeSession(w.id, s))),
-    );
+
+    if (projectId) {
+      const project = getProject(projectId);
+      if (!project) return reply.status(404).send({ error: `Project '${projectId}' not found` });
+      // Return both worktree sessions and direct sessions for this project
+      const worktreeSessions = project.worktrees.flatMap((w) =>
+        w.sessions.map((s) => serializeSession(w.id, project.id, s)),
+      );
+      const directSessions = project.directSessions.map((s) => serializeSession(null, project.id, s));
+      return reply.send([...worktreeSessions, ...directSessions]);
+    }
+
+    // Return all sessions (worktree + direct) across all projects
+    const all = getAllProjects().flatMap((p) => [
+      ...p.worktrees.flatMap((w) => w.sessions.map((s) => serializeSession(w.id, p.id, s))),
+      ...p.directSessions.map((s) => serializeSession(null, p.id, s)),
+    ]);
     return reply.send(all);
   });
 
@@ -170,7 +269,10 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
-    return reply.send(serializeSession(ctx.worktree.id, ctx.session));
+    if (ctx.kind === "worktree") {
+      return reply.send(serializeSession(ctx.worktree.id, ctx.project.id, ctx.session));
+    }
+    return reply.send(serializeSession(null, ctx.project.id, ctx.session));
   });
 
   // GET /sessions/:id/output?lines=N
@@ -191,14 +293,16 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ id, output });
   });
 
-  // POST /sessions
+  // POST /sessions — create in worktree or directly in project
   app.post("/sessions", async (req, reply) => {
     const result = CreateSessionBody.safeParse(req.body);
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { worktreeId, type, prompt, useTmux: rawUseTmux } = result.data;
-    let { modeId } = result.data;
+
+    const data = result.data;
+    const { type, prompt, useTmux: rawUseTmux } = data;
+    let { modeId } = data;
     const useTmux = resolveUseTmux(rawUseTmux);
 
     if (type === "agent" && !modeId) {
@@ -215,13 +319,117 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
     }
 
+    // Determine target: direct session vs worktree session
+    // For backward compat, if no explicit target, infer from worktreeId presence
+    const isDirect = data.target === "direct" || !("worktreeId" in data);
+
+    if (isDirect) {
+      // --- DIRECT SESSION (in project directory) ---
+      const projectId = "projectId" in data ? data.projectId : undefined;
+      if (!projectId) {
+        return reply.status(400).send({ error: "projectId is required for direct sessions" });
+      }
+
+      const project = getProject(projectId);
+      if (!project) {
+        return reply.status(404).send({ error: `Project '${projectId}' not found` });
+      }
+
+      // Reserve direct slot
+      const slot = reserveNextDirectSlot(project);
+      const tmuxName = useTmux
+        ? buildDirectTmuxName(project.prefix, slot)
+        : `__direct__-${projectId}-${slot}`;
+      const sessionId = `${projectId}-${slot}`;
+
+      // Terminal naming for direct sessions
+      let nextDirectSeq: number | undefined;
+      let terminalName: string | undefined;
+      if (type === "terminal") {
+        nextDirectSeq = (project.directSessionSeq ?? 0) + 1;
+        const provided = data.name;
+        terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextDirectSeq}`;
+      }
+
+      const sessionRecord: SessionRecord = {
+        id: sessionId,
+        slot,
+        type,
+        modeId: type === "agent" ? (modeId ?? undefined) : undefined,
+        name: terminalName,
+        tmuxName,
+        useTmux,
+        lifecycle: {
+          state: "not_started",
+          lastTransitionAt: new Date().toISOString(),
+        },
+      };
+
+      // Spawn terminal immediately if type=terminal
+      if (type === "terminal") {
+        try {
+          if (useTmux) {
+            await newSession({ name: tmuxName, cwd: project.absolutePath });
+          } else {
+            const { DirectPtyBackend } = await import("../services/directPty.js");
+            await DirectPtyBackend.spawn({
+              command: process.env.SHELL ?? "/bin/bash",
+              args: [],
+              cwd: project.absolutePath,
+              env: { ...process.env as Record<string, string> },
+              cols: 80,
+              rows: 24,
+              sessionId,
+              projectId: project.id,
+              worktreeId: undefined,
+            });
+          }
+          sessionRecord.lifecycle = {
+            state: "working",
+            lastTransitionAt: new Date().toISOString(),
+          };
+        } catch (err) {
+          return reply.status(500).send({ error: `Failed to spawn terminal: ${String(err)}` });
+        }
+      }
+
+      // Persist direct session
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        ...(nextDirectSeq != null ? { directSessionSeq: nextDirectSeq } : {}),
+        directSessions: [...p.directSessions, sessionRecord],
+      }));
+
+      // Broadcast
+      broadcastAll({
+        type: "session:created",
+        sessionId,
+        projectId: project.id,
+        worktreeId: null,
+        sessionType: type,
+        mode: typeof modeId === "string" ? modeId : undefined,
+        snapshot: serializeSession(null, project.id, sessionRecord),
+      });
+
+      // Spawn agent in background
+      if (type === "agent" && modeId) {
+        const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+        void runDirectAgentSpawnJob({ project, session: sessionRecord, modeId, prompt, daemonPort });
+      }
+
+      return reply.status(201).send(serializeSession(null, project.id, sessionRecord));
+    }
+
+    // --- WORKTREE SESSION (existing behavior) ---
+    const worktreeId = "worktreeId" in data ? data.worktreeId : undefined;
+    if (!worktreeId) {
+      return reply.status(400).send({ error: "worktreeId is required for worktree sessions" });
+    }
+
     const ctx = findWorktreeContext(worktreeId);
     if (!ctx) return reply.status(404).send({ error: `Worktree '${worktreeId}' not found` });
 
     const { project, worktree } = ctx;
-
-    // Reject if trying to create an 'm' slot directly
-    // (main session is created by POST /worktrees only)
 
     // Reserve slot
     const slot = type === "agent"
@@ -232,14 +440,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const tmuxName = useTmux ? buildTmuxName(project.prefix, wtNum, slot) : `__direct__-${`${worktreeId}-${slot}`}`;
     const sessionId = `${worktreeId}-${slot}`;
 
-    // Terminal naming: monotonic per-worktree counter (never reused). A custom
-    // name from the request wins; otherwise default to "Terminal N". The counter
-    // bumps on every terminal create so the next default keeps advancing.
+    // Terminal naming: monotonic per-worktree counter (never reused).
     let nextTerminalSeq: number | undefined;
     let terminalName: string | undefined;
     if (type === "terminal") {
       nextTerminalSeq = (worktree.terminalSeq ?? 0) + 1;
-      const provided = result.data.name;
+      const provided = data.name;
       terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextTerminalSeq}`;
     }
 
@@ -302,15 +508,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }));
 
     // Broadcast and return immediately — agent spawn runs in background.
-    // session:created must be broadcastAll, not notifySession — no client has
-    // subscribed to a brand-new sessionId yet.
     broadcastAll({
       type: "session:created",
       sessionId,
+      projectId: project.id,
       worktreeId,
       sessionType: type,
       mode: typeof modeId === "string" ? modeId : undefined,
-      snapshot: serializeSession(worktreeId, sessionRecord),
+      snapshot: serializeSession(worktreeId, project.id, sessionRecord),
     });
 
     if (type === "agent" && modeId) {
@@ -318,7 +523,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       void runAgentSpawnJob({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
     }
 
-    return reply.status(201).send(serializeSession(worktreeId, sessionRecord));
+    return reply.status(201).send(serializeSession(worktreeId, project.id, sessionRecord));
   });
 
   // DELETE /sessions/:id
@@ -327,9 +532,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
 
-    const { project, worktree, session } = ctx;
+    const { project, session } = ctx;
 
-    // Main session cannot be killed
+    // Main session cannot be killed (worktree sessions only)
     if (session.slot === "m") {
       return reply.status(400).send({
         error: "Cannot delete the main session. Use DELETE /worktrees/:id instead.",
@@ -347,20 +552,102 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
     }
 
-    // Best-effort cleanup of per-session data dir
-    cleanupSessionDataDir(project.id, worktree.id, id);
-
-    // Remove from manifest
-    await mutateProject(project.id, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktree.id
-          ? { ...w, sessions: w.sessions.filter((s) => s.id !== id) }
-          : w,
-      ),
-    }));
+    if (ctx.kind === "worktree") {
+      // Worktree session: cleanup worktree-scoped data dir
+      cleanupSessionDataDir(project.id, ctx.worktree.id, id);
+      // Remove from worktree's sessions array
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        worktrees: p.worktrees.map((w) =>
+          w.id === ctx.worktree.id
+            ? { ...w, sessions: w.sessions.filter((s) => s.id !== id) }
+            : w,
+        ),
+      }));
+    } else {
+      // Direct session: cleanup project-scoped data dir
+      cleanupDirectSessionDataDir(project.id, id);
+      // Remove from project's directSessions array
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        directSessions: p.directSessions.filter((s) => s.id !== id),
+      }));
+    }
 
     broadcastAll({ type: "session:deleted", sessionId: id });
+    return reply.send({ ok: true });
+  });
+
+  // PATCH /sessions/:id/pin   { pinned: boolean }
+  // Toggle SessionRecord.pinnedAt. Idempotent — no-op when already in the
+  // requested state (so cross-tab pins don't bounce the timestamp). Works for
+  // both direct and worktree sessions.
+  app.patch("/sessions/:id/pin", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ pinned: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { pinned } = parsed.data;
+
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    const already = ctx.session.pinnedAt != null;
+    if (already === pinned) {
+      // No state change.
+      return reply.send({ ok: true, pinnedAt: ctx.session.pinnedAt ?? null });
+    }
+
+    const nextPinnedAt = pinned ? new Date().toISOString() : undefined;
+    const patchSession = (s: SessionRecord): SessionRecord => {
+      if (pinned) return { ...s, pinnedAt: nextPinnedAt };
+      // Drop the field rather than setting undefined so the manifest stays clean.
+      const { pinnedAt: _drop, ...rest } = s;
+      void _drop;
+      return rest;
+    };
+
+    await mutateProject(ctx.project.id, (p) => {
+      if (ctx.kind === "worktree") {
+        return {
+          ...p,
+          worktrees: p.worktrees.map((w) =>
+            w.id === ctx.worktree.id
+              ? { ...w, sessions: w.sessions.map((s) => (s.id === id ? patchSession(s) : s)) }
+              : w,
+          ),
+        };
+      }
+      return {
+        ...p,
+        directSessions: p.directSessions.map((s) => (s.id === id ? patchSession(s) : s)),
+      };
+    });
+
+    broadcastAll({ type: "session:updated", sessionId: id, pinnedAt: nextPinnedAt ?? null });
+    return reply.send({ ok: true, pinnedAt: nextPinnedAt ?? null });
+  });
+
+  // POST /sessions/:id/done — mark an agent session as done (metadata only; no
+  // process kill). Terminals have no "done" concept, so reject them.
+  app.post("/sessions/:id/done", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.session.type !== "agent") {
+      return reply.status(400).send({ error: "Only agent sessions can be marked done." });
+    }
+
+    ctx.session.lifecycle = { state: "done", lastTransitionAt: new Date().toISOString() };
+    // persistLifecycleState handles both the worktree and direct branches and
+    // broadcasts session:state itself.
+    await persistLifecycleState(
+      ctx.project.id,
+      ctx.kind === "worktree" ? ctx.worktree.id : undefined,
+      id,
+      "done",
+    );
     return reply.send({ ok: true });
   });
 
@@ -370,7 +657,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
 
-    const { project, worktree, session } = ctx;
+    const { project, session } = ctx;
+    const isWorktreeSession = ctx.kind === "worktree";
+    const worktree = isWorktreeSession ? ctx.worktree : undefined;
+
+    // Determine working directory
+    const cwd = isWorktreeSession
+      ? worktreePath(project.id, worktree!.id)
+      : project.absolutePath;
 
     let restoredFromHistory = false;
 
@@ -385,29 +679,30 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
         const plugin = resolvePlugin(mode.cli);
 
-        // Ask plugin for restore argv
-        const restoreArgv = await plugin.getRestoreCommand?.({
-          session,
-          project,
-          worktree,
-          model: mode.model,
-        });
+        // Ask plugin for restore argv (only for worktree sessions with worktree context)
+        const restoreArgv = isWorktreeSession
+          ? await plugin.getRestoreCommand?.({
+              session,
+              project,
+              worktree: worktree!,
+              model: mode.model,
+            })
+          : null; // Direct sessions don't support restore yet
 
-        if (restoreArgv) {
+        if (restoreArgv && isWorktreeSession) {
           // Resume path: spawn from explicit restore argv
           restoredFromHistory = true;
-          const wtPath = worktreePath(project.id, worktree.id);
 
           // Ensure hook script is installed (self-heals legacy sessions without agentChatId)
           if (plugin.setupWorkspaceHooks) {
-            await plugin.setupWorkspaceHooks(wtPath);
+            await plugin.setupWorkspaceHooks(cwd);
           }
 
-          const launchCfg = { project, worktree, session, daemonPort: 0, ...(mode.model ? { model: mode.model } : {}) };
+          const launchCfg = { project, worktree: worktree!, session, daemonPort: 0, ...(mode.model ? { model: mode.model } : {}) };
           const env: Record<string, string> = {
             VST_SESSION: session.id,
             VST_SPAWN_TOKEN: session.id,
-            VST_WORKTREE: worktree.id,
+            VST_WORKTREE: worktree!.id,
             VST_PROJECT: project.id,
             VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
             VST_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
@@ -416,7 +711,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
           await spawnSessionFromArgv({
             project,
-            worktree,
+            worktree: worktree!,
             session,
             argv: restoreArgv,
             env,
@@ -424,33 +719,47 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           });
 
           // Capture chat ID for future resumes (self-healing for legacy sessions)
-          const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+          const capturedId = await plugin.captureChatId?.({ session, project, worktree: worktree! }) ?? null;
           if (capturedId) {
             session.agentChatId = capturedId;
           }
         } else {
           // Fresh launch path: build prompt and spawn normally
-          const { buildPrompt } = await import("../services/promptBuilder.js");
-          const builtPrompt = await buildPrompt({
-            project,
-            worktree,
-            modeContext: mode.context,
-          });
-
-          // Get daemon port
           const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
 
-          // Spawn a fresh session
-          await spawnSession({
-            project,
-            worktree,
-            session,
-            plugin,
-            daemonPort,
-            systemPrompt: builtPrompt.systemPrompt,
-            taskPrompt: builtPrompt.taskPrompt,
-            model: mode.model,
-          });
+          if (isWorktreeSession) {
+            const { buildPrompt } = await import("../services/promptBuilder.js");
+            const builtPrompt = await buildPrompt({
+              project,
+              worktree: worktree!,
+              modeContext: mode.context,
+            });
+            await spawnSession({
+              project,
+              worktree: worktree!,
+              session,
+              plugin,
+              daemonPort,
+              systemPrompt: builtPrompt.systemPrompt,
+              taskPrompt: builtPrompt.taskPrompt,
+              model: mode.model,
+            });
+          } else {
+            const { buildDirectPrompt } = await import("../services/promptBuilder.js");
+            const builtPrompt = await buildDirectPrompt({
+              project,
+              modeContext: mode.context,
+            });
+            await spawnDirectSession({
+              project,
+              session,
+              plugin,
+              daemonPort,
+              systemPrompt: builtPrompt.systemPrompt,
+              taskPrompt: builtPrompt.taskPrompt,
+              model: mode.model,
+            });
+          }
         }
       } catch (err) {
         return reply.status(500).send({
@@ -460,22 +769,20 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     } else {
       // Terminal session — spawn a new shell session
       try {
-        const { worktreePath: getWtPath } = await import("../services/paths.js");
-        const wtPath = getWtPath(project.id, worktree.id);
         if (session.useTmux) {
-          await newSession({ name: session.tmuxName, cwd: wtPath });
+          await newSession({ name: session.tmuxName, cwd });
         } else {
           const { DirectPtyBackend } = await import("../services/directPty.js");
           await DirectPtyBackend.spawn({
             command: process.env.SHELL ?? "/bin/bash",
             args: [],
-            cwd: wtPath,
+            cwd,
             env: { ...process.env as Record<string, string> },
             cols: 80,
             rows: 24,
             sessionId: session.id,
             projectId: project.id,
-            worktreeId: worktree.id,
+            worktreeId: isWorktreeSession ? worktree!.id : undefined,
           });
         }
       } catch {
@@ -491,24 +798,36 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       },
     };
 
-    await mutateProject(project.id, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktree.id
-          ? {
-              ...w,
-              sessions: w.sessions.map((s) => (s.id === id ? updatedSession : s)),
-            }
-          : w,
-      ),
-    }));
+    if (isWorktreeSession) {
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        worktrees: p.worktrees.map((w) =>
+          w.id === worktree!.id
+            ? {
+                ...w,
+                sessions: w.sessions.map((s) => (s.id === id ? updatedSession : s)),
+              }
+            : w,
+        ),
+      }));
+    } else {
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        directSessions: p.directSessions.map((s) => (s.id === id ? updatedSession : s)),
+      }));
+    }
 
     broadcastAll({
       type: "session:resumed",
       sessionId: id,
       restoredFromHistory,
     });
-    return reply.send(serializeSession(worktree.id, updatedSession));
+
+    return reply.send(serializeSession(
+      isWorktreeSession ? worktree!.id : null,
+      project.id,
+      updatedSession,
+    ));
   });
 
   // POST /sessions/:id/input

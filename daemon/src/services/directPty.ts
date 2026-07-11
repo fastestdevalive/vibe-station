@@ -40,9 +40,9 @@ export class DirectPtyStream extends EventEmitter implements SessionStream {
   private sentinelWaiters = new Map<string, (hit: boolean) => void>();
   private sessionId: string;
   private projectId: string;
-  private worktreeId: string;
+  private worktreeId: string | undefined;
 
-  constructor(pty: IPty, sessionId: string, projectId: string, worktreeId: string) {
+  constructor(pty: IPty, sessionId: string, projectId: string, worktreeId: string | undefined) {
     super();
     // Long-lived stream with many connect/disconnect cycles can accumulate
     // chunk + close + error listeners over time (one per WSConnection). 0 = no
@@ -266,7 +266,7 @@ export class DirectPtyBackend {
     rows: number;
     sessionId: string;
     projectId: string;
-    worktreeId: string;
+    worktreeId: string | undefined;
   }): Promise<DirectPtyStream> {
     // Inherit the daemon's process.env (PATH, HOME, SHELL, NVM bits, etc.) so
     // shell launchers can resolve binaries like `claude`. Overlay caller-provided

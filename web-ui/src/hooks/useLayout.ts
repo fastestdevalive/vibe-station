@@ -3,9 +3,12 @@ import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "./useStore";
 /** Layout slice: region visibility + active tool tab + active ids (persisted via useWorkspaceStore). */
 export function useLayout() {
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
+  const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
-  const activeLayout = activeWorktreeId
-    ? (layoutByWorktree[activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT)
+  // Direct sessions (no worktree) key their layout by the project id.
+  const layoutKey = activeWorktreeId ?? activeDirectContextId;
+  const activeLayout = layoutKey
+    ? (layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT)
     : DEFAULT_WORKTREE_LAYOUT;
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
@@ -24,6 +27,7 @@ export function useLayout() {
     terminalDockVisible: activeLayout.terminalDockVisible,
     toolSplitOrientation: activeLayout.toolSplitOrientation ?? "horizontal",
     activeWorktreeId,
+    activeDirectContextId,
     activeSessionId,
     activeTerminalSessionId,
     activeProjectId,

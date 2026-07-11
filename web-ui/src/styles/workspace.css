@@ -501,6 +501,9 @@
 
 .tree-row__label {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -697,6 +700,162 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * New Project button — in the Projects heading.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.sidebar-projects-heading__add {
+  color: var(--fg-secondary);
+  opacity: 0.7;
+  transition: opacity var(--transition-fast);
+}
+
+.sidebar-projects-heading__add:hover {
+  opacity: 1;
+  color: var(--accent-color, var(--fg-primary));
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Project Plus Menu — popup for new worktree vs direct agent choice.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.project-plus-menu {
+  /* --bg-surface / --border-muted are not defined in tokens.css (both
+     declarations were being dropped, leaving the menu transparent and
+     borderless) — use the same tokens as `.menu-pop`. */
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1) 0;
+  min-width: 160px;
+}
+
+.project-plus-menu .menu-pop__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.project-plus-menu .menu-pop__item:hover {
+  background: var(--bg-hover);
+}
+
+.project-plus-menu .menu-pop__item:focus-visible {
+  /* --accent-color has no global definition; every other usage carries a
+     fg-primary fallback — without it this outline was dropped entirely. */
+  outline: 2px solid var(--accent-color, var(--fg-primary));
+  outline-offset: -2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Direct Sessions — agents running in project dir (no worktree).
+ * Visually distinct from worktrees: dashed left rail, italic label, "direct"
+ * badge. Rows lean on the `.tree-row` base for layout, hover and active
+ * backgrounds — only the differences live here.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.direct-sessions-group {
+  /* Rail aligns with the worktree rows' 12px indent (see
+     `.tree-row.tree-row--worktree`). --border-subtle is near-invisible
+     against the sidebar bg in both themes; --border-default keeps the rail
+     quiet but perceivable. */
+  border-left: 1px dashed var(--border-default);
+  margin-left: 12px;
+  padding-left: var(--space-1);
+}
+
+.tree-row--direct-session {
+  gap: var(--space-2);
+  min-height: 28px; /* match .tree-row--worktree, not the 32px .tree-row base */
+  color: var(--fg-secondary);
+}
+
+.tree-row--direct-session:hover,
+.tree-row--direct-session[data-active="true"] {
+  color: var(--fg-primary);
+}
+
+.tree-row--direct-session:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: -2px;
+}
+
+/* Same width as `.wt-leading-slot` so status dots form one column. */
+.direct-session__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  min-width: 12px;
+  flex-shrink: 0;
+}
+
+.direct-session__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+  font-weight: var(--font-weight-light);
+}
+
+.tree-row--direct-session[data-active="true"] .direct-session__label {
+  font-weight: var(--font-weight-normal);
+}
+
+.direct-session__badge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--fg-muted);
+  /* bg-secondary alone vanishes against the sidebar bg (5% lightness apart
+     in both themes); the border makes the pill legible on the resting row
+     while bg-secondary still reads as a cutout on hover/active rows. */
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  text-transform: lowercase;
+}
+
+/* Collapsed rail: no room for the rail/badge chrome — mirror the collapsed
+ * worktree treatment (centered abbreviation, no indent). */
+.left-sidebar--collapsed .direct-sessions-group {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+.left-sidebar--collapsed .tree-row--direct-session {
+  justify-content: center;
+  padding: var(--space-1);
+  min-height: 26px;
+}
+
+.left-sidebar--collapsed .direct-session__icon {
+  display: none;
+}
+
+.left-sidebar--collapsed .direct-session__label {
+  flex: 0 1 auto;
+  text-align: center;
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: -0.03em;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
  * Pinned section — mirrors selected worktrees at the top of the sidebar.
  * Rows are two-line (branch + project subheader). The ⋯ menu and id chip
  * sit at the top-right (not vertically centered) because the row is taller
@@ -782,6 +941,43 @@
 .pinned-row .wt-menu-trigger {
   top: 4px;
   transform: none;
+}
+
+/* The `.pinned-row` resets for indent/height/alignment (above) are single-class
+ * (0,1,0) and were silently defeated by the later, higher-specificity
+ * `.tree-row.tree-row--worktree` rule (margin-left:12px; min-height:28px) and the
+ * base `.tree-row` (min-height:32px; align-items:center). That left the pinned
+ * worktree row indented 12px and a few px taller than the pinned direct-session
+ * row. Carry `.left-sidebar` + `.tree-row` to reach (0,3,0) so BOTH pinned row
+ * types align pixel-for-pixel. No markup change. */
+.left-sidebar .tree-row.pinned-row {
+  margin-left: 0;
+  min-height: auto;
+  align-items: flex-start;
+}
+
+/* Unify the trailing ⋯ affordance across the two pinned row types. Worktree rows
+ * already hide their ⋯ until hover/focus (showing the id chip at rest); give the
+ * direct-session pinned row the same hover-reveal so at rest both rows are clean
+ * (id / badge) and hover surfaces the menu. Kept in-flow (opacity only) so the
+ * always-on "direct" badge doesn't shift. */
+.tree-row--direct-session.pinned-row .wt-menu-trigger {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+.tree-row--direct-session.pinned-row:hover .wt-menu-trigger,
+.tree-row--direct-session.pinned-row:focus-within .wt-menu-trigger,
+.tree-row--direct-session.pinned-row .wt-menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Direct sessions read italic in the project tree (`.direct-session__label`);
+ * carry that same signal into the Pinned section so one entity looks the same
+ * in both places (worktree branch labels stay roman). */
+.tree-row--direct-session .pinned-row__primary {
+  font-style: italic;
 }
 
 /* Menu items with an icon (e.g. Pin/Unpin) — small leading glyph. */
@@ -1089,15 +1285,45 @@
   opacity: 0.55;
 }
 
+/* Hover = a NEUTRAL, transient highlight (grey bg, mid opacity). Deliberately a
+   different tone from the selected state so an unselected button never looks
+   selected while pointed at — important for the same-icon toggles (terminal,
+   tool panel) whose glyph doesn't change between states. */
 .top-bar__pane-btn:hover {
+  color: var(--fg-secondary);
+  background: var(--bg-hover);
+  opacity: 0.85;
+}
+
+/* Selected = a persistent, ACCENT-tinted (colored) highlight at full strength.
+   The colored tone reads clearly apart from the neutral grey hover. */
+.top-bar__pane-btn--on {
   color: var(--fg-primary);
+  background: color-mix(in srgb, var(--accent, #6e78c7) 20%, transparent);
   opacity: 1;
 }
 
-.top-bar__pane-btn--on {
+/* Selected + hover = strengthen the accent tint so hovering a selected button
+   still gives feedback instead of looking inert. The extra `.top-bar__pane-btn`
+   class raises this to (0,3,0) so it beats the plain `.top-bar__pane-btn:hover`
+   (0,2,0) on specificity, not merely source order. */
+.top-bar__pane-btn.top-bar__pane-btn--on:hover {
   color: var(--fg-primary);
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--accent, #6e78c7) 30%, transparent);
   opacity: 1;
+}
+
+/* Disabled pane button — clearly inert: dimmer, no hover highlight. Defensive:
+   no pane toggle is disabled today, but this keeps a future disabled control
+   from reading as merely unselected-with-a-hover. */
+.top-bar__pane-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.top-bar__pane-btn:disabled:hover {
+  color: var(--fg-muted);
+  background: transparent;
+  opacity: 0.3;
 }
 
 .top-bar__actions {
@@ -2258,6 +2484,43 @@
   gap: var(--space-2);
 }
 
+/* Fixed-size dialog variant — the card keeps a stable footprint instead of
+   growing/shrinking with its content (e.g. the New Agent dialog, whose body
+   reveals fields as you go). Header + footer stay pinned; the body scrolls. */
+.dialog-card--agent {
+  max-width: 640px;
+  width: min(90vw, 640px);
+  height: min(80vh, 760px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-card--agent .dialog-card__header,
+.dialog-card--agent .dialog-card__footer {
+  flex: 0 0 auto;
+}
+.dialog-card--agent .dialog-card__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Mobile: the New Agent dialog goes fullscreen. `--flush` drops the overlay
+   padding so the card can fill the viewport edge-to-edge. */
+@media (max-width: 768px) {
+  .dialog-overlay--flush {
+    padding: 0;
+  }
+  .dialog-card--agent {
+    width: 100vw;
+    height: 100dvh;
+    max-width: none;
+    max-height: none;
+    border: none;
+    border-radius: 0;
+  }
+}
+
 .field-label {
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
@@ -2290,6 +2553,300 @@
 
 .field-textarea:focus {
   border-color: var(--border-strong);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Form field styles (shared across dialogs)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.form-field > label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-secondary);
+}
+
+.form-optional {
+  font-weight: var(--font-weight-normal);
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+}
+
+.form-hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  margin-top: var(--space-1);
+}
+
+
+.form-divider {
+  border: none;
+  border-top: var(--border-width) solid var(--border-subtle);
+  margin: var(--space-2) 0;
+}
+
+.form-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* "Will create <path>" line — the path is highlighted (mono chip, primary
+   colour) so the target directory reads clearly instead of as muted hint text. */
+.new-agent__will-create {
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+.new-agent__will-create-path {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-primary);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  word-break: break-all;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  padding: var(--space-1) var(--space-2);
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-2));
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.checkbox-label:hover {
+  background: var(--bg-hover);
+}
+
+.checkbox-label:has(input:checked) {
+  background: color-mix(in srgb, var(--accent, #6e78c7) 12%, transparent);
+}
+
+.checkbox-label:has(input:checked):hover {
+  background: color-mix(in srgb, var(--accent, #6e78c7) 18%, transparent);
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent, var(--fg-primary));
+}
+
+/* Disabled checkbox row (e.g. "Use worktree" on a non-git project) — dim it and
+   drop the pointer affordance so it reads as unavailable, not just unchecked. */
+.checkbox-label:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.checkbox-label:has(input:disabled) input[type="checkbox"] {
+  cursor: not-allowed;
+}
+.checkbox-label:has(input:disabled):hover {
+  background: transparent;
+}
+
+.dialog-error {
+  font-size: var(--font-size-sm);
+  color: var(--destructive);
+  padding: var(--space-2) var(--space-3);
+  /* Tinted panel keeps the red text readable in both themes (solid
+     --destructive-muted made dark-theme text nearly illegible). */
+  background: color-mix(in srgb, var(--destructive) 10%, transparent);
+  border: var(--border-width) solid color-mix(in srgb, var(--destructive) 35%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * New Project dialog — single combobox + chip + directory autocomplete
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.combobox-wrapper {
+  position: relative;
+}
+
+.project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-input);
+}
+
+.project-chip__icon {
+  opacity: 0.7;
+  flex: none;
+}
+
+.project-chip__name {
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-chip__remove {
+  margin-left: auto;
+  flex: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-muted);
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-base);
+  line-height: 1;
+}
+
+.project-chip__remove:hover {
+  color: var(--fg-primary);
+}
+
+.combobox-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 60;
+  padding: var(--space-1);
+}
+
+.combobox-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+}
+
+.combobox-option:hover,
+.combobox-option--active {
+  background: var(--bg-hover);
+}
+
+.combobox-option__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.combobox-option__subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.combobox-popup__group-label {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* Dialog buttons — layered on the global `button` element style. Without
+   these, primary and secondary actions rendered identically. */
+.btn {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--accent, #6e78c7);
+  border-color: var(--accent, #6e78c7);
+  color: #ffffff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent, #6e78c7) 88%, #ffffff);
+}
+
+.btn--secondary {
+  background: transparent;
+  border-color: var(--border-default);
+  color: var(--fg-primary);
+}
+
+.btn--secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+/* Text controls carrying className="input" (e.g. dialog textareas). */
+.input {
+  width: 100%;
+  background: var(--bg-input);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  padding: var(--space-2) var(--space-3);
+  outline: none;
+}
+
+textarea.input {
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.input::placeholder {
+  color: var(--fg-muted);
+}
+
+.input:focus {
+  border-color: var(--accent, var(--border-strong));
 }
 
 /* Subtle connection pill in the topbar. Hidden when online. */

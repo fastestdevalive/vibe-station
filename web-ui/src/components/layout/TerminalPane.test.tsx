@@ -118,6 +118,7 @@ describe("TerminalPane", () => {
     resolveResume({
       id: "sess-main",
       worktreeId: "wt-1",
+      projectId: "proj-1",
       modeId: "mode-1",
       type: "agent",
       label: "main",

@@ -71,10 +71,35 @@ export function reserveNextTerminalSlot(worktree: WorktreeRecord): `t${number}` 
 }
 
 /**
+ * Reserve the next free direct session slot number (d{n}) for a project.
+ * Direct sessions run in the project directory without worktree isolation.
+ */
+export function reserveNextDirectSlot(project: ProjectRecord): `d${number}` {
+  const usedNums = new Set(
+    project.directSessions
+      .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("d"))
+      .map((s) => parseInt((s.slot as string).slice(1), 10)),
+  );
+  for (let n = 1; n < 100_000; n++) {
+    if (!usedNums.has(n)) return `d${n}`;
+  }
+  throw new Error(`Could not reserve direct slot for project ${project.id}`);
+}
+
+/**
  * Build the canonical tmux session name.
  * Format: vr-{prefix}-{worktreeNum}-{slot}
  * e.g. vr-vibe-1-m
  */
 export function buildTmuxName(prefix: string, worktreeNum: number, slot: SessionSlot): string {
   return `vr-${prefix}-${worktreeNum}-${slot}`;
+}
+
+/**
+ * Build tmux session name for direct sessions (no worktree).
+ * Format: vr-{prefix}-d{n}
+ * e.g. vr-vibe-d1
+ */
+export function buildDirectTmuxName(prefix: string, slot: `d${number}`): string {
+  return `vr-${prefix}-${slot}`;
 }

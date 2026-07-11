@@ -11,7 +11,10 @@ export interface Project {
   name: string;
   path: string;
   prefix: string;
-  defaultBranch: string;
+  /** True if this is a git repository; false for non-git directories. */
+  isGit: boolean;
+  /** Default branch (git projects only). */
+  defaultBranch?: string;
   createdAt: string;
   /** When true, the project and all its worktrees are hidden from the sidebar
    *  and dashboard. Always emitted by the daemon (defaults to false). */
@@ -33,26 +36,38 @@ export interface Worktree {
   pinnedAt: string | null;
 }
 
+/**
+ * File-browsing scope. "worktree" hits /worktrees/:id/... (git-aware);
+ * "project" hits /projects/:id/... (plain files in the project base dir, used
+ * by direct sessions which have no worktree).
+ */
+export type FileScope = "worktree" | "project";
+
 export type SessionType = "agent" | "terminal";
 
 export type SessionState = "not_started" | "working" | "idle" | "done" | "exited";
 
 export interface Session {
   id: string;
-  worktreeId: string;
+  /** Worktree this session belongs to; null for direct sessions. */
+  worktreeId: string | null;
+  /** Project this session belongs to. Always present. */
+  projectId: string;
   modeId: string | null;
   type: SessionType;
   /** Display label in tabs / sidebar (custom name when set, else slot-derived) */
   label: string;
   /** User-set/default display name (terminals). null when slot-derived. */
   name?: string | null;
-  /** Stable slot: `m` = main (non-closable), `a{n}`, `t{n}` */
+  /** Stable slot: `m` = main (non-closable), `a{n}`, `t{n}`, `d{n}` (direct) */
   slot: string;
   state: SessionState;
   lifecycleState: SessionState;
   tmuxName: string;
   useTmux?: boolean;
   createdAt: string;
+  /** When set, the session is pinned to the top of its sidebar group. */
+  pinnedAt?: string | null;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -83,7 +98,10 @@ export type WSEvent =
   | {
       type: "session:created";
       sessionId: string;
-      worktreeId: string;
+      /** Null for direct sessions (no worktree). */
+      worktreeId: string | null;
+      /** Project ID (present for direct sessions). */
+      projectId?: string;
       sessionType: SessionType;
       /** Legacy: mode id string when agent; omitted for terminal */
       mode?: string;
@@ -113,6 +131,11 @@ export type WSEvent =
   | {
       type: "session:deleted";
       sessionId: string;
+    }
+  | {
+      type: "session:updated";
+      sessionId: string;
+      pinnedAt?: string | null;
     }
   | {
       type: "session:error";
@@ -204,7 +227,8 @@ export interface ChangedPathEntry {
 
 export interface ProjectBranchesResponse {
   branches: string[];
-  defaultBranch: string;
+  /** Null for a non-git project (the daemon sends null in that case). */
+  defaultBranch: string | null;
 }
 
 export interface CreateWorktreeBody {
@@ -225,6 +249,31 @@ export interface CreateSessionBody {
   /** Optional display name for terminals; blank → daemon assigns "Terminal N". */
   name?: string;
 }
+
+/** Body for creating a direct session (no worktree). */
+export interface CreateDirectSessionBody {
+  target: "direct";
+  projectId: string;
+  type: SessionType;
+  modeId?: string;
+  prompt?: string;
+  useTmux?: boolean;
+  name?: string;
+}
+
+/** Body for adding a new project. */
+export interface AddProjectBody {
+  path: string;
+  name?: string;
+  /** When true, run the git-ready setup script (init + .gitignore + initial
+   *  `main` commit) against the directory after registering it. */
+  setup?: boolean;
+}
+
+/** Response from POST /projects. Extends Project with an optional `warning`
+ *  when `setup: true` was requested but the setup script failed (the project
+ *  stays registered regardless — see daemon routes/projects.ts). */
+export type AddProjectResponse = Project & { warning?: string };
 
 export interface SendInputBody {
   data: string;
@@ -255,4 +304,43 @@ export interface TerminalApi {
    *  composition events to the daemon's input-debug log. Optional so the mock
    *  can omit it. */
   sendDebug?: (entries: Record<string, unknown>[]) => Promise<void>;
+}
+
+/** User-configurable settings from GET/PATCH /settings */
+export interface Settings {
+  defaultProjectsDir: string;
+  /** Runtime-computed home dir (not persisted) — for `~` display/expansion. */
+  homeDir?: string;
+}
+
+/** Body for POST /projects/create — create a brand new project directory. */
+export interface CreateProjectBody {
+  /** Project name (directory name). */
+  name: string;
+  /** Parent directory override (default: settings.defaultProjectsDir). */
+  dir?: string;
+  /** Optional: start an agent after creating. */
+  startAgent?: {
+    modeId: string;
+    prompt?: string;
+    useWorktree?: boolean;
+    /** Branch name for the worktree (useWorktree only). Default "feature". */
+    branch?: string;
+  };
+}
+
+/** Response from POST /projects/create. */
+export interface CreateProjectResponse {
+  project: Project;
+  worktree?: Worktree;
+  session?: Session;
+  warning?: string;
+}
+
+/** Response from GET /fs/complete — directory-only autocomplete. */
+export interface FsCompleteResponse {
+  /** The directory being listed (absolute path). */
+  base: string;
+  /** Child directories matching the completion, sorted by name (capped). */
+  entries: { name: string; path: string }[];
 }

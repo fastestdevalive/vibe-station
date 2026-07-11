@@ -4,6 +4,7 @@ import type { ApiInstance } from "@/api";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
+import { ProjectsSetting } from "./ProjectsSetting";
 import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
 
 interface Section {
@@ -25,6 +26,8 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState("modes");
   const tabLayoutId = useId();
 
+  const projectsRef = useRef<HTMLElement | null>(null);
+
   const sections: Section[] = [
     {
       id: "modes",
@@ -37,6 +40,12 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
       label: "Appearance",
       ref: appearanceRef,
       content: <AppearanceSetting />,
+    },
+    {
+      id: "projects",
+      label: "Projects",
+      ref: projectsRef,
+      content: <ProjectsSetting api={api} />,
     },
     {
       id: "hidden-projects",

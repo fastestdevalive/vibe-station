@@ -7,6 +7,7 @@ const W1 = "wt-1";
 const mockSession = (id: string, slot: "m" | "a" = "m"): Session => ({
   id,
   worktreeId: W1,
+  projectId: P1,
   modeId: null,
   type: "terminal",
   state: "working",

@@ -250,6 +250,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const project = getProject(projectId);
     if (!project) return reply.status(404).send({ error: `Project '${projectId}' not found` });
 
+    // Guard: worktrees require git repository
+    if (!project.isGit) {
+      return reply.status(400).send({
+        error: "Worktrees require a git repository. Use direct sessions for non-git projects.",
+      });
+    }
+
     // 1. Validate branch name
     const branchValid = validateBranch(branch);
     if (!branchValid.ok) {
@@ -264,8 +271,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       });
     }
 
-    // 2. Resolve baseBranch
-    const baseBranch = baseBranchInput ?? project.defaultBranch;
+    // 2. Resolve baseBranch (defaultBranch is guaranteed for git projects)
+    const baseBranch = baseBranchInput ?? project.defaultBranch!;
 
     // Ensure baseBranch exists locally — try fetching from origin first
     if (!(await branchExists(project.absolutePath, baseBranch))) {
@@ -359,9 +366,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         type: "session:created",
         sessionId: mainSession.id,
         worktreeId: wtId,
+        projectId,
         sessionType: "agent",
         mode: modeId,
-        snapshot: serializeSession(wtId, mainSession),
+        snapshot: serializeSession(wtId, projectId, mainSession),
       });
 
       void runMainSpawnJob({
