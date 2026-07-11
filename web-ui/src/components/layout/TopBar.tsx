@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Columns2,
+  PanelBottom,
   PanelLeft,
   PanelRight,
   Rows2,
@@ -32,11 +33,16 @@ function shortcutHints() {
 
 interface TopBarProps {
   /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles.
-   *  login = unauthenticated state — only shows brand + "not signed in" chip, no sidebar. */
-  layoutMode?: "workspace" | "dashboard" | "settings" | "login";
+   *  login = unauthenticated state — only shows brand + "not signed in" chip, no sidebar.
+   *  direct-session = terminal-only view for direct sessions (no worktree). */
+  layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "direct-session";
   projects: Project[];
   worktrees: Worktree[];
   sessions: Session[];
+  /** Direct session for breadcrumb (when layoutMode === "direct-session") */
+  directSession?: Session;
+  /** Project for direct session breadcrumb */
+  directSessionProject?: Project;
   isMobile: boolean;
   onToggleLeftSidebar: () => void;
   leftSidebarCollapsed: boolean;
@@ -50,6 +56,8 @@ export function TopBar({
   projects,
   worktrees,
   sessions,
+  directSession,
+  directSessionProject,
   isMobile,
   onToggleLeftSidebar,
   leftSidebarCollapsed,
@@ -96,6 +104,9 @@ export function TopBar({
     crumbParts.push({ label: "Dashboard" });
   } else if (layoutMode === "settings") {
     crumbParts.push({ label: "Settings" });
+  } else if (layoutMode === "direct-session") {
+    if (directSessionProject) crumbParts.push({ label: directSessionProject.name });
+    if (directSession) crumbParts.push({ label: directSession.label, highlight: true });
   } else {
     if (project) crumbParts.push({ label: project.name });
     if (wt) crumbParts.push({ label: wt.branch, highlight: true });
@@ -109,7 +120,9 @@ export function TopBar({
       ? "Dashboard"
       : layoutMode === "settings"
         ? "Settings"
-        : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+        : layoutMode === "direct-session"
+          ? [directSessionProject?.name, directSession?.label].filter(Boolean).join(" · ") || "Direct Session"
+          : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
     <span className="top-bar__crumb-seg">—</span>
@@ -210,7 +223,7 @@ export function TopBar({
       )}
       <div className="top-bar__end">
         <ConnectionStatus />
-        {layoutMode === "workspace" ? (
+        {layoutMode === "workspace" || layoutMode === "direct-session" ? (
           <>
             <button
               type="button"
@@ -232,7 +245,6 @@ export function TopBar({
                     : "Place agent and tools side by side"
                 }
                 onClick={toggleToolSplitOrientation}
-                disabled={!toolPanelVisible}
               >
                 {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
               </button>
@@ -254,7 +266,9 @@ export function TopBar({
                 title="Toggle tool panel"
                 onClick={toggleToolPanel}
               >
-                <PanelRight size={17} />
+                {/* Vertical split docks the tool panel to the bottom, so mirror
+                    that with a bottom-panel icon instead of the right-panel one. */}
+                {toolSplitOrientation === "vertical" ? <PanelBottom size={17} /> : <PanelRight size={17} />}
               </button>
             </div>
           </>

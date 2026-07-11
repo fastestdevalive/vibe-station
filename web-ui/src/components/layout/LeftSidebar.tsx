@@ -1,8 +1,8 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -10,9 +10,12 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
-import { worktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
+import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
+import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
+import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 import { Logo } from "@/components/shared/Logo";
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
@@ -37,6 +40,12 @@ function disambiguatedAbbrev(
     "?";
   const stem = base.replace(/[-–—.]$/u, "").slice(0, 2);
   return `${stem}${tail}`.slice(0, 3);
+}
+
+/** Map SessionState to WorktreeRolledUpStatus for StatusDot. */
+function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
+  if (state === "not_started") return "spawning";
+  return state; // working, idle, done, exited all map directly
 }
 
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
@@ -69,6 +78,7 @@ export function LeftSidebar({
   onWorktreeSelected,
 }: LeftSidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { theme, toggleTheme, toggleFont } = useTheme();
   // Server data comes from the central store, populated and refreshed by
   // `useServerSync` (mounted once in Workspace). LeftSidebar derives the
@@ -84,7 +94,32 @@ export function LeftSidebar({
   }, [worktrees]);
   const sessionMap = useMemo(() => {
     const m: Record<string, Session[]> = {};
-    for (const s of sessions) (m[s.worktreeId] ??= []).push(s);
+    for (const s of sessions) {
+      // Skip direct sessions (worktreeId === null) — they go in directSessionMap
+      if (s.worktreeId != null) {
+        (m[s.worktreeId] ??= []).push(s);
+      }
+    }
+    return m;
+  }, [sessions]);
+  /** Direct sessions grouped by projectId. */
+  const directSessionMap = useMemo(() => {
+    const m: Record<string, Session[]> = {};
+    for (const s of sessions) {
+      if (s.worktreeId === null && s.projectId) {
+        (m[s.projectId] ??= []).push(s);
+      }
+    }
+    // Pinned sessions first (newest pin on top), then the rest by id for stability.
+    for (const id of Object.keys(m)) {
+      m[id]!.sort((a, b) => {
+        const ap = a.pinnedAt ?? "";
+        const bp = b.pinnedAt ?? "";
+        if (!!ap !== !!bp) return ap ? -1 : 1;
+        if (ap && bp && ap !== bp) return ap < bp ? 1 : -1; // newer pin first
+        return a.id < b.id ? -1 : 1;
+      });
+    }
     return m;
   }, [sessions]);
   /** Project lookup for the project-name subheader on pinned rows. */
@@ -118,6 +153,20 @@ export function LeftSidebar({
         .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
     [worktrees, hiddenProjectIds],
   );
+  /**
+   * Pinned direct sessions (no worktree), newest pin first. Shown in the same
+   * "Pinned" section as worktrees so "Pin to top" surfaces them at the top of
+   * the sidebar, not just within their project group.
+   */
+  const pinnedDirectSessions = useMemo(
+    () =>
+      sessions
+        .filter((s) => s.worktreeId === null && s.pinnedAt != null && !hiddenProjectIds.has(s.projectId))
+        .slice()
+        .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
+    [sessions, hiddenProjectIds],
+  );
+  const hasPinned = pinnedWorktrees.length > 0 || pinnedDirectSessions.length > 0;
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("sidebar:openProj");
@@ -135,7 +184,11 @@ export function LeftSidebar({
   const toggleInactiveWorktreesFilter = useWorkspaceStore((s) => s.toggleInactiveWorktreesFilter);
 
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
+  const [directAgentProject, setDirectAgentProject] = useState<Project | null>(null);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [plusMenu, setPlusMenu] = useState<{ project: Project; rect: DOMRect } | null>(null);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
+  const [sessMenu, setSessMenu] = useState<{ session: Session; rect: DOMRect } | null>(null);
   const [projMenu, setProjMenu] = useState<{ project: Project; rect: DOMRect } | null>(null);
 
   /** Scroll container — used to snap the active worktree into view when the
@@ -149,6 +202,7 @@ export function LeftSidebar({
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
+  const [pendingDismissSession, setPendingDismissSession] = useState<Session | null>(null);
 
   // Subscribe to live session output for every session we know about so the
   // rollup picks up state transitions in real time. The set of ids comes from
@@ -186,6 +240,31 @@ export function LeftSidebar({
   }, [wtMenu]);
 
   useEffect(() => {
+    if (!sessMenu) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-sess-menu-panel]") || t.closest("[data-sess-menu-trigger]")) return;
+        setSessMenu(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setSessMenu(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [sessMenu]);
+
+  useEffect(() => {
     if (!projMenu) return undefined;
     let removeListeners: (() => void) | undefined;
     const timer = window.setTimeout(() => {
@@ -209,6 +288,32 @@ export function LeftSidebar({
       removeListeners?.();
     };
   }, [projMenu]);
+
+  // Close plus menu on outside click
+  useEffect(() => {
+    if (!plusMenu) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-project-plus-menu]") || t.closest("[data-plus-menu-trigger]")) return;
+        setPlusMenu(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setPlusMenu(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [plusMenu]);
 
   useEffect(() => {
     if (!filterMenuRect) return undefined;
@@ -260,6 +365,24 @@ export function LeftSidebar({
       if (activeWorktreeId === worktree.id) {
         clearWorkspaceSelection();
       }
+    } catch {
+      /* surface errors later */
+    }
+  }
+
+  async function confirmDismissSession() {
+    if (!pendingDismissSession) return;
+    const sess = pendingDismissSession;
+    setPendingDismissSession(null);
+    // If we're viewing the session being dismissed, leave for the dashboard
+    // BEFORE deletion so we don't briefly render a dead session.
+    if (location.pathname === `/session/${sess.id}`) {
+      navigate("/", { replace: true });
+    }
+    try {
+      // Removes the session record + kills the process + removes its data dir.
+      // The daemon NEVER deletes the project's own files (guarded server-side).
+      await api.deleteSession(sess.id);
     } catch {
       /* surface errors later */
     }
@@ -372,12 +495,67 @@ export function LeftSidebar({
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
-        {!collapsed && pinnedWorktrees.length > 0 ? (
-          <section className="pinned-section" aria-label="Pinned worktrees">
+        {!collapsed && hasPinned ? (
+          <section className="pinned-section" aria-label="Pinned">
             <div className="sidebar-projects-heading pinned-section__heading">
               <span className="sidebar-projects-heading__gutter" aria-hidden />
               <span className="sidebar-projects-heading__title">Pinned</span>
             </div>
+            {pinnedDirectSessions.map((sess) => {
+              const proj = projectById[sess.projectId];
+              const isActive = location.pathname === `/session/${sess.id}`;
+              return (
+                <div key={`pinned-sess-${sess.id}`} className="wt-row-wrap">
+                  <div
+                    className="tree-row tree-row--direct-session pinned-row"
+                    data-active={isActive}
+                    style={{ position: "relative" }}
+                    title={`${sess.label} — direct session`}
+                  >
+                    <Link
+                      to={`/session/${sess.id}`}
+                      className="wt-row__stretch-link"
+                      aria-label={`Open pinned direct session ${sess.label}`}
+                      onClick={() => {
+                        if (isMobile) setMobileSidebarOpen(false);
+                      }}
+                      tabIndex={-1}
+                    />
+                    <span className="wt-leading-slot pinned-row__leading" aria-hidden>
+                      <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
+                    </span>
+                    <div className="pinned-row__text">
+                      <span className="pinned-row__primary">{sess.label}</span>
+                      <span className="pinned-row__subhead" title={proj?.path}>
+                        {proj?.name ?? sess.projectId}
+                      </span>
+                    </div>
+                    <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                      <span className="direct-session__badge">direct</span>
+                      <button
+                        type="button"
+                        data-sess-menu-trigger
+                        className="icon-btn wt-menu-trigger tree-row__action"
+                        aria-label={`Session actions for ${sess.label}`}
+                        aria-expanded={sessMenu?.session.id === sess.id}
+                        aria-haspopup="menu"
+                        title="Session menu"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setSessMenu((prev) =>
+                            prev?.session.id === sess.id ? null : { session: sess, rect },
+                          );
+                        }}
+                      >
+                        <MoreHorizontal size={16} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
             {pinnedWorktrees.map((w) => {
               const proj = projectById[w.projectId];
               const isActive = activeWorktreeId === w.id && location.pathname.startsWith("/worktree/");
@@ -459,6 +637,15 @@ export function LeftSidebar({
               <span className="sidebar-projects-heading__title">Projects</span>
               <button
                 type="button"
+                className="icon-btn sidebar-projects-heading__add"
+                title="New agent"
+                aria-label="New agent"
+                onClick={() => setAddProjectOpen(true)}
+              >
+                <Plus size={14} />
+              </button>
+              <button
+                type="button"
                 data-filter-menu-trigger
                 className="icon-btn"
                 title={hideInactiveWorktrees ? "Showing active only" : "Filter worktrees"}
@@ -481,9 +668,9 @@ export function LeftSidebar({
         {visibleProjects.length === 0 ? (
           <div className={`empty-state ${collapsed ? "empty-state--collapsed-rail" : ""}`} style={{ padding: collapsed ? "var(--space-2)" : "var(--space-4)" }}>
             {collapsed ? (
-              <span title="No projects yet — add one with the CLI">∅</span>
+              <span title="No projects yet — click + to add one">∅</span>
             ) : (
-              "No projects yet. Add one with the CLI."
+              "No projects yet."
             )}
           </div>
         ) : null}
@@ -511,10 +698,19 @@ export function LeftSidebar({
               </button>
               <button
                 type="button"
+                data-plus-menu-trigger
                 className="icon-btn tree-row__action"
                 aria-label={`New session in ${p.name}`}
+                aria-haspopup="menu"
+                aria-expanded={plusMenu?.project.id === p.id}
                 title={collapsed ? `New session — ${p.name}` : undefined}
-                onClick={() => setNewSessProject(p)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setPlusMenu((prev) =>
+                    prev?.project.id === p.id ? null : { project: p, rect },
+                  );
+                }}
               >
                 <Plus size={16} />
               </button>
@@ -539,6 +735,67 @@ export function LeftSidebar({
                 </button>
               ) : null}
             </div>
+            {/* Direct sessions (no worktree) — shown first, above worktrees */}
+            {openProj.has(p.id) && (directSessionMap[p.id] ?? []).length > 0 ? (
+              <div className="direct-sessions-group">
+                {(directSessionMap[p.id] ?? []).map((sess) => (
+                  <div key={sess.id} className="wt-row-wrap">
+                    <div
+                      className="tree-row tree-row--direct-session"
+                      data-active={location.pathname === `/session/${sess.id}`}
+                      style={{ position: "relative" }}
+                      title={collapsed ? `${sess.label} — direct session` : "Direct session (no worktree)"}
+                    >
+                      <Link
+                        to={`/session/${sess.id}`}
+                        className="wt-row__stretch-link"
+                        aria-label={`Open direct session ${sess.label}`}
+                        onClick={() => {
+                          if (isMobile) setMobileSidebarOpen(false);
+                        }}
+                        tabIndex={-1}
+                      />
+                      <span className="direct-session__icon" aria-hidden>
+                        <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
+                      </span>
+                      <span className="direct-session__label">
+                        {collapsed ? sess.slot : sess.label}
+                      </span>
+                      {!collapsed && sess.pinnedAt ? (
+                        <Pin size={10} fill="currentColor" aria-label="Pinned" style={{ flexShrink: 0, opacity: 0.7 }} />
+                      ) : null}
+                      {!collapsed && (
+                        <span className="direct-session__badge">direct</span>
+                      )}
+                      {!collapsed ? (
+                        <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                          <button
+                            type="button"
+                            data-sess-menu-trigger
+                            className="icon-btn wt-menu-trigger tree-row__action"
+                            aria-label={`Session actions for ${sess.label}`}
+                            aria-haspopup="menu"
+                            aria-expanded={sessMenu?.session.id === sess.id}
+                            title="Session menu"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setSessMenu((prev) =>
+                                prev?.session.id === sess.id ? null : { session: sess, rect },
+                              );
+                            }}
+                          >
+                            <MoreHorizontal size={16} />
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {/* Worktrees — shown after direct sessions */}
             {openProj.has(p.id)
               ? (() => {
                   const wtList = (worktreeMap[p.id] ?? []).filter((w) => {
@@ -655,13 +912,54 @@ export function LeftSidebar({
         </div>
       </div>
 
+      {/* Plus menu for project actions */}
+      {plusMenu ? (
+        <ProjectPlusMenu
+          project={plusMenu.project}
+          rect={plusMenu.rect}
+          onNewWorktree={() => {
+            setPlusMenu(null);
+            setNewSessProject(plusMenu.project);
+          }}
+          onDirectAgent={() => {
+            setPlusMenu(null);
+            setDirectAgentProject(plusMenu.project);
+          }}
+          onClose={() => setPlusMenu(null)}
+        />
+      ) : null}
+
+      {/* New worktree dialog */}
       {newSessProject ? (
         <NewSessionDialog
           open
           projectId={newSessProject.id}
           projectName={newSessProject.name}
           api={api}
-          onClose={() => setNewSessProject(null)}
+          onClose={() => {
+            setNewSessProject(null);
+          }}
+          onCreated={() => { /* store stays current via session:created WS event */ }}
+        />
+      ) : null}
+
+      {/* New agent dialog — owns spawn + navigation itself, so onCreated is
+          just a refresh hook (store stays current via WS events either way). */}
+      <NewAgentDialog
+        open={addProjectOpen}
+        api={api}
+        onClose={() => setAddProjectOpen(false)}
+        onCreated={() => { /* store stays current via WS events */ }}
+      />
+
+      {/* Direct agent dialog */}
+      {directAgentProject ? (
+        <DirectAgentDialog
+          open
+          projectId={directAgentProject.id}
+          projectName={directAgentProject.name}
+          api={api}
+          onClose={() => setDirectAgentProject(null)}
           onCreated={() => { /* store stays current via session:created WS event */ }}
         />
       ) : null}
@@ -690,6 +988,19 @@ export function LeftSidebar({
         confirmLabel="Dismiss"
         onConfirm={() => void confirmDismissWorktree()}
         onCancel={() => setPendingDismiss(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDismissSession !== null}
+        title="Dismiss agent?"
+        message={
+          pendingDismissSession
+            ? `Remove “${pendingDismissSession.label}” from vst? The agent process is stopped. Your project files are NOT touched.`
+            : ""
+        }
+        confirmLabel="Dismiss"
+        onConfirm={() => void confirmDismissSession()}
+        onCancel={() => setPendingDismissSession(null)}
       />
 
       {wtMenu
@@ -788,6 +1099,91 @@ export function LeftSidebar({
             document.body,
           )
         : null}
+      {sessMenu
+        ? createPortal(
+            <div
+              className="menu-pop wt-menu-pop--portal"
+              data-sess-menu-panel
+              role="menu"
+              aria-label="Session actions"
+              style={{
+                position: "fixed",
+                top: sessMenu.rect.bottom + 6,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    sessMenu.rect.right - 176,
+                    typeof window !== "undefined" ? window.innerWidth - 184 : 8,
+                  ),
+                ),
+                minWidth: 150,
+                zIndex: 4000,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const sid = sessMenu.session.id;
+                  const wasPinned = sessMenu.session.pinnedAt != null;
+                  setSessMenu(null);
+                  void (async () => {
+                    try {
+                      await api.pinSession(sid, !wasPinned);
+                      // Store stays current via the `session:updated` WS event.
+                    } catch {
+                      /* surface errors later */
+                    }
+                  })();
+                }}
+              >
+                <Pin
+                  size={13}
+                  aria-hidden
+                  fill={sessMenu.session.pinnedAt != null ? "currentColor" : "none"}
+                />
+                {sessMenu.session.pinnedAt != null ? "Unpin" : "Pin to top"}
+              </button>
+              {sessMenu.session.type === "agent" ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-pop__item"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const sid = sessMenu.session.id;
+                    setSessMenu(null);
+                    void (async () => {
+                      try {
+                        await api.markSessionDone(sid);
+                        // Store stays current via the `session:state` WS event.
+                      } catch {
+                        /* surface errors later */
+                      }
+                    })();
+                  }}
+                >
+                  Mark as done
+                </button>
+              ) : null}
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPendingDismissSession(sessMenu.session);
+                  setSessMenu(null);
+                }}
+              >
+                Dismiss (keep files)
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
       {projMenu
         ? createPortal(
             <div
@@ -809,19 +1205,6 @@ export function LeftSidebar({
                 zIndex: 4000,
               }}
             >
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setNewSessProject(projMenu.project);
-                  setProjMenu(null);
-                }}
-              >
-                <Plus size={13} aria-hidden />
-                New worktree
-              </button>
               <button
                 type="button"
                 role="menuitem"

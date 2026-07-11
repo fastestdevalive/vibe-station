@@ -5,17 +5,19 @@ import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
 import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 
 interface MarkdownImageProps {
   src?: string;
   alt?: string;
   api: ApiInstance | null;
   worktreeId: string | null;
+  scope: FileScope;
   /** Directory of the file being previewed, used to resolve relative image paths. */
   fileDir: string | null;
 }
 
-function MarkdownImage({ src, alt, api, worktreeId, fileDir }: MarkdownImageProps) {
+function MarkdownImage({ src, alt, api, worktreeId, scope, fileDir }: MarkdownImageProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
   const isRemote =
@@ -36,7 +38,7 @@ function MarkdownImage({ src, alt, api, worktreeId, fileDir }: MarkdownImageProp
       ? src.replace(/^\/+/, "")
       : fileDir ? `${fileDir}/${src}` : src;
 
-    api.getFileBlob(worktreeId, imagePath).then((blob) => {
+    api.getFileBlob(worktreeId, imagePath, scope).then((blob) => {
       if (cancelled) return;
       objectUrl = URL.createObjectURL(blob);
       setBlobUrl(objectUrl);
@@ -47,7 +49,7 @@ function MarkdownImage({ src, alt, api, worktreeId, fileDir }: MarkdownImageProp
       setBlobUrl(null);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [src, api, worktreeId, fileDir, isRemote]);
+  }, [src, api, worktreeId, scope, fileDir, isRemote]);
 
   if (isRemote && src) {
     return <img src={src} alt={alt ?? ""} className="markdown-img" />;
@@ -60,11 +62,12 @@ interface MarkdownViewProps {
   source: string;
   api?: ApiInstance | null;
   worktreeId?: string | null;
+  scope?: FileScope;
   /** Absolute-style path of the file being previewed (e.g. "docs/README.md"). */
   filePath?: string | null;
 }
 
-export function MarkdownView({ source, api = null, worktreeId = null, filePath = null }: MarkdownViewProps) {
+export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null }: MarkdownViewProps) {
   const fileDir = filePath ? filePath.split("/").slice(0, -1).join("/") || null : null;
 
   const markdownComponents = useMemo(() => ({
@@ -75,9 +78,9 @@ export function MarkdownView({ source, api = null, worktreeId = null, filePath =
       return <code className={className} {...props}>{children}</code>;
     },
     img({ src, alt }: ComponentPropsWithoutRef<"img">) {
-      return <MarkdownImage src={src} alt={alt} api={api} worktreeId={worktreeId} fileDir={fileDir} />;
+      return <MarkdownImage src={src} alt={alt} api={api} worktreeId={worktreeId} scope={scope} fileDir={fileDir} />;
     },
-  }), [api, worktreeId, fileDir]);
+  }), [api, worktreeId, scope, fileDir]);
 
   return (
     <div className="workspace-markdown-preview">

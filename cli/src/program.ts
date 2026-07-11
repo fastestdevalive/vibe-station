@@ -7,6 +7,7 @@ import { registerDaemonStart } from "./commands/daemon/start.js";
 import { registerDaemonStop } from "./commands/daemon/stop.js";
 import { registerDaemonRestart } from "./commands/daemon/restart.js";
 import { registerProjectAdd } from "./commands/project/add.js";
+import { registerProjectCreate } from "./commands/project/create.js";
 import { registerProjectRm } from "./commands/project/rm.js";
 import { registerProjectLs } from "./commands/project/ls.js";
 import { registerProjectInfo } from "./commands/project/info.js";
@@ -67,6 +68,7 @@ export function buildProgram(): Command {
     .command("project")
     .description("Manage projects");
   registerProjectAdd(project);
+  registerProjectCreate(project);
   registerProjectRm(project);
   registerProjectLs(project);
   registerProjectInfo(project);

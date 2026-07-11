@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { DiffScope } from "@/api/types";
+import type { DiffScope, FileScope } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
@@ -10,28 +10,30 @@ import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { CodeView } from "@/components/preview/CodeView";
 import { DiffView } from "@/components/preview/DiffView";
-import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
 import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
+  /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string | null;
+  scope?: FileScope;
 }
 
-export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
+export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree" }: FilePreviewPaneProps) {
   const path = useWorkspaceStore((s) => s.activeFilePath);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
   );
-  const scope: DiffScope = scopeFromStore ?? "none";
+  // Project scope (direct sessions) has no git/diff — always plain file view.
+  const scope: DiffScope = fileScope === "project" ? "none" : (scopeFromStore ?? "none");
   const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
 
   const { theme } = useTheme();
   const themeMode = theme;
 
   const [fileBody, setFileBody] = useState<string | null>(null);
-  const { lastChanged } = useFileWatch(api, worktreeId, path);
+  const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
 
   const [diffBody, setDiffBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
     void (async () => {
       try {
         if (scope === "none") {
-          const text = await api.getFile(worktreeId, path);
+          const text = await api.getFile(worktreeId, path, fileScope);
           if (!cancelled) {
             setFileBody(text);
             setDiffBody(null);
@@ -87,7 +89,7 @@ export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, lastChanged]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -161,12 +163,12 @@ export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
     return summarizeDiffLines(hunks);
   }, [scope, diffBody, fileBody]);
 
+  // No worktree context (e.g. nothing selected yet). The dashboard has its own
+  // route now, so this is a plain empty state — never dashboard/kanban content.
   if (!worktreeId) {
     return (
       <div className="pane pane-stack">
-        <div className="preview-body" style={{ padding: 0 }}>
-          <DashboardPanel api={api} />
-        </div>
+        <div className="empty-state">No worktree selected</div>
       </div>
     );
   }
@@ -237,7 +239,7 @@ export function FilePreviewPane({ api, worktreeId }: FilePreviewPaneProps) {
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           {segments.map((seg, i) =>
             seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} filePath={path} />
+              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={path} />
             ) : (
               <MermaidView key={i} chart={seg.content} theme={themeMode} />
             ),

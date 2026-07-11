@@ -145,11 +145,13 @@ describe("LeftSidebar", () => {
       type: "session:created",
       sessionId: "sess-extra",
       worktreeId: "wt-1",
+      projectId: "proj-1",
       sessionType: "agent",
       mode: "mode-1",
       snapshot: {
         id: "sess-extra",
         worktreeId: "wt-1",
+      projectId: "proj-1",
         modeId: "mode-1",
         type: "agent",
         label: "extra",
@@ -176,7 +178,7 @@ describe("LeftSidebar", () => {
         </MemoryRouter>,
       );
       await screen.findByText("Proj A");
-      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+      expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
     });
 
     it("pin action in the ⋯ menu calls api.pinWorktree and the row appears in the pinned section", async () => {
@@ -203,7 +205,7 @@ describe("LeftSidebar", () => {
       // The pinned section should appear; the mock api emits worktree:updated
       // synchronously so useServerSync will re-render in a microtask.
       await waitFor(() => {
-        expect(screen.getByRole("region", { name: /pinned worktrees/i })).toBeInTheDocument();
+        expect(screen.getByRole("region", { name: /^pinned$/i })).toBeInTheDocument();
       });
       // The pinned-row link is labelled differently to disambiguate.
       expect(screen.getByRole("link", { name: /Open pinned worktree wt-1/i })).toBeInTheDocument();
@@ -219,7 +221,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("region", { name: /pinned worktrees/i });
+      await screen.findByRole("region", { name: /^pinned$/i });
       // The mock seeds "Proj A" as the name for proj-a (the project that owns wt-1)
       const subheads = document.querySelectorAll(".pinned-row__subhead");
       expect(Array.from(subheads).some((s) => s.textContent === "Proj A")).toBe(true);
@@ -236,7 +238,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("region", { name: /pinned worktrees/i });
+      await screen.findByRole("region", { name: /^pinned$/i });
 
       const pinnedLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
       const pinnedRow = pinnedLink.closest(".pinned-row")! as HTMLElement;
@@ -248,7 +250,7 @@ describe("LeftSidebar", () => {
       await user.click(unpinItem);
 
       await waitFor(() => {
-        expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+        expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
       });
     });
 
@@ -262,7 +264,7 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("region", { name: /pinned worktrees/i });
+      await screen.findByRole("region", { name: /^pinned$/i });
       const pinnedRow = screen
         .getByRole("link", { name: /Open pinned worktree wt-2/i })
         .closest(".pinned-row")! as HTMLElement;
@@ -281,7 +283,7 @@ describe("LeftSidebar", () => {
         </MemoryRouter>,
       );
       await screen.findByText("Pra");
-      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+      expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
     });
 
     it("pinned rows render in pinnedAt DESC order (newest first)", async () => {
@@ -296,8 +298,8 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("region", { name: /pinned worktrees/i });
-      const region = screen.getByRole("region", { name: /pinned worktrees/i });
+      await screen.findByRole("region", { name: /^pinned$/i });
+      const region = screen.getByRole("region", { name: /^pinned$/i });
       const labels = Array.from(region.querySelectorAll(".pinned-row__primary")).map(
         (n) => n.textContent,
       );
@@ -316,7 +318,7 @@ describe("LeftSidebar", () => {
         </MemoryRouter>,
       );
       await screen.findByRole("link", { name: /Open worktree wt-1/i });
-      expect(screen.queryByRole("region", { name: /pinned worktrees/i })).toBeNull();
+      expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
 
       // Simulate another tab pinning wt-1
       localApi.__test.emit({
@@ -333,14 +335,14 @@ describe("LeftSidebar", () => {
       });
 
       await waitFor(() => {
-        expect(screen.getByRole("region", { name: /pinned worktrees/i })).toBeInTheDocument();
+        expect(screen.getByRole("region", { name: /^pinned$/i })).toBeInTheDocument();
       });
     });
   });
 
   // ─── Project hiding ──────────────────────────────────────────────────────
   describe("project hiding", () => {
-    it("project row exposes a project actions (⋮) menu with Hide project + New worktree", async () => {
+    it("project row exposes a project actions (⋮) menu with Hide project (New worktree moved to the + menu)", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi();
       render(
@@ -354,7 +356,9 @@ describe("LeftSidebar", () => {
       const trigger = screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!;
       await user.click(trigger);
       expect(await screen.findByRole("menuitem", { name: /Hide project/i })).toBeInTheDocument();
-      expect(screen.getByRole("menuitem", { name: /New worktree/i })).toBeInTheDocument();
+      // "New worktree" was intentionally removed from the ⋮ menu — it lives in
+      // the project + (plus) menu instead.
+      expect(screen.queryByRole("menuitem", { name: /New worktree/i })).not.toBeInTheDocument();
     });
 
     it("clicking Hide project calls api.hideProject", async () => {
@@ -392,7 +396,8 @@ describe("LeftSidebar", () => {
           name: "Proj A",
           path: "/home/dev/proj-a",
           prefix: "pa",
-          defaultBranch: "main",
+          isGit: true,
+      defaultBranch: "main",
           createdAt: new Date().toISOString(),
           hidden: true,
         },

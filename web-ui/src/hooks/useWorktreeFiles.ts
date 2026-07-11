@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 import { useTreeWatch } from "./useSubscription";
 
 /**
@@ -54,10 +55,13 @@ export interface UseWorktreeFilesResult {
 export function useWorktreeFiles(
   api: ApiInstance,
   worktreeId: string | null,
+  scope: FileScope = "worktree",
 ): UseWorktreeFilesResult {
-  const { lastChanged } = useTreeWatch(api, worktreeId);
+  const { lastChanged } = useTreeWatch(api, worktreeId, scope);
 
-  const cached = worktreeId ? cache.get(worktreeId) : undefined;
+  // Cache key is scoped so a project id can't collide with a worktree id.
+  const cacheKey = worktreeId ? `${scope}:${worktreeId}` : null;
+  const cached = cacheKey ? cache.get(cacheKey) : undefined;
   const [files, setFiles] = useState<string[]>(cached?.files ?? []);
   const [truncated, setTruncated] = useState<boolean>(cached?.truncated ?? false);
   const [loading, setLoading] = useState<boolean>(!cached && worktreeId !== null);
@@ -79,7 +83,8 @@ export function useWorktreeFiles(
       return;
     }
 
-    const existing = cache.get(worktreeId);
+    const key = cacheKey!;
+    const existing = cache.get(key);
     if (existing) {
       // Show stale list immediately. Only fetch if stale or if caller asked
       // for a refresh.
@@ -97,9 +102,9 @@ export function useWorktreeFiles(
     const controller = new AbortController();
     void (async () => {
       try {
-        const result = await api.fileList(worktreeId, controller.signal);
+        const result = await api.fileList(worktreeId, controller.signal, scope);
         if (controller.signal.aborted) return;
-        cache.set(worktreeId, {
+        cache.set(key, {
           files: result.files,
           truncated: result.truncated,
           ts: Date.now(),
@@ -124,7 +129,7 @@ export function useWorktreeFiles(
       // twice on mount — without abort, we'd fire two HTTP requests.
       controller.abort();
     };
-  }, [api, worktreeId, refreshTick]);
+  }, [api, worktreeId, scope, cacheKey, refreshTick]);
 
   // Mark cache stale on tree:changed and schedule a debounced background
   // refetch. The debounce coalesces bursts (e.g. a bulk agent edit emits
@@ -133,8 +138,8 @@ export function useWorktreeFiles(
   // immediately — only the refetch is delayed.
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (!worktreeId || lastChanged === 0) return;
-    const entry = cache.get(worktreeId);
+    if (!cacheKey || lastChanged === 0) return;
+    const entry = cache.get(cacheKey);
     if (entry) entry.stale = true;
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     debounceTimer.current = setTimeout(() => {
@@ -149,7 +154,7 @@ export function useWorktreeFiles(
         debounceTimer.current = null;
       }
     };
-  }, [worktreeId, lastChanged]);
+  }, [cacheKey, lastChanged]);
 
   return { files, truncated, loading, error, refresh };
 }

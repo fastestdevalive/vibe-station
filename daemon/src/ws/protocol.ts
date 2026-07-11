@@ -102,7 +102,8 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 // Per-session events (subscribers / open streams)
 const SessionCreatedSnapshot = z.object({
   id: z.string(),
-  worktreeId: z.string(),
+  worktreeId: z.string().nullable(),
+  projectId: z.string().optional(),
   slot: z.string(),
   type: z.enum(["agent", "terminal"]),
   modeId: z.string().nullable(),
@@ -117,7 +118,8 @@ const SessionCreatedSnapshot = z.object({
 const SessionCreatedEvent = z.object({
   type: z.literal("session:created"),
   sessionId: z.string(),
-  worktreeId: z.string(),
+  worktreeId: z.string().nullable(),
+  projectId: z.string().optional(), // for direct sessions
   sessionType: z.string(),
   mode: z.string().optional(),
   snapshot: SessionCreatedSnapshot.optional(),
@@ -156,6 +158,14 @@ const SessionResumedEvent = z.object({
 const SessionDeletedEvent = z.object({
   type: z.literal("session:deleted"),
   sessionId: z.string(),
+});
+
+// Metadata change that isn't a lifecycle-state transition (e.g. pin toggle).
+// Carries only the fields that changed so the client can patch in place.
+const SessionUpdatedEvent = z.object({
+  type: z.literal("session:updated"),
+  sessionId: z.string(),
+  pinnedAt: z.string().nullable().optional(),
 });
 
 const SessionErrorEvent = z.object({
@@ -250,6 +260,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   SessionExitedEvent,
   SessionResumedEvent,
   SessionDeletedEvent,
+  SessionUpdatedEvent,
   SessionErrorEvent,
   // File/tree events
   FileChangedEvent,

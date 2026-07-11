@@ -50,6 +50,12 @@ export interface BuildPromptInput {
   userPrompt?: string;
 }
 
+export interface BuildDirectPromptInput {
+  project: ProjectRecord;
+  modeContext?: string;
+  userPrompt?: string;
+}
+
 export interface BuiltPrompt {
   systemPrompt: string;
   taskPrompt?: string;
@@ -95,6 +101,53 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
   const l2 = l2Lines.join("\n");
 
   // L3 — project-level rules (AGENTS.md or .vibe-station/rules.md)
+  const l3 = await readProjectRules(project.absolutePath);
+
+  const systemPrompt = [l1, l2, ...(l3 ? [l3] : [])].join("\n");
+
+  return {
+    systemPrompt,
+    taskPrompt: userPrompt || undefined,
+  };
+}
+
+/**
+ * Build prompt for a direct session (no worktree).
+ * Simpler context — just project, no branch/worktree info.
+ */
+export async function buildDirectPrompt(input: BuildDirectPromptInput): Promise<BuiltPrompt> {
+  const { project, modeContext, userPrompt } = input;
+
+  // L1 — base skill
+  const l1 = await loadSkillMd();
+
+  // L2 — project context (no worktree)
+  const l2Lines: string[] = [
+    "",
+    "## Context",
+    "",
+    `**Your working directory:** ${project.absolutePath}`,
+    `> This is a direct session running in the project directory (no worktree isolation).`,
+    "",
+    `**Project:** ${project.id}`,
+  ];
+
+  // Only show defaultBranch for git projects
+  if (project.isGit && project.defaultBranch) {
+    l2Lines.push(`**Default branch:** ${project.defaultBranch}`);
+    l2Lines.push("", "> Note: You are editing files directly in the project directory.");
+    l2Lines.push("> Changes will affect the current working tree (no branch isolation).");
+  } else {
+    l2Lines.push("", "> This is a non-git project. No version control is active.");
+  }
+
+  if (modeContext) {
+    l2Lines.push("", "## Mode Instructions", "", modeContext);
+  }
+
+  const l2 = l2Lines.join("\n");
+
+  // L3 — project-level rules
   const l3 = await readProjectRules(project.absolutePath);
 
   const systemPrompt = [l1, l2, ...(l3 ? [l3] : [])].join("\n");

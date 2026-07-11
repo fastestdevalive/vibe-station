@@ -19,6 +19,12 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
   useEffect(() => {
     if (!ready || urlConsumed.current) return;
 
+    // Skip URL sync for direct session paths — Workspace handles them directly
+    if (location.pathname.startsWith("/session/")) {
+      urlConsumed.current = true;
+      return;
+    }
+
     // Backward-compat: if ?wt= query param exists (old URL), redirect to new path format.
     // Do NOT set urlConsumed.current yet — let the next render's read effect consume the
     // new path params and populate the store. Setting it here would cause the write effect

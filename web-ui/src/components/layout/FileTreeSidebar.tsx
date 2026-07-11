@@ -1,7 +1,7 @@
 import { File, FileText, Folder, FolderOpen, GitCompare } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { ChangedPathEntry, DiffScope, GitStatusChar, TreeEntry } from "@/api/types";
+import type { ChangedPathEntry, DiffScope, FileScope, GitStatusChar, TreeEntry } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useTreeWatch } from "@/hooks/useSubscription";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
@@ -58,6 +58,7 @@ function rowGitModifier(entry: TreeEntry, m: Map<string, GitStatusChar>): string
 interface NodeProps {
   api: ApiInstance;
   worktreeId: string | null;
+  scope: FileScope;
   entry: TreeEntry;
   level: number;
   expanded: Set<string>;
@@ -69,6 +70,7 @@ interface NodeProps {
 function TreeNode({
   api,
   worktreeId,
+  scope,
   entry,
   level,
   expanded,
@@ -88,13 +90,13 @@ function TreeNode({
     if (!isDir || !isOpen || !worktreeId) return;
     let cancelled = false;
     void (async () => {
-      const list = await api.tree(worktreeId, entry.path);
+      const list = await api.tree(worktreeId, entry.path, scope);
       if (!cancelled) setChildren(sortEntries(list));
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, entry.path, isDir, isOpen, lastChanged]);
+  }, [api, worktreeId, scope, entry.path, isDir, isOpen, lastChanged]);
 
   function openFile() {
     if (!worktreeId) return;
@@ -151,6 +153,7 @@ function TreeNode({
               key={ch.path}
               api={api}
               worktreeId={worktreeId}
+              scope={scope}
               entry={ch}
               level={level + 1}
               expanded={expanded}
@@ -171,17 +174,26 @@ function isTextLikeFile(name: string): boolean {
 
 interface FileTreeSidebarProps {
   api: ApiInstance;
+  /** Context id: worktree id (fileScope="worktree") or project id ("project").
+   *  Falls back to the active worktree when omitted (worktree callers). */
+  contextId?: string | null;
+  scope?: FileScope;
 }
 
-export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
-  const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
+export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" }: FileTreeSidebarProps) {
+  const storeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
+  // The browsing context id: explicit prop (project or worktree) or the store's
+  // active worktree for legacy callers.
+  const activeWorktreeId = contextId !== undefined ? contextId : storeWorktreeId;
+  const isProject = fileScope === "project";
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
 
   const scopeRaw = useWorkspaceStore((s) =>
     activeWorktreeId ? s.diffScopeByWorktree[activeWorktreeId] : undefined,
   );
-  const scope: DiffScope = scopeRaw ?? "none";
+  // Project scope has no git/diff — force plain file view.
+  const scope: DiffScope = isProject ? "none" : (scopeRaw ?? "none");
 
   const [root, setRoot] = useState<TreeEntry[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -191,7 +203,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
   const [branchLoading, setBranchLoading] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
-  const { lastChanged } = useTreeWatch(api, activeWorktreeId);
+  const { lastChanged } = useTreeWatch(api, activeWorktreeId, fileScope);
 
   const gitStatusByPath = useMemo(() => {
     const m = new Map<string, GitStatusChar>();
@@ -215,13 +227,13 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     }
     let cancelled = false;
     void (async () => {
-      const list = await api.tree(activeWorktreeId, "");
+      const list = await api.tree(activeWorktreeId, "", fileScope);
       if (!cancelled) setRoot(sortEntries(list));
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, lastChanged]);
+  }, [api, activeWorktreeId, fileScope, lastChanged]);
 
   const parentsOfActive = useMemo(() => {
     if (!activeFilePath) return [];
@@ -252,7 +264,8 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
   }, [parentsOfActive]);
 
   useEffect(() => {
-    if (!activeWorktreeId) {
+    // Project scope (direct sessions) has no git — skip status entirely.
+    if (!activeWorktreeId || isProject) {
       setLocalChanged([]);
       setLocalError(null);
       setLocalLoading(false);
@@ -278,10 +291,10 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, lastChanged]);
+  }, [api, activeWorktreeId, isProject, lastChanged]);
 
   useEffect(() => {
-    if (!activeWorktreeId || scope !== "branch") {
+    if (!activeWorktreeId || isProject || scope !== "branch") {
       setBranchChanged([]);
       setBranchError(null);
       setBranchLoading(false);
@@ -307,7 +320,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, scope, lastChanged]);
+  }, [api, activeWorktreeId, isProject, scope, lastChanged]);
 
   function toggle(path: string) {
     setExpanded((prev) => {
@@ -366,16 +379,19 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
               </div>
             ) : null}
           </div>
-          <button
-            type="button"
-            className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
-            aria-pressed={diffMode}
-            aria-label={diffMode ? "Diff view on" : "Diff view off"}
-            title="Toggle diff view"
-            onClick={toggleDiffMode}
-          >
-            <GitCompare size={15} strokeWidth={2} />
-          </button>
+          {/* Diff view is git-only; hidden for project (direct-session) scope. */}
+          {!isProject ? (
+            <button
+              type="button"
+              className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
+              aria-pressed={diffMode}
+              aria-label={diffMode ? "Diff view on" : "Diff view off"}
+              title="Toggle diff view"
+              onClick={toggleDiffMode}
+            >
+              <GitCompare size={15} strokeWidth={2} />
+            </button>
+          ) : null}
         </div>
       </div>
       <div
@@ -408,6 +424,7 @@ export function FileTreeSidebar({ api }: FileTreeSidebarProps) {
                 key={e.path}
                 api={api}
                 worktreeId={activeWorktreeId}
+                scope={fileScope}
                 entry={e}
                 level={0}
                 expanded={expanded}

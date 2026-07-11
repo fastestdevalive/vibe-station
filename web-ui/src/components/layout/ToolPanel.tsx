@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 import type { ToolTab } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
@@ -9,7 +10,10 @@ import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 
 interface ToolPanelProps {
   api: ApiInstance;
+  /** Context id: a worktree id (scope="worktree") or a project id (scope="project"). */
   worktreeId: string | null;
+  /** Browsing scope. "project" is used by direct sessions (files in the base dir). */
+  scope?: FileScope;
 }
 
 const TABS: { id: ToolTab; label: string }[] = [
@@ -24,7 +28,7 @@ const TABS: { id: ToolTab; label: string }[] = [
  * (web browser + emulators) and Artifacts are placeholders until their backends
  * land.
  */
-export function ToolPanel({ api, worktreeId }: ToolPanelProps) {
+export function ToolPanel({ api, worktreeId, scope = "worktree" }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
 
   return (
@@ -61,11 +65,19 @@ export function ToolPanel({ api, worktreeId }: ToolPanelProps) {
         </div>
       </div>
       <div className="tool-panel__body">
-        {toolPanelTab === "files" ? (
-          <FilesPanel api={api} worktreeId={worktreeId} />
-        ) : null}
-        {toolPanelTab === "devices" ? <DevicesPanel /> : null}
-        {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
+        {worktreeId == null ? (
+          // No context (nothing selected yet). Tools are context-scoped, so
+          // show a plain empty state — never dashboard/kanban or stale files.
+          <div className="empty-state">Select a worktree to use tools</div>
+        ) : (
+          <>
+            {toolPanelTab === "files" ? (
+              <FilesPanel api={api} worktreeId={worktreeId} scope={scope} />
+            ) : null}
+            {toolPanelTab === "devices" ? <DevicesPanel /> : null}
+            {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
+          </>
+        )}
       </div>
     </div>
   );

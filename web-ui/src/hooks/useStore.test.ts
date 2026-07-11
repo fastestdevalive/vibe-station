@@ -10,6 +10,7 @@ const mockSessions = (worktreeId: string): Session[] => [
   {
     id: `${worktreeId}-main`,
     worktreeId,
+    projectId: P1,
     modeId: null,
     type: "agent",
     state: "working",
@@ -22,6 +23,7 @@ const mockSessions = (worktreeId: string): Session[] => [
   {
     id: `${worktreeId}-alt`,
     worktreeId,
+    projectId: P1,
     modeId: null,
     type: "agent",
     state: "idle",

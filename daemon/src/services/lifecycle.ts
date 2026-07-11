@@ -47,7 +47,7 @@ function hashPane(output: string): string {
 
 export async function persistLifecycleState(
   projectId: string,
-  worktreeId: string,
+  worktreeId: string | undefined,
   sessionId: string,
   newState: LifecycleState,
 ): Promise<void> {
@@ -58,27 +58,47 @@ export async function persistLifecycleState(
     sessionId,
     state: newState,
   });
-  await mutateProject(projectId, (p) => ({
-    ...p,
-    worktrees: p.worktrees.map((w) =>
-      w.id === worktreeId
-        ? {
-            ...w,
-            sessions: w.sessions.map((s) =>
-              s.id === sessionId
-                ? {
-                    ...s,
-                    lifecycle: {
-                      state: newState,
-                      lastTransitionAt: new Date().toISOString(),
-                    },
-                  }
-                : s,
-            ),
-          }
-        : w,
-    ),
-  }));
+
+  if (worktreeId) {
+    // Worktree session
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id === sessionId
+                  ? {
+                      ...s,
+                      lifecycle: {
+                        state: newState,
+                        lastTransitionAt: new Date().toISOString(),
+                      },
+                    }
+                  : s,
+              ),
+            }
+          : w,
+      ),
+    }));
+  } else {
+    // Direct session
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      directSessions: p.directSessions.map((s) =>
+        s.id === sessionId
+          ? {
+              ...s,
+              lifecycle: {
+                state: newState,
+                lastTransitionAt: new Date().toISOString(),
+              },
+            }
+          : s,
+      ),
+    }));
+  }
 }
 
 /** Lines of ring buffer used for idle hashing in direct-pty mode. */
@@ -86,7 +106,7 @@ const DIRECT_IDLE_BYTES = 4 * 1024;
 
 async function pollSession(
   projectId: string,
-  worktreeId: string,
+  worktreeId: string | undefined,
   session: SessionRecord,
 ): Promise<void> {
   if (session.lifecycle.state === "not_started") return;
@@ -146,27 +166,7 @@ async function pollSession(
       type: "session:exited",
       sessionId: session.id,
     });
-    await mutateProject(projectId, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktreeId
-          ? {
-              ...w,
-              sessions: w.sessions.map((s) =>
-                s.id === session.id
-                  ? {
-                      ...s,
-                      lifecycle: {
-                        state: "exited",
-                        lastTransitionAt: new Date().toISOString(),
-                      },
-                    }
-                  : s,
-              ),
-            }
-          : w,
-      ),
-    }));
+    await persistLifecycleState(projectId, worktreeId, session.id, "exited");
     return;
   }
 
@@ -212,17 +212,27 @@ async function pollSession(
  * Mark a session as exited synchronously. Called from DirectPtyStream.onExit
  * so exit is detected immediately rather than waiting for the next poll tick.
  * Idempotent — no-ops if already exited.
+ *
+ * @param worktreeId - undefined for direct sessions (session lives in project.directSessions)
  */
 export async function markSessionExited(
   projectId: string,
-  worktreeId: string,
+  worktreeId: string | undefined,
   sessionId: string,
 ): Promise<void> {
   const projects = getAllProjects();
   const project = projects.find((p) => p.id === projectId);
-  const session = project?.worktrees
-    .find((w) => w.id === worktreeId)
-    ?.sessions.find((s) => s.id === sessionId);
+  if (!project) return;
+
+  // Find session in either worktree.sessions or project.directSessions
+  let session;
+  if (worktreeId) {
+    session = project.worktrees
+      .find((w) => w.id === worktreeId)
+      ?.sessions.find((s) => s.id === sessionId);
+  } else {
+    session = project.directSessions.find((s) => s.id === sessionId);
+  }
 
   if (!session || session.lifecycle.state === "exited") return;
 
@@ -239,15 +249,22 @@ export async function runLifecyclePollOnce(): Promise<void> {
 async function pollAll(): Promise<void> {
   const projects = getAllProjects();
   await Promise.all(
-    projects.flatMap((project) =>
-      project.worktrees.flatMap((worktree) =>
+    projects.flatMap((project) => [
+      // Poll worktree sessions
+      ...project.worktrees.flatMap((worktree) =>
         worktree.sessions.map((session) =>
           pollSession(project.id, worktree.id, session).catch((err) => {
             console.error(`[lifecycle] Poll error for ${session.id}:`, err);
           }),
         ),
       ),
-    ),
+      // Poll direct sessions
+      ...project.directSessions.map((session) =>
+        pollSession(project.id, undefined, session).catch((err) => {
+          console.error(`[lifecycle] Poll error for ${session.id}:`, err);
+        }),
+      ),
+    ]),
   );
 }
 

@@ -71,6 +71,9 @@ coverage/
 # Claude Code
 .claude/
 
+# vibe-station per-session runtime state (chat ids, etc.)
+.vibe-station/agent-chat-ids/
+
 # Package manager locks (keep only one — uncomment your preference)
 # package-lock.json
 # yarn.lock

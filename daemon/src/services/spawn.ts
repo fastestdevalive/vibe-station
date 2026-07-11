@@ -18,7 +18,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { newSession, hasSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
 import { DirectPtyBackend } from "./directPty.js";
-import { worktreePath as getWorktreePath, sessionDataDir, systemPromptPath } from "./paths.js";
+import {
+  worktreePath as getWorktreePath,
+  sessionDataDir,
+  systemPromptPath,
+  directSessionDataDir,
+  directSystemPromptPath,
+} from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
@@ -89,6 +95,24 @@ export interface SpawnOptions {
   daemonPort: number;
   systemPrompt: string;
   taskPrompt?: string;
+  model?: string;
+}
+
+export interface DirectSpawnOptions {
+  project: ProjectRecord;
+  session: SessionRecord;
+  plugin: AgentPlugin;
+  daemonPort: number;
+  systemPrompt: string;
+  taskPrompt?: string;
+  model?: string;
+}
+
+/** LaunchConfig variant for direct sessions (no worktree). */
+export interface DirectLaunchConfig {
+  project: ProjectRecord;
+  session: SessionRecord;
+  daemonPort: number;
   model?: string;
 }
 
@@ -336,6 +360,152 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
   if (capturedId) {
     session.agentChatId = capturedId;
+  }
+}
+
+/**
+ * Spawn a direct session (in project directory, no worktree).
+ * Similar to spawnSession but uses project.absolutePath as cwd.
+ */
+export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void> {
+  const { project, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
+  const cwd = project.absolutePath;
+
+  // Create a synthetic worktree-like config for the plugin (some plugins may not need it)
+  const launchCfg: LaunchConfig = {
+    project,
+    worktree: {
+      id: `${project.id}-direct`,
+      branch: "direct",
+      baseBranch: project.defaultBranch ?? "main",
+      baseSha: "",
+      createdAt: new Date().toISOString(),
+      sessions: [session],
+    },
+    session,
+    daemonPort,
+    ...(model ? { model } : {}),
+  };
+
+  // Setup workspace hooks in project directory
+  if (plugin.setupWorkspaceHooks) {
+    await plugin.setupWorkspaceHooks(cwd);
+  }
+
+  // Write system-prompt file to direct session data dir
+  const dataDir = directSessionDataDir(project.id, session.id);
+  mkdirSync(dataDir, { recursive: true });
+  const promptFile = directSystemPromptPath(project.id, session.id);
+  writeFileSync(promptFile, systemPrompt, "utf8");
+
+  // Compose launch prompt
+  const { launchArgs, postLaunchInput, postLaunchSubmit, useShell, shellLine } = plugin.composeLaunchPrompt({
+    systemPrompt,
+    taskPrompt,
+    sessionId: session.id,
+    systemPromptFile: promptFile,
+    launchCfg,
+  });
+
+  // Resolve env (no worktree env vars for direct sessions)
+  const baseEnv: Record<string, string> = {
+    VST_SESSION: session.id,
+    VST_SPAWN_TOKEN: session.id,
+    VST_PROJECT: project.id,
+    VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
+    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    ...plugin.getEnvironment(launchCfg),
+  };
+
+  // Build launch command
+  const commandParts: string[] = useShell && shellLine
+    ? ["sh", "-lc", shellLine]
+    : [...plugin.getLaunchCommand(launchCfg), ...(launchArgs ?? [])];
+
+  // Spawn (branch on useTmux)
+  if (!session.useTmux) {
+    let stream = null;
+    try {
+      stream = await DirectPtyBackend.spawn({
+        command: commandParts[0]!,
+        args: commandParts.slice(1),
+        cwd,
+        env: baseEnv,
+        cols: 80,
+        rows: 24,
+        sessionId: session.id,
+        projectId: project.id,
+        worktreeId: undefined,
+      });
+
+      const { sentinel, fallbackMs } = plugin.getReadySignal();
+      if (sentinel) {
+        const ready = await stream.waitForOutput(sentinel, fallbackMs);
+        if (!ready) {
+          console.warn(
+            `[spawn] Ready sentinel not found for ${session.id} (${plugin.name}); proceeding anyway`,
+          );
+        }
+      } else {
+        await sleep(fallbackMs);
+      }
+
+      await sleep(plugin.postSentinelDelayMs ?? 0);
+
+      if (postLaunchInput) {
+        stream.write(postLaunchInput);
+        if (postLaunchSubmit) {
+          stream.write("\r");
+        }
+      }
+    } catch (err) {
+      if (stream) {
+        stream.kill();
+      }
+      throw err;
+    }
+    return;
+  }
+
+  // Tmux path
+  try {
+    await newSession({
+      name: session.tmuxName,
+      cwd,
+      env: baseEnv,
+      command: commandParts,
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new Error(
+        "tmux is not installed or not on PATH. Install tmux to launch agent sessions.",
+      );
+    }
+    throw err;
+  }
+
+  const { sentinel, fallbackMs } = plugin.getReadySignal();
+  if (sentinel) {
+    await waitForSentinel(session.tmuxName, sentinel, fallbackMs);
+  } else {
+    await sleep(fallbackMs);
+  }
+
+  await sleep(plugin.postSentinelDelayMs ?? 0);
+
+  if (postLaunchInput) {
+    if (!(await hasSession(session.tmuxName))) {
+      const binary = commandParts[0] ?? plugin.name;
+      console.warn(
+        `[spawn] Skipping post-launch prompt for ${session.id}: pane ${session.tmuxName} is gone (${binary} likely exited at startup).`,
+      );
+      return;
+    }
+    await pasteBuffer(session.tmuxName, `vst-prompt-${session.id}`, postLaunchInput);
+    if (postLaunchSubmit) {
+      await sendKeys(session.tmuxName, "", true);
+    }
   }
 }
 

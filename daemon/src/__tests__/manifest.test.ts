@@ -30,8 +30,10 @@ const makeProject = (id: string): ProjectRecord => ({
   id,
   absolutePath: `/fake/${id}`,
   prefix: id.slice(0, 4),
+  isGit: true,
   defaultBranch: "main",
   createdAt: new Date().toISOString(),
+  directSessions: [],
   worktrees: [],
 });
 

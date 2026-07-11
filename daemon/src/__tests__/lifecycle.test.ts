@@ -68,8 +68,10 @@ describe("lifecycle polling behavior", () => {
       id: "proj-l",
       absolutePath: join(tempDir, "repo"),
       prefix: "pfx",
+      isGit: true,
       defaultBranch: "main",
       createdAt: new Date().toISOString(),
+      directSessions: [],
       worktrees: [
         {
           id: "wt-l",
@@ -102,8 +104,8 @@ describe("lifecycle polling behavior", () => {
   }
 
   function emittedStateChanges(): LifecycleState[] {
-    return broadcaster.notifySession.mock.calls
-      .map(([, msg]) => msg)
+    return broadcaster.broadcastAll.mock.calls
+      .map(([msg]) => msg)
       .filter((msg): msg is { type: "session:state"; sessionId: string; state: LifecycleState } =>
         (msg as { type?: string }).type === "session:state",
       )
@@ -118,6 +120,7 @@ describe("lifecycle polling behavior", () => {
     tmux.hasSession.mockReset();
     tmux.capturePane.mockReset();
     broadcaster.notifySession.mockClear();
+    broadcaster.broadcastAll.mockClear();
     tmux.hasSession.mockResolvedValue(true);
   });
 
@@ -201,8 +204,8 @@ describe("lifecycle polling behavior", () => {
     await runLifecyclePollOnce();
 
     expect(await getCurrentState()).toBe("exited");
-    const exitCalls = broadcaster.notifySession.mock.calls.filter(
-      ([, msg]) => (msg as { type?: string }).type === "session:exited",
+    const exitCalls = broadcaster.broadcastAll.mock.calls.filter(
+      ([msg]) => (msg as { type?: string }).type === "session:exited",
     );
     expect(exitCalls).toHaveLength(1);
 

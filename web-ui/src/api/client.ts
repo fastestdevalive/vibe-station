@@ -1,15 +1,23 @@
 import type {
+  AddProjectBody,
+  AddProjectResponse,
   ChangedPathEntry,
   CliId,
+  CreateDirectSessionBody,
   CreateModeBody,
+  CreateProjectBody,
+  CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  FileScope,
+  FsCompleteResponse,
   HealthResponse,
   Mode,
   Project,
   ProjectBranchesResponse,
   SendInputBody,
   Session,
+  Settings,
   SupportedCli,
   TreeEntry,
   UpdateModeBody,
@@ -34,6 +42,15 @@ function wsUrl() {
   u.pathname = "/ws";
   u.search = "";
   return u.toString();
+}
+
+/**
+ * Base path for file-browsing endpoints. Worktree scope is git-aware; project
+ * scope serves plain files from the project base dir (direct sessions).
+ */
+function fileBase(scope: FileScope, id: string): string {
+  const seg = scope === "project" ? "projects" : "worktrees";
+  return `${baseUrl()}/${seg}/${encodeURIComponent(id)}`;
 }
 
 async function parseJson<T>(res: Response): Promise<T> {
@@ -195,6 +212,16 @@ export function createClientApi() {
       return parseJson<Project[]>(res);
     },
 
+    async addProject(body: AddProjectBody): Promise<AddProjectResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<AddProjectResponse>(res);
+    },
+
     async deleteProject(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/projects/${encodeURIComponent(id)}`, {
@@ -314,12 +341,43 @@ export function createClientApi() {
       return parseJson<Session>(res);
     },
 
+    /** Create a direct session (no worktree) in a project directory. */
+    async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<Session>(res);
+    },
+
     /** Default name the next terminal in this worktree would get ("Terminal N"). */
     async nextTerminalName(worktreeId: string): Promise<string> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/next-terminal-name`);
       const { name } = await parseJson<{ name: string }>(res);
       return name;
+    },
+
+    /** Pin/unpin a session (toggles pinnedAt). Works for direct + worktree sessions. */
+    async pinSession(id: string, pinned: boolean): Promise<{ ok: true; pinnedAt: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/pin`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned }),
+      });
+      return parseJson<{ ok: true; pinnedAt: string | null }>(res);
+    },
+
+    /** Mark an agent session as done (metadata only; no process kill). */
+    async markSessionDone(id: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/done`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true }>(res);
     },
 
     async deleteSession(id: string): Promise<{ ok: true }> {
@@ -351,18 +409,16 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
-    async getFileBlob(worktreeId: string, filePath: string): Promise<Blob> {
+    async getFileBlob(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<Blob> {
       const path = filePath.replace(/^\/+/, "");
-      const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/files/${path}`);
       if (!res.ok) throw new ApiError("Failed to fetch file", res.status);
       return res.blob();
     },
 
-    async getFile(worktreeId: string, filePath: string): Promise<string> {
+    async getFile(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
-      const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/files/${path}`);
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/files/${path}`);
       if (res.status === 422) throw new ApiError("File too large to preview", 422);
       if (!res.ok) {
         const text = await res.text();
@@ -403,12 +459,9 @@ export function createClientApi() {
       return text;
     },
 
-    async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
+    async tree(worktreeId: string, path: string, scope: FileScope = "worktree"): Promise<TreeEntry[]> {
       const q = new URLSearchParams({ path: path.replace(/^\/+/, "") });
-      const root = baseUrl();
-      const res = await apiFetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/tree?${q}`,
-      );
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/tree?${q}`);
       return parseJson<TreeEntry[]>(res);
     },
 
@@ -424,12 +477,9 @@ export function createClientApi() {
     async fileList(
       worktreeId: string,
       signal?: AbortSignal,
+      scope: FileScope = "worktree",
     ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
-      const root = baseUrl();
-      const res = await apiFetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/file-list`,
-        { signal },
-      );
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/file-list`, { signal });
       return parseJson<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }>(res);
     },
 
@@ -490,6 +540,45 @@ export function createClientApi() {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
+    },
+
+    // ── Settings ────────────────────────────────────────────────────────────────
+
+    async getSettings(): Promise<Settings> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/settings`);
+      return parseJson<Settings>(res);
+    },
+
+    async updateSettings(body: Partial<Settings>): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
+    // ── Create Project ──────────────────────────────────────────────────────────
+
+    async createProject(body: CreateProjectBody): Promise<CreateProjectResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<CreateProjectResponse>(res);
+    },
+
+    // ── Filesystem autocomplete ─────────────────────────────────────────────────
+
+    async fsComplete(path: string): Promise<FsCompleteResponse> {
+      const root = baseUrl();
+      const q = new URLSearchParams({ path });
+      const res = await apiFetch(`${root}/fs/complete?${q}`);
+      return parseJson<FsCompleteResponse>(res);
     },
 
     async send(message: {

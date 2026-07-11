@@ -6,7 +6,9 @@ interface NewTerminalDialogProps {
   open: boolean;
   onClose: () => void;
   api: ApiInstance;
+  /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string;
+  scope?: "worktree" | "project";
   onCreated?: () => void;
 }
 
@@ -16,8 +18,10 @@ export function NewTerminalDialog({
   onClose,
   api,
   worktreeId,
+  scope = "worktree",
   onCreated,
 }: NewTerminalDialogProps) {
+  const isProject = scope === "project";
   const [name, setName] = useState("");
   const [useTmux, setUseTmux] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -25,8 +29,15 @@ export function NewTerminalDialog({
 
   // Prefill with the daemon's monotonic default ("Terminal N") each open, then
   // select it so the user can either accept or type over it immediately.
+  // The next-name endpoint is worktree-only; for project scope let the daemon
+  // assign the default name.
   useEffect(() => {
     if (!open || !worktreeId) return;
+    if (isProject) {
+      setName("");
+      requestAnimationFrame(() => inputRef.current?.select());
+      return;
+    }
     let cancelled = false;
     setName("");
     void (async () => {
@@ -43,19 +54,30 @@ export function NewTerminalDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, worktreeId, api]);
+  }, [open, worktreeId, api, isProject]);
 
   async function submit() {
     if (busy) return;
     setBusy(true);
     try {
-      await api.createSession({
-        worktreeId,
-        modeId: null,
-        type: "terminal",
-        name: name.trim() || undefined,
-        useTmux,
-      });
+      if (isProject) {
+        // Direct terminal — runs in the project base directory (no worktree).
+        await api.createDirectSession({
+          target: "direct",
+          projectId: worktreeId,
+          type: "terminal",
+          name: name.trim() || undefined,
+          useTmux,
+        });
+      } else {
+        await api.createSession({
+          worktreeId,
+          modeId: null,
+          type: "terminal",
+          name: name.trim() || undefined,
+          useTmux,
+        });
+      }
       onCreated?.();
       onClose();
     } finally {

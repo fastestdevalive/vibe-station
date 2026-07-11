@@ -1,9 +1,10 @@
 import { Maximize2, Minimize2, Minus, Plus } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
 import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -12,13 +13,18 @@ type TabKind = "agent" | "terminal";
 
 interface TabsStripProps {
   api: ApiInstance;
+  /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string | null;
   /** "agent" → agent pane tabs; "terminal" → bottom dock terminal tabs. */
   kind: TabKind;
+  /** "project" → direct-session terminals (no worktree), derived from the
+   *  server store and created in the project base dir. Default "worktree". */
+  scope?: "worktree" | "project";
 }
 
-export function TabsStrip({ api, worktreeId, kind }: TabsStripProps) {
+export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
   const isAgent = kind === "agent";
+  const isProject = scope === "project";
   const fsTarget: WorkspacePaneFullscreen = isAgent ? "agent" : "terminal";
 
   const activeSessionId = useWorkspaceStore((s) =>
@@ -43,11 +49,37 @@ export function TabsStrip({ api, worktreeId, kind }: TabsStripProps) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [localSessions, setSessions] = useState<Session[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<Session | null>(null);
 
+  // Project scope: direct-session terminals live in the global server store
+  // (no worktree). Derive them instead of fetching per-worktree.
+  const serverSessions = useServerStore((s) => s.sessions);
+  const projectSessions = useMemo(
+    () =>
+      isProject && worktreeId
+        ? serverSessions.filter(
+            (s) => s.projectId === worktreeId && s.worktreeId === null && s.type === kind,
+          )
+        : [],
+    [isProject, worktreeId, serverSessions, kind],
+  );
+  const sessions = isProject ? projectSessions : localSessions;
+
+  // Project scope: keep the active terminal selection valid as direct sessions
+  // come and go (created/closed elsewhere). Pick a default when none is active.
   useEffect(() => {
+    if (!isProject) return;
+    const store = useWorkspaceStore.getState();
+    const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
+    if (cur && projectSessions.some((s) => s.id === cur)) return;
+    const pick = projectSessions[0]?.id ?? null;
+    if (pick) setActiveSession(pick);
+  }, [isProject, projectSessions, isAgent, setActiveSession]);
+
+  useEffect(() => {
+    if (isProject) return; // project scope derives from the server store above
     if (!worktreeId) {
       setSessions([]);
       return;
@@ -117,10 +149,12 @@ export function TabsStrip({ api, worktreeId, kind }: TabsStripProps) {
       offCreated();
       offDeleted();
     };
-  }, [api, worktreeId, kind, isAgent, setActiveSession]);
+  }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 
   async function refreshTabs() {
-    if (!worktreeId) return;
+    // Project scope derives from the server store (WS session:deleted updates
+    // it); nothing to refetch here.
+    if (isProject || !worktreeId) return;
     const all = await api.listSessions(worktreeId);
     setSessions(all.filter((s) => s.type === kind));
     useWorkspaceStore.getState().syncSessionsFromApi(all);
@@ -231,6 +265,7 @@ export function TabsStrip({ api, worktreeId, kind }: TabsStripProps) {
           open={newOpen}
           api={api}
           worktreeId={worktreeId ?? ""}
+          scope={scope}
           onClose={() => setNewOpen(false)}
           onCreated={() => {}}
         />

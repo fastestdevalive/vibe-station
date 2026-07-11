@@ -11,10 +11,26 @@ import { resolveUseTmux } from "./resolveUseTmux.js";
 export async function readManifest(projectId: string): Promise<ProjectRecord> {
   const content = await readFile(manifestPath(projectId), "utf8");
   const record = JSON.parse(content) as ProjectRecord;
+
+  // Backfill for existing manifests created before non-git support:
+  // - isGit defaults to true (all existing projects were git repos)
+  // - directSessions defaults to empty array
+  if (record.isGit === undefined) {
+    record.isGit = true;
+  }
+  if (!record.directSessions) {
+    record.directSessions = [];
+  }
+
+  // Normalize useTmux for worktree sessions
   for (const worktree of record.worktrees) {
     for (const session of worktree.sessions) {
       session.useTmux = resolveUseTmux(session.useTmux);
     }
+  }
+  // Normalize useTmux for direct sessions
+  for (const session of record.directSessions) {
+    session.useTmux = resolveUseTmux(session.useTmux);
   }
   return record;
 }

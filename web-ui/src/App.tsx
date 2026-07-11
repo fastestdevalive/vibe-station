@@ -52,6 +52,7 @@ function AppShell() {
       <Route path="/worktree" element={<Workspace />} />
       <Route path="/worktree/:wtId" element={<Workspace />} />
       <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />
+      <Route path="/session/:directSessionId" element={<Workspace />} />
       <Route path="/workspace" element={<Navigate to="/worktree" replace />} />
       <Route path="/dashboard" element={<Navigate to="/" replace />} />
     </Routes>

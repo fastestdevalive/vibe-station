@@ -128,6 +128,11 @@ export function useServerSync(api: ApiInstance): void {
     const offSessDeleted = api.on("session:deleted", (ev) => {
       if (ev.type === "session:deleted") applySessionDeleted(ev.sessionId);
     });
+    const offSessUpdated = api.on("session:updated", (ev) => {
+      if (ev.type === "session:updated") {
+        applySessionUpdated(ev.sessionId, { pinnedAt: ev.pinnedAt ?? null });
+      }
+    });
     return () => {
       offProjCreated();
       offProjDeleted();
@@ -140,6 +145,7 @@ export function useServerSync(api: ApiInstance): void {
       offSessExited();
       offSessResumed();
       offSessDeleted();
+      offSessUpdated();
     };
   }, [
     api,

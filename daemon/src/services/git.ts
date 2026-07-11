@@ -1,16 +1,20 @@
 /**
  * Git wrappers used by the daemon.
- * All functions shell out to the `git` CLI.
+ * All functions shell out to the `git` CLI using execFile for security.
  */
-import { exec as execCb } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { access } from "node:fs/promises";
+import { access, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-const exec = promisify(execCb);
+const execFile = promisify(execFileCb);
 
-async function run(cmd: string, cwd?: string): Promise<string> {
-  const { stdout } = await exec(cmd, { cwd, env: { ...process.env } });
+/**
+ * Run a git command safely using execFile (no shell interpolation).
+ * This prevents shell injection attacks from user-supplied paths/branches.
+ */
+async function runGit(args: string[], cwd?: string): Promise<string> {
+  const { stdout } = await execFile("git", args, { cwd, env: { ...process.env } });
   return stdout.trim();
 }
 
@@ -19,9 +23,9 @@ export async function isGitRepo(dir: string): Promise<boolean> {
   try {
     await access(join(dir, ".git")).catch(async () => {
       // Could be a worktree or a .git file instead of dir
-      await run(`git -C "${dir}" rev-parse --git-dir`);
+      await runGit(["-C", dir, "rev-parse", "--git-dir"]);
     });
-    await run(`git -C "${dir}" rev-parse --git-dir`);
+    await runGit(["-C", dir, "rev-parse", "--git-dir"]);
     return true;
   } catch {
     return false;
@@ -40,7 +44,7 @@ export async function isGitRepo(dir: string): Promise<boolean> {
 export async function detectDefaultBranch(repoPath: string): Promise<string | null> {
   // 1. Try origin/HEAD symref
   try {
-    const ref = await run(`git -C "${repoPath}" symbolic-ref refs/remotes/origin/HEAD`);
+    const ref = await runGit(["-C", repoPath, "symbolic-ref", "refs/remotes/origin/HEAD"]);
     // Returns e.g. "refs/remotes/origin/main"
     const parts = ref.split("/");
     const branch = parts[parts.length - 1];
@@ -51,7 +55,7 @@ export async function detectDefaultBranch(repoPath: string): Promise<string | nu
 
   // 2. "master" exists locally
   try {
-    await run(`git -C "${repoPath}" rev-parse --verify master`);
+    await runGit(["-C", repoPath, "rev-parse", "--verify", "master"]);
     return "master";
   } catch {
     // doesn't exist
@@ -59,7 +63,7 @@ export async function detectDefaultBranch(repoPath: string): Promise<string | nu
 
   // 3. "main" exists locally
   try {
-    await run(`git -C "${repoPath}" rev-parse --verify main`);
+    await runGit(["-C", repoPath, "rev-parse", "--verify", "main"]);
     return "main";
   } catch {
     // doesn't exist
@@ -67,7 +71,7 @@ export async function detectDefaultBranch(repoPath: string): Promise<string | nu
 
   // 4. First branch in `git branch --list`
   try {
-    const output = await run(`git -C "${repoPath}" branch --list`);
+    const output = await runGit(["-C", repoPath, "branch", "--list"]);
     const lines = output
       .split("\n")
       .map((l) => l.replace(/^\*?\s+/, "").trim())
@@ -83,7 +87,7 @@ export async function detectDefaultBranch(repoPath: string): Promise<string | nu
 /** Returns true if `branch` exists locally in the repo at `repoPath`. */
 export async function branchExists(repoPath: string, branch: string): Promise<boolean> {
   try {
-    await run(`git -C "${repoPath}" rev-parse --verify "${branch}"`);
+    await runGit(["-C", repoPath, "rev-parse", "--verify", branch]);
     return true;
   } catch {
     return false;
@@ -92,13 +96,14 @@ export async function branchExists(repoPath: string, branch: string): Promise<bo
 
 /**
  * List local branch names in the repo, sorted by most-recent commit first.
- * The `--format` string is single-quoted because `()` are shell metacharacters
- * (commands here are interpolated into a /bin/sh string — see `run`).
  */
 export async function listBranches(repoPath: string): Promise<string[]> {
-  const out = await run(
-    `git -C "${repoPath}" branch --list --sort=-committerdate --format='%(refname:short)'`,
-  );
+  const out = await runGit([
+    "-C", repoPath,
+    "branch", "--list",
+    "--sort=-committerdate",
+    "--format=%(refname:short)",
+  ]);
   return out
     .split("\n")
     .map((l) => l.trim())
@@ -107,7 +112,7 @@ export async function listBranches(repoPath: string): Promise<string[]> {
 
 /** Returns the full SHA of `ref` in the repo. */
 export async function revParse(repoPath: string, ref: string): Promise<string> {
-  return run(`git -C "${repoPath}" rev-parse "${ref}"`);
+  return runGit(["-C", repoPath, "rev-parse", ref]);
 }
 
 /** Add a git worktree with a new branch. */
@@ -117,26 +122,52 @@ export async function worktreeAdd(
   branch: string,
   baseBranch: string,
 ): Promise<void> {
-  await run(
-    `git -C "${repoPath}" worktree add -b "${branch}" "${worktreePath}" "${baseBranch}"`,
-  );
+  await runGit(["-C", repoPath, "worktree", "add", "-b", branch, worktreePath, baseBranch]);
 }
 
 /** Remove a git worktree (--force). */
 export async function worktreeRemove(repoPath: string, worktreePath: string): Promise<void> {
-  await run(`git -C "${repoPath}" worktree remove --force "${worktreePath}"`);
+  await runGit(["-C", repoPath, "worktree", "remove", "--force", worktreePath]);
 }
 
 /** Delete a local branch (--force). */
 export async function deleteBranch(repoPath: string, branch: string): Promise<void> {
-  await run(`git -C "${repoPath}" branch -D "${branch}"`);
+  await runGit(["-C", repoPath, "branch", "-D", branch]);
 }
 
 /** Fetch a ref from origin (best-effort — swallows errors if no remote). */
 export async function fetchOrigin(repoPath: string, ref: string): Promise<void> {
   try {
-    await run(`git -C "${repoPath}" fetch origin "${ref}"`);
+    await runGit(["-C", repoPath, "fetch", "origin", ref]);
   } catch {
     // no remote or network error — callers treat this as best-effort
+  }
+}
+
+/** Initialize a new git repository in the given directory. */
+export async function gitInit(dir: string): Promise<void> {
+  await runGit(["init", dir]);
+}
+
+/** Standard .gitignore content for new projects. */
+const DEFAULT_GITIGNORE = `.DS_Store
+node_modules/
+.env
+.env.local
+*.log
+`;
+
+/** Create a standard .gitignore file in the given directory. */
+export async function createGitignore(dir: string): Promise<void> {
+  await writeFile(join(dir, ".gitignore"), DEFAULT_GITIGNORE, "utf8");
+}
+
+/** Check if git is available in PATH. */
+export async function isGitAvailable(): Promise<boolean> {
+  try {
+    await runGit(["--version"]);
+    return true;
+  } catch {
+    return false;
   }
 }

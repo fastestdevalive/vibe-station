@@ -41,8 +41,10 @@ describe("recoverNotStartedSessions", () => {
       id: "proj-r",
       absolutePath: join(tempDir, "repo"),
       prefix: "pfx",
+      isGit: true,
       defaultBranch: "main",
       createdAt: new Date().toISOString(),
+      directSessions: [],
       worktrees: [
         {
           id: "wt-r",
@@ -57,6 +59,7 @@ describe("recoverNotStartedSessions", () => {
               type: "agent",
               modeId: "mode",
               tmuxName: "alive-pane",
+              useTmux: true,
               lifecycle: {
                 state: "not_started",
                 lastTransitionAt: new Date().toISOString(),
@@ -68,6 +71,7 @@ describe("recoverNotStartedSessions", () => {
               type: "agent",
               modeId: "mode",
               tmuxName: "dead-pane",
+              useTmux: true,
               lifecycle: {
                 state: "not_started",
                 lastTransitionAt: new Date().toISOString(),
@@ -79,6 +83,7 @@ describe("recoverNotStartedSessions", () => {
               type: "agent",
               modeId: "mode",
               tmuxName: "ignore-pane",
+              useTmux: true,
               lifecycle: {
                 state: "working",
                 lastTransitionAt: new Date().toISOString(),
