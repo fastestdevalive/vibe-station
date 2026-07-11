@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { SessionState, WSEvent } from "@/api/types";
+import type { FileScope, SessionState, WSEvent } from "@/api/types";
 import { useWorkspaceStore } from "./useStore";
 
 export function useSubscription(sessionIds: string[], api: ApiInstance) {
@@ -86,9 +86,17 @@ export function useSessionOutput(
   return { sessionState };
 }
 
-export function useFileWatch(api: ApiInstance, worktreeId: string | null, path: string | null) {
+export function useFileWatch(
+  api: ApiInstance,
+  worktreeId: string | null,
+  path: string | null,
+  scope: FileScope = "worktree",
+) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
+    // The daemon only watches worktree paths; project-scoped (direct-session)
+    // files have no watcher, so skip the subscription entirely.
+    if (scope === "project") return undefined;
     if (!worktreeId || !path) return undefined;
     void api.send({ type: "file:watch", worktreeId, path });
     const bump = (ev: WSEvent) => {
@@ -103,13 +111,19 @@ export function useFileWatch(api: ApiInstance, worktreeId: string | null, path: 
       offDeleted();
       void api.send({ type: "file:unwatch", worktreeId, path });
     };
-  }, [api, path, worktreeId]);
+  }, [api, path, worktreeId, scope]);
   return { lastChanged };
 }
 
-export function useTreeWatch(api: ApiInstance, worktreeId: string | null) {
+export function useTreeWatch(
+  api: ApiInstance,
+  worktreeId: string | null,
+  scope: FileScope = "worktree",
+) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
+    // No daemon-side tree watcher for project scope (direct sessions).
+    if (scope === "project") return undefined;
     if (!worktreeId) return undefined;
     void api.send({ type: "tree:watch", worktreeId });
     const off = api.on("tree:changed", (ev) => {
@@ -119,6 +133,6 @@ export function useTreeWatch(api: ApiInstance, worktreeId: string | null) {
       off();
       void api.send({ type: "tree:unwatch", worktreeId });
     };
-  }, [api, worktreeId]);
+  }, [api, worktreeId, scope]);
   return { lastChanged };
 }

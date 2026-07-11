@@ -13,7 +13,7 @@ export interface SessionLifecycle {
   lastTransitionAt: string; // ISO8601
 }
 
-export type SessionSlot = "m" | `a${number}` | `t${number}`;
+export type SessionSlot = "m" | `a${number}` | `t${number}` | `d${number}`;
 export type SessionType = "agent" | "terminal";
 
 export interface TranscriptRef {
@@ -38,6 +38,12 @@ export interface SessionRecord {
   lifecycle: SessionLifecycle;
   transcriptRef?: TranscriptRef;
   agentChatId?: string;
+  /**
+   * When set, this session is pinned to the top of its group in the sidebar.
+   * Absent / undefined ≡ unpinned. The timestamp encodes recency order.
+   * Currently surfaced for direct sessions via the sidebar actions menu.
+   */
+  pinnedAt?: string; // ISO8601
 }
 
 export interface WorktreeRecord {
@@ -65,7 +71,17 @@ export interface ProjectRecord {
   id: string;
   absolutePath: string;
   prefix: string;
-  defaultBranch: string;
+  /**
+   * Whether this project is a git repository. When false, worktrees cannot be
+   * created — only direct sessions in the project directory. Set at project
+   * creation time based on `isGitRepo()` check.
+   */
+  isGit: boolean;
+  /**
+   * Default branch for git projects (e.g., "main", "master"). Only present
+   * when `isGit` is true. Used as the default base branch for new worktrees.
+   */
+  defaultBranch?: string;
   createdAt: string; // ISO8601
   /**
    * When true, the project (and all its worktrees) is hidden from the sidebar
@@ -73,5 +89,16 @@ export interface ProjectRecord {
    * affects sessions, worktrees, or files. Unhide via Settings.
    */
   hidden?: boolean;
+  /**
+   * Sessions that run directly in the project directory without a worktree.
+   * Available for all projects (git and non-git). These sessions edit files
+   * in-place without branch isolation.
+   */
+  directSessions: SessionRecord[];
+  /**
+   * Monotonic counter for direct session slots (d1, d2, …). Only ever
+   * increments — numbers are never reused even after a session is deleted.
+   */
+  directSessionSeq?: number;
   worktrees: WorktreeRecord[];
 }

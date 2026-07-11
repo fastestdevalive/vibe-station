@@ -1,13 +1,16 @@
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { FileText, FolderTree, Minus, Plus, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { FileTreeSidebar } from "@/components/layout/FileTreeSidebar";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 
 interface FilesPanelProps {
   api: ApiInstance;
+  /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string | null;
+  scope?: FileScope;
 }
 
 /** Last path segment — the file name shown on the tab. */
@@ -23,7 +26,7 @@ function baseName(path: string): string {
  * time), and the panel controls (zoom / fullscreen / close). The tree column is
  * collapsible via the toggle.
  */
-export function FilesPanel({ api, worktreeId }: FilesPanelProps) {
+export function FilesPanel({ api, worktreeId, scope = "worktree" }: FilesPanelProps) {
   const wt = worktreeId ?? "__none__";
 
   const treeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
@@ -32,7 +35,7 @@ export function FilesPanel({ api, worktreeId }: FilesPanelProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
 
-  const preview = <FilePreviewPane api={api} worktreeId={worktreeId} />;
+  const preview = <FilePreviewPane api={api} worktreeId={worktreeId} scope={scope} />;
 
   return (
     <div className="files-panel">
@@ -92,7 +95,7 @@ export function FilesPanel({ api, worktreeId }: FilesPanelProps) {
         <PanelGroup direction="horizontal" autoSaveId={`vs-files-${wt}`} style={{ width: "100%", flex: 1, minHeight: 0 }}>
           <Panel defaultSize={34} minSize={16} maxSize={60}>
             <div className="pane-fill-host">
-              <FileTreeSidebar api={api} />
+              <FileTreeSidebar api={api} contextId={worktreeId} scope={scope} />
             </div>
           </Panel>
           <PanelResizeHandle className="resize-handle resize-handle--col" />

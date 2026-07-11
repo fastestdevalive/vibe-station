@@ -30,7 +30,7 @@ describe("FileTreeSidebar", () => {
     await screen.findByText("src");
     await user.click(screen.getByRole("treeitem", { name: "src" }));
     await waitFor(() => {
-      expect(spy).toHaveBeenCalledWith("wt-1", "src");
+      expect(spy).toHaveBeenCalledWith("wt-1", "src", "worktree");
     });
   });
 

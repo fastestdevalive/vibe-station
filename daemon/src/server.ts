@@ -10,6 +10,8 @@ import { registerProjectRoutes } from "./routes/projects.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerModeRoutes } from "./routes/modes.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerFsRoutes } from "./routes/fs.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerWSEndpoint } from "./ws/server.js";
 import { COOKIE_NAME, validateSessionCookie } from "./auth.js";
@@ -132,6 +134,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);
   registerModeRoutes(app);
+  registerSettingsRoutes(app);
+  registerFsRoutes(app);
   await registerWSEndpoint(app, noAuth ? undefined : token);
 
   return app;

@@ -9,6 +9,7 @@ function sess(
   return {
     id,
     worktreeId: "w",
+    projectId: "p",
     modeId: null,
     type: "agent",
     label: id,

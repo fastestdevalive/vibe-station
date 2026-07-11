@@ -11,7 +11,8 @@ let tempDir: string;
 let repoDir: string;
 
 vi.mock("../services/paths.js", async () => {
-  const { join: pathJoin } = await import("node:path");
+  const { join: pathJoin, resolve: pathResolve, relative: pathRelative, isAbsolute: pathIsAbsolute } =
+    await import("node:path");
   return {
     vstHome: () => tempDir,
     projectDir: (id: string) => pathJoin(tempDir, "projects", id),
@@ -22,6 +23,16 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    // Faithful guard against the mocked home so the delete path still exercises
+    // the "never escape the data dir" check.
+    assertSafeToDelete: (target: string) => {
+      const abs = pathResolve(target);
+      const home = pathResolve(tempDir);
+      const rel = pathRelative(home, abs);
+      if (rel === "" || rel.startsWith("..") || pathIsAbsolute(rel)) {
+        throw new Error(`Refusing to delete '${abs}' — outside ${home}`);
+      }
+    },
   };
 });
 
@@ -68,7 +79,7 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     expect(body.defaultBranch).toBeTruthy();
   });
 
-  it("POST /projects 400 if path is not a git repo", async () => {
+  it("POST /projects 201 for non-git directory (with isGit=false)", async () => {
     const notRepo = join(tempDir, "not-a-repo");
     execSync(`mkdir -p "${notRepo}"`);
     const res = await app.inject({
@@ -76,7 +87,10 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
       url: "/projects",
       payload: { path: notRepo },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(201);
+    const body = res.json();
+    expect(body.isGit).toBe(false);
+    expect(body.defaultBranch).toBeUndefined();
   });
 
   it("POST /projects 409 on duplicate id", async () => {

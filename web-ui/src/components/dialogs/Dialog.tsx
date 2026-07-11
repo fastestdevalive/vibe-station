@@ -13,6 +13,11 @@ interface DialogProps {
   children: ReactNode;
   footer?: ReactNode;
   ariaLabelledBy?: string;
+  /** Extra class on the overlay (e.g. flush padding for a mobile fullscreen dialog). */
+  overlayClassName?: string;
+  /** Extra class on the card (e.g. a fixed-size variant so the dialog doesn't
+   *  resize as its content grows). */
+  cardClassName?: string;
 }
 
 export function Dialog({
@@ -22,6 +27,8 @@ export function Dialog({
   children,
   footer,
   ariaLabelledBy = "dialog-title",
+  overlayClassName,
+  cardClassName,
 }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -88,7 +95,7 @@ export function Dialog({
   return createPortal(
     <div
       ref={overlayRef}
-      className="dialog-overlay"
+      className={overlayClassName ? `dialog-overlay ${overlayClassName}` : "dialog-overlay"}
       role="presentation"
       onMouseDown={(e) => {
         if (e.target === overlayRef.current) onClose();
@@ -96,7 +103,7 @@ export function Dialog({
     >
       <div
         ref={cardRef}
-        className="dialog-card"
+        className={cardClassName ? `dialog-card ${cardClassName}` : "dialog-card"}
         role="dialog"
         aria-modal="true"
         aria-labelledby={ariaLabelledBy}

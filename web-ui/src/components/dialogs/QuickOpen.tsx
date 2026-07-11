@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useWorktreeFiles } from "@/hooks/useWorktreeFiles";
 
 interface QuickOpenProps {
   api: ApiInstance;
+  /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string | null;
   open: boolean;
   onClose: () => void;
+  scope?: FileScope;
 }
 
 function basename(path: string): string {
@@ -15,7 +18,7 @@ function basename(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
-export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
+export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }: QuickOpenProps) {
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
 
@@ -29,6 +32,7 @@ export function QuickOpen({ api, worktreeId, open, onClose }: QuickOpenProps) {
   const { files, loading, error, truncated } = useWorktreeFiles(
     api,
     open ? worktreeId : null,
+    scope,
   );
 
   useEffect(() => {

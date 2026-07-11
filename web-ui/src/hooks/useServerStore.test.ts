@@ -8,7 +8,8 @@ function proj(id: string, hidden = false): Project {
     name: id,
     path: `/tmp/${id}`,
     prefix: id.slice(0, 2),
-    defaultBranch: "main",
+    isGit: true,
+      defaultBranch: "main",
     createdAt: "2024-01-01T00:00:00.000Z",
     hidden,
   };

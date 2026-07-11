@@ -43,6 +43,12 @@ export interface WorkspaceState {
   layoutByWorktree: Record<string, WorktreeLayout>;
   activeProjectId: string | null;
   activeWorktreeId: string | null;
+  /**
+   * Layout context for a direct session (no worktree): the project id. Direct
+   * sessions reuse the per-context layout map keyed by this id, so tool-panel /
+   * terminal-dock toggles work just like a worktree. Null outside direct sessions.
+   */
+  activeDirectContextId: string | null;
   /** Active *agent* session (drives the agent pane + file preview). */
   activeSessionId: string | null;
   /** Active *terminal* session shown in the bottom terminal dock. */
@@ -82,6 +88,8 @@ export interface WorkspaceState {
   /** Flip the agent pane ↔ tool panel split between horizontal and vertical. */
   toggleToolSplitOrientation: () => void;
   setActiveWorktree: (projectId: string, worktreeId: string, sessions?: Session[]) => void;
+  /** Set (or clear with null) the direct-session layout context (project id). */
+  setActiveDirectContext: (projectId: string | null) => void;
   setActiveSession: (sessionId: string) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null) => void;
@@ -107,6 +115,7 @@ const initial = {
   layoutByWorktree: {} as Record<string, WorktreeLayout>,
   activeProjectId: null as string | null,
   activeWorktreeId: null as string | null,
+  activeDirectContextId: null as string | null,
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
@@ -130,17 +139,23 @@ const initial = {
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set) => {
-      /** Patch the active worktree's layout, falling back to defaults. */
+      /** Active layout key: worktree id, or the direct-session project id. */
+      function layoutKey(s: WorkspaceState): string | null {
+        return s.activeWorktreeId ?? s.activeDirectContextId;
+      }
+
+      /** Patch the active context's layout, falling back to defaults. */
       function patchLayout(
         s: WorkspaceState,
         patch: Partial<WorktreeLayout>,
       ): Partial<WorkspaceState> {
-        if (!s.activeWorktreeId) return s;
-        const cur = s.layoutByWorktree[s.activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
+        const key = layoutKey(s);
+        if (!key) return s;
+        const cur = s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT;
         return {
           layoutByWorktree: {
             ...s.layoutByWorktree,
-            [s.activeWorktreeId]: { ...cur, ...patch },
+            [key]: { ...cur, ...patch },
           },
         };
       }
@@ -149,8 +164,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         ...initial,
         toggleToolPanel: () =>
           set((s) => {
-            const cur = s.activeWorktreeId
-              ? (s.layoutByWorktree[s.activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT)
+            const key = layoutKey(s);
+            const cur = key
+              ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
               : DEFAULT_WORKTREE_LAYOUT;
             const next = patchLayout(s, { toolPanelVisible: !cur.toolPanelVisible });
             // Leaving fullscreen if we just hid the panel that was maximized.
@@ -163,8 +179,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => patchLayout(s, { toolPanelTab: tab, toolPanelVisible: true })),
         toggleTerminalDock: () =>
           set((s) => {
-            const cur = s.activeWorktreeId
-              ? (s.layoutByWorktree[s.activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT)
+            const key = layoutKey(s);
+            const cur = key
+              ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
               : DEFAULT_WORKTREE_LAYOUT;
             const next = patchLayout(s, { terminalDockVisible: !cur.terminalDockVisible });
             if (cur.terminalDockVisible && s.workspacePaneFullscreen === "terminal") {
@@ -174,8 +191,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         toggleToolSplitOrientation: () =>
           set((s) => {
-            const cur = s.activeWorktreeId
-              ? (s.layoutByWorktree[s.activeWorktreeId] ?? DEFAULT_WORKTREE_LAYOUT)
+            const key = layoutKey(s);
+            const cur = key
+              ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
               : DEFAULT_WORKTREE_LAYOUT;
             const next = cur.toolSplitOrientation === "horizontal" ? "vertical" : "horizontal";
             return patchLayout(s, { toolSplitOrientation: next });
@@ -216,21 +234,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: s.lastFileByWorktree[worktreeId] ?? null,
             };
           }),
+        setActiveDirectContext: (projectId) =>
+          set({ activeDirectContextId: projectId }),
         setActiveSession: (sessionId) =>
           set((s) => {
-            const wt = s.activeWorktreeId;
+            const key = layoutKey(s);
             const nextLast =
-              wt != null
-                ? { ...s.lastSessionByWorktree, [wt]: sessionId }
+              key != null
+                ? { ...s.lastSessionByWorktree, [key]: sessionId }
                 : s.lastSessionByWorktree;
             return { activeSessionId: sessionId, lastSessionByWorktree: nextLast };
           }),
         setActiveTerminalSession: (sessionId) =>
           set((s) => {
-            const wt = s.activeWorktreeId;
+            const key = layoutKey(s);
             const nextLast =
-              wt != null
-                ? { ...s.lastTerminalByWorktree, [wt]: sessionId }
+              key != null
+                ? { ...s.lastTerminalByWorktree, [key]: sessionId }
                 : s.lastTerminalByWorktree;
             return { activeTerminalSessionId: sessionId, lastTerminalByWorktree: nextLast };
           }),
@@ -268,6 +288,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set({
             activeProjectId: null,
             activeWorktreeId: null,
+            activeDirectContextId: null,
             activeSessionId: null,
             activeTerminalSessionId: null,
             activeFilePath: null,

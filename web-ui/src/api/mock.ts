@@ -1,15 +1,23 @@
 import type {
+  AddProjectBody,
+  AddProjectResponse,
   ChangedPathEntry,
   CliId,
+  CreateDirectSessionBody,
   CreateModeBody,
+  CreateProjectBody,
+  CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  FileScope,
+  FsCompleteResponse,
   HealthResponse,
   Mode,
   Project,
   ProjectBranchesResponse,
   SendInputBody,
   Session,
+  Settings,
   SupportedCli,
   TreeEntry,
   UpdateModeBody,
@@ -26,6 +34,15 @@ const PRESET_BUG_FIX =
   "You are fixing a bug. Open a PR when done. Run tests before committing.";
 const PRESET_PLANNING = "You are planning. Do not commit or open a PR. Output a written plan.";
 
+/** Fixed home dir + directory tree for the mock `/fs/complete` autocomplete. */
+const MOCK_HOME = "/home/user";
+const MOCK_FS_TREE: Record<string, string[]> = {
+  "/home/user": ["projects", "code", "work"],
+  "/home/user/projects": ["proj-a", "proj-b"],
+  "/home/user/code": ["webapp"],
+  "/home/user/work": ["cloned-repo"],
+};
+
 export function createMockApi() {
   const projects: Project[] = [
     {
@@ -33,6 +50,7 @@ export function createMockApi() {
       name: "Proj A",
       path: "/home/dev/proj-a",
       prefix: "pa",
+      isGit: true,
       defaultBranch: "main",
       createdAt: nowIso(),
       hidden: false,
@@ -42,6 +60,7 @@ export function createMockApi() {
       name: "Proj B",
       path: "/home/dev/proj-b",
       prefix: "pb",
+      isGit: true,
       defaultBranch: "develop",
       createdAt: nowIso(),
       hidden: false,
@@ -99,6 +118,7 @@ export function createMockApi() {
     {
       id: "sess-main",
       worktreeId: "wt-1",
+      projectId: "proj-a",
       modeId: "mode-1",
       type: "agent",
       label: "main",
@@ -111,6 +131,7 @@ export function createMockApi() {
     {
       id: "sess-agent2",
       worktreeId: "wt-1",
+      projectId: "proj-a",
       modeId: "mode-2",
       type: "agent",
       label: "agent-2",
@@ -123,6 +144,7 @@ export function createMockApi() {
     {
       id: "sess-term1",
       worktreeId: "wt-1",
+      projectId: "proj-a",
       modeId: null,
       type: "terminal",
       label: "term-1",
@@ -135,6 +157,7 @@ export function createMockApi() {
     {
       id: "sess-wt2-main",
       worktreeId: "wt-2",
+      projectId: "proj-a",
       modeId: "mode-1",
       type: "agent",
       label: "main",
@@ -147,6 +170,7 @@ export function createMockApi() {
     {
       id: "sess-wt3-main",
       worktreeId: "wt-3",
+      projectId: "proj-b",
       modeId: "mode-1",
       type: "agent",
       label: "main",
@@ -255,6 +279,23 @@ export function createMockApi() {
       return structuredClone(projects);
     },
 
+    async addProject(body: AddProjectBody): Promise<AddProjectResponse> {
+      const id = body.name ?? body.path.split("/").pop() ?? "new-project";
+      const newProject: Project = {
+        id,
+        name: body.name ?? id,
+        path: body.path,
+        prefix: id.slice(0, 4),
+        isGit: true, // mock assumes git
+        defaultBranch: "main",
+        createdAt: nowIso(),
+        hidden: false,
+      };
+      projects.push(newProject);
+      emit({ type: "project:created", project: structuredClone(newProject) });
+      return structuredClone(newProject);
+    },
+
     async deleteProject(_id: string): Promise<{ ok: true }> {
       emit({ type: "project:deleted", projectId: _id });
       return { ok: true };
@@ -287,13 +328,17 @@ export function createMockApi() {
     async listProjectBranches(projectId: string): Promise<ProjectBranchesResponse> {
       const project = projects.find((p) => p.id === projectId);
       if (!project) throw new ApiError("not found", 404);
+      // Non-git projects return empty branches
+      if (!project.isGit) {
+        return { branches: [], defaultBranch: "" };
+      }
       // Derive a stable branch set: the project default plus any branches its
       // worktrees were based on, deduped with the default listed first.
-      const defaultBranch = project.defaultBranch;
+      const defaultBranch = project.defaultBranch ?? "main";
       const others = worktrees
         .filter((w) => w.projectId === projectId)
         .map((w) => w.baseBranch);
-      const branches = [...new Set([defaultBranch, ...others, "feature/example"])];
+      const branches = [...new Set([defaultBranch, ...others, "feature/example"])].filter(Boolean) as string[];
       return { branches, defaultBranch };
     },
 
@@ -377,6 +422,7 @@ export function createMockApi() {
     },
 
     async createSession(body: CreateSessionBody): Promise<Session> {
+      const wt = worktrees.find((w) => w.id === body.worktreeId);
       const wtSessions = sessions.filter((s) => s.worktreeId === body.worktreeId);
       const nextAgent = wtSessions.filter((s) => s.slot.startsWith("a")).length + 1;
       const nextTerm = wtSessions.filter((s) => s.slot.startsWith("t")).length + 1;
@@ -389,6 +435,7 @@ export function createMockApi() {
       const sess: Session = {
         id: `sess-${Date.now()}`,
         worktreeId: body.worktreeId,
+        projectId: wt?.projectId ?? "proj-a",
         modeId: body.modeId,
         type: body.type,
         label: termName ?? `agent-${nextAgent}`,
@@ -404,6 +451,38 @@ export function createMockApi() {
         type: "session:created",
         sessionId: sess.id,
         worktreeId: sess.worktreeId,
+        projectId: sess.projectId,
+        sessionType: sess.type,
+        mode: typeof body.modeId === "string" ? body.modeId : undefined,
+        snapshot: sess,
+      });
+      return structuredClone(sess);
+    },
+
+    async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
+      const projSessions = sessions.filter((s) => s.projectId === body.projectId && s.worktreeId === null);
+      const nextDirect = projSessions.length + 1;
+      const slot = `d${nextDirect}`;
+      const sess: Session = {
+        id: `sess-direct-${Date.now()}`,
+        worktreeId: null,
+        projectId: body.projectId,
+        modeId: body.modeId ?? null,
+        type: body.type,
+        label: body.type === "terminal" ? `Terminal ${nextDirect}` : `direct ${nextDirect}`,
+        name: body.name ?? null,
+        slot,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: `tmux-direct-${Date.now()}`,
+        createdAt: nowIso(),
+      };
+      sessions.push(sess);
+      emit({
+        type: "session:created",
+        sessionId: sess.id,
+        worktreeId: null,
+        projectId: sess.projectId,
         sessionType: sess.type,
         mode: typeof body.modeId === "string" ? body.modeId : undefined,
         snapshot: sess,
@@ -423,6 +502,22 @@ export function createMockApi() {
       if (!victim) throw new ApiError("not found", 404);
       if (victim.slot === "m") throw new ApiError("cannot delete main", 400);
       sessions.splice(idx, 1);
+      return { ok: true };
+    },
+
+    async pinSession(id: string, pinned: boolean): Promise<{ ok: true; pinnedAt: string | null }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      s.pinnedAt = pinned ? new Date(0).toISOString() : null;
+      return { ok: true, pinnedAt: s.pinnedAt };
+    },
+
+    async markSessionDone(id: string): Promise<{ ok: true }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      if (s.type !== "agent") throw new ApiError("only agent sessions can be marked done", 400);
+      s.state = "done";
+      s.lifecycleState = "done";
       return { ok: true };
     },
 
@@ -484,11 +579,17 @@ export function createMockApi() {
     // Diagnostic channel (mobile double-text investigation) — no-op in the mock.
     async sendDebug(): Promise<void> {},
 
-    async getFileBlob(_worktreeId: string, _filePath: string): Promise<Blob> {
+    async getFileBlob(_worktreeId: string, _filePath: string, _scope: FileScope = "worktree"): Promise<Blob> {
       return new Blob([], { type: "image/png" });
     },
 
-    async getFile(worktreeId: string, filePath: string): Promise<string> {
+    async getFile(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<string> {
+      // Project scope (direct sessions) isn't backed by the mock tree store;
+      // return a benign placeholder so the preview renders in mock mode.
+      if (scope === "project") {
+        if (filePath === "HUGE.bin") throw new ApiError("File too large to preview", 422);
+        return fileContents[filePath.replace(/^\/+/, "")] ?? `// ${filePath}\n`;
+      }
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (filePath === "HUGE.bin") {
         throw new ApiError("File too large to preview", 422);
@@ -507,7 +608,9 @@ export function createMockApi() {
       return unifiedDiffs[key] ?? "";
     },
 
-    async tree(worktreeId: string, path: string): Promise<TreeEntry[]> {
+    async tree(worktreeId: string, path: string, scope: FileScope = "worktree"): Promise<TreeEntry[]> {
+      // Project scope has no mock tree store — return empty (no crash).
+      if (scope === "project") return [];
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const norm = path.replace(/^\/+/, "").replace(/\/$/, "");
       const entries = treeStore[worktreeId]?.[norm];
@@ -518,7 +621,9 @@ export function createMockApi() {
     async fileList(
       worktreeId: string,
       _signal?: AbortSignal,
+      scope: FileScope = "worktree",
     ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
+      if (scope === "project") return { files: [], truncated: false, source: "node" };
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       // Walk the mock treeStore to produce a flat list of file paths.
       const out: string[] = [];
@@ -622,6 +727,146 @@ export function createMockApi() {
       modes.splice(idx, 1);
       emit({ type: "mode:deleted", modeId: id });
       return { ok: true };
+    },
+
+    // ── Settings ────────────────────────────────────────────────────────────────
+
+    async getSettings(): Promise<Settings> {
+      return { defaultProjectsDir: "/home/user/projects", homeDir: "/home/user" };
+    },
+
+    async updateSettings(_body: Partial<Settings>): Promise<{ ok: true }> {
+      // Mock does not persist settings
+      return { ok: true };
+    },
+
+    // ── Create Project ──────────────────────────────────────────────────────────
+
+    async createProject(body: CreateProjectBody): Promise<CreateProjectResponse> {
+      const id = body.name;
+      const newProject: Project = {
+        id,
+        name: body.name,
+        path: `${body.dir || "/home/user/projects"}/${body.name}`,
+        prefix: id.slice(0, 4),
+        isGit: true,
+        defaultBranch: "main",
+        createdAt: nowIso(),
+        hidden: false,
+      };
+      projects.push(newProject);
+      emit({ type: "project:created", project: structuredClone(newProject) });
+
+      const response: CreateProjectResponse = { project: structuredClone(newProject) };
+
+      // Mirror the daemon: `startAgent` spawns a worktree+session or a direct
+      // session as part of this same call, so mock-mode navigates too.
+      if (body.startAgent) {
+        const { modeId, useWorktree, branch } = body.startAgent;
+        if (useWorktree) {
+          const wt: Worktree = {
+            id: `wt-${Date.now()}`,
+            projectId: id,
+            branch: branch?.trim() || "feature",
+            baseBranch: "main",
+            baseSha: "mock-base-sha",
+            createdAt: nowIso(),
+            pinnedAt: null,
+          };
+          worktrees.push(wt);
+          treeStore[wt.id] = { "": [] };
+          emit({ type: "worktree:created", worktree: wt });
+
+          const sess: Session = {
+            id: `${wt.id}-m`,
+            worktreeId: wt.id,
+            projectId: id,
+            modeId: modeId ?? null,
+            type: "agent",
+            label: "main",
+            name: null,
+            slot: "m",
+            state: "working",
+            lifecycleState: "working",
+            tmuxName: `tmux-${Date.now()}`,
+            createdAt: nowIso(),
+          };
+          sessions.push(sess);
+          emit({
+            type: "session:created",
+            sessionId: sess.id,
+            worktreeId: wt.id,
+            projectId: id,
+            sessionType: "agent",
+            mode: modeId,
+            snapshot: sess,
+          });
+          response.worktree = wt;
+          response.session = sess;
+        } else {
+          const sess: Session = {
+            id: `sess-direct-${Date.now()}`,
+            worktreeId: null,
+            projectId: id,
+            modeId: modeId ?? null,
+            type: "agent",
+            label: "direct 1",
+            name: null,
+            slot: "d1",
+            state: "working",
+            lifecycleState: "working",
+            tmuxName: `tmux-direct-${Date.now()}`,
+            createdAt: nowIso(),
+          };
+          sessions.push(sess);
+          emit({
+            type: "session:created",
+            sessionId: sess.id,
+            worktreeId: null,
+            projectId: id,
+            sessionType: "agent",
+            mode: modeId,
+            snapshot: sess,
+          });
+          response.session = sess;
+        }
+      }
+
+      return response;
+    },
+
+    // ── Filesystem autocomplete ──────────────────────────────────────────────────
+
+    async fsComplete(path: string): Promise<FsCompleteResponse> {
+      // Mirrors the daemon's R4 completion rule against a small fixed tree:
+      // a trailing separator lists the dir's children; otherwise prefix-match
+      // child names of the parent dir (no auto-descend on exact-name match).
+      let resolved = path;
+      if (resolved === "~") resolved = MOCK_HOME;
+      else if (resolved.startsWith("~/")) resolved = `${MOCK_HOME}/${resolved.slice(2)}`;
+
+      if (!resolved.startsWith("/")) {
+        return { base: resolved, entries: [] };
+      }
+
+      let dir: string;
+      let prefix: string;
+      if (resolved.endsWith("/")) {
+        dir = resolved.slice(0, -1) || "/";
+        prefix = "";
+      } else {
+        const idx = resolved.lastIndexOf("/");
+        dir = idx <= 0 ? "/" : resolved.slice(0, idx);
+        prefix = resolved.slice(idx + 1);
+      }
+
+      const children = MOCK_FS_TREE[dir] ?? [];
+      const entries = children
+        .filter((name) => prefix === "" || name.startsWith(prefix))
+        .map((name) => ({ name, path: `${dir === "/" ? "" : dir}/${name}` }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+      return { base: dir, entries };
     },
 
     subscribe(sessionIds: string[]): () => void {

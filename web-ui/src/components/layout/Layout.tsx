@@ -11,9 +11,11 @@ interface LayoutProps {
   dashboardPane?: ReactNode;
   /** Center region — agent sessions. Required when `dashboardPane` is omitted. */
   agentPane?: ReactNode;
-  /** Right region — tool panel (Files/Preview/Browser/Emulator/Artifacts). */
+  /** Right region — tool panel (Files/Preview/Browser/Emulator/Artifacts).
+   *  Pass `null` when the region is unavailable (e.g. direct sessions are
+   *  terminal-only): the split is skipped regardless of stored visibility. */
   toolPanel?: ReactNode;
-  /** Bottom region — terminal dock. */
+  /** Bottom region — terminal dock. Pass `null` when unavailable. */
   terminalDock?: ReactNode;
   leftColumnPx: number;
   isMobile: boolean;
@@ -33,7 +35,7 @@ export function Layout({
   mobileSidebarOpen,
   onMobileSidebarClose,
 }: LayoutProps) {
-  const { toolPanelVisible, terminalDockVisible, toolSplitOrientation, activeWorktreeId } = useLayout();
+  const { toolPanelVisible, terminalDockVisible, toolSplitOrientation, activeWorktreeId, activeDirectContextId } = useLayout();
 
   const mainContentRef = useRef<HTMLDivElement>(null);
 
@@ -41,11 +43,20 @@ export function Layout({
   const paneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
   const setPaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
 
+  // `null` slots mean the region is unavailable in this mode (direct sessions
+  // are terminal-only) — treat them as hidden no matter what the persisted
+  // per-worktree layout says (activeWorktreeId is null there, so the DEFAULT
+  // layout with toolPanelVisible:true would otherwise apply).
+  const hasToolPanel = toolPanel != null;
+  const hasTerminalDock = terminalDock != null;
+  const showToolPanel = toolPanelVisible && hasToolPanel;
+  const showTerminalDock = terminalDockVisible && hasTerminalDock;
+
   // Drop a stale fullscreen if the region it targets is no longer visible.
   useEffect(() => {
-    if (paneFullscreen === "tools" && !toolPanelVisible) setPaneFullscreen(null);
-    if (paneFullscreen === "terminal" && !terminalDockVisible) setPaneFullscreen(null);
-  }, [paneFullscreen, toolPanelVisible, terminalDockVisible, setPaneFullscreen]);
+    if (paneFullscreen === "tools" && !showToolPanel) setPaneFullscreen(null);
+    if (paneFullscreen === "terminal" && !showTerminalDock) setPaneFullscreen(null);
+  }, [paneFullscreen, showToolPanel, showTerminalDock, setPaneFullscreen]);
 
   const sidebarInner = (
     <div
@@ -119,7 +130,11 @@ export function Layout({
     throw new Error("Layout: agentPane, toolPanel, and terminalDock are required when dashboardPane is omitted.");
   }
 
-  const wt = activeWorktreeId ?? "__none__";
+  // Key persisted panel sizes on the worktree, or — for direct sessions, which
+  // have no worktree — the direct context (project) id. Matches how useLayout
+  // keys region visibility, so each context keeps its own split sizes instead
+  // of every direct session sharing one "__none__" bucket.
+  const wt = activeWorktreeId ?? activeDirectContextId ?? "__none__";
 
   function wrap(node: ReactNode, placement: PaneFullscreenPlacement = "panel") {
     return <PaneFullscreenChrome placement={placement}>{node}</PaneFullscreenChrome>;
@@ -144,7 +159,7 @@ export function Layout({
 
   const agentFullscreen = paneFullscreen === "agent";
   const terminalFullscreen = paneFullscreen === "terminal";
-  const toolsInSplit = toolPanelVisible && paneFullscreen !== "tools";
+  const toolsInSplit = showToolPanel && paneFullscreen !== "tools";
 
   const agentWrapper = () => regionWrapper(agentPane, agentFullscreen);
   const dockWrapper = () => regionWrapper(terminalDock, terminalFullscreen);
@@ -170,7 +185,7 @@ export function Layout({
     agentWrapper()
   );
 
-  const mainColumnInner = terminalDockVisible ? (
+  const mainColumnInner = showTerminalDock ? (
     <PanelGroup
       direction="vertical"
       autoSaveId={`vs-ide-dock-${wt}`}
@@ -198,7 +213,7 @@ export function Layout({
   );
 
   const fullscreenOverlay =
-    paneFullscreen === "tools" ? (
+    paneFullscreen === "tools" && hasToolPanel ? (
       <div className="pane-viewport-fullscreen" key="viewport-fs-tools">
         {wrap(toolPanel, "viewport")}
       </div>
