@@ -74,4 +74,11 @@ export interface ProjectRecord {
    */
   hidden?: boolean;
   worktrees: WorktreeRecord[];
+  /**
+   * Monotonic high-water mark for worktree numbers. Never decreases, never reused,
+   * even after a worktree is deleted. Optional for back-compat with manifests
+   * written before this field existed — `reserveNextWorktreeNum` lazily seeds it
+   * from the existing worktrees the first time it's needed.
+   */
+  nextWorktreeNum?: number;
 }

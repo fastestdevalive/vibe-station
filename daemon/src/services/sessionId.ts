@@ -6,31 +6,38 @@ import { existsSync } from "node:fs";
 import type { ProjectRecord, SessionSlot, WorktreeRecord } from "../types.js";
 import { worktreePath } from "./paths.js";
 
+/** Extract the trailing "-<num>" from a worktree id (e.g. "vs-3" -> 3). May be NaN. */
+function numOf(wt: WorktreeRecord): number {
+  const parts = wt.id.split("-");
+  const last = parts[parts.length - 1];
+  return parseInt(last ?? "", 10);
+}
+
 /**
- * Reserve the next free worktree number for a project.
- * Returns the smallest positive integer not already used by any worktree in the project,
- * AND whose worktree directory does not already exist on disk. The disk check guards
- * against orphans left by `vst worktree rm` (without --purge), which intentionally
- * removes from the manifest but keeps files and git registration.
- * MUST be called under the project mutex.
+ * Reserve the next worktree number for a project — monotonic, never reused.
+ *
+ * Uses the persisted high-water counter `project.nextWorktreeNum`. For legacy
+ * manifests written before that field existed, it's lazily seeded from
+ * `max(existing worktree nums) + 1` (the `Number.isFinite` filter is required:
+ * a worktree id whose trailing segment isn't numeric parses to NaN, and
+ * `Math.max(0, NaN)` is NaN, which would poison the counter permanently).
+ *
+ * The `existsSync` check is a paranoia guard against stray on-disk directories
+ * left by non-purge deletes (`vst worktree rm` without `--purge`) — mostly moot
+ * once the counter is persisted, but cheap to keep.
+ *
+ * This function is pure (it doesn't mutate or persist anything) — callers MUST
+ * run it inside a `mutateProject` callback and write the returned value + 1 back
+ * to `nextWorktreeNum` as part of that same atomic update, so the reservation
+ * and the counter bump land together.
  */
 export function reserveNextWorktreeNum(project: ProjectRecord): number {
-  const usedNums = new Set(
-    project.worktrees.map((wt) => {
-      // wt.id is "<prefix>-<num>"
-      const parts = wt.id.split("-");
-      const last = parts[parts.length - 1];
-      return parseInt(last ?? "0", 10);
-    }),
-  );
-
-  for (let n = 1; n < 100_000; n++) {
-    if (usedNums.has(n)) continue;
-    const candidatePath = worktreePath(project.id, `${project.prefix}-${n}`);
-    if (existsSync(candidatePath)) continue;
-    return n;
-  }
-  throw new Error(`Could not reserve worktree number for project ${project.id}`);
+  const nums = project.worktrees.map(numOf).filter(Number.isFinite);
+  const seed = Math.max(0, ...nums) + 1;
+  let n = project.nextWorktreeNum ?? seed;
+  // paranoia guard: never land on a stray on-disk dir (old non-purge orphans)
+  while (existsSync(worktreePath(project.id, `${project.prefix}-${n}`))) n++;
+  return n;
 }
 
 /**
