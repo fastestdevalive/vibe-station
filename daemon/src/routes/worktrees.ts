@@ -264,9 +264,15 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     let worktreeAdded = false;
 
     try {
-      // 3. Reserve worktree id under mutex (read project fresh from store)
-      const freshProject = getProject(projectId)!;
-      const wtNum = reserveNextWorktreeNum(freshProject);
+      // 3. Reserve worktree id: reserve + bump `nextWorktreeNum` atomically inside
+      // a single mutateProject call, so the reservation is race-safe and the
+      // counter is persisted even if worktree creation fails below (burn-on-failure
+      // is intentional — a burned number is never reused).
+      let wtNum!: number;
+      const freshProject = await mutateProject(projectId, (p) => {
+        wtNum = reserveNextWorktreeNum(p);
+        return { ...p, nextWorktreeNum: wtNum + 1 };
+      });
       const wtId = `${freshProject.prefix}-${wtNum}`;
       const wtPath = getWorktreePath(projectId, wtId);
 
