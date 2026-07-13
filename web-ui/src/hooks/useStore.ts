@@ -121,7 +121,7 @@ const initial = {
   fileTreeVisible: true,
   terminalFontScale: 1,
   leftSidebarCollapsed: false,
-  hideInactiveWorktrees: false,
+  hideInactiveWorktrees: true,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
@@ -304,7 +304,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     },
     {
       name: "vibestation:workspace",
-      version: 10,
+      version: 11,
       migrate: (persisted, version) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -413,6 +413,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             };
           }
           p.layoutByWorktree = next;
+        }
+        // v10 → v11: "hide done" now defaults ON. Existing browsers persisted the
+        // old `false` default, so done worktrees stayed visible on machines other
+        // than the one where the filter was toggled. Flip legacy persisted state to
+        // the new default so done worktrees hide consistently across clients.
+        if (version < 11) {
+          p.hideInactiveWorktrees = true;
         }
         return p;
       },
