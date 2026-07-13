@@ -31,6 +31,9 @@ describe("LeftSidebar", () => {
       sessionStates: {},
       lastSessionByWorktree: {},
       diffScopeByWorktree: {},
+      // Keep all worktrees visible by default; these tests assert on worktree
+      // rows regardless of the "hide done" product default (now true).
+      hideInactiveWorktrees: false,
     });
     // Reset central server store between tests. Harness (via useServerSync)
     // will refill it from the mock api on mount.
