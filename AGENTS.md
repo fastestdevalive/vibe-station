@@ -89,3 +89,37 @@ else if (mode.cli === "opencode") { ... }
 - **New CLI support:** if a fourth CLI is ever added, implement *all* required methods and the optional ones that make sense. The TypeScript interface will enforce required methods at compile time.
 - **`resolvePlugin` in routes vs. services:** `resolvePlugin` is in `daemon/src/agent-plugins/registry.ts`. Routes are allowed to import it. Services (`daemon/src/services/spawn.ts`) receive the already-resolved plugin as an argument — they never import `resolvePlugin` themselves.
 - **`CliId` type:** defined in `daemon/src/types.ts`. Adding a new CLI means adding it to `CliId`, adding a plugin file, registering it in `registry.ts`, and updating Zod schemas in `modes.ts`.
+
+---
+
+## WebSocket — serialize session:open / session:close per (connection, sessionId)
+
+**Files:** `daemon/src/ws/connection.ts` · `daemon/src/ws/handlers/sessionOpen.ts` · `daemon/src/ws/handlers/sessionClose.ts`
+
+### The invariant
+
+`session:open` and `session:close` for the **same `(connection, sessionId)` pair** MUST be serialized. The `socket.on("message", async …)` dispatcher does NOT serialize concurrent handlers — it awaits each handler independently, so a close immediately followed by an open run interleaved.
+
+A terminal remount fires `session:close` then `session:open` back-to-back. Without serialization both handlers park at their respective `await stream.detach` / `await stream.attach` calls concurrently. Both `open` calls can get past the stale-stream check before either registers its new stream, so both spawn a `tmux attach-session` client. Only the last is registered in `openStreams`; the orphaned client keeps forwarding tmux pane output to `conn.send` → browser receives duplicate ("double") echo.
+
+### The mechanism: `WSConnection.withSessionLock`
+
+`connection.ts` holds a per-session promise-chain lock (`sessionLocks: Map<string, Promise<void>>`). Wrap every `session:open` and `session:close` handler body with it:
+
+```ts
+export function handleSessionOpen(conn, msg): Promise<void> {
+  return conn.withSessionLock(msg.sessionId, () => openSessionLocked(conn, msg));
+}
+// same shape for handleSessionClose
+```
+
+Keep the **entire** handler body — including the `await stream.attach` park point — inside the `fn` passed to `withSessionLock`. Moving the attach outside defeats the purpose.
+
+The lock is scoped to one `WSConnection`. Two browser tabs legitimately hold two tmux clients (one per connection), so never serialize across connections.
+
+### What to watch for
+
+- **New open/close-like handlers:** any handler that calls `stream.attach()` or `stream.detach()` must be wrapped with `conn.withSessionLock`.
+- **Don't move attach outside the lock:** the race occurs precisely because `attach` is an async park point. Splitting into "register then attach" outside the lock recreates the bug.
+- **Symptom if violated:** `tmux list-clients -t <session>` shows >1 client for a single browser → duplicated ("double") echo that a page refresh temporarily clears.
+- **Invariant:** for any `(conn, sessionId)`, at most one `TmuxOutputStream` should be live (i.e., have a non-killed PTY) at any moment. The stale-stream teardown in `sessionOpen.ts` reinforces this but only works reliably once the lock prevents interleaving across the attach await.
