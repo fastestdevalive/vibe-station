@@ -79,7 +79,7 @@ export function createClaudePlugin(): AgentPlugin {
       // Shell-line launch: $(cat '<file>') reads the prompt at exec time, avoiding
       // ARG_MAX limits for long prompts. spawn.ts wraps this in `sh -lc <shellLine>`.
       const filePart = `"$(cat ${sq(prompt.systemPromptFile)})"`;
-      let shellLine = `claude --dangerously-skip-permissions --system-prompt ${filePart}`;
+      let shellLine = `claude --dangerously-skip-permissions --chrome --system-prompt ${filePart}`;
       if (prompt.launchCfg.model) {
         shellLine += ` --model ${sq(prompt.launchCfg.model)}`;
       }
@@ -177,7 +177,7 @@ export function createClaudePlugin(): AgentPlugin {
         session.agentChatId ??
         (await findLatestChatUuid(getWorktreePath(project.id, worktree.id)));
       if (uuid) {
-        const argv = ["claude", "--resume", uuid, "--dangerously-skip-permissions"];
+        const argv = ["claude", "--resume", uuid, "--dangerously-skip-permissions", "--chrome"];
         if (model) argv.push("--model", model);
         return argv;
       }
