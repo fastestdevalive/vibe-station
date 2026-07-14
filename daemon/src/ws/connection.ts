@@ -25,6 +25,7 @@ export class WSConnection {
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   readonly id: string; // Unique identifier for this connection
+  private sessionLocks: Map<string, Promise<void>> = new Map(); // sessionId -> tail of promise chain
   /**
    * Diagnostic flag (mobile double-text investigation). Set once a client sends
    * a `debug:log` message — the client only does so when input debugging is
@@ -83,6 +84,43 @@ export class WSConnection {
    */
   isSubscribedTo(sessionId: string): boolean {
     return this.subscriptions.has(sessionId);
+  }
+
+  /**
+   * Run `fn` under this connection's per-session lock, serializing it against
+   * any other open/close for the same sessionId on THIS connection. The
+   * critical section spans the entire `fn`, so callers MUST keep the
+   * `await stream.attach` park point inside `fn`.
+   *
+   * Scoped to this connection only — two browser tabs are two WSConnections and
+   * legitimately hold two tmux clients, so we never serialize across
+   * connections or across tmux names.
+   *
+   * A terminal remount fires close-then-open back-to-back. Without this lock
+   * both handlers await their `stream.attach` concurrently, each spawns a
+   * `tmux attach-session` client, but only the last is registered in
+   * `openStreams`. The orphaned client keeps emitting chunks → duplicate echo.
+   */
+  withSessionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.sessionLocks.get(sessionId) ?? Promise.resolve();
+    // Chain fn after the previous operation, regardless of whether it
+    // succeeded or failed.
+    const run = prev.then(fn, fn);
+    // The tail swallows the result so a failure cannot poison the chain for
+    // subsequent callers.
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.sessionLocks.set(sessionId, tail);
+    void tail.finally(() => {
+      // Clean up the map entry once the chain is idle so it doesn't grow
+      // unboundedly for sessions that are only ever opened once.
+      if (this.sessionLocks.get(sessionId) === tail) {
+        this.sessionLocks.delete(sessionId);
+      }
+    });
+    return run;
   }
 
   /**
