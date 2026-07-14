@@ -6,7 +6,14 @@ import { findSessionRecord } from "./sessionLookup.js";
 import { directPtyRegistry } from "../../state/directPtyRegistry.js";
 import type { SessionStream } from "../streams/sessionStream.js";
 
-export async function handleSessionOpen(
+export function handleSessionOpen(
+  conn: WSConnection,
+  msg: Extract<ClientMessage, { type: "session:open" }>,
+): Promise<void> {
+  return conn.withSessionLock(msg.sessionId, () => openSessionLocked(conn, msg));
+}
+
+async function openSessionLocked(
   conn: WSConnection,
   msg: Extract<ClientMessage, { type: "session:open" }>,
 ): Promise<void> {
