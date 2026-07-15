@@ -22,7 +22,11 @@ interface TabsStripProps {
   scope?: "worktree" | "project";
 }
 
-/** In-flight auto-create keys — dedupes StrictMode double-effect and parallel races. */
+/** Contexts with an auto-create request in flight. Guards the window between
+ *  "decided to create" and "server knows about it", where a fresh strip would
+ *  still read zero terminals and create a second one. Held only for that
+ *  window — see the release comment below. Module-scoped so it survives a
+ *  remount (StrictMode's double-effect is covered by the per-instance ref). */
 const autoCreateInFlight = new Set<string>();
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
@@ -41,8 +45,12 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
   const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
   const scrollRef = useRef<HTMLDivElement>(null);
-  /** One auto-create attempt per mount of an empty terminal strip (not on last-tab close). */
-  const didAttemptAutoCreate = useRef(false);
+  /** Context key ("scope:id") this instance already tried to auto-create for.
+   *  Keyed by context, not just "did it run": the strip is NOT remounted when
+   *  the user switches worktrees (same tree position, new props), so a plain
+   *  boolean would let the first empty worktree suppress every later one.
+   *  Closing the last tab keeps the key, so it does not re-trigger. */
+  const autoCreateAttemptedFor = useRef<string | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -163,26 +171,24 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 
   // Opening an empty terminal dock creates one shell immediately (no dialog).
-  // Runs once per mount — closing the last tab while the dock stays open does not re-trigger.
+  // Fires at most once per context (worktree/project): the dock is unmounted
+  // while hidden, so "mounted empty" == "opened empty". Closing the last tab
+  // while the dock stays open keeps the attempted-key set, so it does not
+  // re-trigger; switching to another empty worktree does.
   useEffect(() => {
-    if (isAgent || !worktreeId || !sessionsLoaded) return;
-    if (sessions.length > 0) {
-      autoCreateInFlight.delete(`${scope}:${worktreeId}`);
-      return;
-    }
-    if (didAttemptAutoCreate.current) return;
+    if (isAgent || !worktreeId || !sessionsLoaded || sessions.length > 0) return;
 
     const lockKey = `${scope}:${worktreeId}`;
+    if (autoCreateAttemptedFor.current === lockKey) return;
     if (autoCreateInFlight.has(lockKey)) {
-      didAttemptAutoCreate.current = true;
+      autoCreateAttemptedFor.current = lockKey;
       return;
     }
-    didAttemptAutoCreate.current = true;
+    autoCreateAttemptedFor.current = lockKey;
     autoCreateInFlight.add(lockKey);
 
     let cancelled = false;
     void (async () => {
-      let created = false;
       try {
         if (isProject) {
           const existing = useServerStore
@@ -197,7 +203,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             type: "terminal",
             useTmux: true,
           });
-          created = true;
         } else {
           const all = await api.listSessions(worktreeId);
           if (cancelled || all.some((s) => s.type === "terminal")) return;
@@ -215,13 +220,17 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             name,
             useTmux: true,
           });
-          created = true;
         }
       } catch {
-        // Leave empty hint; allow a later remount to retry.
-        didAttemptAutoCreate.current = false;
+        // Leave the empty hint; allow a later dock open to retry.
+        autoCreateAttemptedFor.current = null;
       } finally {
-        if (!created) autoCreateInFlight.delete(lockKey);
+        // Always release: the key guards only the in-flight window, where a
+        // racing strip would not yet see the new session. Once the create has
+        // resolved, a racing strip re-reads the server / store and bails on its
+        // own. Holding the key past that point would strand it forever if this
+        // strip unmounts before the session lands.
+        autoCreateInFlight.delete(lockKey);
       }
     })();
 
