@@ -4,7 +4,7 @@
 
 **Issue:** terminal-panel-close
 **Branch:** `terminal-panel-close`
-**Status:** Pending
+**Status:** Done
 **PRD:** _(none — small UI fix)_
 **Parent design:** _(none)_
 
