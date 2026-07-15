@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Minus, Plus } from "lucide-react";
+import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
@@ -22,6 +22,9 @@ interface TabsStripProps {
   scope?: "worktree" | "project";
 }
 
+/** In-flight auto-create keys — dedupes StrictMode double-effect and parallel races. */
+const autoCreateInFlight = new Set<string>();
+
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
   const isAgent = kind === "agent";
   const isProject = scope === "project";
@@ -36,7 +39,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
   const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
+  const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** One auto-create attempt per mount of an empty terminal strip (not on last-tab close). */
+  const didAttemptAutoCreate = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -50,6 +56,8 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
   const [localSessions, setSessions] = useState<Session[]>([]);
+  /** Worktree list finished (project scope is always ready from the server store). */
+  const [sessionsLoaded, setSessionsLoaded] = useState(isProject);
   const [newOpen, setNewOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<Session | null>(null);
 
@@ -82,13 +90,16 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (isProject) return; // project scope derives from the server store above
     if (!worktreeId) {
       setSessions([]);
+      setSessionsLoaded(true);
       return;
     }
+    setSessionsLoaded(false);
     const matches = (s: Session) => s.type === kind;
     void (async () => {
       const all = await api.listSessions(worktreeId);
       const ss = all.filter(matches);
       setSessions(ss);
+      setSessionsLoaded(true);
       const store = useWorkspaceStore.getState();
       store.syncSessionsFromApi(all);
       const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
@@ -150,6 +161,74 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       offDeleted();
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
+
+  // Opening an empty terminal dock creates one shell immediately (no dialog).
+  // Runs once per mount — closing the last tab while the dock stays open does not re-trigger.
+  useEffect(() => {
+    if (isAgent || !worktreeId || !sessionsLoaded) return;
+    if (sessions.length > 0) {
+      autoCreateInFlight.delete(`${scope}:${worktreeId}`);
+      return;
+    }
+    if (didAttemptAutoCreate.current) return;
+
+    const lockKey = `${scope}:${worktreeId}`;
+    if (autoCreateInFlight.has(lockKey)) {
+      didAttemptAutoCreate.current = true;
+      return;
+    }
+    didAttemptAutoCreate.current = true;
+    autoCreateInFlight.add(lockKey);
+
+    let cancelled = false;
+    void (async () => {
+      let created = false;
+      try {
+        if (isProject) {
+          const existing = useServerStore
+            .getState()
+            .sessions.some(
+              (s) => s.projectId === worktreeId && s.worktreeId === null && s.type === "terminal",
+            );
+          if (existing || cancelled) return;
+          await api.createDirectSession({
+            target: "direct",
+            projectId: worktreeId,
+            type: "terminal",
+            useTmux: true,
+          });
+          created = true;
+        } else {
+          const all = await api.listSessions(worktreeId);
+          if (cancelled || all.some((s) => s.type === "terminal")) return;
+          let name: string | undefined;
+          try {
+            name = await api.nextTerminalName(worktreeId);
+          } catch {
+            name = undefined;
+          }
+          if (cancelled) return;
+          await api.createSession({
+            worktreeId,
+            modeId: null,
+            type: "terminal",
+            name,
+            useTmux: true,
+          });
+          created = true;
+        }
+      } catch {
+        // Leave empty hint; allow a later remount to retry.
+        didAttemptAutoCreate.current = false;
+      } finally {
+        if (!created) autoCreateInFlight.delete(lockKey);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [api, isAgent, isProject, scope, sessions.length, sessionsLoaded, worktreeId]);
 
   async function refreshTabs() {
     // Project scope derives from the server store (WS session:deleted updates
@@ -250,6 +329,17 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             )}
           </button>
         </div>
+        {!isAgent ? (
+          <button
+            type="button"
+            className="tab tab--icon tool-bar-btn"
+            aria-label="Close terminal dock"
+            title="Close terminal dock"
+            onClick={() => toggleTerminalDock()}
+          >
+            <X size={13} aria-hidden />
+          </button>
+        ) : null}
       </div>
 
       {isAgent ? (
