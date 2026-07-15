@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -122,6 +122,7 @@ describe("TabsStrip", () => {
 
   it("does not auto-create when terminals already exist", async () => {
     const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
     render(
       <MemoryRouter>
         <TabsStrip api={api} worktreeId="wt-1" kind="terminal" />
@@ -131,5 +132,85 @@ describe("TabsStrip", () => {
       expect(screen.getByRole("tab", { name: /term-1/i })).toBeInTheDocument();
     });
     expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("auto-creates again for a second empty worktree after switching", async () => {
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    const { rerender } = render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-empty-a" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(1);
+    });
+    // Switching worktrees keeps the same TabsStrip instance mounted (no key),
+    // so the once-per-mount guard must be scoped to the context, not the mount.
+    rerender(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-empty-b" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(2);
+    });
+    expect(createSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ worktreeId: "wt-empty-b", type: "terminal", useTmux: true }),
+    );
+  });
+
+  it("does not re-create when the last terminal is closed while the dock stays open", async () => {
+    const user = userEvent.setup();
+    const createSpy = vi.spyOn(api, "createSession");
+    createSpy.mockClear();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-empty-close" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(1);
+    });
+    const tab = await screen.findByRole("tab", { name: /Terminal 1/i });
+
+    // Closing the last tab must leave the dock empty — auto-create is a
+    // dock-open behaviour, not an "always keep one terminal alive" rule.
+    await user.click(screen.getByRole("button", { name: /Close Terminal 1/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Close$/i }),
+    );
+    await waitFor(() => {
+      expect(tab).not.toBeInTheDocument();
+    });
+    expect(screen.getByText(/No terminals/i)).toBeInTheDocument();
+    expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries auto-create on a later dock open when the previous create left no session", async () => {
+    const createSpy = vi
+      .spyOn(api, "createSession")
+      .mockResolvedValue({ id: "sess-ghost" } as never);
+    createSpy.mockClear();
+    const { unmount } = render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-empty-ghost" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(1);
+    });
+    // Dock closed before the created session ever showed up. Re-opening it on a
+    // still-empty worktree must not be permanently wedged by a stale in-flight key.
+    unmount();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-empty-ghost" kind="terminal" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(createSpy).toHaveBeenCalledTimes(2);
+    });
+    createSpy.mockRestore();
   });
 });
