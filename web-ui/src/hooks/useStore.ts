@@ -234,8 +234,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: s.lastFileByWorktree[worktreeId] ?? null,
             };
           }),
+        // Restore the last file for this project context, mirroring what
+        // setActiveWorktree does for worktrees. Entering a direct session used
+        // to leave activeFilePath at whatever the previous context had.
         setActiveDirectContext: (projectId) =>
-          set({ activeDirectContextId: projectId }),
+          set((s) => {
+            if (projectId == null) return { activeDirectContextId: null };
+            return {
+              activeDirectContextId: projectId,
+              activeFilePath: s.lastFileByWorktree[projectId] ?? null,
+            };
+          }),
         setActiveSession: (sessionId) =>
           set((s) => {
             const key = layoutKey(s);
@@ -254,11 +263,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 : s.lastTerminalByWorktree;
             return { activeTerminalSessionId: sessionId, lastTerminalByWorktree: nextLast };
           }),
+        // Keyed by layoutKey (worktree id, or the direct-session project id) —
+        // NOT activeWorktreeId, which is always null for a direct session and
+        // so silently dropped their open file from the restore map.
+        // setActiveSession/setActiveTerminalSession above already do this.
         setActiveFile: (path) =>
           set((s) => {
-            const wt = s.activeWorktreeId;
+            const key = layoutKey(s);
             const nextLastFile =
-              path && wt ? { ...s.lastFileByWorktree, [wt]: path } : s.lastFileByWorktree;
+              path && key != null
+                ? { ...s.lastFileByWorktree, [key]: path }
+                : s.lastFileByWorktree;
             return { activeFilePath: path, lastFileByWorktree: nextLastFile };
           }),
         setFileScroll: (worktreeId, filePath, scrollTop) =>
