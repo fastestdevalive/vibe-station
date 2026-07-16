@@ -56,13 +56,16 @@ export function useSessionOutput(
     // window, "not running" errors are a race with spawnSession, not a real
     // exit, and the eventual session:state event will update us.
     const offError = api.on("session:error", (ev) => {
-      if (
-        ev.type !== "session:error" ||
-        ev.sessionId !== sessionId ||
-        !/not found|exited|not running|can't find pane/i.test(ev.message)
-      ) {
-        return;
-      }
+      if (ev.type !== "session:error" || ev.sessionId !== sessionId) return;
+      // Only the daemon's explicit "gone" classification implies an exit.
+      // We used to regex-match ev.message for /not found|exited|.../, which
+      // latched the Resume banner onto healthy sessions: a "Session not found"
+      // (direct sessions were invisible to the WS lookup) or a non-zero
+      // `tmux attach-session` exit both matched while the agent was alive.
+      // "transient" errors are stream hiccups and must never flip state — the
+      // daemon's lifecycle poller owns exit detection and broadcasts
+      // session:exited.
+      if (ev.reason !== "gone") return;
       const known = useWorkspaceStore.getState().sessionStates[sessionId];
       if (known === "not_started") return; // race during fresh spawn
       setSessionState("exited");

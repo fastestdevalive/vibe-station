@@ -80,7 +80,7 @@ export function createGeminiPlugin(): AgentPlugin {
     async getRestoreCommand(args: {
       session: SessionRecord;
       project: ProjectRecord;
-      worktree: WorktreeRecord;
+      cwd: string;
       model?: string;
     }): Promise<string[] | null> {
       const { session, model } = args;

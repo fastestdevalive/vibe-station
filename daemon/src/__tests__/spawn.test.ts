@@ -23,8 +23,10 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("../services/tmux.js", () => ({
   newSession: vi.fn().mockResolvedValue(undefined),
   hasSession: vi.fn().mockResolvedValue(true),
+  killSession: vi.fn().mockResolvedValue(undefined),
   capturePane: vi.fn(),
   pasteBuffer: vi.fn().mockResolvedValue(undefined),
+  sendKeys: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe("spawnSession prompt verification", () => {

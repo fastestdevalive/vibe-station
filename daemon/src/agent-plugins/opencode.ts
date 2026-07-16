@@ -136,16 +136,11 @@ export function createOpencodePlugin(): AgentPlugin {
     async captureChatId(args: {
       session: SessionRecord;
       project: ProjectRecord;
-      worktree: WorktreeRecord;
+      cwd: string;
     }): Promise<string | null> {
       // session.created fires when the user's first chat is created, which for the TUI
       // may be after the ready sentinel. Poll for up to 30s; timeout → null → mtime fallback.
-      const tokenFile = join(
-        getWorktreePath(args.project.id, args.worktree.id),
-        ".vibe-station",
-        "agent-chat-ids",
-        args.session.id,
-      );
+      const tokenFile = join(args.cwd, ".vibe-station", "agent-chat-ids", args.session.id);
       const deadline = Date.now() + 30_000;
       while (Date.now() < deadline) {
         try {
@@ -163,7 +158,7 @@ export function createOpencodePlugin(): AgentPlugin {
     async getRestoreCommand(args: {
       session: { agentChatId?: string };
       project: { id: string };
-      worktree: { id: string };
+      cwd: string;
       model?: string;
     }): Promise<string[] | null> {
       if (args.session.agentChatId) {

@@ -10,7 +10,12 @@ import {
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
-import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
+import {
+  spawnSession,
+  spawnSessionFromArgv,
+  spawnDirectSession,
+  syntheticDirectWorktree,
+} from "../services/spawn.js";
 import { cleanupSessionDataDir, cleanupDirectSessionDataDir, worktreePath } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
@@ -679,17 +684,16 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
         const plugin = resolvePlugin(mode.cli);
 
-        // Ask plugin for restore argv (only for worktree sessions with worktree context)
-        const restoreArgv = isWorktreeSession
-          ? await plugin.getRestoreCommand?.({
-              session,
-              project,
-              worktree: worktree!,
-              model: mode.model,
-            })
-          : null; // Direct sessions don't support restore yet
+        // Ask plugin for restore argv. `cwd` is the worktree checkout or, for a
+        // direct session, project.absolutePath — so direct sessions restore too.
+        const restoreArgv = await plugin.getRestoreCommand?.({
+          session,
+          project,
+          cwd,
+          model: mode.model,
+        });
 
-        if (restoreArgv && isWorktreeSession) {
+        if (restoreArgv) {
           // Resume path: spawn from explicit restore argv
           restoredFromHistory = true;
 
@@ -698,11 +702,20 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             await plugin.setupWorkspaceHooks(cwd);
           }
 
-          const launchCfg = { project, worktree: worktree!, session, daemonPort: 0, ...(mode.model ? { model: mode.model } : {}) };
+          // getEnvironment still takes a LaunchConfig with a worktree; direct
+          // sessions reuse the same synthetic record spawnDirectSession builds.
+          const launchCfg = {
+            project,
+            worktree: worktree ?? syntheticDirectWorktree(project, session),
+            session,
+            daemonPort: 0,
+            ...(mode.model ? { model: mode.model } : {}),
+          };
           const env: Record<string, string> = {
             VST_SESSION: session.id,
             VST_SPAWN_TOKEN: session.id,
-            VST_WORKTREE: worktree!.id,
+            // Direct sessions have no worktree — omit rather than fake it.
+            ...(worktree ? { VST_WORKTREE: worktree.id } : {}),
             VST_PROJECT: project.id,
             VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
             VST_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
@@ -711,7 +724,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
           await spawnSessionFromArgv({
             project,
-            worktree: worktree!,
+            cwd,
+            worktreeId: worktree?.id,
             session,
             argv: restoreArgv,
             env,
@@ -719,7 +733,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           });
 
           // Capture chat ID for future resumes (self-healing for legacy sessions)
-          const capturedId = await plugin.captureChatId?.({ session, project, worktree: worktree! }) ?? null;
+          const capturedId = await plugin.captureChatId?.({ session, project, cwd }) ?? null;
           if (capturedId) {
             session.agentChatId = capturedId;
           }

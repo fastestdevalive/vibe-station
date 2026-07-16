@@ -49,6 +49,7 @@ export function handleSessionInput(
     conn.send({
       type: "session:error",
       sessionId,
+      reason: "gone",
       message: `Session '${sessionId}' not found`,
     });
     return;
@@ -78,6 +79,7 @@ export function handleSessionInput(
       conn.send({
         type: "session:error",
         sessionId,
+        reason: "transient",
         message: err instanceof Error ? err.message : "Failed to send input",
       });
     }
@@ -94,6 +96,7 @@ export function handleSessionInput(
     conn.send({
       type: "session:error",
       sessionId,
+      reason: "transient",
       message: err instanceof Error ? err.message : "Failed to send input",
     });
   }

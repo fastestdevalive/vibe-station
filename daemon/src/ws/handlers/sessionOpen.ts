@@ -38,6 +38,8 @@ async function openSessionLocked(
     conn.send({
       type: "session:error",
       sessionId,
+      // No record in the manifest at all — the session is genuinely gone.
+      reason: "gone",
       message: `Session '${sessionId}' not found`,
     });
     return;
@@ -59,6 +61,8 @@ async function openSessionLocked(
         conn.send({
           type: "session:error",
           sessionId,
+          // Record exists but no PTY is registered — the process is gone.
+          reason: "gone",
           message: `Session '${sessionId}' not running`,
         });
         return;
@@ -103,6 +107,10 @@ async function openSessionLocked(
       conn.send({
         type: "session:error",
         sessionId,
+        // A stream/attach failure says nothing about pane liveness — e.g. a
+        // non-zero `tmux attach-session` exit races an alive pane. The
+        // lifecycle poller is authoritative for exit; never infer it here.
+        reason: "transient",
         message,
       });
     });
@@ -120,6 +128,8 @@ async function openSessionLocked(
     conn.send({
       type: "session:error",
       sessionId,
+      // Attach threw — the pane may still be alive. Not an exit signal.
+      reason: "transient",
       message: err instanceof Error ? err.message : "Unknown error",
     });
   }
