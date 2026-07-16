@@ -102,11 +102,19 @@ export function LeftSidebar({
     }
     return m;
   }, [sessions]);
-  /** Direct sessions grouped by projectId. */
+  /**
+   * Direct *agent* sessions grouped by projectId.
+   *
+   * Agents only — the sidebar lists agents, never terminals. The terminal dock
+   * auto-creates a shell for the project scope (TabsStrip), which lands in
+   * project.directSessions; without this filter it surfaces as a bogus
+   * top-level "Terminal 1" row. The worktree path already filters terminals
+   * out (see worktreeIsInactive / worktreeRolledUpStatus).
+   */
   const directSessionMap = useMemo(() => {
     const m: Record<string, Session[]> = {};
     for (const s of sessions) {
-      if (s.worktreeId === null && s.projectId) {
+      if (s.worktreeId === null && s.projectId && s.type === "agent") {
         (m[s.projectId] ??= []).push(s);
       }
     }
@@ -161,7 +169,14 @@ export function LeftSidebar({
   const pinnedDirectSessions = useMemo(
     () =>
       sessions
-        .filter((s) => s.worktreeId === null && s.pinnedAt != null && !hiddenProjectIds.has(s.projectId))
+        // Agents only — same reasoning as directSessionMap above.
+        .filter(
+          (s) =>
+            s.worktreeId === null &&
+            s.type === "agent" &&
+            s.pinnedAt != null &&
+            !hiddenProjectIds.has(s.projectId),
+        )
         .slice()
         .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
     [sessions, hiddenProjectIds],

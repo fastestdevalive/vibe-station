@@ -163,7 +163,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: {},
         project: { id: "test-proj" },
-        worktree: { id: "wt-1" },
+        cwd: "/tmp/vst-test-cwd",
       });
 
       // When no uuid exists, should return null
@@ -243,7 +243,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: { agentChatId: "abc" },
         project: {},
-        worktree: {},
+        cwd: "/tmp/vst-test-cwd",
       });
       expect(result).toEqual(["opencode", "--session", "abc"]);
     });
@@ -254,7 +254,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: {},
         project: {},
-        worktree: {},
+        cwd: "/tmp/vst-test-cwd",
       });
       expect(result).toBeNull();
     });
@@ -359,7 +359,7 @@ describe("Agent plugins", () => {
       const id = await plugin.provideChatId?.({
         session: { id: "s1" } as never,
         project: { id: "p1" } as never,
-        worktree: { id: "w1" } as never,
+        cwd: "/tmp/vst-test-cwd" as never,
       });
       expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     });
@@ -370,7 +370,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: { agentChatId: "abc-uuid" } as never,
         project: { id: "p1" } as never,
-        worktree: { id: "w1" } as never,
+        cwd: "/tmp/vst-test-cwd" as never,
         model: "gemini-3.1-pro-preview",
       });
       expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid", "-m", "gemini-3.1-pro-preview"]);
@@ -382,7 +382,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: { agentChatId: "abc-uuid" } as never,
         project: { id: "p1" } as never,
-        worktree: { id: "w1" } as never,
+        cwd: "/tmp/vst-test-cwd" as never,
         model: "auto",
       });
       expect(result).toEqual(["gemini", "--yolo", "--skip-trust", "--resume", "abc-uuid"]);
@@ -394,7 +394,7 @@ describe("Agent plugins", () => {
       const result = await plugin.getRestoreCommand?.({
         session: {} as never,
         project: { id: "p1" } as never,
-        worktree: { id: "w1" } as never,
+        cwd: "/tmp/vst-test-cwd" as never,
       });
       expect(result).toBeNull();
     });
@@ -536,7 +536,7 @@ describe("Agent plugins", () => {
         const result = await plugin.getRestoreCommand?.({
           session: {},
           project: { id: name },
-          worktree: { id: name },
+          cwd: "/tmp/vst-test-cwd",
         });
         expect(result === null || Array.isArray(result)).toBe(true);
       }
@@ -629,9 +629,15 @@ describe("Claude plugin — chat-id capture", () => {
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "known-uuid" } as any,
       project: { id: "p1" } as any,
-      worktree: { id: "w1" } as any,
+      cwd: "/tmp/vst-test-cwd",
     });
-    expect(result).toEqual(["claude", "--resume", "known-uuid", "--dangerously-skip-permissions"]);
+    expect(result).toEqual([
+      "claude",
+      "--resume",
+      "known-uuid",
+      "--dangerously-skip-permissions",
+      "--chrome",
+    ]);
   });
 });
 
@@ -678,7 +684,7 @@ describe("Cursor plugin — chat-id capture", () => {
     const result = await plugin.getRestoreCommand!({
       session: {},
       project: { id: "p1" },
-      worktree: { id: "w1" },
+      cwd: "/tmp/vst-test-cwd-no-chats",
     });
     expect(result).toBeNull();
   });

@@ -104,6 +104,13 @@ async function sweepDirectPtySessionsOnBoot(): Promise<void> {
         }
       }
     }
+    // Direct sessions (no worktree) — their PTYs are daemon children too.
+    for (const session of project.directSessions) {
+      if (!session.useTmux && session.lifecycle.state !== "exited") {
+        console.log(`[sweep] ${session.id}: direct-pty died with daemon → mark exited`);
+        await persistLifecycleState(project.id, undefined, session.id, "exited");
+      }
+    }
   }
 }
 

@@ -168,10 +168,21 @@ const SessionUpdatedEvent = z.object({
   pinnedAt: z.string().nullable().optional(),
 });
 
+/**
+ * `reason` is the machine-readable classification of the error. Clients must
+ * branch on it rather than regex-matching `message` (which is for humans and
+ * free to change).
+ *
+ * - "gone"       — the session/pane genuinely no longer exists. Safe for the
+ *                  client to treat as exited.
+ * - "transient"  — attach/stream hiccup; the session may well still be alive.
+ *                  Clients must NOT infer "exited" from this.
+ */
 const SessionErrorEvent = z.object({
   type: z.literal("session:error"),
   sessionId: z.string(),
   message: z.string(),
+  reason: z.enum(["gone", "transient"]).optional(),
 });
 
 // File/tree watcher events
