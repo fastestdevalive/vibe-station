@@ -16,7 +16,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { sq } from "../services/shell.js";
 import { findLatestCursorChatId } from "./cursorRestore.js";
 
@@ -48,7 +47,7 @@ export function createCursorPlugin(): AgentPlugin {
     },
 
     getLaunchCommand(cfg: LaunchConfig): string[] {
-      const wtPath = getWorktreePath(cfg.project.id, cfg.worktree.id);
+      const wtPath = cfg.ctx.cwd;
       const argv: string[] = ["cursor-agent"];
       if (cfg.session?.agentChatId) {
         argv.push("--resume", cfg.session.agentChatId);
@@ -78,7 +77,7 @@ export function createCursorPlugin(): AgentPlugin {
       systemPromptFile: string;
       launchCfg: LaunchConfig;
     }) {
-      const wtPath = getWorktreePath(prompt.launchCfg.project.id, prompt.launchCfg.worktree.id);
+      const wtPath = prompt.launchCfg.ctx.cwd;
       // Mirror ao-142 agent-cursor/src/index.ts:190-198:
       // cursor-agent … -- "$(cat '<file>'; printf '\n\n'; printf %s '<task>')"
       const filePart = `cat ${sq(prompt.systemPromptFile)}`;

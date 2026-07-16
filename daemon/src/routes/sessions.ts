@@ -10,12 +10,8 @@ import {
 } from "../services/sessionId.js";
 import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
-import {
-  spawnSession,
-  spawnSessionFromArgv,
-  spawnDirectSession,
-  syntheticDirectWorktree,
-} from "../services/spawn.js";
+import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
+import { resolvedContextOf } from "../services/context.js";
 import { cleanupSessionDataDir, cleanupDirectSessionDataDir, worktreePath } from "../services/paths.js";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
@@ -702,11 +698,10 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             await plugin.setupWorkspaceHooks(cwd);
           }
 
-          // getEnvironment still takes a LaunchConfig with a worktree; direct
-          // sessions reuse the same synthetic record spawnDirectSession builds.
+          // Same context object the spawners build — worktree or project-direct.
           const launchCfg = {
             project,
-            worktree: worktree ?? syntheticDirectWorktree(project, session),
+            ctx: resolvedContextOf(project, worktree ?? null),
             session,
             daemonPort: 0,
             ...(mode.model ? { model: mode.model } : {}),
