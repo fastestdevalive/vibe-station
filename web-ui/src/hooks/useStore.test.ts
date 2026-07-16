@@ -139,3 +139,69 @@ describe("useWorkspaceStore - setActiveWorktree", () => {
     expect(state.activeFilePath).toBeNull();
   });
 });
+
+/**
+ * A direct session has no worktree — activeWorktreeId is always null and the
+ * context key is the project id (layoutKey = activeWorktreeId ?? activeDirectContextId).
+ * setActiveFile used to key on activeWorktreeId directly, so a direct session's
+ * open file was never remembered and could never be restored.
+ */
+describe("useWorkspaceStore - file memory per context", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeProjectId: null,
+      activeWorktreeId: null,
+      activeDirectContextId: null,
+      activeSessionId: null,
+      activeFilePath: null,
+      lastFileByWorktree: {},
+    });
+  });
+
+  it("remembers a direct session's open file under the project key", () => {
+    useWorkspaceStore.getState().setActiveDirectContext(P1);
+    useWorkspaceStore.getState().setActiveFile("/docs/plan.md");
+
+    expect(useWorkspaceStore.getState().lastFileByWorktree[P1]).toBe("/docs/plan.md");
+  });
+
+  it("restores a direct session's last file on re-entering the context", () => {
+    useWorkspaceStore.getState().setActiveDirectContext(P1);
+    useWorkspaceStore.getState().setActiveFile("/docs/plan.md");
+
+    // Leave the direct context, then come back.
+    useWorkspaceStore.getState().setActiveDirectContext(null);
+    useWorkspaceStore.setState({ activeFilePath: null });
+    useWorkspaceStore.getState().setActiveDirectContext(P1);
+
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/docs/plan.md");
+  });
+
+  it("still keys worktree sessions by worktree id", () => {
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/src/index.ts");
+
+    expect(useWorkspaceStore.getState().lastFileByWorktree[W1]).toBe("/src/index.ts");
+  });
+
+  it("keeps worktree and direct file memory in separate keys", () => {
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/src/index.ts");
+
+    useWorkspaceStore.setState({ activeWorktreeId: null });
+    useWorkspaceStore.getState().setActiveDirectContext(P1);
+    useWorkspaceStore.getState().setActiveFile("/docs/plan.md");
+
+    const { lastFileByWorktree } = useWorkspaceStore.getState();
+    expect(lastFileByWorktree[W1]).toBe("/src/index.ts");
+    expect(lastFileByWorktree[P1]).toBe("/docs/plan.md");
+  });
+
+  it("does not record a file when there is no active context", () => {
+    useWorkspaceStore.getState().setActiveFile("/orphan.ts");
+    expect(useWorkspaceStore.getState().lastFileByWorktree).toEqual({});
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/orphan.ts");
+  });
+});
