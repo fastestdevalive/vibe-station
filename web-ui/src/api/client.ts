@@ -10,6 +10,7 @@ import type {
   CreateSessionBody,
   CreateWorktreeBody,
   FileScope,
+  WsContextRef,
   FsCompleteResponse,
   HealthResponse,
   Mode,
@@ -25,6 +26,15 @@ import type {
   Worktree,
 } from "./types";
 import { ApiError } from "./errors";
+
+/**
+ * Wire fields for a watch message. The legacy `worktreeId` alias rides along for
+ * worktree contexts so a daemon predating `context` still understands it; a
+ * project context has no worktree and sends `context` only.
+ */
+function watchWire(ref: WsContextRef) {
+  return { context: ref, ...(ref.kind === "worktree" ? { worktreeId: ref.id } : {}) };
+}
 
 function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
@@ -89,8 +99,11 @@ export function createClientApi() {
   /** Active file/tree watchers — replayed on WS reconnect so the daemon's
    *  per-connection chokidar state survives a drop. Keyed by stringified
    *  payload to deduplicate. */
-  const fileWatches = new Map<string, { worktreeId: string; path: string }>();
-  const treeWatches = new Map<string, { worktreeId: string }>();
+  // Keyed by context ("<kind>:<id>"), not worktree id — a direct (project)
+  // context has no worktreeId, so keying on that silently dropped its watches
+  // from the reconnect replay set.
+  const fileWatches = new Map<string, { ref: WsContextRef; path: string }>();
+  const treeWatches = new Map<string, { ref: WsContextRef }>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
@@ -158,10 +171,10 @@ export function createClientApi() {
         // is gone after a drop, so without this the FilePreviewPane silently
         // stops receiving file:changed events until the user remounts it.
         for (const w of fileWatches.values()) {
-          socket.send(JSON.stringify({ type: "file:watch", worktreeId: w.worktreeId, path: w.path }));
+          socket.send(JSON.stringify({ type: "file:watch", ...watchWire(w.ref), path: w.path }));
         }
         for (const w of treeWatches.values()) {
-          socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
+          socket.send(JSON.stringify({ type: "tree:watch", ...watchWire(w.ref) }));
         }
         // Notify consumers that a fresh handshake landed so they can refetch
         // any server state that might have drifted (persisted caches go stale
@@ -583,22 +596,24 @@ export function createClientApi() {
 
     async send(message: {
       type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";
+      context?: WsContextRef;
       worktreeId?: string;
       path?: string;
     }): Promise<void> {
       // Track watches so they can be re-sent on reconnect.
-      if (message.worktreeId) {
+      const ref: WsContextRef | null =
+        message.context ??
+        (message.worktreeId ? { kind: "worktree", id: message.worktreeId } : null);
+      if (ref) {
+        const ckey = `${ref.kind}:${ref.id}`;
         if (message.type === "file:watch" && message.path) {
-          fileWatches.set(`${message.worktreeId}:${message.path}`, {
-            worktreeId: message.worktreeId,
-            path: message.path,
-          });
+          fileWatches.set(`${ckey}:${message.path}`, { ref, path: message.path });
         } else if (message.type === "file:unwatch" && message.path) {
-          fileWatches.delete(`${message.worktreeId}:${message.path}`);
+          fileWatches.delete(`${ckey}:${message.path}`);
         } else if (message.type === "tree:watch") {
-          treeWatches.set(message.worktreeId, { worktreeId: message.worktreeId });
+          treeWatches.set(ckey, { ref });
         } else if (message.type === "tree:unwatch") {
-          treeWatches.delete(message.worktreeId);
+          treeWatches.delete(ckey);
         }
       }
       await sendWs(message);

@@ -1,20 +1,32 @@
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
+import { contextRefFromMessage } from "../protocol.js";
 import { FileWatcher } from "../streams/fileWatcher.js";
 import { join } from "node:path";
-import { getAllProjects } from "../../state/project-store.js";
-import { worktreePath as getWorktreePath } from "../../services/paths.js";
+import { resolveWatchContext } from "./watchContext.js";
 
 /**
  * Handle file:watch: start watching a file for changes.
+ *
+ * Works for BOTH worktree and direct (project) contexts. This used to resolve
+ * by scanning `p.worktrees` only, so a direct session — which has no worktree
+ * by design — got "Worktree '<id>' not found" and could never watch anything.
+ * The client worked around it by skipping watches for project scope entirely,
+ * which is why direct-session file trees and previews never live-updated.
  */
 export function handleFileWatch(
   conn: WSConnection,
   msg: Extract<ClientMessage, { type: "file:watch" }>,
 ): void {
-  const { worktreeId, path } = msg;
+  const { path } = msg;
+  const wireRef = contextRefFromMessage(msg);
+  if (!wireRef) {
+    conn.send({ type: "system:error", message: "file:watch requires a context or worktreeId" });
+    return;
+  }
 
-  const watchKey = `file:${worktreeId}:${path}`;
+  // Key includes kind so a worktree and a project of the same id can't collide.
+  const watchKey = `file:${wireRef.kind}:${wireRef.id}:${path}`;
 
   // Check if already watching
   if ((conn as any).fileWatches?.has?.(watchKey)) {
@@ -23,34 +35,32 @@ export function handleFileWatch(
   }
 
   try {
-    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === worktreeId));
-    if (!project) {
+    const ctx = resolveWatchContext(wireRef);
+    if (!ctx) {
       conn.send({
         type: "system:error",
-        message: `Worktree '${worktreeId}' not found`,
+        message: `Context '${wireRef.id}' not found`,
       });
       return;
     }
-    const worktreeRoot = getWorktreePath(project.id, worktreeId);
-    const absPath = join(worktreeRoot, path);
+
+    // Watch relative to the context's working dir: the worktree checkout, or
+    // the project dir for a direct session.
+    const root = ctx.cwd;
+    const absPath = join(root, path);
+    const context = { kind: wireRef.kind, id: wireRef.id } as const;
+    // Echo the legacy field for worktree contexts so pre-context clients match.
+    const legacy = ctx.worktree ? { worktreeId: ctx.worktree.id } : {};
 
     const watcher = new FileWatcher();
 
     // Set up event listeners
     watcher.on("file:changed", () => {
-      conn.send({
-        type: "file:changed",
-        worktreeId,
-        path,
-      });
+      conn.send({ type: "file:changed", context, ...legacy, path });
     });
 
     watcher.on("file:deleted", () => {
-      conn.send({
-        type: "file:deleted",
-        worktreeId,
-        path,
-      });
+      conn.send({ type: "file:deleted", context, ...legacy, path });
     });
 
     watcher.on("error", (message: string) => {
@@ -69,7 +79,7 @@ export function handleFileWatch(
     conn.registerFileWatcher(watchKey, watcher);
 
     // Start watching
-    watcher.watch(absPath, worktreeRoot);
+    watcher.watch(absPath, root);
   } catch (err) {
     conn.send({
       type: "system:error",

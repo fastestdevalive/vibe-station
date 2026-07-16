@@ -1,6 +1,7 @@
 import type { WSConnection } from "../connection.js";
 import type { ClientMessage } from "../protocol.js";
 import type { FileWatcher } from "../streams/fileWatcher.js";
+import { contextRefFromMessage } from "../protocol.js";
 
 /**
  * Handle tree:unwatch: stop watching a directory tree.
@@ -9,10 +10,12 @@ export async function handleTreeUnwatch(
   conn: WSConnection,
   msg: Extract<ClientMessage, { type: "tree:unwatch" }>,
 ): Promise<void> {
-  const { worktreeId, path: treePathOverride } = msg;
-
+  const { path: treePathOverride } = msg;
   const treePath = treePathOverride ?? "";
-  const watchKey = `tree:${worktreeId}:${treePath}`;
+  // Key must match handleTreeWatch exactly — see fileUnwatch.
+  const wireRef = contextRefFromMessage(msg);
+  if (!wireRef) return;
+  const watchKey = `tree:${wireRef.kind}:${wireRef.id}:${treePath}`;
 
   try {
     const watcher = conn.treeWatches?.get?.(watchKey) as FileWatcher | undefined;

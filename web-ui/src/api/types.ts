@@ -43,6 +43,18 @@ export interface Worktree {
  */
 export type FileScope = "worktree" | "project";
 
+/**
+ * Wire reference to the context a watch applies to — a git worktree, or a
+ * project directory (a direct agent, which has no worktree). Mirrors
+ * `WsContextRef` in daemon/src/ws/protocol.ts.
+ *
+ * `id` is a worktree id when kind === "worktree", else a project id.
+ */
+export interface WsContextRef {
+  kind: "worktree" | "project";
+  id: string;
+}
+
 export type SessionType = "agent" | "terminal";
 
 export type SessionState = "not_started" | "working" | "idle" | "done" | "exited";
@@ -156,17 +168,21 @@ export type WSEvent =
     }
   | {
       type: "file:changed";
-      worktreeId: string;
+      context?: WsContextRef;
+      /** Present only for worktree contexts (legacy field). */
+      worktreeId?: string;
       path: string;
     }
   | {
       type: "file:deleted";
-      worktreeId: string;
+      context?: WsContextRef;
+      worktreeId?: string;
       path: string;
     }
   | {
       type: "tree:changed";
-      worktreeId: string;
+      context?: WsContextRef;
+      worktreeId?: string;
       path: string;
       kind: "added" | "deleted" | "renamed";
       from?: string;

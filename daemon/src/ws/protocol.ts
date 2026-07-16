@@ -40,27 +40,51 @@ const SessionCloseMessage = z.object({
   sessionId: z.string(),
 });
 
+/**
+ * The context a watch applies to: a git worktree, or a project directory (a
+ * "direct" agent, which has no worktree).
+ *
+ * `worktreeId` used to be the only way to say where — and it was non-optional,
+ * so a direct session could not express a watch AT ALL. The client silently
+ * skipped watching for them, which is why direct-session file trees and
+ * previews never live-updated. `context` says it properly; `worktreeId` remains
+ * as a legacy alias so an older client keeps working.
+ *
+ * Handlers must normalise via `contextRefFromMessage` — never read worktreeId
+ * directly.
+ */
+const WsContextRef = z.object({
+  kind: z.enum(["worktree", "project"]),
+  /** Worktree id when kind === "worktree", else project id. */
+  id: z.string(),
+});
+
 const FileWatchMessage = z.object({
   type: z.literal("file:watch"),
-  worktreeId: z.string(),
+  context: WsContextRef.optional(),
+  /** @deprecated legacy alias for context {kind:"worktree", id}. */
+  worktreeId: z.string().optional(),
   path: z.string(),
 });
 
 const FileUnwatchMessage = z.object({
   type: z.literal("file:unwatch"),
-  worktreeId: z.string(),
+  context: WsContextRef.optional(),
+  worktreeId: z.string().optional(),
   path: z.string(),
 });
 
 const TreeWatchMessage = z.object({
   type: z.literal("tree:watch"),
-  worktreeId: z.string(),
+  context: WsContextRef.optional(),
+  worktreeId: z.string().optional(),
   path: z.string().optional(),
 });
 
 const TreeUnwatchMessage = z.object({
   type: z.literal("tree:unwatch"),
-  worktreeId: z.string(),
+  context: WsContextRef.optional(),
+  worktreeId: z.string().optional(),
   path: z.string().optional(),
 });
 
@@ -188,19 +212,23 @@ const SessionErrorEvent = z.object({
 // File/tree watcher events
 const FileChangedEvent = z.object({
   type: z.literal("file:changed"),
-  worktreeId: z.string(),
+  context: WsContextRef,
+  /** Present only for worktree contexts, so pre-context clients still match. */
+  worktreeId: z.string().optional(),
   path: z.string(),
 });
 
 const FileDeletedEvent = z.object({
   type: z.literal("file:deleted"),
-  worktreeId: z.string(),
+  context: WsContextRef,
+  worktreeId: z.string().optional(),
   path: z.string(),
 });
 
 const TreeChangedEvent = z.object({
   type: z.literal("tree:changed"),
-  worktreeId: z.string(),
+  context: WsContextRef,
+  worktreeId: z.string().optional(),
   path: z.string(),
   kind: z.enum(["added", "deleted", "renamed"]),
   from: z.string().optional(),
@@ -293,3 +321,20 @@ export const ServerMessage = z.discriminatedUnion("type", [
 ]);
 
 export type ServerMessage = z.infer<typeof ServerMessage>;
+
+/**
+ * Normalise a watch message's context: prefer the explicit `context`, fall back
+ * to the legacy `worktreeId` alias. Returns null when neither is present.
+ *
+ * Handlers MUST go through this rather than reading `worktreeId` — that field
+ * cannot express a direct (project) context, which is the whole reason direct
+ * sessions could never watch a file.
+ */
+export function contextRefFromMessage(msg: {
+  context?: { kind: "worktree" | "project"; id: string };
+  worktreeId?: string;
+}): { kind: "worktree" | "project"; id: string } | null {
+  if (msg.context) return msg.context;
+  if (msg.worktreeId) return { kind: "worktree", id: msg.worktreeId };
+  return null;
+}

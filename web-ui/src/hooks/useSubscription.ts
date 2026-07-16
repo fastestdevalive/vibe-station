@@ -89,6 +89,35 @@ export function useSessionOutput(
   return { sessionState };
 }
 
+/**
+ * Build the wire context for a watch. `id` is a worktree id for worktree scope
+ * and a project id for project (direct-session) scope — the callers' worktreeId
+ * prop carries both today.
+ *
+ * The legacy `worktreeId` field is sent alongside for worktree scope only, so
+ * a daemon predating `context` still understands the message.
+ */
+function watchTarget(id: string, scope: FileScope) {
+  const kind = scope === "project" ? "project" : "worktree";
+  return {
+    context: { kind, id } as const,
+    ...(kind === "worktree" ? { worktreeId: id } : {}),
+  };
+}
+
+/** Does this event belong to the context we're watching? */
+function matchesContext(
+  ev: { context?: { kind: string; id: string }; worktreeId?: string },
+  id: string,
+  scope: FileScope,
+) {
+  if (ev.context) {
+    return ev.context.kind === (scope === "project" ? "project" : "worktree") && ev.context.id === id;
+  }
+  // Pre-context daemon: only ever emits worktree-scoped events.
+  return scope !== "project" && ev.worktreeId === id;
+}
+
 export function useFileWatch(
   api: ApiInstance,
   worktreeId: string | null,
@@ -97,13 +126,17 @@ export function useFileWatch(
 ) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
-    // The daemon only watches worktree paths; project-scoped (direct-session)
-    // files have no watcher, so skip the subscription entirely.
-    if (scope === "project") return undefined;
+    // Project (direct-session) scope is watched too — the daemon resolves a
+    // context to its cwd, so it no longer needs a worktree to watch a path.
     if (!worktreeId || !path) return undefined;
-    void api.send({ type: "file:watch", worktreeId, path });
+    const target = watchTarget(worktreeId, scope);
+    void api.send({ type: "file:watch", ...target, path });
     const bump = (ev: WSEvent) => {
-      if ((ev.type === "file:changed" || ev.type === "file:deleted") && ev.worktreeId === worktreeId && ev.path === path) {
+      if (
+        (ev.type === "file:changed" || ev.type === "file:deleted") &&
+        matchesContext(ev, worktreeId, scope) &&
+        ev.path === path
+      ) {
         setLastChanged(Date.now());
       }
     };
@@ -112,7 +145,7 @@ export function useFileWatch(
     return () => {
       offChanged();
       offDeleted();
-      void api.send({ type: "file:unwatch", worktreeId, path });
+      void api.send({ type: "file:unwatch", ...target, path });
     };
   }, [api, path, worktreeId, scope]);
   return { lastChanged };
@@ -125,16 +158,17 @@ export function useTreeWatch(
 ) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
-    // No daemon-side tree watcher for project scope (direct sessions).
-    if (scope === "project") return undefined;
     if (!worktreeId) return undefined;
-    void api.send({ type: "tree:watch", worktreeId });
+    const target = watchTarget(worktreeId, scope);
+    void api.send({ type: "tree:watch", ...target });
     const off = api.on("tree:changed", (ev) => {
-      if (ev.type === "tree:changed" && ev.worktreeId === worktreeId) setLastChanged(Date.now());
+      if (ev.type === "tree:changed" && matchesContext(ev, worktreeId, scope)) {
+        setLastChanged(Date.now());
+      }
     });
     return () => {
       off();
-      void api.send({ type: "tree:unwatch", worktreeId });
+      void api.send({ type: "tree:unwatch", ...target });
     };
   }, [api, worktreeId, scope]);
   return { lastChanged };
