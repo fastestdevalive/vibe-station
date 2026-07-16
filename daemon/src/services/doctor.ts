@@ -58,10 +58,13 @@ async function checkOrphanSessions(): Promise<DoctorCheck> {
     const sessions = await listSessions();
     const vrSessions = sessions.filter((s) => s.startsWith("vr-"));
     const projects = getAllProjects();
+    // Must include direct sessions: they are real, live panes. Counting only
+    // worktree sessions reports them as orphans and advises killing them.
     const knownTmuxNames = new Set(
-      projects.flatMap((p) =>
-        p.worktrees.flatMap((w) => w.sessions.map((s) => s.tmuxName)),
-      ),
+      projects.flatMap((p) => [
+        ...p.worktrees.flatMap((w) => w.sessions.map((s) => s.tmuxName)),
+        ...p.directSessions.map((s) => s.tmuxName),
+      ]),
     );
 
     const orphans = vrSessions.filter((s) => !knownTmuxNames.has(s));

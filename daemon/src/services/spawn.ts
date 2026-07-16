@@ -16,7 +16,7 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { newSession, hasSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
+import { newSession, hasSession, killSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
 import { DirectPtyBackend } from "./directPty.js";
 import {
   worktreePath as getWorktreePath,
@@ -51,28 +51,40 @@ export interface AgentPlugin {
     launchCfg: LaunchConfig;
   }): { launchArgs?: string[]; postLaunchInput?: string; postLaunchSubmit?: boolean; useShell?: boolean; shellLine?: string };
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
-  /** Pre-spawn: obtain a chat id before launching (e.g. cursor-agent create-chat). */
+  /**
+   * Pre-spawn: obtain a chat id before launching (e.g. cursor-agent create-chat).
+   *
+   * `cwd` is the session's working directory — a worktree checkout, or
+   * project.absolutePath for a direct session. Plugins must use it rather than
+   * deriving a path from a worktree id: direct sessions have no worktree, and
+   * a fabricated one resolves to a nonexistent directory.
+   */
   provideChatId?(args: {
     session: SessionRecord;
     project: ProjectRecord;
-    worktree: WorktreeRecord;
+    cwd: string;
   }): Promise<string | null>;
   /** Post-ready: capture the agent's chat id written to a token file by a hook/plugin. */
   captureChatId?(args: {
     session: SessionRecord;
     project: ProjectRecord;
-    worktree: WorktreeRecord;
+    /** Session working directory — see provideChatId. */
+    cwd: string;
   }): Promise<string | null>;
   /**
    * Return the list of models available for this CLI.
    * Each plugin owns its own discovery strategy — callers never branch on CLI name.
    */
   listModels(): Promise<{ models: string[]; error?: string }>;
-  /** Return argv for resuming a prior session, or null for fresh launch. */
+  /**
+   * Return argv for resuming a prior session, or null for fresh launch.
+   * Works for direct sessions too — see `cwd` on provideChatId.
+   */
   getRestoreCommand?(args: {
     session: SessionRecord;
     project: ProjectRecord;
-    worktree: WorktreeRecord;
+    /** Session working directory — see provideChatId. */
+    cwd: string;
     /** Per-mode model override — plugin should include the model flag in the returned argv. */
     model?: string;
   }): Promise<string[] | null>;
@@ -118,11 +130,59 @@ export interface DirectLaunchConfig {
 
 export interface SpawnSessionFromArgvOptions {
   project: ProjectRecord;
-  worktree: WorktreeRecord;
+  /** Working directory: worktree checkout, or project.absolutePath for a direct session. */
+  cwd: string;
+  /** Worktree id, or undefined for a direct session (direct-pty bookkeeping only). */
+  worktreeId?: string;
   session: SessionRecord;
   argv: string[];
   env: Record<string, string>;
   fallbackMs: number;
+}
+
+/**
+ * Direct sessions have no worktree, but LaunchConfig — and therefore
+ * getLaunchCommand / getEnvironment / composeLaunchPrompt — still requires one.
+ * This synthesises a placeholder so those plugin methods keep working.
+ *
+ * WARNING: the `id` here does NOT correspond to a real directory.
+ * `worktreePath(project.id, syntheticDirectWorktree(...).id)` resolves to a
+ * path that does not exist. Never derive a filesystem path from it — take an
+ * explicit `cwd` instead (see AgentPlugin.provideChatId). Deriving paths from a
+ * fabricated worktree id is why direct-session restore silently found nothing.
+ */
+export function syntheticDirectWorktree(
+  project: ProjectRecord,
+  session: SessionRecord,
+): WorktreeRecord {
+  return {
+    id: `${project.id}-direct`,
+    branch: "direct",
+    baseBranch: project.defaultBranch ?? "main",
+    baseSha: "",
+    createdAt: new Date().toISOString(),
+    sessions: [session],
+  };
+}
+
+/**
+ * tmux refuses `new-session -s <name>` when a session of that name already
+ * exists ("duplicate session"), which surfaces to the user as a 500 rather
+ * than anything actionable.
+ *
+ * Every caller here is spawning what it believes is a *new* pane for this
+ * session id — a fresh spawn, or a resume that is about to restore the
+ * conversation from the agent's own history. An existing pane under that name
+ * is therefore stale by definition, so replace it rather than failing.
+ *
+ * Note this is a real (if intentional) process kill: it is safe only because
+ * the caller is committed to respawning the pane immediately.
+ */
+async function killStaleTmuxSession(name: string): Promise<void> {
+  if (await hasSession(name)) {
+    console.warn(`[spawn] tmux session ${name} already exists — killing stale pane before respawn`);
+    await killSession(name);
+  }
 }
 
 /**
@@ -131,21 +191,20 @@ export interface SpawnSessionFromArgvOptions {
  * Branches on useTmux: direct-pty spawns via DirectPtyBackend, tmux via newSession.
  */
 export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): Promise<void> {
-  const { project, worktree, session, argv, env, fallbackMs } = opts;
-  const wtPath = getWorktreePath(project.id, worktree.id);
+  const { project, cwd, worktreeId, session, argv, env, fallbackMs } = opts;
 
   if (!session.useTmux) {
     // Direct-pty spawn
     await DirectPtyBackend.spawn({
       command: argv[0]!,
       args: argv.slice(1),
-      cwd: wtPath,
+      cwd,
       env,
       cols: 80,
       rows: 24,
       sessionId: session.id,
       projectId: project.id,
-      worktreeId: worktree.id,
+      worktreeId,
     });
 
     await sleep(fallbackMs);
@@ -154,9 +213,10 @@ export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): P
 
   // Tmux spawn (existing code)
   try {
+    await killStaleTmuxSession(session.tmuxName);
     await newSession({
       name: session.tmuxName,
-      cwd: wtPath,
+      cwd,
       env,
       command: argv,
     });
@@ -192,7 +252,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
 
   // Steps 2.5 + 3: provideChatId + setupWorkspaceHooks in parallel (both pre-spawn, independent)
   const [preSpawnChatId] = await Promise.all([
-    plugin.provideChatId?.({ session, project, worktree }) ?? Promise.resolve(null),
+    plugin.provideChatId?.({ session, project, cwd: wtPath }) ?? Promise.resolve(null),
     plugin.setupWorkspaceHooks ? plugin.setupWorkspaceHooks(wtPath) : Promise.resolve(),
   ]);
   if (preSpawnChatId) {
@@ -277,7 +337,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
       }
 
       // Step 7.5: Capture chat ID written by agent hook/plugin
-      const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+      const capturedId = await plugin.captureChatId?.({ session, project, cwd: wtPath }) ?? null;
       if (capturedId) {
         session.agentChatId = capturedId;
       }
@@ -293,6 +353,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
 
   // Tmux path (existing logic)
   try {
+    await killStaleTmuxSession(session.tmuxName);
     await newSession({
       name: session.tmuxName,
       cwd: wtPath,
@@ -357,7 +418,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   }
 
   // Step 7.5: Capture chat ID written by agent hook/plugin
-  const capturedId = await plugin.captureChatId?.({ session, project, worktree }) ?? null;
+  const capturedId = await plugin.captureChatId?.({ session, project, cwd: wtPath }) ?? null;
   if (capturedId) {
     session.agentChatId = capturedId;
   }
@@ -371,17 +432,10 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
   const { project, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
   const cwd = project.absolutePath;
 
-  // Create a synthetic worktree-like config for the plugin (some plugins may not need it)
+  // Synthetic worktree purely to satisfy LaunchConfig — see the helper's warning.
   const launchCfg: LaunchConfig = {
     project,
-    worktree: {
-      id: `${project.id}-direct`,
-      branch: "direct",
-      baseBranch: project.defaultBranch ?? "main",
-      baseSha: "",
-      createdAt: new Date().toISOString(),
-      sessions: [session],
-    },
+    worktree: syntheticDirectWorktree(project, session),
     session,
     daemonPort,
     ...(model ? { model } : {}),
@@ -458,6 +512,13 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
           stream.write("\r");
         }
       }
+
+      // Step 7.5: capture chat id — mirrors spawnSession. Without this a direct
+      // session has no agentChatId, so Resume can never restore its history.
+      const capturedId = await plugin.captureChatId?.({ session, project, cwd }) ?? null;
+      if (capturedId) {
+        session.agentChatId = capturedId;
+      }
     } catch (err) {
       if (stream) {
         stream.kill();
@@ -469,6 +530,7 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
 
   // Tmux path
   try {
+    await killStaleTmuxSession(session.tmuxName);
     await newSession({
       name: session.tmuxName,
       cwd,
@@ -506,6 +568,12 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
     if (postLaunchSubmit) {
       await sendKeys(session.tmuxName, "", true);
     }
+  }
+
+  // Step 7.5: capture chat id — see the direct-pty branch above.
+  const capturedId = await plugin.captureChatId?.({ session, project, cwd }) ?? null;
+  if (capturedId) {
+    session.agentChatId = capturedId;
   }
 }
 

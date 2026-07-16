@@ -487,4 +487,58 @@ describe("LeftSidebar", () => {
     expect(settings).toBeInTheDocument();
     expect(settings).toHaveAttribute("href", "/settings");
   });
+
+  // ─── Direct sessions ───────────────────────────────────────────────────
+  describe("direct sessions", () => {
+    /**
+     * The terminal dock auto-creates a shell for the project scope, which the
+     * daemon stores in project.directSessions alongside direct agents. The
+     * sidebar lists agents only, so that shell must not surface as a row —
+     * it previously did, appearing as a bogus top-level "Terminal 1".
+     */
+    function emitDirect(sessionId: string, type: "agent" | "terminal", label: string) {
+      api.__test.emit({
+        type: "session:created",
+        sessionId,
+        worktreeId: null,
+        projectId: "proj-a",
+        sessionType: type,
+        snapshot: {
+          id: sessionId,
+          worktreeId: null,
+          projectId: "proj-a",
+          modeId: type === "agent" ? "mode-1" : null,
+          type,
+          label,
+          slot: type === "agent" ? "d1" : "d2",
+          state: "idle",
+          lifecycleState: "idle",
+          tmuxName: `tm-${sessionId}`,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    it("lists direct agent sessions but never direct terminals", async () => {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      emitDirect("proj-a-d1", "agent", "direct 1");
+      emitDirect("proj-a-d2", "terminal", "Terminal 1");
+
+      // The agent row shows up...
+      await screen.findByRole("link", { name: /Open direct session direct 1/i });
+      // ...and the auto-created terminal never does.
+      expect(
+        screen.queryByRole("link", { name: /Open direct session Terminal 1/i }),
+      ).toBeNull();
+      expect(screen.queryByText("Terminal 1")).toBeNull();
+    });
+  });
 });

@@ -132,13 +132,20 @@ export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; 
   return fetchPromise;
 }
 
-/** Check if any running session references this modeId. */
+/**
+ * Check if any session references this modeId — worktree sessions AND direct
+ * sessions. Missing directSessions here let a mode used only by a direct
+ * session be deleted while in use.
+ */
 function isModeInUse(modeId: string): boolean {
   for (const project of getAllProjects()) {
     for (const wt of project.worktrees) {
       for (const session of wt.sessions) {
         if (session.modeId === modeId) return true;
       }
+    }
+    for (const session of project.directSessions) {
+      if (session.modeId === modeId) return true;
     }
   }
   return false;

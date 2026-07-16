@@ -9,10 +9,9 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { worktreePath as getWorktreePath } from "../services/paths.js";
 import { sq } from "../services/shell.js";
 import { findLatestChatUuid } from "./claudeRestore.js";
-import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
+import type { SessionRecord, ProjectRecord } from "../types.js";
 
 async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promise<void> {
   let content = "";
@@ -152,10 +151,9 @@ export function createClaudePlugin(): AgentPlugin {
     async captureChatId(args: {
       session: SessionRecord;
       project: ProjectRecord;
-      worktree: WorktreeRecord;
+      cwd: string;
     }): Promise<string | null> {
-      const wtPath = getWorktreePath(args.project.id, args.worktree.id);
-      const tokenFile = join(wtPath, ".vibe-station", "agent-chat-ids", args.session.id);
+      const tokenFile = join(args.cwd, ".vibe-station", "agent-chat-ids", args.session.id);
       try {
         const uuid = (await fs.readFile(tokenFile, "utf8")).trim();
         await fs.unlink(tokenFile).catch(() => {});
@@ -169,13 +167,11 @@ export function createClaudePlugin(): AgentPlugin {
     async getRestoreCommand(args: {
       session: SessionRecord;
       project: ProjectRecord;
-      worktree: WorktreeRecord;
+      cwd: string;
       model?: string;
     }): Promise<string[] | null> {
-      const { project, worktree, session, model } = args;
-      const uuid =
-        session.agentChatId ??
-        (await findLatestChatUuid(getWorktreePath(project.id, worktree.id)));
+      const { cwd, session, model } = args;
+      const uuid = session.agentChatId ?? (await findLatestChatUuid(cwd));
       if (uuid) {
         const argv = ["claude", "--resume", uuid, "--dangerously-skip-permissions", "--chrome"];
         if (model) argv.push("--model", model);

@@ -141,6 +141,13 @@ export type WSEvent =
       type: "session:error";
       sessionId: string;
       message: string;
+      /**
+       * Machine-readable classification. Branch on this — never regex-match
+       * `message`. "gone" = session genuinely absent; "transient" = attach or
+       * stream hiccup, the session may still be alive. Optional for
+       * compatibility with a daemon older than this field.
+       */
+      reason?: "gone" | "transient";
     }
   | {
       type: "session:resumed";
