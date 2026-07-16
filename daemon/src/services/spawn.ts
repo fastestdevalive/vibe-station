@@ -18,14 +18,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { newSession, hasSession, killSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
 import { DirectPtyBackend } from "./directPty.js";
-import {
-  worktreePath as getWorktreePath,
-  sessionDataDir,
-  systemPromptPath,
-  directSessionDataDir,
-  directSystemPromptPath,
-} from "./paths.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
+import type { ResolvedContext } from "./context.js";
+import { resolvedContextOf, systemPromptPathFor, sessionDataDirFor } from "./context.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
 export function promptVerificationNeedle(sessionId: string): string {
@@ -92,7 +87,16 @@ export interface AgentPlugin {
 
 export interface LaunchConfig {
   project: ProjectRecord;
-  worktree: WorktreeRecord;
+  /**
+   * The context this agent runs in — worktree or project-direct. Use
+   * `ctx.cwd` and the `*For(ctx, …)` path helpers rather than deriving paths
+   * from a worktree id: a direct session has no worktree, and the fabricated
+   * one this replaced resolved to a nonexistent directory.
+   *
+   * `ctx.worktree` is null for direct sessions. Gate on it for things that are
+   * genuinely worktree-only (branch metadata, VST_WORKTREE).
+   */
+  ctx: ResolvedContext;
   session: SessionRecord;
   daemonPort: number;
   /** Per-mode model override passed to the agent CLI when set. */
@@ -120,14 +124,6 @@ export interface DirectSpawnOptions {
   model?: string;
 }
 
-/** LaunchConfig variant for direct sessions (no worktree). */
-export interface DirectLaunchConfig {
-  project: ProjectRecord;
-  session: SessionRecord;
-  daemonPort: number;
-  model?: string;
-}
-
 export interface SpawnSessionFromArgvOptions {
   project: ProjectRecord;
   /** Working directory: worktree checkout, or project.absolutePath for a direct session. */
@@ -138,31 +134,6 @@ export interface SpawnSessionFromArgvOptions {
   argv: string[];
   env: Record<string, string>;
   fallbackMs: number;
-}
-
-/**
- * Direct sessions have no worktree, but LaunchConfig — and therefore
- * getLaunchCommand / getEnvironment / composeLaunchPrompt — still requires one.
- * This synthesises a placeholder so those plugin methods keep working.
- *
- * WARNING: the `id` here does NOT correspond to a real directory.
- * `worktreePath(project.id, syntheticDirectWorktree(...).id)` resolves to a
- * path that does not exist. Never derive a filesystem path from it — take an
- * explicit `cwd` instead (see AgentPlugin.provideChatId). Deriving paths from a
- * fabricated worktree id is why direct-session restore silently found nothing.
- */
-export function syntheticDirectWorktree(
-  project: ProjectRecord,
-  session: SessionRecord,
-): WorktreeRecord {
-  return {
-    id: `${project.id}-direct`,
-    branch: "direct",
-    baseBranch: project.defaultBranch ?? "main",
-    baseSha: "",
-    createdAt: new Date().toISOString(),
-    sessions: [session],
-  };
 }
 
 /**
@@ -240,11 +211,12 @@ export async function spawnSessionFromArgv(opts: SpawnSessionFromArgvOptions): P
  */
 export async function spawnSession(opts: SpawnOptions): Promise<void> {
   const { project, worktree, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
-  const wtPath = getWorktreePath(project.id, worktree.id);
+  const ctx = resolvedContextOf(project, worktree);
+  const wtPath = ctx.cwd;
 
   const launchCfg: LaunchConfig = {
     project,
-    worktree,
+    ctx,
     session,
     daemonPort,
     ...(model ? { model } : {}),
@@ -260,9 +232,9 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
   }
 
   // Write system-prompt file to per-session data dir
-  const dataDir = sessionDataDir(project.id, worktree.id, session.id);
+  const dataDir = sessionDataDirFor(ctx, session.id);
   mkdirSync(dataDir, { recursive: true });
-  const promptFile = systemPromptPath(project.id, worktree.id, session.id);
+  const promptFile = systemPromptPathFor(ctx, session.id);
   writeFileSync(promptFile, systemPrompt, "utf8");
 
   // Compose launch prompt
@@ -430,12 +402,15 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
  */
 export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void> {
   const { project, session, plugin, daemonPort, systemPrompt, taskPrompt, model } = opts;
-  const cwd = project.absolutePath;
+  // A project context — no worktree. Plugins read ctx.cwd / ctx.worktree
+  // instead of the fabricated worktree record this replaced, whose id pointed
+  // at a directory that never existed.
+  const ctx = resolvedContextOf(project, null);
+  const cwd = ctx.cwd;
 
-  // Synthetic worktree purely to satisfy LaunchConfig — see the helper's warning.
   const launchCfg: LaunchConfig = {
     project,
-    worktree: syntheticDirectWorktree(project, session),
+    ctx,
     session,
     daemonPort,
     ...(model ? { model } : {}),
@@ -446,10 +421,10 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
     await plugin.setupWorkspaceHooks(cwd);
   }
 
-  // Write system-prompt file to direct session data dir
-  const dataDir = directSessionDataDir(project.id, session.id);
+  // Write system-prompt file to this context's session data dir
+  const dataDir = sessionDataDirFor(ctx, session.id);
   mkdirSync(dataDir, { recursive: true });
-  const promptFile = directSystemPromptPath(project.id, session.id);
+  const promptFile = systemPromptPathFor(ctx, session.id);
   writeFileSync(promptFile, systemPrompt, "utf8");
 
   // Compose launch prompt
