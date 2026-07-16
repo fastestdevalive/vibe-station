@@ -119,8 +119,18 @@ export function Workspace() {
   // worktree was deleted between sessions). Runs once the server bundle has
   // landed so it has fresh data to validate against; without this the
   // FilePreviewPane fires a doomed getFile() with a stale path on remount.
+  //
+  // Direct sessions are exempt: they have NO worktree by design (the mutual
+  // exclusion effect above nulls activeWorktreeId), so every check below reads
+  // "no worktree" as "worktree deleted" and wipes activeFilePath — clearing the
+  // user's open file. This effect re-runs whenever the `sessions` array identity
+  // changes, and applySessionUpdated rebuilds that array on EVERY session:state
+  // for ANY session, so an unrelated agent going idle elsewhere was enough to
+  // clear the file seconds after opening it. Direct-session staleness is already
+  // owned by the redirect effect above ("Redirect to dashboard if direct session
+  // not found"), so there is nothing for this effect to validate here.
   useEffect(() => {
-    if (!bundleLoaded) return;
+    if (!bundleLoaded || isDirectSession) return;
     const s = useWorkspaceStore.getState();
     const activeWt = s.activeWorktreeId
       ? worktrees.find((w) => w.id === s.activeWorktreeId)
@@ -148,7 +158,7 @@ export function Workspace() {
     } else if (!sessStillExists) {
       useWorkspaceStore.setState({ activeSessionId: null });
     }
-  }, [bundleLoaded, worktrees, sessions, projects, location.pathname, navigate]);
+  }, [bundleLoaded, isDirectSession, worktrees, sessions, projects, location.pathname, navigate]);
 
   useEffect(() => {
     if (!isMobile && mobileSidebarOpen) {
