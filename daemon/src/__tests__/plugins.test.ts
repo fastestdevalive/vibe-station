@@ -10,6 +10,33 @@ import type { LaunchConfig } from "../services/spawn.js";
 
 let tempDir: string;
 
+/**
+ * ResolvedContext stub for a WORKTREE context. Plugins read `ctx.cwd` and the
+ * `*For(ctx, …)` path helpers rather than deriving paths from a worktree id.
+ */
+function wtCtx(projectId: string, worktreeId: string) {
+  return {
+    ref: { kind: "worktree", projectId, worktreeId },
+    project: { id: projectId, absolutePath: `/repos/${projectId}` },
+    worktree: { id: worktreeId },
+    cwd: `${tempDir || "/tmp/vst-test"}/projects/${projectId}/worktrees/${worktreeId}`,
+  } as never;
+}
+
+/**
+ * ResolvedContext stub for a DIRECT (project) context — no worktree, cwd is the
+ * project checkout. This is the shape that used to be faked with a synthetic
+ * worktree whose id resolved to a directory that did not exist.
+ */
+function projCtx(projectId: string, absolutePath = `/repos/${projectId}`) {
+  return {
+    ref: { kind: "project", projectId },
+    project: { id: projectId, absolutePath },
+    worktree: null,
+    cwd: absolutePath,
+  } as never;
+}
+
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   return {
@@ -29,6 +56,15 @@ vi.mock("../services/paths.js", async () => {
       pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s, "system-prompt.md"),
     opencodeConfigPath: (p: string, w: string, s: string) =>
       pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s, "opencode-config.json"),
+    // Direct (no-worktree) family — services/context.ts routes to these for a
+    // project context, so the mock must provide them too.
+    directSessionDataDir: (p: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "sessions", s),
+    directSystemPromptPath: (p: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "sessions", s, "system-prompt.md"),
+    directOpencodeConfigPath: (p: string, s: string) =>
+      pathJoin(tempDir || "/tmp/vst-test", "projects", p, "sessions", s, "opencode-config.json"),
+    cleanupDirectSessionDataDir: () => {},
   };
 });
 
@@ -185,7 +221,7 @@ describe("Agent plugins", () => {
         systemPromptFile: "/tmp/system-prompt.md",
         launchCfg: {
           project: { id: "p1" },
-          worktree: { id: "w1" },
+          ctx: wtCtx("p1", "w1"),
           session: { id: "sess-test" },
           daemonPort: 7421,
         } as unknown as LaunchConfig,
@@ -204,7 +240,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("cursor");
       const cmd = plugin.getLaunchCommand({
         project: { id: "test-proj" },
-        worktree: { id: "wt-1" },
+        ctx: wtCtx("test-proj", "wt-1"),
       } as any);
       expect(cmd).toContain("--force");
       expect(cmd).toContain("--sandbox");
@@ -225,7 +261,7 @@ describe("Agent plugins", () => {
         systemPromptFile: "/tmp/system-prompt.md",
         launchCfg: {
           project: { id: "p1" },
-          worktree: { id: "w1" },
+          ctx: wtCtx("p1", "w1"),
           session: { id: "sess-test" },
           daemonPort: 7421,
         } as unknown as LaunchConfig,
@@ -266,7 +302,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
         project: { id: "p1" },
-        worktree: { id: "w1" },
+        ctx: wtCtx("p1", "w1"),
         session: { id: "s1", agentChatId: undefined },
         daemonPort: 7421,
         model: "gemini-3.1-pro-preview",
@@ -279,7 +315,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
         project: { id: "p1" },
-        worktree: { id: "w1" },
+        ctx: wtCtx("p1", "w1"),
         session: { id: "s1", agentChatId: undefined },
         daemonPort: 7421,
         model: "auto",
@@ -292,7 +328,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
         project: { id: "p1" },
-        worktree: { id: "w1" },
+        ctx: wtCtx("p1", "w1"),
         session: { id: "s1", agentChatId: undefined },
         daemonPort: 7421,
       } as LaunchConfig);
@@ -304,7 +340,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("gemini");
       const cmd = plugin.getLaunchCommand({
         project: { id: "p1" },
-        worktree: { id: "w1" },
+        ctx: wtCtx("p1", "w1"),
         session: { id: "s1", agentChatId: "my-uuid-1234" },
         daemonPort: 7421,
       } as LaunchConfig);
@@ -318,7 +354,7 @@ describe("Agent plugins", () => {
       const plugin = resolvePlugin("gemini");
       const env = plugin.getEnvironment({
         project: { id: "p1" },
-        worktree: { id: "w1" },
+        ctx: wtCtx("p1", "w1"),
         session: { id: "s1" },
         daemonPort: 7421,
       } as LaunchConfig);
@@ -647,7 +683,7 @@ describe("Cursor plugin — chat-id capture", () => {
     const plugin = createCursorPlugin();
     const cmd = plugin.getLaunchCommand({
       project: { id: "p1" },
-      worktree: { id: "w1" },
+      ctx: wtCtx("p1", "w1"),
       session: { id: "s1", agentChatId: "uuid-abc" },
     } as any);
     expect(cmd).toContain("--resume");
@@ -659,7 +695,7 @@ describe("Cursor plugin — chat-id capture", () => {
     const plugin = createCursorPlugin();
     const cmd = plugin.getLaunchCommand({
       project: { id: "p1" },
-      worktree: { id: "w1" },
+      ctx: wtCtx("p1", "w1"),
       session: { id: "s1" },
     } as any);
     expect(cmd).not.toContain("--resume");
@@ -671,7 +707,7 @@ describe("Cursor plugin — chat-id capture", () => {
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "cursor-uuid-xyz" },
       project: { id: "p1" },
-      worktree: { id: "w1" },
+      ctx: wtCtx("p1", "w1"),
     });
     expect(result).not.toBeNull();
     expect(result).toContain("--resume");
@@ -737,5 +773,75 @@ describe("OpenCode plugin — chat-id capture", () => {
       worktree: {},
     });
     expect(result).toEqual(["opencode", "--session", "ses_abc"]);
+  });
+});
+
+/**
+ * Direct (project) contexts — regression coverage for three LIVE path bugs.
+ *
+ * Direct sessions used to be handed a fabricated worktree record whose id was
+ * `<project>-direct`. Plugins derived paths from that id, so they resolved to
+ * ~/.vibe-station/projects/<p>/worktrees/<p>-direct — a directory that never
+ * exists. cursor got a bogus --workspace; opencode read its config and system
+ * prompt from the wrong dir; gemini pointed GEMINI_SYSTEM_MD at nothing.
+ * Plugins now read ctx.cwd / the *For(ctx, …) helpers, which handle both shapes.
+ */
+describe("plugins in a direct (project) context", () => {
+  it("cursor: getLaunchCommand uses the project dir as --workspace", async () => {
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
+    const cmd = createCursorPlugin().getLaunchCommand({
+      project: { id: "p1" },
+      ctx: projCtx("p1", "/repos/p1"),
+      session: { id: "s1" },
+      daemonPort: 7421,
+    } as never);
+
+    const wsIdx = cmd.indexOf("--workspace");
+    expect(wsIdx).toBeGreaterThanOrEqual(0);
+    expect(cmd[wsIdx + 1]).toBe("/repos/p1");
+    // The fabricated-worktree path must not appear anywhere in the argv.
+    expect(cmd.join(" ")).not.toContain("p1-direct");
+    expect(cmd.join(" ")).not.toContain("worktrees");
+  });
+
+  it("gemini: GEMINI_SYSTEM_MD points at the direct session data dir", async () => {
+    const { resolvePlugin } = await import("../agent-plugins/registry.js");
+    const { directSystemPromptPath } = await import("../services/paths.js");
+    const env = resolvePlugin("gemini").getEnvironment({
+      project: { id: "p1" },
+      ctx: projCtx("p1"),
+      session: { id: "s1" },
+      daemonPort: 7421,
+    } as never);
+
+    expect(env.GEMINI_SYSTEM_MD).toBe(directSystemPromptPath("p1", "s1"));
+    expect(env.GEMINI_SYSTEM_MD).not.toContain("p1-direct");
+  });
+
+  it("gemini: still uses the worktree data dir for a worktree context", async () => {
+    const { resolvePlugin } = await import("../agent-plugins/registry.js");
+    const { systemPromptPath } = await import("../services/paths.js");
+    const env = resolvePlugin("gemini").getEnvironment({
+      project: { id: "p1" },
+      ctx: wtCtx("p1", "w1"),
+      session: { id: "s1" },
+      daemonPort: 7421,
+    } as never);
+
+    expect(env.GEMINI_SYSTEM_MD).toBe(systemPromptPath("p1", "w1", "s1"));
+  });
+
+  it("opencode: config + system prompt resolve to the direct session data dir", async () => {
+    const { resolvePlugin } = await import("../agent-plugins/registry.js");
+    const { directOpencodeConfigPath } = await import("../services/paths.js");
+    const env = resolvePlugin("opencode").getEnvironment({
+      project: { id: "p1" },
+      ctx: projCtx("p1"),
+      session: { id: "s1" },
+      daemonPort: 7421,
+    } as never);
+
+    expect(env.OPENCODE_CONFIG).toBe(directOpencodeConfigPath("p1", "s1"));
+    expect(env.OPENCODE_CONFIG).not.toContain("p1-direct");
   });
 });

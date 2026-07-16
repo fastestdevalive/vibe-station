@@ -15,11 +15,11 @@ import { promises as fs } from "node:fs";
 const execFileAsync = promisify(execFile);
 import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { opencodeConfigPath, systemPromptPath, worktreePath as getWorktreePath } from "../services/paths.js";
+import { opencodeConfigPathFor, systemPromptPathFor } from "../services/context.js";
 import { writeOpenCodeConfig } from "../services/opencodeConfig.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
+import type { SessionRecord, ProjectRecord } from "../types.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -56,8 +56,8 @@ export function createOpencodePlugin(): AgentPlugin {
     getEnvironment(cfg: LaunchConfig): Record<string, string> {
       // Write (or re-write) the opencode config pointing at the system-prompt file.
       // This runs both on fresh spawn and on restore — so updated AGENTS.md is always picked up.
-      const configPath = opencodeConfigPath(cfg.project.id, cfg.worktree.id, cfg.session.id);
-      const promptFile = systemPromptPath(cfg.project.id, cfg.worktree.id, cfg.session.id);
+      const configPath = opencodeConfigPathFor(cfg.ctx, cfg.session.id);
+      const promptFile = systemPromptPathFor(cfg.ctx, cfg.session.id);
       try {
         mkdirSync(dirname(configPath), { recursive: true });
         writeOpenCodeConfig(configPath, [promptFile]);

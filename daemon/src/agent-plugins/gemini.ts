@@ -16,8 +16,8 @@
 
 import { randomUUID } from "node:crypto";
 import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { systemPromptPath } from "../services/paths.js";
-import type { SessionRecord, ProjectRecord, WorktreeRecord } from "../types.js";
+import { systemPromptPathFor } from "../services/context.js";
+import type { SessionRecord, ProjectRecord } from "../types.js";
 
 // "auto" = no -m flag passed; Gemini CLI picks the default model automatically.
 const GEMINI_MODELS = [
@@ -48,7 +48,7 @@ export function createGeminiPlugin(): AgentPlugin {
 
     getEnvironment(cfg: LaunchConfig): Record<string, string> {
       return {
-        GEMINI_SYSTEM_MD: systemPromptPath(cfg.project.id, cfg.worktree.id, cfg.session.id),
+        GEMINI_SYSTEM_MD: systemPromptPathFor(cfg.ctx, cfg.session.id),
       };
     },
 
