@@ -57,4 +57,9 @@ Client:
 
 The client still carries three names for one concept (`FileScope`, `WsContextRef`, and the overloaded `worktreeId` prop threaded through `ToolPanel`/`TabsStrip`/`QuickOpen`/`FilePreviewPane`). Collapsing the store's `activeWorktreeId`/`activeDirectContextId`/`activeProjectId` triple into a single `activeContext: AgentContextRef`, and replacing the `worktreeId` + `scope` prop pair with one `context` prop, is what makes the watch-protocol change a net simplification. Sequence Stage 3 *inside* that work, not before it.
 
-The reference implementation for everything above is preserved in the branch history: commit `c327e40` ("feat(direct-sessions): live file/tree updates via context-aware watch"), verified live in Docker (a project-scoped `file:watch` fired `file:changed` + `tree:changed` on disk edits).
+The reference implementation for everything above is preserved at the git tag
+**`archive/direct-session-live-watch`** (commit `c327e40`, "feat(direct-sessions):
+live file/tree updates via context-aware watch") — verified live in Docker (a
+project-scoped `file:watch` fired `file:changed` + `tree:changed` on disk edits).
+Recover it with `git show archive/direct-session-live-watch` or
+`git cherry-pick c327e40`.
