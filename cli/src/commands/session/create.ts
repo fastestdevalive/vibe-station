@@ -1,7 +1,7 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { readFileSync } from "fs";
+import { resolveFileOrInline } from "../../lib/prompt-source.js";
 import { die } from "../../lib/output.js";
 import ora from "ora";
 
@@ -18,23 +18,24 @@ export function registerSessionCreate(session: Command): void {
     .option("--type <type>", "Session type (agent|terminal)", "agent")
     .option("--mode <id>", "Mode ID")
     .option("--prompt <text>", "Initial prompt")
-    .option("--prompt-file <path>", "Read prompt from file")
+    .addOption(
+      new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
+    )
     .action(
       async (
         worktreeId: string,
+        // Keys must match commander's camelCased option names (--prompt-file → promptFile).
+        // Spelling them with dashes here type-checks but reads a property that never exists.
         opts: {
           type: string;
           mode?: string;
           prompt?: string;
-          "prompt-file"?: string;
+          promptFile?: string;
         }
       ) => {
-        await preflight();
+        const prompt = resolveFileOrInline(opts.prompt, opts.promptFile, "--prompt-file");
 
-        let prompt = opts.prompt;
-        if (opts["prompt-file"]) {
-          prompt = readFileSync(opts["prompt-file"], "utf-8");
-        }
+        await preflight();
 
         const spinner = ora("Creating session...").start();
 

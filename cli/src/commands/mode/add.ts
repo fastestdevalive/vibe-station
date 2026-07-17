@@ -1,7 +1,7 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { readFileSync } from "fs";
+import { resolveFileOrInline } from "../../lib/prompt-source.js";
 import { die, success } from "../../lib/output.js";
 
 interface ModeCreateResponse {
@@ -16,14 +16,18 @@ export function registerModeAdd(mode: Command): void {
     .option("--name <name>", "Mode name (required)", "")
     .option("--cli <cmd>", "CLI command (required)", "")
     .option("--context <text>", "Context text")
-    .option("--context-file <path>", "Read context from file")
+    .addOption(
+      new Option("--context-file <path>", "Read context from file").conflicts("context")
+    )
     .option("--preset <preset>", "Preset name")
     .action(
+      // Keys must match commander's camelCased option names (--context-file → contextFile).
+      // Spelling them with dashes here type-checks but reads a property that never exists.
       async (opts: {
         name: string;
         cli: string;
         context?: string;
-        "context-file"?: string;
+        contextFile?: string;
         preset?: string;
       }) => {
         if (!opts.name) {
@@ -33,12 +37,9 @@ export function registerModeAdd(mode: Command): void {
           die("--cli is required", 1);
         }
 
-        await preflight();
+        const context = resolveFileOrInline(opts.context, opts.contextFile, "--context-file");
 
-        let context = opts.context;
-        if (opts["context-file"]) {
-          context = readFileSync(opts["context-file"], "utf-8");
-        }
+        await preflight();
 
         const result = await daemonPost<ModeCreateResponse>("/modes", {
           name: opts.name,

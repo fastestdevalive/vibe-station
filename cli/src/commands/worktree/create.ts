@@ -1,7 +1,7 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { readFileSync } from "fs";
+import { resolveFileOrInline } from "../../lib/prompt-source.js";
 import { die } from "../../lib/output.js";
 import ora from "ora";
 
@@ -20,29 +20,30 @@ export function registerWorktreeCreate(worktree: Command): void {
     .option("--base <branch>", "Base branch")
     .option("--branch <name>", "New branch name")
     .option("--prompt <text>", "Initial prompt")
-    .option("--prompt-file <path>", "Read prompt from file")
+    .addOption(
+      new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
+    )
     .action(
       async (
         projectId: string,
+        // Keys must match commander's camelCased option names (--prompt-file → promptFile).
+        // Spelling them with dashes here type-checks but reads a property that never exists.
         opts: {
           mode: string;
           name?: string;
           base?: string;
           branch?: string;
           prompt?: string;
-          "prompt-file"?: string;
+          promptFile?: string;
         }
       ) => {
         if (!opts.mode) {
           die("--mode is required", 1);
         }
 
-        await preflight();
+        const prompt = resolveFileOrInline(opts.prompt, opts.promptFile, "--prompt-file");
 
-        let prompt = opts.prompt;
-        if (opts["prompt-file"]) {
-          prompt = readFileSync(opts["prompt-file"], "utf-8");
-        }
+        await preflight();
 
         const spinner = ora("Creating worktree...").start();
 
