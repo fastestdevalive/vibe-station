@@ -58,12 +58,17 @@ export function registerProjectCreate(project: Command): void {
     .option("--prompt <text>", "Initial prompt for the agent")
     .option("--worktree", "Use worktree isolation (creates branch + worktree)")
     .action(async (name: string, opts: CreateProjectOptions) => {
-      await preflight();
-
       // Validate options
       if (opts.startAgent && !opts.mode) {
         die("--mode is required when using --start-agent", 1);
       }
+      // Without --start-agent there is no agent to give the prompt to, and the body below would
+      // drop it silently — the same invisible failure as the --prompt-file bug. Say so instead.
+      if (opts.prompt && !opts.startAgent) {
+        die("--prompt requires --start-agent (there is no agent to receive it otherwise)", 1);
+      }
+
+      await preflight();
 
       // Resolve dir if provided (relative to cwd)
       let dir: string | undefined;
