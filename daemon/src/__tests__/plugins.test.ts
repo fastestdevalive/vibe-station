@@ -707,11 +707,14 @@ describe("Cursor plugin — chat-id capture", () => {
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "cursor-uuid-xyz" },
       project: { id: "p1" },
-      ctx: wtCtx("p1", "w1"),
+      cwd: "/repos/p1",
     });
     expect(result).not.toBeNull();
     expect(result).toContain("--resume");
     expect(result).toContain("cursor-uuid-xyz");
+    // cwd must reach --workspace, not leak through as undefined.
+    expect(result).toContain("/repos/p1");
+    expect(result?.join(" ")).not.toContain("undefined");
   });
 
   it("3.T7 — getRestoreCommand without agentChatId → falls back to findLatestCursorChatId (returns null when no chats)", async () => {
@@ -770,7 +773,7 @@ describe("OpenCode plugin — chat-id capture", () => {
     const result = await plugin.getRestoreCommand!({
       session: { agentChatId: "ses_abc" },
       project: {},
-      worktree: {},
+      cwd: "/repos/p1",
     });
     expect(result).toEqual(["opencode", "--session", "ses_abc"]);
   });
