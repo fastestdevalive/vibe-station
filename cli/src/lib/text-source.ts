@@ -35,10 +35,15 @@ export function resolveFileOrInline(
     return die(`Cannot read ${fileFlag} ${filePath}: ${message}`, 1);
   }
 
-  // An empty file yields an agent with no task — the exact symptom this flag's bug produced.
-  // Warn rather than fail: it is unambiguously not what the caller intended, but it is their call.
+  // Collapse a whitespace-only file to undefined rather than passing it through. A truthy "\n"
+  // is worse than nothing: plugins gate on `if (prompt.taskPrompt)` (agent-plugins/claude.ts:86),
+  // so whitespace would be *submitted* as the agent's task. Returning undefined takes the same
+  // path as "no prompt given" — which is what the warning below actually promises.
+  // Warn rather than fail: an empty file is unambiguously not what the caller intended, but it
+  // is not our call to block on.
   if (contents.trim() === "") {
     warn(`${fileFlag} ${filePath} is empty — the agent will start with no task.`);
+    return undefined;
   }
 
   return contents;

@@ -19,6 +19,8 @@ import { buildProgram } from "../program";
  *    CLI uses global fetch (undici). We stub fetch directly instead.
  *  - VST_DAEMON_URL must be set, or getDaemonUrl() falls back to the developer's real
  *    ~/.vibe-station/config.json and the test could hit a live daemon and create real worktrees.
+ *    (It only covers the URL: getDaemonToken() reads that config unconditionally either way.
+ *    That read is harmless — read-only, and the stubbed fetch ignores the header.)
  *  - process.exit must be stubbed: die() calls it, which would otherwise kill the vitest worker.
  */
 
@@ -131,7 +133,19 @@ describe("--prompt-file / --context-file are actually read", () => {
     await run(["worktree", "create", "proj-1", "--mode=m1", "--branch=b1", `--prompt-file=${file}`]);
 
     const post = captured.find((c) => c.url.endsWith("/worktrees"));
+    expect(post, "expected a POST to /worktrees").toBeDefined();
     expect(post!.body.prompt).toBe(contents);
+  });
+
+  it("treats a whitespace-only prompt file as no prompt, not a whitespace task", async () => {
+    // A truthy "\n" would be *submitted* as the agent's task by plugins that gate on
+    // `if (prompt.taskPrompt)`. Omitting the key takes the same path as "no prompt given".
+    const file = writePrompt("\n\n  \n");
+    await run(["worktree", "create", "proj-1", "--mode=m1", "--branch=b1", `--prompt-file=${file}`]);
+
+    const post = captured.find((c) => c.url.endsWith("/worktrees"));
+    expect(post, "expected a POST to /worktrees").toBeDefined();
+    expect(post!.body).not.toHaveProperty("prompt");
   });
 });
 
@@ -175,5 +189,25 @@ describe("failure modes are loud, not silent", () => {
     expect(code).not.toBeNull();
     expect(code).not.toBe(0);
     expect(captured.find((c) => c.url.endsWith("/worktrees"))).toBeUndefined();
+  });
+
+  it("rejects a prompt on a terminal session the daemon would discard", async () => {
+    // The daemon only consumes `prompt` for agent sessions; a terminal session would accept it
+    // and drop it — the same silent loss this PR is about.
+    const code = await run(["session", "create", "wt-1", "--type=terminal", "--prompt=hi"]);
+
+    expect(code).not.toBeNull();
+    expect(code).not.toBe(0);
+    expect(captured.find((c) => c.url.endsWith("/sessions"))).toBeUndefined();
+  });
+
+  it("rejects project create --prompt without --start-agent", async () => {
+    // Without --start-agent there is no agent to receive the prompt, and the request body
+    // would omit it silently.
+    const code = await run(["project", "create", "proj-x", "--prompt=hi"]);
+
+    expect(code).not.toBeNull();
+    expect(code).not.toBe(0);
+    expect(captured.find((c) => c.url.endsWith("/projects"))).toBeUndefined();
   });
 });

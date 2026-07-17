@@ -1,7 +1,7 @@
 import { Command, Option } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { resolveFileOrInline } from "../../lib/prompt-source.js";
+import { resolveFileOrInline } from "../../lib/text-source.js";
 import { die } from "../../lib/output.js";
 import ora from "ora";
 
@@ -33,6 +33,13 @@ export function registerSessionCreate(session: Command): void {
           promptFile?: string;
         }
       ) => {
+        // The daemon only consumes `prompt` for agent sessions (routes/sessions.ts:420) — a
+        // terminal session would accept it over the wire and drop it on the floor. Same silent
+        // loss as the --prompt-file bug, so refuse it up front.
+        if ((opts.prompt || opts.promptFile) && opts.type !== "agent") {
+          die(`--prompt/--prompt-file only apply to --type=agent (got --type=${opts.type})`, 1);
+        }
+
         const prompt = resolveFileOrInline(opts.prompt, opts.promptFile, "--prompt-file");
 
         await preflight();

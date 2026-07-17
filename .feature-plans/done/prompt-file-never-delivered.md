@@ -45,9 +45,10 @@ Each action handler hand-declares its own opts shape with the dashed key:
 ```ts
 opts: { …; "prompt-file"?: string }
 ```
-Commander's `.action()` types the callback loosely, so this fabricated annotation is accepted as-is.
-TS then happily type-checks a property access that can never exist at runtime. The type annotation
-is the thing that hides the bug.
+Commander's `.action()` types the callback as `(...args: any[])`, so this fabricated annotation is
+accepted as-is. TS then happily type-checks a property access that can never exist at runtime. The
+type annotation is the thing that hides the bug — and, importantly, correcting it to camelCase
+fixes the code without restoring any compile-time guarantee (see fix item 2).
 
 ### Why it fails silently rather than erroring
 
@@ -67,10 +68,18 @@ read-a-file-the-user-named failure that produces no diagnostic).
    - `mode/add.ts`: `opts.contextFile`
 
 2. **Delete the lying type annotations** — replace the hand-written dashed-key opts interfaces with
-   camelCase ones (`promptFile?: string`, `contextFile?: string`). This is what turns the class of
-   bug from silent into compile-time-visible: the dead property access stops type-checking.
+   camelCase ones (`promptFile?: string`, `contextFile?: string`).
 
-3. **Add a shared `resolveFileOrInline()` helper** in `cli/src/lib/` — items 4–6 below would
+   **This does not buy compile-time safety, and an earlier draft of this plan wrongly claimed it
+   did.** Commander types the callback as `action(fn: (...args: any[]) => void | Promise<void>)`
+   (`commander/typings/index.d.ts:547`), so the opts annotation is *never* checked against the
+   `.option()` strings. A typo'd `promptFyle?: string` read as `opts.promptFyle` would compile
+   exactly as cleanly as the original dashed version did. The code is now correct, but the only
+   thing standing between us and a recurrence is the regression test — which is precisely why the
+   test asserts on the POSTed body rather than on internals. The real structural fix is the
+   deferred `@commander-js/extra-typings` migration below.
+
+3. **Add a shared `resolveFileOrInline()` helper** in `cli/src/lib/text-source.ts` — items 4–6 below would
    otherwise be triplicated verbatim across three files. The helper owns: read-or-die, the
    conflict check, and the empty-file warning. One place to get right, one place to test.
 
@@ -82,8 +91,12 @@ read-a-file-the-user-named failure that produces no diagnostic).
    `new Option("--prompt-file <path>").conflicts("prompt")` rather than a hand-rolled `die()`.
    It yields standard commander error output and cooperates with `exitOverride()` in tests.
 
-6. **Warn on an empty prompt file** — an empty/whitespace-only file yields an agent with no task,
-   which is the exact symptom being fixed. Warn rather than fail.
+6. **Warn on an empty prompt file, and return `undefined` for it** — not the raw contents. A
+   whitespace-only file yields a *truthy* `"\n"`, and plugins gate on `if (prompt.taskPrompt)`
+   (`agent-plugins/claude.ts:86`), so it would be **submitted as the agent's task**. Returning
+   `undefined` takes the same path as "no prompt given", which is what the warning promises.
+   Warn rather than fail: an empty file is unambiguously not what the caller intended, but it is
+   not ours to block.
 
 ## Test plan
 
@@ -114,6 +127,9 @@ worth pinning.
 - `--prompt` + `--prompt-file` together → exits non-zero
 - `--prompt-file` pointing at a nonexistent path → exits non-zero with a readable message
 - multi-line file contents survive verbatim (no trimming/mangling of the body)
+- a whitespace-only file omits `prompt` rather than submitting `"\n"` as the task
+- `session create --type=terminal --prompt…` → exits non-zero (daemon would discard it)
+- `project create --prompt` without `--start-agent` → exits non-zero (body would omit it)
 
 Required args or the command dies before reaching the file logic: `mode add` needs `--name`/`--cli`
 (`mode/add.ts:29-34`); `worktree create` needs `--mode`.
@@ -137,9 +153,22 @@ of the POST is fine and is exercised daily by the working `--prompt` flag.
 `opts.file` is already correct. (It shares the raw-ENOENT roughness and could adopt the helper later;
 out of scope here.)
 
-Repo-wide sweep confirms no other instance of this bug class: commander is used only in `cli/`, and
-the only multi-word options in the repo are `--start-agent` (correct), `--prompt-file` ×2, and
-`--context-file`.
+Repo-wide sweep confirms no other instance of the camelCase bug class: commander is used only in
+`cli/`, and the only multi-word options in the repo are `--start-agent` (correct), `--prompt-file`
+×2, and `--context-file`.
+
+### Sibling silent-drops closed at the same time
+
+Review found two more places a prompt vanished without a word — same symptom, different mechanism,
+so they belong with this fix rather than in a follow-up:
+
+- `project create --prompt` **without** `--start-agent` built a body that omitted the prompt
+  entirely (`project/create.ts:94`). The inverse was already guarded (`--mode` required when
+  `--start-agent`), so this was an asymmetry, not a design.
+- `session create --type=terminal --prompt…` POSTed a prompt the daemon only ever consumes for
+  agent sessions (`daemon/src/routes/sessions.ts:420`), dropping it on the floor.
+
+Both now `die()`.
 
 ### Deferred follow-up
 

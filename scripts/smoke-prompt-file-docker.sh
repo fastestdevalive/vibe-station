@@ -31,14 +31,33 @@ Second line of the prompt file, to prove multi-line survives.
 EOF
 
 echo "== Install stub gemini that echoes its argv"
-cat > /usr/local/bin/gemini <<'STUB'
+# Container-only. Guard against clobbering a real binary: docker-compose.dev.yml mounts genuine
+# CLIs into /usr/local/bin, and this script must never overwrite one (see demo-seed.sh's
+# `if [ ! -x ... ]` precedent). We stash any existing gemini and restore it on exit.
+STUB_PATH=/usr/local/bin/gemini
+STUB_BACKUP=""
+if [[ -e "$STUB_PATH" ]]; then
+  STUB_BACKUP="${STUB_PATH}.smoke-backup.$$"
+  mv "$STUB_PATH" "$STUB_BACKUP"
+fi
+restore_stub() {
+  rm -f "$STUB_PATH"
+  [[ -n "$STUB_BACKUP" && -e "$STUB_BACKUP" ]] && mv "$STUB_BACKUP" "$STUB_PATH"
+  return 0
+}
+trap restore_stub EXIT
+
+cat > "$STUB_PATH" <<'STUB'
 #!/usr/bin/env bash
 # Stub gemini: print argv so the task prompt delivered by the daemon is observable.
+# The ╭ line is gemini.ts's getReadySignal() sentinel — without it every spawn burns the
+# full 10s fallback timeout (mirrors scripts/fake-gemini.sh).
 echo "STUB-GEMINI-ARGV: $*"
+echo "╭─ Fake Gemini CLI ─╮"
 echo "Ready."
 cat
 STUB
-chmod +x /usr/local/bin/gemini
+chmod +x "$STUB_PATH"
 
 echo "== Wait for daemon"
 until curl -sf "$BASE/health" >/dev/null 2>&1; do sleep 0.5; done

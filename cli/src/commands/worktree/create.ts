@@ -1,7 +1,7 @@
 import { Command, Option } from "commander";
 import { daemonPost } from "../../lib/daemon-client.js";
 import { preflight } from "../../lib/preflight.js";
-import { resolveFileOrInline } from "../../lib/prompt-source.js";
+import { resolveFileOrInline } from "../../lib/text-source.js";
 import { die } from "../../lib/output.js";
 import ora from "ora";
 
