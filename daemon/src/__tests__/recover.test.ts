@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as tmuxNs from "../services/tmux.js";
-import { recoverNotStartedSessions } from "../services/recover.js";
+import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "../services/recover.js";
 import type { ProjectRecord } from "../types.js";
 
 let tempDir: string;
@@ -20,6 +20,10 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    sessionDataDir: (p: string, w: string, s: string) =>
+      pathJoin(tempDir, "projects", p, "session-data", w, s),
+    directSessionDataDir: (p: string, s: string) =>
+      pathJoin(tempDir, "projects", p, "sessions", s),
   };
 });
 
@@ -89,6 +93,32 @@ describe("recoverNotStartedSessions", () => {
                 lastTransitionAt: new Date().toISOString(),
               },
             },
+            {
+              id: "sess-json-fresh",
+              slot: "a3",
+              type: "agent",
+              modeId: "mode",
+              tmuxName: "__direct__-json-fresh",
+              useTmux: false,
+              channel: "json",
+              lifecycle: {
+                state: "not_started",
+                lastTransitionAt: new Date().toISOString(),
+              },
+            },
+            {
+              id: "sess-json-working",
+              slot: "a4",
+              type: "agent",
+              modeId: "mode",
+              tmuxName: "__direct__-json-working",
+              useTmux: false,
+              channel: "json",
+              lifecycle: {
+                state: "working",
+                lastTransitionAt: new Date().toISOString(),
+              },
+            },
           ],
         },
       ],
@@ -118,5 +148,156 @@ describe("recoverNotStartedSessions", () => {
 
     const working = proj.worktrees[0]!.sessions.find((s) => s.id === "sess-working")!;
     expect(working.lifecycle.state).toBe("working");
+  });
+
+  it("2.T5 — JSON not_started stays not_started; JSON working reconciles → idle", async () => {
+    const { getProject } = await import("../state/project-store.js");
+    // No tmux pane exists for any JSON session — must NOT influence them.
+    tmux.hasSession.mockResolvedValue(false);
+
+    await recoverNotStartedSessions();
+
+    const sessions = getProject("proj-r")!.worktrees[0]!.sessions;
+    const fresh = sessions.find((s) => s.id === "sess-json-fresh")!;
+    const jsonWorking = sessions.find((s) => s.id === "sess-json-working")!;
+
+    // A fresh JSON session has no live process — that's normal, don't mark exited.
+    expect(fresh.lifecycle.state).toBe("not_started");
+    // A JSON session left working had its turn killed by the restart → idle.
+    expect(jsonWorking.lifecycle.state).toBe("idle");
+    expect(jsonWorking.lifecycle.reason).toBe("json-restart-reconcile");
+  });
+
+  it("boot sweep marks direct-pty exited but leaves JSON sessions untouched (Fix #1)", async () => {
+    const { getProject } = await import("../state/project-store.js");
+    tmux.hasSession.mockResolvedValue(false);
+
+    // Full boot ordering: recover reconciles JSON working → idle, then the sweep
+    // runs. The sweep MUST NOT clobber the reconciled JSON sessions to exited.
+    await recoverNotStartedSessions();
+    await sweepDirectPtySessionsOnBoot();
+
+    const sessions = getProject("proj-r")!.worktrees[0]!.sessions;
+    const jsonFresh = sessions.find((s) => s.id === "sess-json-fresh")!;
+    const jsonWorking = sessions.find((s) => s.id === "sess-json-working")!;
+
+    // JSON sessions survive the sweep with their recovered state.
+    expect(jsonFresh.lifecycle.state).toBe("not_started");
+    expect(jsonWorking.lifecycle.state).toBe("idle");
+  });
+});
+
+describe("sweepOrphanTurnPids — PID-reuse safety (opus review finding)", () => {
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-recover-pidsweep-"));
+    await mkdir(join(tempDir, "projects", "proj-pidsweep"), { recursive: true });
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    const record: ProjectRecord = {
+      id: "proj-pidsweep",
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pfx",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [],
+      worktrees: [
+        {
+          id: "wt-pidsweep",
+          branch: "b",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          createdAt: new Date().toISOString(),
+          sessions: [
+            {
+              id: "sess-pidsweep",
+              slot: "m",
+              type: "agent",
+              modeId: "mode",
+              tmuxName: "pane-pidsweep",
+              channel: "json",
+              lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+            },
+          ],
+        },
+      ],
+    } as ProjectRecord;
+    await addProject(record);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("verifyPidIsTurnProcess: true for a real process whose comm matches a known CLI binary", async () => {
+    const { verifyPidIsTurnProcess } = await import("../services/recover.js");
+    const { spawn } = await import("node:child_process");
+    const { writeFile, chmod } = await import("node:fs/promises");
+    // /proc/<pid>/stat's comm field is derived by the kernel from the
+    // EXECUTABLE FILE's own basename at exec time — not argv[0] (so `exec -a
+    // claude sleep` does NOT work; comm would still read "sleep"). Create a
+    // real, tiny, executable script file literally named "claude" and spawn
+    // it directly, so comm is genuinely "claude" end-to-end through a real
+    // /proc entry, not a mocked string.
+    const scriptPath = join(tempDir, "claude");
+    await writeFile(scriptPath, "#!/bin/sh\nsleep 5\n", "utf8");
+    await chmod(scriptPath, 0o755);
+    const child = spawn(scriptPath, [], { stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 100)); // let /proc/<pid>/stat settle
+      expect(child.pid).toBeDefined();
+      expect(verifyPidIsTurnProcess(child.pid!)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("verifyPidIsTurnProcess: false for a real, live process whose comm is NOT one of our CLI binaries (the PID-reuse case)", async () => {
+    const { verifyPidIsTurnProcess } = await import("../services/recover.js");
+    const { spawn } = await import("node:child_process");
+    // An ordinary unrelated process — comm will be "sleep", not in the
+    // allowlist. This is exactly the shape of a reused PID after reboot: a
+    // live, legitimate process that just isn't OUR turn child.
+    const child = spawn("sleep", ["5"], { stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      expect(child.pid).toBeDefined();
+      expect(verifyPidIsTurnProcess(child.pid!)).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("verifyPidIsTurnProcess: true (inconclusive → proceed) for a PID with no /proc entry", async () => {
+    const { verifyPidIsTurnProcess } = await import("../services/recover.js");
+    // An implausibly large PID almost certainly has no /proc/<pid> entry —
+    // exercises the catch path (ENOENT), which must fail open (best-effort
+    // preserved) rather than silently blocking the sweep forever.
+    expect(verifyPidIsTurnProcess(999_999_999)).toBe(true);
+  });
+
+  it("sweepOrphanTurnPids: does NOT kill a live, unrelated process recorded under a stale pidfile (PID reuse)", async () => {
+    const { sweepOrphanTurnPids } = await import("../services/recover.js");
+    const { spawn } = await import("node:child_process");
+    const { writeFile, mkdir: mkdirp } = await import("node:fs/promises");
+
+    // A real, live "sleep" process standing in for a PID that was reused by
+    // an unrelated process after a reboot — verifyPidIsTurnProcess must
+    // refuse to kill it even though it's recorded in turn.pids.
+    const child = spawn("sleep", ["5"], { stdio: "ignore" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(child.pid).toBeDefined();
+
+    const dataDir = join(tempDir, "projects", "proj-pidsweep", "session-data", "wt-pidsweep", "sess-pidsweep");
+    await mkdirp(dataDir, { recursive: true });
+    await writeFile(join(dataDir, "turn.pids"), String(child.pid), "utf8");
+
+    try {
+      sweepOrphanTurnPids();
+      // The process must still be alive — sending signal 0 throws if it's dead.
+      expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 });

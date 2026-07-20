@@ -1,7 +1,9 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  BeginEditResponse,
   ChangedPathEntry,
+  Channel,
   CliId,
   CreateDirectSessionBody,
   CreateModeBody,
@@ -15,12 +17,17 @@ import type {
   Mode,
   Project,
   ProjectBranchesResponse,
+  SendChatResponse,
   SendInputBody,
   Session,
+  SessionMeta,
   Settings,
   SupportedCli,
+  TranscriptResponse,
+  TranscriptPage,
   TreeEntry,
   UpdateModeBody,
+  UploadAttachmentsResponse,
   WSEvent,
   Worktree,
 } from "./types";
@@ -91,6 +98,9 @@ export function createClientApi() {
    *  payload to deduplicate. */
   const fileWatches = new Map<string, { worktreeId: string; path: string }>();
   const treeWatches = new Map<string, { worktreeId: string }>();
+  /** Open JSON-chat subscriptions — replayed on WS reconnect so the daemon
+   *  re-subscribes the connection (and re-sends chat:replay) after a drop. */
+  const chatSubs = new Set<string>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
@@ -162,6 +172,11 @@ export function createClientApi() {
         }
         for (const w of treeWatches.values()) {
           socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
+        }
+        // Re-open JSON chats so the daemon re-subscribes this connection and
+        // replays the transcript (chat:replay) after a reconnect.
+        for (const sid of chatSubs) {
+          socket.send(JSON.stringify({ type: "chat:open", sessionId: sid }));
         }
         // Notify consumers that a fresh handshake landed so they can refetch
         // any server state that might have drifted (persisted caches go stale
@@ -629,6 +644,190 @@ export function createClientApi() {
 
     async resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
       await sendWs({ type: "session:resize", sessionId, cols, rows });
+    },
+
+    // ── JSON agent chat ─────────────────────────────────────────────────────────
+
+    /** Subscribe to a JSON session's normalized event stream. The daemon replies
+     *  with `chat:replay` (bounded tail-N turns) then live `session:message`/
+     *  `session:meta`. Pass `sinceSeq` on reconnect to replay only the delta of
+     *  events newer than that `logSeq` instead of a fresh tail snapshot (R2.3). */
+    async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
+      chatSubs.add(sessionId);
+      await sendWs({ type: "chat:open", sessionId, ...(sinceSeq !== undefined ? { sinceSeq } : {}) });
+    },
+
+    async closeChat(sessionId: string): Promise<void> {
+      chatSubs.delete(sessionId);
+      await sendWs({ type: "chat:close", sessionId });
+    },
+
+    /** Enqueue a user turn. Always accepted (202) — queued behind a running turn. */
+    async sendChat(
+      sessionId: string,
+      message: string,
+      attachmentIds?: string[],
+    ): Promise<SendChatResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+      });
+      return parseJson<SendChatResponse>(res);
+    },
+
+    /** Abort the active turn (keeps queued turns). */
+    async stopChat(sessionId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/stop`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Cancel a single not-yet-started queued turn. */
+    async cancelQueuedTurn(sessionId: string, turnId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/chat/queue/${encodeURIComponent(turnId)}`,
+        { method: "DELETE" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
+    /** Withdraw a queued turn for editing → returns its raw content + index. */
+    async beginEditQueuedTurn(sessionId: string, turnId: string): Promise<BeginEditResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/chat/queue/${encodeURIComponent(turnId)}/edit`,
+        { method: "POST" },
+      );
+      return parseJson<BeginEditResponse>(res);
+    },
+
+    /** Re-enqueue a held turn — `edited` overwrites text/attachments, else restores. */
+    async resubmitQueuedTurn(
+      sessionId: string,
+      turnId: string,
+      body: { edited: boolean; message?: string; attachmentIds?: string[] },
+    ): Promise<{ ok: true; turnId: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/chat/queue/${encodeURIComponent(turnId)}/resubmit`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      return parseJson<{ ok: true; turnId: string }>(res);
+    },
+
+    /** "Send now" — preempt: jump a queued turn to the front AND interrupt the
+     *  active turn so it runs next (the interrupted turn is dropped). */
+    async promoteQueuedTurn(sessionId: string, turnId: string): Promise<{ ok: true; turnId: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/chat/queue/${encodeURIComponent(turnId)}/promote`,
+        { method: "POST" },
+      );
+      return parseJson<{ ok: true; turnId: string }>(res);
+    },
+
+    /** Edit an already-answered turn → fork (P4/R3.1). Truncates the branch after
+     *  the turn and re-runs the edited message from that point (claude only). */
+    async forkChat(
+      sessionId: string,
+      turnId: string,
+      message: string,
+      attachmentIds?: string[],
+    ): Promise<{ ok: true; turnId: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ turnId, message, ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+      });
+      return parseJson<{ ok: true; turnId: string }>(res);
+    },
+
+    /** Live-switch the session's model (status-bar switcher). `null` clears the
+     *  override back to the mode default. Applies to the next spawned turn. */
+    async setSessionModel(
+      sessionId: string,
+      model: string | null,
+    ): Promise<{ ok: true; model: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/model`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      return parseJson<{ ok: true; model: string | null }>(res);
+    },
+
+    /** Live-switch the session's execution channel (JSON↔terminal toggle, P3/R1.2).
+     *  Idle-gated: rejects (409) when a turn is active/queued/held for edit; 400
+     *  for direct sessions or CLIs without a native-history importer. */
+    async setSessionChannel(
+      sessionId: string,
+      channel: Channel,
+    ): Promise<{ ok: true; channel: Channel }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/channel`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel }),
+      });
+      return parseJson<{ ok: true; channel: Channel }>(res);
+    },
+
+    /** Upload files (multipart) → saved under sessionDataDir/uploads, returns Attachment[]. */
+    async uploadAttachments(sessionId: string, files: File[]): Promise<UploadAttachmentsResponse> {
+      const root = baseUrl();
+      const form = new FormData();
+      for (const f of files) form.append("files", f, f.name);
+      // Do NOT set Content-Type — the browser sets the multipart boundary.
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/attachments`, {
+        method: "POST",
+        body: form,
+      });
+      return parseJson<UploadAttachmentsResponse>(res);
+    },
+
+    /** Full normalized transcript (replay fallback when WS is unavailable). */
+    async getTranscript(sessionId: string): Promise<TranscriptResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript`);
+      return parseJson<TranscriptResponse>(res);
+    },
+
+    /** Keyset "load earlier" page — events before `beforeSeq`, turn-aligned (R2.2). */
+    async getTranscriptPage(
+      sessionId: string,
+      beforeSeq: number,
+      limit = 20,
+    ): Promise<TranscriptPage> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/transcript?beforeSeq=${beforeSeq}&limit=${limit}`,
+      );
+      return parseJson<TranscriptPage>(res);
+    },
+
+    /** Whole transcript for the guarded "load all" escape hatch (R2.5). */
+    async getTranscriptAll(sessionId: string): Promise<TranscriptResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/transcript?all=1`);
+      return parseJson<TranscriptResponse>(res);
+    },
+
+    /** Latest cross-harness meta (usage/model/turn-state). */
+    async getMeta(sessionId: string): Promise<SessionMeta> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/meta`);
+      return parseJson<SessionMeta>(res);
     },
 
     subscribe(sessionIds: string[]): () => void {

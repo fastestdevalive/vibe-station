@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Mode } from "@/api/types";
+import type { Mode, SupportedCli } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Dialog } from "./Dialog";
 import { Select } from "../ui/Select";
 import { NewModeDialog } from "./NewModeDialog";
+import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { sendJsonFirstTurn } from "@/api/firstTurn";
 
 interface DirectAgentDialogProps {
   open: boolean;
@@ -30,22 +32,41 @@ export function DirectAgentDialog({
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
+  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
+  const [clis, setClis] = useState<SupportedCli[]>([]);
 
   useEffect(() => {
     if (!open) return;
     void (async () => {
-      const ms = await api.listModes();
+      const [ms, cs] = await Promise.all([api.listModes(), api.getSupportedClis()]);
       setModes(ms);
+      setClis(cs);
       if (ms[0]) setModeId(ms[0].id);
     })();
   }, [open, api]);
 
+  // JSON channel is only offered for CLIs whose plugin supportsJson (daemon
+  // gates this too). Default to allowed until capabilities load.
+  const selectedCli = modes.find((m) => m.id === modeId)?.cli;
+  const jsonSupported =
+    selectedCli == null || clis.length === 0
+      ? true
+      : (clis.find((c) => c.id === selectedCli)?.supportsJson ?? true);
+
+  // If the selected mode's CLI can't run JSON, snap back to terminal.
+  useEffect(() => {
+    if (!jsonSupported && channel === "json") setChannel("terminal");
+  }, [jsonSupported, channel]);
+
   function reset() {
     setModeId(modes[0]?.id ?? "");
     setInitialPrompt("");
+    setChannel("terminal");
+    setFiles([]);
     setError(null);
     setSubmitting(false);
   }
@@ -64,13 +85,27 @@ export function DirectAgentDialog({
 
     setSubmitting(true);
     try {
-      await api.createDirectSession({
-        target: "direct",
-        projectId,
-        type: "agent",
-        modeId,
-        prompt: initialPrompt.trim() || undefined,
-      });
+      if (channel === "json") {
+        // JSON path: create the session idle (no prompt in the body → daemon does
+        // NOT auto-enqueue turn 1), then upload staged files + send the prompt as
+        // turn 1 via the chat queue.
+        const sess = await api.createDirectSession({
+          target: "direct",
+          projectId,
+          type: "agent",
+          modeId,
+          channel: "json",
+        });
+        await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
+      } else {
+        await api.createDirectSession({
+          target: "direct",
+          projectId,
+          type: "agent",
+          modeId,
+          prompt: initialPrompt.trim() || undefined,
+        });
+      }
       onCreated?.();
       handleClose();
     } catch (err) {
@@ -149,6 +184,49 @@ export function DirectAgentDialog({
               onChange={(e) => setInitialPrompt(e.target.value)}
             />
           </div>
+
+          <div className="form-field">
+            <label>Channel</label>
+            <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
+                <input
+                  type="radio"
+                  name="direct-channel"
+                  checked={channel === "terminal"}
+                  onChange={() => setChannel("terminal")}
+                />
+                <span>⌨ Terminal</span>
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                  cursor: jsonSupported ? "pointer" : "not-allowed",
+                  opacity: jsonSupported ? 1 : 0.5,
+                }}
+              >
+                <input
+                  type="radio"
+                  name="direct-channel"
+                  checked={channel === "json"}
+                  disabled={!jsonSupported}
+                  onChange={() => setChannel("json")}
+                />
+                <span>💬 JSON chat</span>
+              </label>
+            </div>
+            {!jsonSupported ? (
+              <div className="form-hint">JSON chat not available for {selectedCli} yet.</div>
+            ) : null}
+          </div>
+
+          {channel === "json" ? (
+            <div className="form-field">
+              <label>Attachments <span className="form-optional">(optional)</span></label>
+              <AttachmentPicker files={files} onChange={setFiles} />
+            </div>
+          ) : null}
 
           {error && <div className="dialog-error">{error}</div>}
         </div>

@@ -18,13 +18,77 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { newSession, hasSession, killSession, capturePane, pasteBuffer, sendKeys } from "./tmux.js";
 import { DirectPtyBackend } from "./directPty.js";
-import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
+import type { ProjectRecord, WorktreeRecord, SessionRecord, NormalizedEvent } from "../types.js";
 import type { ResolvedContext } from "./context.js";
 import { resolvedContextOf, systemPromptPathFor, sessionDataDirFor } from "./context.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
 export function promptVerificationNeedle(sessionId: string): string {
   return `VSTPRMT:${sessionId}`;
+}
+
+/**
+ * JSON agent-chat transport (Decision 3).
+ *
+ * The core asks the plugin to "run one turn" and consumes NormalizedEvents; it
+ * NEVER sees raw CLI JSON, never `JSON.parse`es a CLI line, never branches on
+ * `cli`. Each plugin owns spawn/transport AND normalization behind this
+ * boundary. The async-iterator completing == the turn is done (a `result`
+ * event was emitted). `signal` aborts/stops the turn.
+ */
+export interface AgentJsonTransport {
+  /** Whether this plugin can run in the JSON channel. */
+  supportsJson(): boolean;
+  /**
+   * Run ONE turn; yield normalized events as they arrive. The plugin spawns its
+   * CLI (own process group for orphan safety, Decision 13), parses its native
+   * event stream, and maps each event into a NormalizedEvent.
+   */
+  runTurn(input: TurnInput, ctx: TurnContext, signal: AbortSignal): AsyncIterable<NormalizedEvent>;
+}
+
+/** The user's message + attachments for one turn. */
+export interface TurnInput {
+  message: string;
+  /** Absolute paths to attached files (already injected into `message` too). */
+  attachmentPaths?: string[];
+  /**
+   * True for turn 1 — the plugin applies the system prompt (per-CLI transport,
+   * Decision 3). Resumed turns rely on the CLI's own session state.
+   */
+  isFirstTurn: boolean;
+}
+
+/**
+ * Everything a plugin needs to spawn correctly for a worktree OR direct session.
+ * `cwd` is the worktree path OR the project path (direct). `chatId` is reused
+ * across turns (stable — verified, Decision 10).
+ */
+export interface TurnContext {
+  cwd: string;
+  project: ProjectRecord;
+  worktree: WorktreeRecord | null;
+  session: SessionRecord;
+  /** Harness chat/session id, when captured (turn ≥ 2). */
+  chatId?: string;
+  /**
+   * Edit-a-sent-message fork (R3.2): when set, the plugin branches the harness's
+   * OWN session from this chat id into a NEW session id (claude: `--resume <id>
+   * --fork-session`) instead of resuming in place — so the fork never mutates the
+   * original branch. Takes precedence over `chatId`.
+   */
+  forkFromChatId?: string;
+  /** Per-mode model override. */
+  model?: string;
+  /** Absolute path to the system-prompt file (applied on the first turn). */
+  systemPromptFile: string;
+  daemonPort: number;
+  /**
+   * Called by the plugin with each spawned child PID. The child MUST be its own
+   * process group (detached) so the core can group-kill orphans on boot/abort
+   * (Decision 13).
+   */
+  onSpawn?: (pid: number) => void;
 }
 
 export interface AgentPlugin {
@@ -72,6 +136,14 @@ export interface AgentPlugin {
    */
   listModels(): Promise<{ models: string[]; error?: string }>;
   /**
+   * Fork capability (R3.2): plugins that can branch a resumed session into a NEW
+   * session id return the extra argv that does so (claude: `["--fork-session"]`).
+   * Presence is the fork gate — the fork endpoint is claude-only at launch (R3.5),
+   * so only claude implements this; other CLIs are blocked until their at-rest
+   * "new-conversation-replay" fallback ships (deferred).
+   */
+  getForkCommand?(): string[];
+  /**
    * Return argv for resuming a prior session, or null for fresh launch.
    * Works for direct sessions too — see `cwd` on provideChatId.
    */
@@ -83,6 +155,20 @@ export interface AgentPlugin {
     /** Per-mode model override — plugin should include the model flag in the returned argv. */
     model?: string;
   }): Promise<string[] | null>;
+
+  // --- JSON agent-chat transport (AgentJsonTransport, Decision 3) ---
+  // Optional: only plugins that support the JSON channel implement these.
+  /** Whether this plugin can run in the JSON channel. */
+  supportsJson?(): boolean;
+  /**
+   * Run ONE turn; yield NormalizedEvents as they arrive. Completing the iterator
+   * == the turn is done. The plugin owns spawn/transport + normalization.
+   */
+  runTurn?(
+    input: TurnInput,
+    ctx: TurnContext,
+    signal: AbortSignal,
+  ): AsyncIterable<NormalizedEvent>;
 }
 
 export interface LaunchConfig {

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { ApiInstance } from "@/api";
+import type { Session } from "@/api/types";
 import { useServerStore } from "./useServerStore";
 import { useWorkspaceStore } from "./useStore";
 
@@ -130,7 +131,16 @@ export function useServerSync(api: ApiInstance): void {
     });
     const offSessUpdated = api.on("session:updated", (ev) => {
       if (ev.type === "session:updated") {
-        applySessionUpdated(ev.sessionId, { pinnedAt: ev.pinnedAt ?? null });
+        // A live channel toggle (P3, R1.7) patches `channel` (+ the `useTmux`
+        // invariant) so the ChatPane/TerminalPane flip; a pin toggle patches
+        // `pinnedAt`. Only apply fields that are present.
+        const patch: Partial<Session> = {};
+        if (ev.channel !== undefined) {
+          patch.channel = ev.channel;
+          patch.useTmux = ev.channel === "tmux";
+        }
+        if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
+        applySessionUpdated(ev.sessionId, patch);
       }
     });
     return () => {

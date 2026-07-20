@@ -21,6 +21,7 @@ export function registerSessionCreate(session: Command): void {
     .addOption(
       new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
     )
+    .option("--json", "Use the JSON agent-chat channel (channel: json)")
     .action(
       async (
         worktreeId: string,
@@ -31,6 +32,7 @@ export function registerSessionCreate(session: Command): void {
           mode?: string;
           prompt?: string;
           promptFile?: string;
+          json?: boolean;
         }
       ) => {
         // The daemon only consumes `prompt` for agent sessions (routes/sessions.ts:420) — a
@@ -52,6 +54,7 @@ export function registerSessionCreate(session: Command): void {
             type: opts.type,
             modeId: opts.mode,
             prompt,
+            ...(opts.json ? { channel: "json" } : {}),
           });
 
           spinner.stop();

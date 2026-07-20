@@ -53,24 +53,28 @@ describe("Mode routes", () => {
     expect(res.json()).toEqual([]);
   });
 
-  it("GET /supported-clis lists all CLIs with defaultModel including gemini", async () => {
+  it("GET /supported-clis lists all CLIs with defaultModel + supportsJson", async () => {
     const res = await app.inject({ method: "GET", url: "/supported-clis" });
     expect(res.statusCode).toBe(200);
-    const body = res.json<Array<{ id: string; defaultModel: string }>>();
-    const gemini = body.find((c) => c.id === "gemini");
-    // 9c53fd0 moved gemini's defaultModel to "auto"; this expectation was left stale.
-    expect(gemini).toEqual({ id: "gemini", defaultModel: "auto" });
-    expect(body.map((c) => c.id).sort()).toEqual(["claude", "cursor", "gemini", "opencode"]);
+    const body = res.json<Array<{ id: string; defaultModel: string; supportsJson: boolean }>>();
+    expect(body.find((c) => c.id === "claude")?.supportsJson).toBe(true);
+    // agy (Antigravity CLI) registers with JSON support enabled.
+    expect(body.find((c) => c.id === "agy")).toEqual({
+      id: "agy",
+      defaultModel: "Gemini 3.1 Pro (High)",
+      supportsJson: true,
+    });
+    expect(body.map((c) => c.id).sort()).toEqual(["agy", "claude", "cursor", "opencode"]);
   });
 
-  it("POST /modes accepts cli gemini", async () => {
+  it("POST /modes accepts cli agy", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/modes",
-      payload: { name: "gemini-mode", cli: "gemini", context: "Use Gemini." },
+      payload: { name: "agy-mode", cli: "agy", context: "Use Antigravity." },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json<Mode>().cli).toBe("gemini");
+    expect(res.json<Mode>().cli).toBe("agy");
   });
 
   it("POST /modes rejects bogus cli", async () => {

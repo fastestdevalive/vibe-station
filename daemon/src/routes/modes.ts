@@ -76,6 +76,22 @@ export function _resetModesCacheForTest(): void {
   modesCache = null;
 }
 
+/**
+ * Create-time JSON-capability gate (dead-flag fix): given a resolved modeId,
+ * return the mode's CLI id when that CLI's plugin does NOT support the JSON
+ * channel (so the caller can reject with 400), or `null` when it's supported.
+ *
+ * Callers only invoke this for `channel: "json"` agent creates. A missing mode
+ * returns `null` — the existing mode-not-found checks own that error path.
+ */
+export async function jsonUnsupportedCli(modeId: string): Promise<string | null> {
+  const modes = await loadModes();
+  const mode = modes.find((m) => m.id === modeId);
+  if (!mode) return null;
+  const plugin = resolvePlugin(mode.cli);
+  return plugin.supportsJson?.() === true ? null : mode.cli;
+}
+
 const CreateModeBody = z.object({
   name: z.string().min(1).max(64),
   cli: cliIdSchema,
@@ -154,10 +170,14 @@ function isModeInUse(modeId: string): boolean {
 export function registerModeRoutes(app: FastifyInstance): void {
   // GET /supported-clis
   app.get("/supported-clis", async (_req, reply) => {
-    const list = (SUPPORTED_CLIS as CliId[]).map((id) => ({
-      id,
-      defaultModel: PLUGIN_MAP[id]().defaultModel,
-    }));
+    const list = (SUPPORTED_CLIS as CliId[]).map((id) => {
+      const plugin = PLUGIN_MAP[id]();
+      return {
+        id,
+        defaultModel: plugin.defaultModel,
+        supportsJson: plugin.supportsJson?.() === true,
+      };
+    });
     return reply.send(list);
   });
 

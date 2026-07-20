@@ -12,7 +12,7 @@ import { killSession } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
-import { worktreePath as getWorktreePath, cleanupSessionDataDir } from "../services/paths.js";
+import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir } from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
 import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
 import { broadcastAll } from "../broadcaster.js";
@@ -20,8 +20,12 @@ import { persistLifecycleState } from "../services/lifecycle.js";
 import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
+import { resolveChannel } from "../services/channel.js";
+import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
+import { startJsonCreateTurn } from "../services/jsonAgentChat.js";
+import { clearSessionAttachments } from "../state/attachmentRegistry.js";
 import type { AgentPlugin } from "../services/spawn.js";
-import type { WorktreeRecord, SessionRecord, ProjectRecord } from "../types.js";
+import type { WorktreeRecord, SessionRecord, ProjectRecord, Channel } from "../types.js";
 
 const MAX_DIFF_BYTES = 512 * 1024;
 
@@ -124,6 +128,10 @@ function serializeWorktree(projectId: string, w: WorktreeRecord) {
     createdAt: w.createdAt,
     // Always emit pinnedAt so the client doesn't have to special-case undefined.
     pinnedAt: w.pinnedAt ?? null,
+    // Id of the worktree's main (slot `m`) agent session. Lets the create-dialog
+    // JSON path address the main agent for its first turn (upload + POST /chat)
+    // without a follow-up session list fetch.
+    mainSessionId: w.sessions.find((s) => s.slot === "m")?.id ?? null,
   };
 }
 
@@ -134,6 +142,8 @@ const CreateWorktreeBody = z.object({
   baseBranch: z.string().min(1).optional(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
+  // Execution channel for the main agent (Decision 1). `json` pins useTmux=false.
+  channel: z.enum(["tmux", "pty", "json"]).optional(),
 });
 
 async function runMainSpawnJob(opts: {
@@ -237,7 +247,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     }
     const { projectId, branch, baseBranch: baseBranchInput, useTmux: rawUseTmux } = result.data;
     let { modeId } = result.data;
-    const useTmux = resolveUseTmux(rawUseTmux);
+    // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false.
+    const isJson = result.data.channel === "json";
+    const useTmux = isJson ? false : resolveUseTmux(rawUseTmux);
+    const channel: Channel = result.data.channel ?? resolveChannel(useTmux);
 
     // Resolve modeId by name fallback so CLI callers using --mode <name> work.
     try {
@@ -245,6 +258,16 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       modeId = await resolveModeId(modeId);
     } catch {
       return reply.status(400).send({ error: `Mode '${modeId}' not found` });
+    }
+
+    // Create-time JSON-capability gate: reject a JSON main agent whose CLI can't
+    // run the JSON channel before we touch git.
+    if (isJson) {
+      const { jsonUnsupportedCli } = await import("../routes/modes.js");
+      const cli = await jsonUnsupportedCli(modeId);
+      if (cli) {
+        return reply.status(400).send({ error: `${cli} does not support JSON chat mode` });
+      }
     }
 
     const project = getProject(projectId);
@@ -317,6 +340,15 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         modeId,
         tmuxName: mainTmuxName,
         useTmux,
+        channel,
+        ...(isJson
+          ? {
+              transcriptRef: {
+                kind: "vst-json" as const,
+                path: join(sessionDataDir(projectId, wtId, `${wtId}-m`), "messages.jsonl"),
+              },
+            }
+          : {}),
         lifecycle: {
           state: "not_started",
           lastTransitionAt: new Date().toISOString(),
@@ -372,17 +404,23 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         snapshot: serializeSession(wtId, projectId, mainSession),
       });
 
-      void runMainSpawnJob({
-        projectId,
-        wtId,
-        freshProject,
-        worktreeRecord,
-        mainSession,
-        plugin,
-        daemonPort,
-        builtPrompt,
-        model: mode.model,
-      });
+      if (isJson) {
+        // JSON main agent (Decision 2/8): no TTY spawn — auto-enqueue the
+        // create-dialog prompt as turn 1 via the JSON turn queue.
+        void startJsonCreateTurn({ sessionId: mainSession.id, prompt: result.data.prompt, daemonPort });
+      } else {
+        void runMainSpawnJob({
+          projectId,
+          wtId,
+          freshProject,
+          worktreeRecord,
+          mainSession,
+          plugin,
+          daemonPort,
+          builtPrompt,
+          model: mode.model,
+        });
+      }
 
     } catch (err) {
       // Rollback if we got past git worktree add
@@ -532,6 +570,14 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     // Kill all sessions (tmux or direct-pty)
     for (const session of worktree.sessions) {
+      // Abort any live JSON turn BEFORE purge (Decision 13) so no orphaned turn
+      // child keeps writing into the worktree mid-removal. dispose() closes the
+      // session's own SQLite handle (registry delete alone leaks the fd).
+      const jsonAgentToClose = jsonAgentRegistry.get(session.id);
+      jsonAgentToClose?.abortAndDrain();
+      jsonAgentRegistry.delete(session.id);
+      jsonAgentToClose?.dispose();
+      clearSessionAttachments(session.id);
       if (!session.useTmux) {
         directPtyRegistry.get(session.id)?.kill?.();
       } else {

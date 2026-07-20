@@ -22,6 +22,8 @@ vi.mock("../services/paths.js", async () => {
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
     cleanupSessionDataDir: () => {},
+    sessionDataDir: (p: string, w: string, s: string) =>
+      pathJoin(tempDir, "projects", p, "session-data", w, s),
   };
 });
 
@@ -110,6 +112,15 @@ describe("Worktree routes", () => {
     expect(wt.branch).toBe("fix-test-bug");
     expect(wt.id).toMatch(/^[a-z]+-\d+$/);
     expect(wt.baseSha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("JSON gate — POST /worktrees channel:json with a claude (supported) mode → 201", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "json-claude", modeId: "bug-fix", channel: "json" },
+    });
+    expect(res.statusCode).toBe(201);
   });
 
   it("GET changed-paths scope=local lists staged file", async () => {

@@ -286,7 +286,18 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   }}
                 />
               ) : null}
-              <span style={{ position: "relative", zIndex: 1 }}>{s.label}</span>
+              <span style={{ position: "relative", zIndex: 1 }}>
+                {s.label}
+                {isAgent ? (
+                  <span
+                    className="tab__channel-icon"
+                    aria-hidden
+                    title={s.channel === "json" ? "JSON chat agent" : "Terminal agent"}
+                  >
+                    {s.channel === "json" ? "💬" : "⌨"}
+                  </span>
+                ) : null}
+              </span>
               {closeable ? (
                 <span
                   role="button"

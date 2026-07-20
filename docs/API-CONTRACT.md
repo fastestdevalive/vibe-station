@@ -21,7 +21,7 @@ User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst 
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. Prints the new worktree id on the last line of stdout. |
+| `vst worktree create` | `<project-id> --branch=<name> --mode=<id> [--base=<branch>] [--prompt=<text>] [--prompt-file=<path>] [--json]` | Create worktree + auto-spawn main session (atomic). `--branch` is required and becomes the sidebar label. `--prompt`/`--prompt-file` is sent to the main agent on first ready. `--json` runs the main agent on the JSON agent-chat channel (`channel: "json"`). Prints the new worktree id on the last line of stdout. |
 | `vst worktree rm` | `<worktree-id>` | Remove worktree (terminates all sessions, removes git worktree dir). |
 | `vst worktree ls` | `[--project=<id>] [--json]` | List worktrees. `--project` defaults to `$VST_PROJECT` if set. |
 | `vst worktree info` | `<worktree-id> [--json]` | Worktree details + all sessions. |
@@ -30,13 +30,22 @@ User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst 
 
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
+| `vst session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--json]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). `--json` selects the JSON agent-chat channel (`channel: "json"`). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
 | `vst session ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions. `--worktree` defaults to `$VST_WORKTREE`. |
 | `vst session info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
 | `vst session kill` | `<session-id>` | Terminate session. Rejected for `m` slot. |
 | `vst session attach` | `<session-id>` | Drop into the tmux session interactively. |
 | `vst session restore` | `<session-id>` | Resume an `exited` session (calls plugin's restore). |
 | `vst session output` | `<session-id> [--lines=<n>] [--follow]` | Print recent pty output (default last 100 lines). `--follow` streams new bytes until Ctrl-C. |
+| `vst session transcript` | `<session-id> [--json]` | Print a JSON session's normalized transcript. `--json` emits raw NDJSON events. |
+| `vst session meta` | `<session-id> [--json]` | Print a JSON session's cross-harness meta (tokens/model/turn-state/queue). |
+
+### Chat (JSON agent channel)
+
+| Command | Args / Flags | Description |
+|---|---|---|
+| `vst chat` | `<session-id> [message] [--file=<path>...] [--wait]` | Enqueue a user turn on a JSON session. `--file` attaches a file (repeatable). `--wait` polls the transcript and streams events until the turn's `result`. Prints the `turnId` (or queue position). |
+| `vst chat stop` | `<session-id>` | Abort the active turn (queued turns are kept). |
 
 ### Send
 
@@ -123,7 +132,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | Method | Path | Query / Body | Returns | Notes |
 |---|---|---|---|---|
 | GET | `/worktrees` | `?project=<id>` | `Worktree[]` | |
-| POST | `/worktrees` | `{ projectId, modeId, branch, baseBranch?, prompt? }` | `Worktree` | **`branch` required** (validated git-safe; 409 if already exists; sidebar displays it as the worktree's label). `baseBranch` defaults to project default. **Always spawns the main session** atomically. `prompt?` is the user's task message delivered to the agent on first ready. |
+| POST | `/worktrees` | `{ projectId, modeId, branch, baseBranch?, prompt?, channel? }` | `Worktree` | **`branch` required** (validated git-safe; 409 if already exists; sidebar displays it as the worktree's label). `baseBranch` defaults to project default. **Always spawns the main session** atomically. `prompt?` is the user's task message delivered to the agent on first ready. `channel?: "tmux"\|"pty"\|"json"` selects the main agent's execution channel (`json` = agent chat). |
 | DELETE | `/worktrees/:id` | — | `{ ok }` | Cascade: terminates all sessions, removes the worktree dir. |
 | GET | `/worktrees/:id/tree` | `?path=` | `TreeEntry[]` | Lazy-loaded folder; respects `.gitignore`. |
 | GET | `/worktrees/:id/file-list` | — | `{ files: string[], truncated: boolean, source: "ripgrep" \| "node" }` | Flat file list for Quick Open / fuzzy search. Uses `rg --files` when available (respects nested `.gitignore`); falls back to a Node walker that reads only the root `.gitignore`. Caps at 100k entries; sets `truncated: true` on overflow. |
@@ -135,10 +144,21 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | Method | Path | Query / Body | Returns | Notes |
 |---|---|---|---|---|
 | GET | `/sessions` | `?worktree=<id>` | `Session[]` | |
-| POST | `/sessions` | `{ worktreeId, type, modeId?, prompt? }` | `Session` | `type`: `agent` (requires `modeId`) or `terminal`. `prompt?` (agent only) delivered to the new agent via the plugin's `promptDelivery` mode. |
-| DELETE | `/sessions/:id` | — | `{ ok }` | Rejected with 400 for the `m` slot (main is un-closeable). |
+| POST | `/sessions` | `{ worktreeId \| (target:"direct", projectId), type, modeId?, prompt?, channel? }` | `Session` | `type`: `agent` (requires `modeId`) or `terminal`. `prompt?` (agent only) delivered to the new agent via the plugin's `promptDelivery` mode. `channel?: "tmux"\|"pty"\|"json"` — `json` forces `useTmux=false` and renders as agent chat. |
+| DELETE | `/sessions/:id` | — | `{ ok }` | Rejected with 400 for the `m` slot (main is un-closeable). For a JSON session, aborts any active turn + kills its process group before purge. |
 | POST | `/sessions/:id/resume` | — | `Session` | Spawns new tmux + plugin's restore command for an `exited` session. |
 | POST | `/sessions/:id/input` | `{ data, sendEnter? }` | `{ ok }` | **Full-message send** with busy-detect + retry. Used by CLI (`vst send`). The browser uses WS `session:input` for per-keystroke typing, NOT this endpoint. Implementation uses a named tmux paste buffer (`tmux load-buffer -b _vst_send-<sid>` + `paste-buffer -b ... -d`) so it does not stomp on the user's clipboard. |
+
+### JSON agent chat (`channel: "json"` sessions)
+
+| Method | Path | Query / Body | Returns | Notes |
+|---|---|---|---|---|
+| POST | `/sessions/:id/chat` | `{ message, attachmentIds? }` | `202 { turnId, queuePosition }` | **Always accepted** — never 409. Queued FIFO behind a running turn. 400 on empty message / unknown attachment; 404 unknown session. |
+| POST | `/sessions/:id/chat/stop` | — | `{ ok }` | Aborts the **active** turn (queued turns kept). 409 if no JSON agent has run; no-op 200 when only queued turns exist. |
+| DELETE | `/sessions/:id/chat/queue/:turnId` | — | `{ ok }` | Cancels one not-yet-started queued turn. 404 if not queued. |
+| POST | `/sessions/:id/attachments` | `multipart/form-data` `files[]` | `201 { attachments: Attachment[] }` | Saved under `sessionDataDir/uploads/` (outside the checkout). 413 too big; 400 no files. |
+| GET | `/sessions/:id/transcript` | — | `{ events: NormalizedEvent[] }` | Full normalized history (replay / fallback). |
+| GET | `/sessions/:id/meta` | — | `SessionMeta` | Latest tokens/model/turn-state/queueDepth; rebuilt from the transcript tail after a restart. |
 
 ### Modes
 
@@ -194,6 +214,8 @@ Backpressure: if the server's WS write buffer exceeds ~1 MB queued (slow consume
 | `file:unwatch` | `{ worktreeId, path }` | |
 | `tree:watch` | `{ worktreeId, path? }` | Watch tree under `path` (default = worktree root). |
 | `tree:unwatch` | `{ worktreeId, path? }` | |
+| `chat:open` | `{ sessionId }` | Subscribe to a JSON session's normalized event stream → triggers a `chat:replay` + initial `session:meta`. |
+| `chat:close` | `{ sessionId }` | Unsubscribe from the JSON event stream. |
 | `ping` | — | Server replies `pong`. |
 
 ### Server → Client — per-session (subscribers / open streams, high-frequency)
@@ -208,6 +230,9 @@ Backpressure: if the server's WS write buffer exceeds ~1 MB queued (slow consume
 | `session:resumed` | `{ sessionId, restoredFromHistory }` | Emitted after `POST /sessions/:id/resume`. |
 | `session:deleted` | `{ sessionId }` | |
 | `session:error` | `{ sessionId, message }` | Attach / stream failure. |
+| `chat:replay` | `{ sessionId, events: NormalizedEvent[] }` | Full JSON transcript on `chat:open`. |
+| `session:message` | `{ sessionId, event: NormalizedEvent }` | One live normalized JSON-chat event (user/thinking/text/tool_use/tool_result/result/error). |
+| `session:meta` | `{ sessionId, meta: SessionMeta }` | JSON-chat usage/model/turn-state/queueDepth update. |
 
 ### Server → Client — file / tree (file or tree watchers only)
 

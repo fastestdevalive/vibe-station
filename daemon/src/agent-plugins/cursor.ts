@@ -13,13 +13,197 @@
  * Removed `--print` (causes immediate exit on EOF; we want interactive REPL)
  */
 
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
+import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
+import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
 import { sq } from "../services/shell.js";
 import { findLatestCursorChatId } from "./cursorRestore.js";
+import type { NormalizedEvent, NormalizedEventKind } from "../types.js";
 
 const execFile = promisify(execFileCb);
+
+function cursorEvent(
+  sessionId: string,
+  kind: NormalizedEventKind,
+  extra: Partial<NormalizedEvent>,
+): NormalizedEvent {
+  return {
+    id: randomUUID(),
+    sessionId,
+    ts: new Date().toISOString(),
+    provider: "cursor",
+    kind,
+    ...extra,
+  };
+}
+
+/**
+ * Map ONE cursor-agent `stream-json` line into zero or more NormalizedEvents
+ * (Decision 3). Exported for unit testing (3.T1). Malformed lines are skipped
+ * (Decision 7).
+ *
+ * Cursor shapes (live-verified 2026-07-14): `system/init` (session_id, model),
+ * `user` (echo — suppressed), `assistant` content blocks, streamed
+ * `thinking/delta` + `thinking/completed`, `tool_call/started` +
+ * `tool_call/completed` (matched by `call_id`, typed `tool_call.<name>` payload),
+ * and `result/success | result/error`.
+ */
+export function parseCursorStreamLine(line: string, sessionId: string): NormalizedEvent[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  let msg: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") return [];
+    msg = parsed as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+
+  const type = msg.type as string | undefined;
+  const subtype = msg.subtype as string | undefined;
+  const events: NormalizedEvent[] = [];
+
+  if (type === "system" && subtype === "init") {
+    events.push(
+      cursorEvent(sessionId, "session_init", {
+        ...(typeof msg.model === "string" ? { model: msg.model } : {}),
+        ...(typeof msg.session_id === "string" ? { agentChatId: msg.session_id } : {}),
+      }),
+    );
+    return events;
+  }
+
+  // Suppress the CLI's user echo — the daemon renders its own user bubble.
+  if (type === "user") return [];
+
+  if (type === "assistant") {
+    const content = (msg.message as { content?: unknown } | undefined)?.content;
+    if (Array.isArray(content)) {
+      for (const block of content as Array<Record<string, unknown>>) {
+        if (block.type === "text" && typeof block.text === "string") {
+          events.push(cursorEvent(sessionId, "text", { role: "assistant", text: block.text }));
+        } else if (block.type === "thinking" && typeof block.thinking === "string") {
+          events.push(cursorEvent(sessionId, "thinking", { role: "assistant", text: block.thinking }));
+        } else if (block.type === "tool_use") {
+          events.push(
+            cursorEvent(sessionId, "tool_use", {
+              role: "assistant",
+              ...(typeof block.name === "string" ? { toolName: block.name } : {}),
+              ...(typeof block.id === "string" ? { toolId: block.id } : {}),
+              toolInput: block.input,
+            }),
+          );
+        }
+      }
+    }
+    return events;
+  }
+
+  if (type === "thinking") {
+    // Streamed reasoning: `thinking/delta` carries a chunk; `thinking/completed`
+    // may have no text (skip when empty).
+    const text =
+      (typeof msg.text === "string" ? msg.text : undefined) ??
+      (typeof msg.delta === "string" ? msg.delta : undefined) ??
+      (typeof msg.thinking === "string" ? msg.thinking : undefined);
+    if (text) events.push(cursorEvent(sessionId, "thinking", { role: "assistant", text }));
+    return events;
+  }
+
+  if (type === "tool_call") {
+    const callId = typeof msg.call_id === "string" ? msg.call_id : undefined;
+    const toolCall = (msg.tool_call ?? {}) as Record<string, unknown>;
+    // The tool payload lives under the key ending in `ToolCall`
+    // (`shellToolCall`/`readToolCall`/`editToolCall`); siblings like
+    // `toolCallId`/`startedAtMs`/`hookAdditionalContexts` are NOT the tool.
+    // Fall back to the first key so a shape change never drops the tool.
+    const keys = Object.keys(toolCall);
+    const toolName = keys.find((k) => k.endsWith("ToolCall")) ?? keys[0];
+    const payload = (toolName ? toolCall[toolName] : undefined) as Record<string, unknown> | undefined;
+    if (subtype === "started") {
+      events.push(
+        cursorEvent(sessionId, "tool_use", {
+          role: "assistant",
+          ...(toolName ? { toolName } : {}),
+          ...(callId ? { toolId: callId } : {}),
+          toolInput: payload?.args,
+        }),
+      );
+    } else if (subtype === "completed") {
+      // Cursor reports outcome under `result.success` (ok) or `result.failure`
+      // (error). Surface the failure/success detail and flag isError on failure.
+      const rawResult = payload?.result ?? msg.result;
+      let isError = false;
+      let detail: unknown = rawResult;
+      if (rawResult && typeof rawResult === "object") {
+        const r = rawResult as Record<string, unknown>;
+        if ("failure" in r) {
+          isError = true;
+          detail = r.failure;
+        } else if ("success" in r) {
+          detail = r.success;
+        }
+      }
+      const contentStr =
+        typeof detail === "string" ? detail : detail != null ? JSON.stringify(detail) : undefined;
+      events.push(
+        cursorEvent(sessionId, "tool_result", {
+          ...(callId ? { toolId: callId } : {}),
+          toolResult: { ...(contentStr !== undefined ? { content: contentStr } : {}), isError },
+        }),
+      );
+    }
+    return events;
+  }
+
+  if (type === "result") {
+    const usageRaw = (msg.usage ?? {}) as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    // Cursor emits camelCase usage keys (`inputTokens`/`outputTokens`/
+    // `cacheReadTokens`/`cacheWriteTokens`); snake_case kept as a defensive
+    // fallback. Our `cacheCreateTokens` maps from cursor's `cacheWriteTokens`.
+    const inputTokens = num(usageRaw.inputTokens ?? usageRaw.input_tokens);
+    const outputTokens = num(usageRaw.outputTokens ?? usageRaw.output_tokens);
+    const cacheReadTokens = num(usageRaw.cacheReadTokens ?? usageRaw.cache_read_input_tokens);
+    const cacheCreateTokens = num(usageRaw.cacheWriteTokens ?? usageRaw.cache_creation_input_tokens);
+    const model = typeof msg.model === "string" ? msg.model : "";
+    const usage = {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreateTokens,
+      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens,
+      ...(typeof msg.total_cost_usd === "number" ? { costUsd: msg.total_cost_usd } : {}),
+      model,
+    };
+    events.push(cursorEvent(sessionId, "usage", { usage, ...(model ? { model } : {}) }));
+    events.push(
+      cursorEvent(sessionId, "result", {
+        usage,
+        ...(model ? { model } : {}),
+        ...(subtype === "error" && typeof msg.result === "string" ? { text: msg.result } : {}),
+      }),
+    );
+    // A failed turn (`result/error`) also emits a typed `error` event so the UI
+    // can distinguish it from a successful turn (kept alongside `result`).
+    if (subtype === "error") {
+      const errText =
+        typeof msg.result === "string"
+          ? msg.result
+          : typeof msg.error === "string"
+            ? msg.error
+            : "turn failed";
+      events.push(cursorEvent(sessionId, "error", { text: errText }));
+    }
+    return events;
+  }
+
+  return [];
+}
 
 export function createCursorPlugin(): AgentPlugin {
   return {
@@ -107,6 +291,85 @@ export function createCursorPlugin(): AgentPlugin {
         launchArgs: undefined,
         postLaunchInput: undefined,
       };
+    },
+
+    supportsJson(): boolean {
+      return true;
+    },
+
+    /**
+     * Run ONE JSON-channel turn (Decision 2/3). cursor is one-shot per turn:
+     * `cursor-agent -p <msg> --output-format stream-json -f [--resume <id>]`.
+     *
+     * Free plans reject named models → run Auto (omit `--model`). cursor has no
+     * system-prompt flag, so the system prompt is baked into message 1 only
+     * (cursor.ts pattern); resumed turns rely on cursor's saved transcript and
+     * must NOT re-inject it.
+     */
+    async *runTurn(
+      input: TurnInput,
+      ctx: TurnContext,
+      signal: AbortSignal,
+    ): AsyncIterable<NormalizedEvent> {
+      const sessionId = ctx.session.id;
+
+      let message = input.message;
+      if (input.isFirstTurn) {
+        const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
+        if (systemPrompt) message = `${systemPrompt}\n\n${message}`;
+      }
+
+      const args = ["-p", message, "--output-format", "stream-json", "-f"];
+      if (ctx.chatId) args.push("--resume", ctx.chatId);
+      // Auto model on Free plans — deliberately omit `--model`.
+
+      const child = spawn("cursor-agent", args, {
+        cwd: ctx.cwd,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (child.pid) ctx.onSpawn?.(child.pid);
+
+      let stderr = "";
+      child.stderr?.on("data", (d: Buffer) => {
+        stderr += d.toString("utf8");
+      });
+
+      const onAbort = (): void => {
+        try {
+          if (child.pid) process.kill(-child.pid, "SIGTERM");
+        } catch {
+          /* already dead */
+        }
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+
+      const exitPromise = new Promise<number>((resolve) => {
+        child.on("close", (code) => resolve(code ?? 0));
+      });
+
+      try {
+        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
+        for await (const line of rl) {
+          for (const ev of parseCursorStreamLine(line, sessionId)) {
+            yield ev;
+          }
+        }
+        const code = await exitPromise;
+        if (code !== 0 && !signal.aborted) {
+          throw new Error(`cursor-agent exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
+        }
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+        if (!child.killed && child.exitCode === null) {
+          try {
+            if (child.pid) process.kill(-child.pid, "SIGTERM");
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     },
 
     async setupWorkspaceHooks(): Promise<void> {

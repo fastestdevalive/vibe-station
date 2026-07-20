@@ -12,12 +12,36 @@ import { killSession, newSession, pasteBuffer, capturePane } from "../services/t
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
 import { resolvedContextOf } from "../services/context.js";
-import { cleanupSessionDataDir, cleanupDirectSessionDataDir, worktreePath } from "../services/paths.js";
+import type { AgentPlugin } from "../services/spawn.js";
+import {
+  cleanupSessionDataDir,
+  cleanupDirectSessionDataDir,
+  worktreePath,
+  sessionDataDir,
+  directSessionDataDir,
+} from "../services/paths.js";
+import { join } from "node:path";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
+import { resolveChannel, sessionChannel, channelTransition } from "../services/channel.js";
+import { hasNativeHistoryImporter } from "../services/nativeHistoryImporter.js";
 import { persistLifecycleState } from "../services/lifecycle.js";
-import type { SessionRecord, WorktreeRecord, ProjectRecord } from "../types.js";
+import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
+import {
+  enqueueChatTurn,
+  findJsonSessionContext,
+  readSessionTranscript,
+  readSessionTail,
+  readSessionPageBefore,
+  readSessionSince,
+  readSessionMeta,
+  startJsonCreateTurn,
+  resolveJsonAgent,
+} from "../services/jsonAgentChat.js";
+import { resolveCliModels } from "./modes.js";
+import { getAttachment, clearSessionAttachments } from "../state/attachmentRegistry.js";
+import type { SessionRecord, WorktreeRecord, ProjectRecord, Channel, Attachment, SessionMeta } from "../types.js";
 
 /**
  * Session creation supports two targets:
@@ -33,6 +57,7 @@ const WorktreeSessionBody = z.object({
   modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
+  channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
 });
 
@@ -43,6 +68,7 @@ const DirectSessionBody = z.object({
   modeId: z.string().min(1).nullish(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
+  channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
 });
 
@@ -52,6 +78,47 @@ const InputBody = z.object({
   data: z.string().min(1),
   sendEnter: z.boolean().optional(),
 });
+
+const ChatBody = z
+  .object({
+    message: z.string(),
+    attachmentIds: z.array(z.string()).optional(),
+  })
+  // A files-only turn is valid: the first turn of a JSON agent may stage files
+  // with no prompt (web-ui `firstTurn.ts`). Reject only when BOTH are empty.
+  .refine((b) => b.message.trim().length > 0 || (b.attachmentIds?.length ?? 0) > 0, {
+    message: "Provide a message or at least one attachment",
+  });
+
+// Body for POST …/chat/queue/:turnId/resubmit (queue-controls). Content fields
+// are consulted ONLY when `edited` (A11); a discard (`edited:false`) restores
+// the held turn unchanged. When editing, the same message-OR-attachment refine
+// as `ChatBody` applies (A6/R6).
+const ResubmitBody = z
+  .object({
+    edited: z.boolean(),
+    message: z.string().optional(),
+    attachmentIds: z.array(z.string()).optional(),
+  })
+  .refine(
+    (b) =>
+      !b.edited ||
+      (b.message?.trim().length ?? 0) > 0 ||
+      (b.attachmentIds?.length ?? 0) > 0,
+    { message: "Provide a message or at least one attachment" },
+  );
+
+// Body for POST …/chat/fork (P4 edit-a-sent-message). Same message-OR-attachment
+// invariant as `ChatBody` — the fork re-runs from turn N with the edited message.
+const ForkBody = z
+  .object({
+    turnId: z.string(),
+    message: z.string(),
+    attachmentIds: z.array(z.string()).optional(),
+  })
+  .refine((b) => b.message.trim().length > 0 || (b.attachmentIds?.length ?? 0) > 0, {
+    message: "Provide a message or at least one attachment",
+  });
 
 type SessionContext =
   | { kind: "worktree"; project: ProjectRecord; worktree: WorktreeRecord; session: SessionRecord }
@@ -217,6 +284,7 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     label: labelForSession(s),
     tmuxName: s.tmuxName,
     useTmux: s.useTmux,
+    channel: sessionChannel(s),
     state: s.lifecycle.state,
     lifecycleState: s.lifecycle.state,
     createdAt: s.lifecycle.lastTransitionAt,
@@ -304,7 +372,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const data = result.data;
     const { type, prompt, useTmux: rawUseTmux } = data;
     let { modeId } = data;
-    const useTmux = resolveUseTmux(rawUseTmux);
+    // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false;
+    // otherwise fall back to the tmux/pty split.
+    const isJson = data.channel === "json";
+    const useTmux = isJson ? false : resolveUseTmux(rawUseTmux);
+    const channel: Channel = data.channel ?? resolveChannel(useTmux);
 
     if (type === "agent" && !modeId) {
       return reply.status(400).send({ error: "'modeId' is required for agent sessions" });
@@ -317,6 +389,18 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         modeId = await resolveModeId(modeId);
       } catch {
         return reply.status(400).send({ error: `Mode '${modeId}' not found` });
+      }
+    }
+
+    // Create-time JSON-capability gate: a JSON-channel agent is only valid when
+    // its CLI's plugin supportsJson(). Reject early (covers both the direct and
+    // worktree/additional-agent branches below) so we never spawn a broken JSON
+    // session for a CLI that is deliberately gated off.
+    if (isJson && type === "agent" && modeId) {
+      const { jsonUnsupportedCli } = await import("../routes/modes.js");
+      const cli = await jsonUnsupportedCli(modeId);
+      if (cli) {
+        return reply.status(400).send({ error: `${cli} does not support JSON chat mode` });
       }
     }
 
@@ -360,6 +444,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         name: terminalName,
         tmuxName,
         useTmux,
+        channel,
+        ...(isJson
+          ? {
+              transcriptRef: {
+                kind: "vst-json" as const,
+                path: join(directSessionDataDir(project.id, sessionId), "messages.jsonl"),
+              },
+            }
+          : {}),
         lifecycle: {
           state: "not_started",
           lastTransitionAt: new Date().toISOString(),
@@ -412,10 +505,16 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         snapshot: serializeSession(null, project.id, sessionRecord),
       });
 
-      // Spawn agent in background
+      // Spawn agent in background. JSON-channel sessions do NOT spawn a TTY at
+      // create (Decision 2/8) — the process starts on turn 1, auto-enqueued from
+      // the create-dialog prompt via the JSON turn queue.
       if (type === "agent" && modeId) {
         const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-        void runDirectAgentSpawnJob({ project, session: sessionRecord, modeId, prompt, daemonPort });
+        if (isJson) {
+          void startJsonCreateTurn({ sessionId, prompt, daemonPort });
+        } else {
+          void runDirectAgentSpawnJob({ project, session: sessionRecord, modeId, prompt, daemonPort });
+        }
       }
 
       return reply.status(201).send(serializeSession(null, project.id, sessionRecord));
@@ -458,6 +557,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       name: terminalName,
       tmuxName,
       useTmux,
+      channel,
+      ...(isJson
+        ? {
+            transcriptRef: {
+              kind: "vst-json" as const,
+              path: join(sessionDataDir(project.id, worktreeId, sessionId), "messages.jsonl"),
+            },
+          }
+        : {}),
       lifecycle: {
         state: "not_started",
         lastTransitionAt: new Date().toISOString(),
@@ -519,9 +627,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       snapshot: serializeSession(worktreeId, project.id, sessionRecord),
     });
 
+    // JSON-channel sessions do NOT spawn a TTY at create (Decision 2/8) — the
+    // process starts on turn 1, auto-enqueued from the create-dialog prompt.
     if (type === "agent" && modeId) {
       const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-      void runAgentSpawnJob({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
+      if (isJson) {
+        void startJsonCreateTurn({ sessionId, prompt, daemonPort });
+      } else {
+        void runAgentSpawnJob({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
+      }
     }
 
     return reply.status(201).send(serializeSession(worktreeId, project.id, sessionRecord));
@@ -541,6 +655,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         error: "Cannot delete the main session. Use DELETE /worktrees/:id instead.",
       });
     }
+
+    // Abort any live JSON turn BEFORE purge (Decision 13): kill the turn's
+    // process group so no orphaned child keeps mutating the checkout, and drop
+    // the queue. Cheap no-op for TTY sessions (registry miss). dispose() closes
+    // the session's own SQLite handle — the registry delete alone leaks the
+    // fd (better-sqlite3 has no reliable GC finalizer to fall back on).
+    const jsonAgentToClose = jsonAgentRegistry.get(id);
+    jsonAgentToClose?.abortAndDrain();
+    jsonAgentRegistry.delete(id);
+    jsonAgentToClose?.dispose();
+    clearSessionAttachments(id);
 
     // Kill session (tmux or direct-pty)
     if (!session.useTmux) {
@@ -869,5 +994,492 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
 
     return reply.send({ ok: true });
+  });
+
+  // --- JSON agent chat (Decision 8/12) ---
+
+  // POST /sessions/:id/chat — enqueue a user turn. Always accepted (never 409):
+  // queued behind any running turn (FIFO). Returns 202 { turnId, queuePosition }.
+  app.post("/sessions/:id/chat", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ChatBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { message, attachmentIds } = parsed.data;
+
+    // Resolve attachment ids to Attachment records (Decision 5).
+    const attachments: Attachment[] = [];
+    for (const uploadId of attachmentIds ?? []) {
+      const att = getAttachment(id, uploadId);
+      if (!att) {
+        return reply.status(400).send({ error: `Attachment '${uploadId}' not found` });
+      }
+      attachments.push(att);
+    }
+
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    let res;
+    try {
+      res = await enqueueChatTurn({ sessionId: id, message, attachments, daemonPort });
+    } catch (err) {
+      return reply.status(500).send({ error: `Failed to enqueue turn: ${String(err)}` });
+    }
+    if (!res.ok) {
+      const status = res.reason === "not_found" ? 404 : 400;
+      return reply.status(status).send({ error: res.message });
+    }
+
+    // Mark the session working while the turn runs (JSON lifecycle, Decision 11).
+    const ctx = findJsonSessionContext(id);
+    if (ctx) {
+      await persistLifecycleState(ctx.project.id, ctx.worktree?.id, id, "working");
+    }
+
+    return reply.status(202).send(res.result);
+  });
+
+  // POST /sessions/:id/chat/stop — abort the ACTIVE turn, keep queued turns
+  // (Decision 8/13). No-op (200) when only queued turns exist; 409 when no JSON
+  // agent has ever run for this session.
+  app.post("/sessions/:id/chat/stop", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    if (!agent) return reply.status(409).send({ error: "No active turn" });
+    agent.stopActiveTurn();
+    return reply.send({ ok: true });
+  });
+
+  // DELETE /sessions/:id/chat/queue/:turnId — cancel ONE queued (not-yet-started) turn.
+  app.delete("/sessions/:id/chat/queue/:turnId", async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    const removed = agent?.cancelQueuedTurn(turnId) ?? false;
+    if (!removed) return reply.status(404).send({ error: `Queued turn '${turnId}' not found` });
+    return reply.send({ ok: true });
+  });
+
+  // POST …/chat/queue/:turnId/edit — withdraw a queued turn into the editing hold
+  // (queue-controls). Returns its raw content + original queue index. Re-editing
+  // an already-held turn re-acquires it (recovery, A5). 404 when not queued/held.
+  app.post("/sessions/:id/chat/queue/:turnId/edit", async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    const res = agent?.beginEditQueuedTurn(turnId) ?? "not_queued";
+    if (res === "not_queued") return reply.status(404).send({ error: "not_queued" });
+    return reply.send({ turnId, ...res });
+  });
+
+  // POST …/chat/queue/:turnId/resubmit — re-enqueue a held turn (queue-controls).
+  // `edited:true` overwrites text/attachments + emits a superseding user event;
+  // `edited:false` restores it unchanged. 404 when the turn isn't held.
+  app.post("/sessions/:id/chat/queue/:turnId/resubmit", async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const parsed = ResubmitBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    if (!agent) return reply.status(404).send({ error: "not_editing" });
+
+    // Resolve attachment ids only when editing (Decision 5 / A11).
+    const attachments: Attachment[] = [];
+    if (parsed.data.edited) {
+      for (const uploadId of parsed.data.attachmentIds ?? []) {
+        const att = getAttachment(id, uploadId);
+        if (!att) return reply.status(400).send({ error: `Attachment '${uploadId}' not found` });
+        attachments.push(att);
+      }
+    }
+
+    const result = agent.resubmitQueuedTurn(turnId, {
+      edited: parsed.data.edited,
+      ...(parsed.data.edited ? { message: parsed.data.message ?? "", attachments } : {}),
+    });
+    if (result === "not_editing") return reply.status(404).send({ error: "not_editing" });
+
+    // Drain may have persisted `idle` while the turn was held (R17) — the
+    // re-enqueued turn will run, so re-flip the lifecycle to working (A4).
+    await persistLifecycleState(ctx.project.id, ctx.worktree?.id, id, "working");
+    return reply.send({ ok: true, turnId });
+  });
+
+  // POST …/chat/queue/:turnId/promote — "Send now": preempt. Jumps the target to
+  // the front AND aborts the active turn so it runs next; the aborted turn is
+  // dropped (not re-queued).
+  app.post("/sessions/:id/chat/queue/:turnId/promote", async (req, reply) => {
+    const { id, turnId } = req.params as { id: string; turnId: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    const result = agent?.promoteQueuedTurn(turnId) ?? "not_queued";
+    if (result === "not_queued") return reply.status(404).send({ error: "not_queued" });
+    return reply.send({ ok: true, turnId });
+  });
+
+  // POST …/chat/fork — edit an already-ANSWERED turn → fork (P4, R3.1–R3.6).
+  // Truncates the branch after turn N (rows marked superseded, not deleted, R3.3)
+  // and re-runs the edited message from the fork point on a NEW harness session
+  // (claude `--fork-session`). claude-only at launch (R3.5) — gated on the plugin
+  // exposing `getForkCommand`; other CLIs 400 (their replay fallback is deferred).
+  // Broadcasts the fork so other tabs drop the superseded turns and re-sync (R3.6).
+  app.post("/sessions/:id/chat/fork", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ForkBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { turnId, message, attachmentIds } = parsed.data;
+
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const resolved = await resolveJsonAgent(id, daemonPort);
+    if (!resolved.ok) {
+      return reply.status(resolved.reason === "not_found" ? 404 : 400).send({ error: resolved.message });
+    }
+    const { agent, mode } = resolved;
+
+    // R3.5 — fork is claude-only at launch. Gate on the plugin's fork capability
+    // (getForkCommand); non-claude CLIs are blocked until their at-rest replay
+    // fallback ships (deferred).
+    const plugin = resolvePlugin(mode.cli);
+    if (!plugin.getForkCommand) {
+      return reply.status(400).send({ error: `${mode.cli} does not support forking (edit a sent message)` });
+    }
+
+    // Resolve attachment ids → Attachment records (Decision 5).
+    const attachments: Attachment[] = [];
+    for (const uploadId of attachmentIds ?? []) {
+      const att = getAttachment(id, uploadId);
+      if (!att) return reply.status(400).send({ error: `Attachment '${uploadId}' not found` });
+      attachments.push(att);
+    }
+
+    const res = agent.forkTurn({
+      turnId,
+      message,
+      ...(attachments.length ? { attachments } : {}),
+    });
+    if (res === "not_found") return reply.status(404).send({ error: `Turn '${turnId}' not found` });
+
+    // The fork will run — flip lifecycle to working (JSON lifecycle, Decision 11).
+    const ctx = findJsonSessionContext(id);
+    if (ctx) await persistLifecycleState(ctx.project.id, ctx.worktree?.id, id, "working");
+
+    // Mirror the fork to other open tabs (R3.6): they drop the superseded turns
+    // and re-sync from the new branch head (the new user event streams live).
+    broadcastAll({ type: "session:fork", sessionId: id, supersededTurnIds: res.supersededTurnIds });
+    return reply.status(202).send({ ok: true, turnId: res.turnId });
+  });
+
+  // PATCH …/chat/model — live-switch the session's model (status-bar switcher).
+  // `model: null` clears the override back to the mode default. Applies to the
+  // NEXT spawned turn (runOneTurn reads requestedModel at spawn time); never
+  // interrupts a running turn.
+  app.patch("/sessions/:id/chat/model", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({ model: z.string().trim().min(1).max(100).nullable() })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid model" });
+
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const resolved = await resolveJsonAgent(id, daemonPort);
+    if (!resolved.ok) {
+      return reply.status(resolved.reason === "not_found" ? 404 : 400).send({ error: resolved.message });
+    }
+    const { agent, mode } = resolved;
+
+    // Soft validation: when the CLI's model list is available, reject an unknown
+    // model (agy hard-fails every subsequent turn on a bad --model). If the list
+    // can't be fetched, accept free text (mirrors the ModelPicker fallback).
+    if (parsed.data.model) {
+      const list = await resolveCliModels(mode.cli);
+      if (!list.error && list.models.length > 0 && !list.models.includes(parsed.data.model)) {
+        return reply.status(400).send({ error: `Unknown model '${parsed.data.model}' for ${mode.cli}` });
+      }
+    }
+
+    await agent.setModel(parsed.data.model, mode.model);
+    return reply.send({ ok: true, model: parsed.data.model ?? mode.model ?? null });
+  });
+
+  // Spawn the tmux/pty process for an EXISTING worktree agent session, resuming
+  // its `agentChatId` when one exists (P3 json→tty, R1.2/R1.3). Reuses the same
+  // restore primitives as POST /resume — `getRestoreCommand` → `spawnSessionFromArgv`
+  // — with a fresh-launch fallback for an empty session (no `agentChatId`, J12).
+  // It does NOT reserve a slot or create a record (no create-time side effects).
+  async function spawnTtyForWorktreeAgent(opts: {
+    project: ProjectRecord;
+    worktree: WorktreeRecord;
+    session: SessionRecord;
+    plugin: AgentPlugin;
+    model?: string;
+    context?: string;
+  }): Promise<void> {
+    const { project, worktree, session, plugin, model, context } = opts;
+    const cwd = worktreePath(project.id, worktree.id);
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+
+    const restoreArgv = await plugin.getRestoreCommand?.({
+      session,
+      project,
+      worktree,
+      ...(model ? { model } : {}),
+    });
+
+    if (restoreArgv) {
+      // Resume path — same as POST /resume: self-heal hooks, then spawn the argv.
+      if (plugin.setupWorkspaceHooks) await plugin.setupWorkspaceHooks(cwd);
+      const launchCfg = { project, worktree, session, daemonPort: 0, ...(model ? { model } : {}) };
+      const env: Record<string, string> = {
+        VST_SESSION: session.id,
+        VST_SPAWN_TOKEN: session.id,
+        VST_WORKTREE: worktree.id,
+        VST_PROJECT: project.id,
+        VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
+        VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+        ...plugin.getEnvironment(launchCfg),
+      };
+      await spawnSessionFromArgv({
+        project,
+        worktree,
+        session,
+        argv: restoreArgv,
+        env,
+        fallbackMs: plugin.getReadySignal().fallbackMs,
+      });
+      const capturedId = (await plugin.captureChatId?.({ session, project, worktree })) ?? null;
+      if (capturedId) session.agentChatId = capturedId;
+    } else {
+      // Fresh launch — an empty session with nothing to resume (J12).
+      const { buildPrompt } = await import("../services/promptBuilder.js");
+      const built = await buildPrompt({
+        project,
+        worktree,
+        ...(context ? { modeContext: context } : {}),
+      });
+      await spawnSession({
+        project,
+        worktree,
+        session,
+        plugin,
+        daemonPort,
+        systemPrompt: built.systemPrompt,
+        taskPrompt: built.taskPrompt,
+        ...(model ? { model } : {}),
+      });
+    }
+  }
+
+  // PATCH …/sessions/:id/channel — live JSON↔terminal toggle (P3, R1.1–R1.7).
+  // Idle-gated (409 when a turn is active/queued/held for edit); worktree-only
+  // (400 for direct sessions — no restore path, R1.5); gated per-CLI on native-
+  // history importer availability (400 for cursor/agy, R1.6). json→tty spawns the
+  // TTY resuming the same agentChatId; tty→json tears the TTY down, re-establishes
+  // the JSON session, and backfills terminal-phase turns via the P2 importer
+  // (R1.4). The switch is mirrored to other open tabs (R1.7).
+  app.patch("/sessions/:id/channel", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ channel: z.enum(["json", "tmux", "pty"]) }).safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid channel" });
+    const target = parsed.data.channel;
+
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const { project, session } = ctx;
+
+    if (session.type !== "agent") {
+      return reply.status(400).send({ error: "Only agent sessions can switch channel" });
+    }
+
+    const current = sessionChannel(session);
+    if (current === target) return reply.send({ ok: true, channel: current }); // idempotent no-op
+
+    // R1.5 — direct (non-worktree) sessions have no restore path; disable toggle.
+    if (ctx.kind !== "worktree") {
+      return reply.status(400).send({ error: "Channel toggle is only supported for worktree sessions" });
+    }
+    const { worktree } = ctx;
+
+    // Resolve mode → plugin.
+    const modes = await (await import("../routes/modes.js")).loadModes();
+    const mode = session.modeId ? modes.find((m) => m.id === session.modeId) : undefined;
+    if (!mode) return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
+    const plugin = resolvePlugin(mode.cli);
+
+    // R1.6 — only CLIs with a native-history importer can toggle (claude + opencode);
+    // cursor + agy are blocked until their importers ship.
+    if (!hasNativeHistoryImporter(mode.cli)) {
+      return reply.status(400).send({ error: `${mode.cli} does not support channel toggle` });
+    }
+
+    const fromJson = current === "json";
+    const toJson = target === "json";
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+
+    // R1.1 idle gate — only a live JSON session has a turn queue/holds to protect.
+    if (fromJson) {
+      const agent = jsonAgentRegistry.get(id);
+      if (agent && !agent.isIdleForToggle) {
+        return reply.status(409).send({ error: "not_idle" });
+      }
+    }
+
+    try {
+      if (fromJson) {
+        // json → tty: detach the in-memory JSON session (idle-gated, so this only
+        // tears down bookkeeping), then spawn the TTY resuming the agentChatId.
+        // dispose() closes the SQLite handle so a repeated json→tty→json cycle
+        // doesn't accumulate one open store per toggle.
+        const jsonAgentToClose = jsonAgentRegistry.get(id);
+        jsonAgentToClose?.abortAndDrain();
+        jsonAgentRegistry.delete(id);
+        jsonAgentToClose?.dispose();
+        await spawnTtyForWorktreeAgent({
+          project,
+          worktree,
+          session,
+          plugin,
+          ...(mode.model ? { model: mode.model } : {}),
+          ...(mode.context ? { context: mode.context } : {}),
+        });
+      } else {
+        // tty → json: tear the TTY down (reuse the DELETE teardown primitives).
+        if (session.useTmux) {
+          try {
+            await killSession(session.tmuxName);
+          } catch {
+            // best-effort
+          }
+        } else {
+          directPtyRegistry.get(id)?.kill?.();
+        }
+      }
+    } catch (err) {
+      return reply.status(500).send({ error: `Failed to switch channel: ${String(err)}` });
+    }
+
+    // Flip the record's channel + `useTmux` invariant (R1.2), persisting any
+    // agentChatId the json→tty restore may have self-healed.
+    const { channel: newChannel, useTmux: newUseTmux } = channelTransition(target);
+    session.channel = newChannel;
+    session.useTmux = newUseTmux;
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktree.id
+          ? {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id === id
+                  ? {
+                      ...s,
+                      channel: newChannel,
+                      useTmux: newUseTmux,
+                      ...(session.agentChatId ? { agentChatId: session.agentChatId } : {}),
+                    }
+                  : s,
+              ),
+            }
+          : w,
+      ),
+    }));
+
+    // Compute the fresh meta to mirror to other tabs.
+    let meta: SessionMeta;
+    if (toJson) {
+      // tty → json: register a fresh JSON session (reads the now-json record) and
+      // backfill the terminal-phase turns from the native store (R1.4).
+      const resolved = await resolveJsonAgent(id, daemonPort);
+      if (resolved.ok) {
+        await resolved.agent.importNativeHistory();
+        meta = resolved.agent.getMeta();
+      } else {
+        meta = {
+          sessionId: id,
+          channel: newChannel,
+          cli: mode.cli,
+          ...(mode.id ? { modeId: mode.id } : {}),
+          ...(mode.name ? { modeName: mode.name } : {}),
+          turnState: "idle",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+        };
+      }
+    } else {
+      // json → tty: no live JSON session anymore — synthesize an idle TTY meta.
+      meta = {
+        sessionId: id,
+        channel: newChannel,
+        cli: mode.cli,
+        ...(mode.id ? { modeId: mode.id } : {}),
+        ...(mode.name ? { modeName: mode.name } : {}),
+        turnState: "idle",
+        queueDepth: 0,
+        queuedTurnIds: [],
+        editingTurnIds: [],
+      };
+    }
+
+    // Mirror the switch to every open tab (R1.7): patch the session record (drives
+    // the chat/terminal pane flip) + broadcast the fresh meta (status bar).
+    broadcastAll({ type: "session:updated", sessionId: id, channel: newChannel });
+    broadcastAll({ type: "session:meta", sessionId: id, meta });
+    return reply.send({ ok: true, channel: newChannel });
+  });
+
+  // GET /sessions/:id/transcript — bounded normalized history (R2.1–R2.3).
+  //   ?beforeSeq=<n>&limit=<n> → keyset "load earlier" page { events, oldestSeq, hasMore }
+  //   ?since=<logSeq>          → reconnect delta { events }
+  //   (no query)               → tail-N turns { events, oldestSeq, hasMore }
+  // `?all=1` returns the whole transcript (guarded "load all" escape hatch, R2.5).
+  app.get("/sessions/:id/transcript", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    const q = req.query as { beforeSeq?: string; limit?: string; since?: string; all?: string };
+
+    if (q.all === "1" || q.all === "true") {
+      return reply.send({ events: readSessionTranscript(ctx) });
+    }
+
+    if (q.since !== undefined) {
+      const sinceSeq = Number(q.since);
+      if (!Number.isFinite(sinceSeq)) return reply.status(400).send({ error: "invalid since" });
+      return reply.send({ events: readSessionSince(ctx, sinceSeq) });
+    }
+
+    if (q.beforeSeq !== undefined) {
+      const beforeSeq = Number(q.beforeSeq);
+      const limit = q.limit !== undefined ? Number(q.limit) : 20;
+      if (!Number.isFinite(beforeSeq) || !Number.isFinite(limit) || limit <= 0) {
+        return reply.status(400).send({ error: "invalid beforeSeq/limit" });
+      }
+      return reply.send(readSessionPageBefore(ctx, beforeSeq, limit));
+    }
+
+    const limit = q.limit !== undefined ? Number(q.limit) : 20;
+    if (!Number.isFinite(limit) || limit <= 0) return reply.status(400).send({ error: "invalid limit" });
+    return reply.send(readSessionTail(ctx, limit));
+  });
+
+  // GET /sessions/:id/meta — latest cross-harness meta (rebuilt from the
+  // transcript tail when no live session is registered, Decision 8).
+  app.get("/sessions/:id/meta", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    return reply.send(await readSessionMeta(ctx, daemonPort));
   });
 }

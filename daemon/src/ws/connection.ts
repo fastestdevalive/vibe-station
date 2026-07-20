@@ -1,6 +1,19 @@
 import type { WebSocket } from "@fastify/websocket";
 import type { ServerMessage } from "./protocol.js";
 import type { SessionStream } from "./streams/sessionStream.js";
+import type { JsonAgentStream } from "./streams/jsonAgentStream.js";
+import type { NormalizedEvent, SessionMeta } from "../types.js";
+
+/**
+ * A live JSON chat subscription: listeners attached to a session's
+ * `JsonAgentStream` for `chat:open`, so `chat:close`/cleanup can detach them
+ * without leaking (mirrors the tmux/direct `OpenStreamEntry` pattern).
+ */
+export type ChatStreamEntry = {
+  stream: JsonAgentStream;
+  onMessage: (event: NormalizedEvent) => void;
+  onMeta: (meta: SessionMeta) => void;
+};
 
 export type OpenStreamEntry = {
   kind: "tmux" | "direct";
@@ -22,6 +35,7 @@ export type OpenStreamEntry = {
 export class WSConnection {
   private subscriptions: Set<string> = new Set();
   openStreams: Map<string, OpenStreamEntry> = new Map(); // sessionId -> OpenStreamEntry (public for handlers)
+  chatStreams: Map<string, ChatStreamEntry> = new Map(); // sessionId -> ChatStreamEntry (JSON chat)
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   readonly id: string; // Unique identifier for this connection
@@ -144,6 +158,20 @@ export class WSConnection {
     return this.openStreams.has(sessionId);
   }
 
+  /** Register a JSON chat-stream subscription for a session. */
+  registerChatStream(sessionId: string, entry: ChatStreamEntry): void {
+    this.chatStreams.set(sessionId, entry);
+  }
+
+  /** Detach + unregister a JSON chat-stream subscription. Idempotent. */
+  unregisterChatStream(sessionId: string): void {
+    const entry = this.chatStreams.get(sessionId);
+    if (!entry) return;
+    entry.stream.off("message", entry.onMessage);
+    entry.stream.off("meta", entry.onMeta);
+    this.chatStreams.delete(sessionId);
+  }
+
   /**
    * Register a file watcher.
    */
@@ -195,6 +223,11 @@ export class WSConnection {
       }
     }
     this.openStreams.clear();
+
+    // Detach all JSON chat-stream subscriptions
+    for (const sessionId of Array.from(this.chatStreams.keys())) {
+      this.unregisterChatStream(sessionId);
+    }
 
     // Close all file watchers
     for (const watcher of this.fileWatches.values()) {
