@@ -19,11 +19,14 @@ import { registerWorktreeInfo } from "./commands/worktree/info.js";
 import { registerSessionCreate } from "./commands/session/create.js";
 import { registerSessionLs } from "./commands/session/ls.js";
 import { registerSessionInfo } from "./commands/session/info.js";
+import { registerSessionTranscript } from "./commands/session/transcript.js";
+import { registerSessionMeta } from "./commands/session/meta.js";
 import { registerSessionKill } from "./commands/session/kill.js";
 import { registerSessionAttach } from "./commands/session/attach.js";
 import { registerSessionRestore } from "./commands/session/restore.js";
 import { registerSessionOutput } from "./commands/session/output.js";
 import { registerSend } from "./commands/send.js";
+import { registerChat } from "./commands/chat.js";
 import { registerModeLs } from "./commands/mode/ls.js";
 import { registerModeAdd } from "./commands/mode/add.js";
 import { registerModeRm } from "./commands/mode/rm.js";
@@ -94,9 +97,14 @@ export function buildProgram(): Command {
   registerSessionAttach(session);
   registerSessionRestore(session);
   registerSessionOutput(session);
+  registerSessionTranscript(session);
+  registerSessionMeta(session);
 
   // Send command
   registerSend(program);
+
+  // Chat (JSON agent-chat) command
+  registerChat(program);
 
   // Mode commands
   const mode = program

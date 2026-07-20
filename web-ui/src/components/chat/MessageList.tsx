@@ -1,0 +1,361 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ApiInstance } from "@/api";
+import type { Attachment, NormalizedEvent } from "@/api/types";
+import type { PendingTurn } from "@/hooks/useChat";
+import { TextMessage } from "./TextMessage";
+import { QueuedTurnEditor } from "./QueuedTurnEditor";
+import { ThinkingBlock } from "./ThinkingBlock";
+import { ToolUseCard } from "./ToolUseCard";
+import { ToolResultCard } from "./ToolResultCard";
+import { ErrorCard } from "./ErrorCard";
+
+type RenderItem =
+  | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
+  | { type: "assistant"; id: string; text: string; turnId?: string }
+  | { type: "thinking"; id: string; text: string; turnId?: string }
+  | { type: "tool"; id: string; toolName: string; toolInput?: unknown; result?: { content?: string; isError?: boolean } }
+  | { type: "error"; id: string; text: string }
+  | { type: "status"; id: string; text: string };
+
+/**
+ * Fold the flat normalized-event stream into renderable items: consecutive
+ * assistant `text` / `thinking` events collapse into one bubble, and each
+ * `tool_result` attaches to its `tool_use` by `toolId`. Meta-only kinds
+ * (session_init / usage / result) feed the status bar, not the list. A `status`
+ * event carrying text (e.g. a stopped-turn marker) renders as a subtle note so a
+ * stopped turn reads as terminal rather than truncated.
+ */
+/** Benign claude rate-limit heartbeats that were persisted into old transcripts
+ *  before RA6 stopped emitting them — noise, not actionable throttling. */
+function isBenignRateLimit(text: string): boolean {
+  return /^rate limit:\s*(unknown|allowed)/i.test(text.trim());
+}
+
+export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  const toolIndexById = new Map<string, number>();
+  // A superseding (edited) `user` event carries the same turnId — keep the bubble
+  // at its FIRST position but update to the LATEST text/attachments (A7).
+  const userIndexByTurnId = new Map<string, number>();
+
+  for (const ev of events) {
+    // Guard: a superseded (forked-away) event never renders (R3.4). The daemon
+    // already excludes these from replay; this is a belt-and-suspenders filter.
+    if (ev.superseded) continue;
+    switch (ev.kind) {
+      case "user": {
+        if (ev.turnId) {
+          const existingIdx = userIndexByTurnId.get(ev.turnId);
+          if (existingIdx != null) {
+            const existing = items[existingIdx];
+            if (existing && existing.type === "user") {
+              existing.text = ev.text ?? "";
+              existing.attachments = ev.attachments;
+              existing.id = ev.id;
+              existing.cancelled = ev.cancelled;
+            }
+            break;
+          }
+        }
+        items.push({
+          type: "user",
+          id: ev.id,
+          text: ev.text ?? "",
+          attachments: ev.attachments,
+          ...(ev.turnId ? { turnId: ev.turnId } : {}),
+          ...(ev.cancelled ? { cancelled: true } : {}),
+        });
+        if (ev.turnId) userIndexByTurnId.set(ev.turnId, items.length - 1);
+        break;
+      }
+      case "text": {
+        const last = items[items.length - 1];
+        // Merge streaming deltas WITHIN a turn, but a new turn always starts a
+        // fresh bubble — otherwise back-to-back replies (e.g. answers to several
+        // queued messages, with only meta events between them) run together.
+        if (last && last.type === "assistant" && last.turnId === ev.turnId) {
+          last.text += ev.text ?? "";
+        } else {
+          items.push({ type: "assistant", id: ev.id, text: ev.text ?? "", turnId: ev.turnId });
+        }
+        break;
+      }
+      case "thinking": {
+        const last = items[items.length - 1];
+        if (last && last.type === "thinking" && last.turnId === ev.turnId) {
+          last.text += ev.text ?? "";
+        } else {
+          items.push({ type: "thinking", id: ev.id, text: ev.text ?? "", turnId: ev.turnId });
+        }
+        break;
+      }
+      case "tool_use": {
+        items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", toolInput: ev.toolInput });
+        if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
+        break;
+      }
+      case "tool_result": {
+        const result = { content: ev.toolResult?.content, isError: ev.toolResult?.isError };
+        const idx = ev.toolId ? toolIndexById.get(ev.toolId) : undefined;
+        const target = idx != null ? items[idx] : undefined;
+        if (target && target.type === "tool") {
+          target.result = result;
+        } else {
+          items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", result });
+        }
+        break;
+      }
+      case "error":
+        items.push({ type: "error", id: ev.id, text: ev.text ?? "" });
+        break;
+      case "status":
+        // Only surface a status marker that carries text (e.g. "Turn stopped");
+        // transient/empty status signals stay meta-only. Benign claude rate-limit
+        // heartbeats (RA6 stops emitting these, but old transcripts persisted
+        // "rate limit: unknown"/"allowed" noise) are filtered on render too so
+        // history reads clean — real throttles (rejected/throttled/queued) show.
+        if (ev.text && !isBenignRateLimit(ev.text)) {
+          items.push({ type: "status", id: ev.id, text: ev.text });
+        }
+        break;
+      default:
+        // session_init / usage / result — not rendered as bubbles.
+        break;
+    }
+  }
+  return items;
+}
+
+/** A subtle "the agent is thinking on this point" affordance, anchored right
+ *  below the most-recent user message (Change 3). Presence-only — the streaming
+ *  ThinkingBlock renders the actual thinking content below it. */
+function ThinkingHint() {
+  return (
+    <div className="chat-thinking-hint" role="status" aria-live="polite">
+      <span className="chat-thinking-hint__dot" aria-hidden />
+      Thinking…
+    </div>
+  );
+}
+
+/** Loaded-turn count above which the "load all" escape hatch warns (R2.5). */
+const LOAD_ALL_WARN_TURNS = 200;
+
+interface MessageListProps {
+  events: NormalizedEvent[];
+  /** Optimistic user turns that are NOT queued (queued ones live in the tray). */
+  pending: PendingTurn[];
+  /** True while a turn is active — the trailing tool card shows a spinner. */
+  turnActive?: boolean;
+  /** True while the active turn is in the pre-stream "thinking" state (Change 3). */
+  thinking?: boolean;
+  /** turnIds shown in the queued tray — filtered out of the inline chat log. */
+  hiddenTurnIds?: ReadonlySet<string>;
+  /** True when older history exists before the loaded window (R2.2). */
+  hasMore?: boolean;
+  /** True while a load-earlier / load-all fetch is in flight. */
+  loadingEarlier?: boolean;
+  /** Fetch + prepend the previous keyset page. */
+  onLoadEarlier?: () => void;
+  /** Guarded escape hatch: load the whole transcript. */
+  onLoadAll?: () => void;
+  onRetry?: () => void;
+  /** API + session for the inline fork editor (edit an answered message). */
+  api?: ApiInstance;
+  sessionId?: string;
+  /** Edit an already-answered user turn → fork (R3.1). When provided, answered
+   *  user bubbles show an Edit affordance; only enabled while the session is idle. */
+  onForkTurn?: (turnId: string, message: string, attachmentIds: string[]) => Promise<void> | void;
+}
+
+export function MessageList({
+  events,
+  pending,
+  turnActive,
+  thinking,
+  hiddenTurnIds,
+  hasMore,
+  loadingEarlier,
+  onLoadEarlier,
+  onLoadAll,
+  onRetry,
+  api,
+  sessionId,
+  onForkTurn,
+}: MessageListProps) {
+  // Which answered user turn (if any) this tab is editing → fork. Local to the
+  // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
+  const [forkEditingTurnId, setForkEditingTurnId] = useState<string | null>(null);
+  // Forking is only offered when the session is idle (no turn in flight) — an
+  // "answered" message (J6). Attachments/composer reuse the queued-turn editor.
+  const canFork = !!onForkTurn && !!api && !!sessionId && !turnActive;
+  const grouped = useMemo(() => groupEvents(events), [events]);
+  // Queued / editing user turns render in the tray above the composer, not in
+  // the log. Filter after grouping so the A7 edited-turn dedupe still applies.
+  const items = useMemo(
+    () =>
+      hiddenTurnIds && hiddenTurnIds.size > 0
+        ? grouped.filter((it) => it.type !== "user" || !it.turnId || !hiddenTurnIds.has(it.turnId))
+        : grouped,
+    [grouped, hiddenTurnIds],
+  );
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [items.length, pending.length, thinking]);
+
+  // Anchor the thinking hint under the latest user message. When an optimistic
+  // (non-queued) pending bubble exists, the newest user message is that pending
+  // block, so the hint goes after it; otherwise after the last user item.
+  const lastUserIdx = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i]!.type === "user") return i;
+    }
+    return -1;
+  }, [items]);
+  const hintAfterPending = !!thinking && pending.length > 0;
+  const hintAfterItem = !!thinking && !hintAfterPending && lastUserIdx >= 0;
+
+  // Distinct loaded turns — the "load all" hatch warns once the window is large.
+  const loadedTurns = useMemo(() => {
+    const ids = new Set<string>();
+    for (const ev of events) if (ev.turnId) ids.add(ev.turnId);
+    return ids.size;
+  }, [events]);
+
+  return (
+    <div className="chat-message-list" role="log" aria-label="Conversation">
+      {hasMore && onLoadEarlier ? (
+        <div className="chat-load-earlier">
+          <button
+            type="button"
+            className="chat-load-earlier__btn"
+            onClick={onLoadEarlier}
+            disabled={loadingEarlier}
+          >
+            {loadingEarlier ? "Loading…" : "Load earlier messages"}
+          </button>
+          {loadedTurns > LOAD_ALL_WARN_TURNS && onLoadAll ? (
+            <button
+              type="button"
+              className="chat-load-earlier__all"
+              onClick={onLoadAll}
+              disabled={loadingEarlier}
+              title="Loading the entire history may be slow on very long chats."
+            >
+              Load entire history
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {items.flatMap((item, i) => {
+        const key = item.type === "user" ? item.turnId ?? item.id : item.id;
+        let node: React.ReactNode;
+        switch (item.type) {
+          case "user": {
+            // A cancelled queued turn stays in history but was never processed —
+            // render it muted with a marker, and never fork-editable.
+            if (item.cancelled) {
+              node = (
+                <div key={key} className="chat-user-turn chat-user-turn--cancelled" data-role="user">
+                  <TextMessage role="user" text={item.text} attachments={item.attachments} />
+                  <span className="chat-user-turn__cancelled" title="This message was cancelled before the agent processed it.">
+                    Canceled · not sent to agent
+                  </span>
+                </div>
+              );
+              break;
+            }
+            const forkable = canFork && !!item.turnId;
+            if (forkable && forkEditingTurnId === item.turnId) {
+              node = (
+                <div key={key} className="chat-msg chat-msg--user chat-msg--forking" data-role="user">
+                  <QueuedTurnEditor
+                    api={api!}
+                    sessionId={sessionId!}
+                    initialText={item.text}
+                    initialAttachments={item.attachments ?? []}
+                    onSave={async (message, attachments) => {
+                      setForkEditingTurnId(null);
+                      await onForkTurn!(item.turnId!, message, attachments.map((a) => a.id));
+                    }}
+                    onDiscard={() => setForkEditingTurnId(null)}
+                  />
+                </div>
+              );
+            } else if (forkable) {
+              node = (
+                <div key={key} className="chat-user-turn">
+                  <TextMessage role="user" text={item.text} attachments={item.attachments} />
+                  <button
+                    type="button"
+                    className="chat-user-turn__edit"
+                    aria-label="Edit message (fork)"
+                    title="Edit this message and re-run from here (fork)"
+                    onClick={() => setForkEditingTurnId(item.turnId!)}
+                  >
+                    ✎
+                  </button>
+                </div>
+              );
+            } else {
+              node = <TextMessage key={key} role="user" text={item.text} attachments={item.attachments} />;
+            }
+            break;
+          }
+          case "assistant":
+            node = <TextMessage key={key} role="assistant" text={item.text} />;
+            break;
+          case "thinking":
+            node = <ThinkingBlock key={key} text={item.text} />;
+            break;
+          case "tool":
+            node = (
+              <div key={key} className="chat-tool-group">
+                <ToolUseCard
+                  toolName={item.toolName}
+                  toolInput={item.toolInput}
+                  running={!item.result && turnActive && i === items.length - 1}
+                />
+                {item.result ? (
+                  <ToolResultCard
+                    toolName={item.toolName}
+                    content={item.result.content}
+                    isError={item.result.isError}
+                  />
+                ) : null}
+              </div>
+            );
+            break;
+          case "error":
+            node = <ErrorCard key={key} text={item.text} onRetry={onRetry} />;
+            break;
+          case "status":
+            node = (
+              <div key={key} className="chat-status-note" role="note">
+                {item.text}
+              </div>
+            );
+            break;
+          default:
+            node = null;
+        }
+        return hintAfterItem && i === lastUserIdx
+          ? [node, <ThinkingHint key={`${key}-thinking`} />]
+          : node;
+      })}
+
+      {pending.map((p) => (
+        <div key={p.turnId} className="chat-pending">
+          <TextMessage role="user" text={p.message} attachments={p.attachments} pending />
+        </div>
+      ))}
+
+      {hintAfterPending ? <ThinkingHint /> : null}
+
+      <div ref={bottomRef} />
+    </div>
+  );
+}

@@ -8,21 +8,175 @@
  * Ready signal: waits for "opencode" banner in pane output.
  */
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { createInterface } from "node:readline";
 
 const execFileAsync = promisify(execFile);
 import { join } from "node:path";
-import type { AgentPlugin, LaunchConfig } from "../services/spawn.js";
-import { opencodeConfigPathFor, systemPromptPathFor } from "../services/context.js";
+import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
+import { opencodeConfigPathFor, systemPromptPathFor, resolvedContextOf } from "../services/context.js";
 import { writeOpenCodeConfig } from "../services/opencodeConfig.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { SessionRecord, ProjectRecord } from "../types.js";
+import type {
+  SessionRecord,
+  ProjectRecord,
+  NormalizedEvent,
+  NormalizedEventKind,
+} from "../types.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function opencodeEvent(
+  sessionId: string,
+  kind: NormalizedEventKind,
+  extra: Partial<NormalizedEvent>,
+): NormalizedEvent {
+  return {
+    id: randomUUID(),
+    sessionId,
+    ts: new Date().toISOString(),
+    provider: "opencode",
+    kind,
+    ...extra,
+  };
+}
+
+/**
+ * Map ONE opencode `run --format json` line into zero or more NormalizedEvents
+ * (Decision 3). Exported for unit testing (3.T1). Malformed lines skipped
+ * (Decision 7).
+ *
+ * Envelope (live-verified 2026-07-14): `{type, timestamp, sessionID, part:{...}}`
+ * — the top-level `type` mirrors `part.type` (`text`/`tool`/`reasoning`) with
+ * `step_start`/`step_finish` boundaries; the turn ends on
+ * `step_finish part.reason=stop`. There is no explicit `init` event, so the
+ * `sessionID` on the first line is surfaced as `session_init` (once, tracked via
+ * `state.initEmitted`).
+ */
+export function parseOpencodeStreamLine(
+  line: string,
+  sessionId: string,
+  state: { initEmitted: boolean; toolStarted?: Set<string> },
+): NormalizedEvent[] {
+  const trimmed = line.trim();
+  if (!trimmed) return [];
+  let msg: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== "object") return [];
+    msg = parsed as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+
+  const events: NormalizedEvent[] = [];
+  const type = msg.type as string | undefined;
+  const part = (msg.part ?? {}) as Record<string, unknown>;
+  const sessionID = typeof msg.sessionID === "string" ? msg.sessionID : undefined;
+
+  // Surface the harness session id once (no explicit init event).
+  if (!state.initEmitted && sessionID) {
+    state.initEmitted = true;
+    events.push(
+      opencodeEvent(sessionId, "session_init", {
+        agentChatId: sessionID,
+        ...(typeof msg.model === "string" ? { model: msg.model } : {}),
+      }),
+    );
+  }
+
+  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+
+  const emitUsageAndResult = (): void => {
+    const tokens = (part.tokens ?? msg.tokens ?? {}) as Record<string, unknown>;
+    const cache = (tokens.cache ?? {}) as Record<string, unknown>;
+    const inputTokens = num(tokens.input);
+    const outputTokens = num(tokens.output);
+    const cacheReadTokens = num(cache.read);
+    const cacheCreateTokens = num(cache.write);
+    const model = typeof msg.model === "string" ? msg.model : "";
+    const hasUsage = inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens > 0;
+    if (hasUsage) {
+      const usage = {
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheCreateTokens,
+        totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens,
+        ...(typeof part.cost === "number" ? { costUsd: part.cost } : {}),
+        model,
+      };
+      events.push(opencodeEvent(sessionId, "usage", { usage, ...(model ? { model } : {}) }));
+      events.push(opencodeEvent(sessionId, "result", { usage, ...(model ? { model } : {}) }));
+    } else {
+      events.push(opencodeEvent(sessionId, "result", {}));
+    }
+  };
+
+  if (type === "step_finish") {
+    const reason = (part.reason ?? msg.reason) as string | undefined;
+    if (reason === "stop") emitUsageAndResult();
+    // reason=tool-calls (between steps) → drop
+    return events;
+  }
+  if (type === "step_start") return events;
+
+  const partType = part.type as string | undefined;
+  if (partType === "text" && typeof part.text === "string") {
+    events.push(opencodeEvent(sessionId, "text", { role: "assistant", text: part.text }));
+  } else if (partType === "reasoning" && typeof part.text === "string") {
+    events.push(opencodeEvent(sessionId, "thinking", { role: "assistant", text: part.text }));
+  } else if (partType === "tool") {
+    const st = (part.state ?? {}) as Record<string, unknown>;
+    const status = st.status as string | undefined;
+    const callId = typeof part.callID === "string" ? part.callID : undefined;
+    const toolName = typeof part.tool === "string" ? part.tool : undefined;
+    // Emit `tool_use` at most once per tool id (guarded so a terminal part that
+    // ALSO synthesizes tool_use never duplicates a prior running/pending one).
+    const emitToolUse = (input: unknown): void => {
+      if (callId) {
+        if (!state.toolStarted) state.toolStarted = new Set();
+        if (state.toolStarted.has(callId)) return;
+        state.toolStarted.add(callId);
+      }
+      events.push(
+        opencodeEvent(sessionId, "tool_use", {
+          role: "assistant",
+          ...(toolName ? { toolName } : {}),
+          ...(callId ? { toolId: callId } : {}),
+          toolInput: input,
+        }),
+      );
+    };
+    if (status === "running" || status === "pending") {
+      emitToolUse(st.input);
+    } else if (status === "completed" || status === "error") {
+      // In `run --format json` each tool arrives ONCE already terminal — the
+      // running/pending branch never fires — so emit `tool_use` here too (name
+      // from `part.tool`, args from `state.input`) BEFORE the result, giving the
+      // UI tool card its name + args. Guarded so a real `running` isn't dup'd.
+      emitToolUse(st.input);
+      const raw = st.output ?? st.error;
+      const contentStr =
+        typeof raw === "string" ? raw : raw != null ? JSON.stringify(raw) : undefined;
+      events.push(
+        opencodeEvent(sessionId, "tool_result", {
+          ...(callId ? { toolId: callId } : {}),
+          toolResult: {
+            ...(contentStr !== undefined ? { content: contentStr } : {}),
+            isError: status === "error",
+          },
+        }),
+      );
+    }
+  }
+  return events;
 }
 
 export function createOpencodePlugin(): AgentPlugin {
@@ -97,6 +251,92 @@ export function createOpencodePlugin(): AgentPlugin {
         postLaunchInput: parts.length > 0 ? parts.join("\n\n") : undefined,
         postLaunchSubmit: true,
       };
+    },
+
+    supportsJson(): boolean {
+      return true;
+    },
+
+    /**
+     * Run ONE JSON-channel turn (Decision 2/3): `opencode run <msg> --format
+     * json [-m model] [--session <id>]`. The system prompt is delivered via the
+     * `OPENCODE_CONFIG` env → a JSON config listing the system-prompt file as
+     * `instructions` (applied on turn 1; harmless to re-point on resumed turns).
+     */
+    async *runTurn(
+      input: TurnInput,
+      ctx: TurnContext,
+      signal: AbortSignal,
+    ): AsyncIterable<NormalizedEvent> {
+      const sessionId = ctx.session.id;
+
+      // Resolve config + system-prompt paths for worktree OR direct sessions —
+      // routed through the shared *For(ctx, …) helpers (not manual ctx.worktree
+      // branching) so this can't drift into the "fabricated worktree resolves to
+      // a nonexistent directory" bug class the context refactor eliminated.
+      const resolvedCtx = resolvedContextOf(ctx.project, ctx.worktree);
+      const configPath = opencodeConfigPathFor(resolvedCtx, sessionId);
+      const promptFile = systemPromptPathFor(resolvedCtx, sessionId);
+      try {
+        mkdirSync(dirname(configPath), { recursive: true });
+        writeOpenCodeConfig(configPath, [promptFile]);
+      } catch {
+        /* best-effort — spawn still proceeds without instructions */
+      }
+
+      const args = ["run", input.message, "--format", "json"];
+      if (ctx.model && ctx.model !== "auto") args.push("-m", ctx.model);
+      if (ctx.chatId) args.push("--session", ctx.chatId);
+
+      const child = spawn("opencode", args, {
+        cwd: ctx.cwd,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, OPENCODE_CONFIG: configPath },
+      });
+      if (child.pid) ctx.onSpawn?.(child.pid);
+
+      let stderr = "";
+      child.stderr?.on("data", (d: Buffer) => {
+        stderr += d.toString("utf8");
+      });
+
+      const onAbort = (): void => {
+        try {
+          if (child.pid) process.kill(-child.pid, "SIGTERM");
+        } catch {
+          /* already dead */
+        }
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+
+      const exitPromise = new Promise<number>((resolve) => {
+        child.on("close", (code) => resolve(code ?? 0));
+      });
+
+      const state = { initEmitted: false };
+      try {
+        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
+        for await (const line of rl) {
+          for (const ev of parseOpencodeStreamLine(line, sessionId, state)) {
+            yield ev;
+          }
+        }
+        const code = await exitPromise;
+        if (code !== 0 && !signal.aborted) {
+          throw new Error(`opencode exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
+        }
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+        if (!child.killed && child.exitCode === null) {
+          try {
+            if (child.pid) process.kill(-child.pid, "SIGTERM");
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     },
 
     async setupWorkspaceHooks(worktreePath: string): Promise<void> {

@@ -14,6 +14,7 @@ import { handleFileUnwatch } from "./handlers/fileUnwatch.js";
 import { handleTreeWatch } from "./handlers/treeWatch.js";
 import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { handleDebugLog } from "./handlers/debugLog.js";
+import { handleChatOpen, handleChatClose } from "./handlers/chatOpen.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
 import { COOKIE_NAME, validateSessionCookie } from "../auth.js";
 
@@ -142,6 +143,13 @@ export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: str
             break;
           case "tree:unwatch":
             await handleTreeUnwatch(conn, msg);
+            break;
+          // JSON agent chat: subscribe + replay + bridge normalized events
+          case "chat:open":
+            await handleChatOpen(conn, msg);
+            break;
+          case "chat:close":
+            handleChatClose(conn, msg);
             break;
           // Diagnostic channel (mobile double-text investigation)
           case "debug:log":

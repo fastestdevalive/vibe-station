@@ -68,6 +68,21 @@ const PingMessage = z.object({
   type: z.literal("ping"),
 });
 
+// JSON agent chat (Decision 6/12): subscribe to a session's normalized event
+// stream. `chat:open` triggers a transcript replay; `chat:close` unsubscribes.
+const ChatOpenMessage = z.object({
+  type: z.literal("chat:open"),
+  sessionId: z.string(),
+  /** Reconnect delta cursor (R2.3): when set, the server replays only events
+   *  strictly newer than this `logSeq` instead of a fresh tail snapshot. */
+  sinceSeq: z.number().optional(),
+});
+
+const ChatCloseMessage = z.object({
+  type: z.literal("chat:close"),
+  sessionId: z.string(),
+});
+
 // Diagnostic channel (mobile double-text investigation): the client ships
 // terminal input + IME/composition events here when ?debugInput=1 is enabled,
 // and the daemon writes them to input-debug.log. Gated entirely on the client;
@@ -89,10 +104,85 @@ export const ClientMessage = z.discriminatedUnion("type", [
   TreeWatchMessage,
   TreeUnwatchMessage,
   PingMessage,
+  ChatOpenMessage,
+  ChatCloseMessage,
   DebugLogMessage,
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessage>;
+
+/**
+ * Normalized chat schemas (mirror of the TS types in daemon/src/types.ts).
+ * Kept here so the WS layer can validate `session:message` / `session:meta`
+ * / `chat:replay` payloads.
+ */
+export const UsageInfoSchema = z.object({
+  inputTokens: z.number(),
+  outputTokens: z.number(),
+  cacheReadTokens: z.number(),
+  cacheCreateTokens: z.number(),
+  totalTokens: z.number(),
+  contextWindow: z.number().optional(),
+  costUsd: z.number().optional(),
+  model: z.string(),
+});
+
+export const AttachmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  path: z.string(),
+  size: z.number(),
+  mime: z.string(),
+});
+
+export const NormalizedEventSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  ts: z.string(),
+  provider: z.enum(["claude", "cursor", "opencode", "agy"]),
+  kind: z.enum([
+    "session_init",
+    "user",
+    "thinking",
+    "text",
+    "tool_use",
+    "tool_result",
+    "usage",
+    "result",
+    "error",
+    "status",
+  ]),
+  role: z.enum(["user", "assistant"]).optional(),
+  text: z.string().optional(),
+  toolName: z.string().optional(),
+  toolId: z.string().optional(),
+  toolInput: z.unknown().optional(),
+  toolResult: z
+    .object({ content: z.string().optional(), isError: z.boolean().optional() })
+    .optional(),
+  usage: UsageInfoSchema.optional(),
+  model: z.string().optional(),
+  turnId: z.string().optional(),
+  attachments: z.array(AttachmentSchema).optional(),
+  edited: z.boolean().optional(),
+  agentChatId: z.string().optional(),
+  /** Durable monotonic pagination cursor assigned at persist (R0.3/R2.x). */
+  logSeq: z.number().optional(),
+});
+
+export const SessionMetaSchema = z.object({
+  sessionId: z.string(),
+  channel: z.enum(["tmux", "pty", "json"]),
+  modeId: z.string().optional(),
+  modeName: z.string().optional(),
+  cli: z.string(),
+  model: z.string().optional(),
+  turnState: z.enum(["idle", "queued", "thinking", "responding", "tool", "error"]),
+  queueDepth: z.number(),
+  queuedTurnIds: z.array(z.string()),
+  editingTurnIds: z.array(z.string()),
+  usage: UsageInfoSchema.optional(),
+});
 
 /**
  * Server-to-client messages.
@@ -110,6 +200,7 @@ const SessionCreatedSnapshot = z.object({
   label: z.string(),
   tmuxName: z.string(),
   useTmux: z.boolean().optional().default(true),
+  channel: z.enum(["tmux", "pty", "json"]).optional(),
   state: z.enum(["not_started", "working", "idle", "done", "exited"]),
   lifecycleState: z.enum(["not_started", "working", "idle", "done", "exited"]),
   createdAt: z.string(),
@@ -166,6 +257,8 @@ const SessionUpdatedEvent = z.object({
   type: z.literal("session:updated"),
   sessionId: z.string(),
   pinnedAt: z.string().nullable().optional(),
+  /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
+  channel: z.enum(["tmux", "pty", "json"]).optional(),
 });
 
 /**
@@ -262,6 +355,37 @@ const SystemErrorEvent = z.object({
   message: z.string(),
 });
 
+// JSON agent chat (S→C)
+const ChatReplayEvent = z.object({
+  type: z.literal("chat:replay"),
+  sessionId: z.string(),
+  events: z.array(NormalizedEventSchema),
+  /** Keyset cursor for "load earlier" (R2.1) — `logSeq` of the oldest replayed
+   *  event and whether older rows exist. Omitted on a `sinceSeq` delta replay. */
+  oldestSeq: z.number().optional(),
+  hasMore: z.boolean().optional(),
+});
+
+const SessionMessageEvent = z.object({
+  type: z.literal("session:message"),
+  sessionId: z.string(),
+  event: NormalizedEventSchema,
+});
+
+const SessionMetaEvent = z.object({
+  type: z.literal("session:meta"),
+  sessionId: z.string(),
+  meta: SessionMetaSchema,
+});
+
+// Edit-a-sent-message fork (P4/R3.6): tells other open tabs which turns were
+// truncated so they drop the superseded bubbles and re-sync from the new head.
+const SessionForkEvent = z.object({
+  type: z.literal("session:fork"),
+  sessionId: z.string(),
+  supersededTurnIds: z.array(z.string()),
+});
+
 export const ServerMessage = z.discriminatedUnion("type", [
   // Per-session events
   SessionCreatedEvent,
@@ -287,6 +411,11 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ModeCreatedEvent,
   ModeUpdatedEvent,
   ModeDeletedEvent,
+  // JSON agent chat
+  ChatReplayEvent,
+  SessionMessageEvent,
+  SessionMetaEvent,
+  SessionForkEvent,
   // System
   PongMessage,
   SystemErrorEvent,

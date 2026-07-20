@@ -23,6 +23,7 @@ export function registerWorktreeCreate(worktree: Command): void {
     .addOption(
       new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
     )
+    .option("--json", "Use the JSON agent-chat channel for the main agent (channel: json)")
     .action(
       async (
         projectId: string,
@@ -35,6 +36,7 @@ export function registerWorktreeCreate(worktree: Command): void {
           branch?: string;
           prompt?: string;
           promptFile?: string;
+          json?: boolean;
         }
       ) => {
         if (!opts.mode) {
@@ -57,6 +59,7 @@ export function registerWorktreeCreate(worktree: Command): void {
               baseBranch: opts.base,
               branch: opts.branch,
               prompt,
+              ...(opts.json ? { channel: "json" } : {}),
             }
           );
 

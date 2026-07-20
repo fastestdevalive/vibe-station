@@ -22,6 +22,11 @@ vi.mock("../services/paths.js", async () => {
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
     cleanupSessionDataDir: () => {},
+    cleanupDirectSessionDataDir: () => {},
+    sessionDataDir: (p: string, w: string, s: string) =>
+      pathJoin(tempDir, "projects", p, "session-data", w, s),
+    directSessionDataDir: (p: string, s: string) =>
+      pathJoin(tempDir, "projects", p, "sessions", s),
   };
 });
 
@@ -221,6 +226,53 @@ describe("Session routes", () => {
     expect(res.statusCode).toBe(200);
     const session = res.json<any>();
     expect(session.state).toBe("working");
+  });
+
+  it("1.T4 — channel:json create carries channel through serializeSession and does NOT spawn", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "json" },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json<{ id: string; channel?: string; state: string }>();
+    expect(created.channel).toBe("json");
+    // JSON sessions do not spawn at create — no PTY/tmux job flips them working.
+    expect(created.state).toBe("not_started");
+
+    // Give any (incorrectly-scheduled) spawn job a chance to run, then confirm
+    // the session is still not_started with channel json (no refetch needed).
+    await new Promise((r) => setTimeout(r, 200));
+    const getRes = await app.inject({ method: "GET", url: `/sessions/${created.id}` });
+    const fetched = getRes.json<{ channel?: string; state: string }>();
+    expect(fetched.channel).toBe("json");
+    expect(fetched.state).toBe("not_started");
+  });
+
+  it("JSON gate — channel:json with a claude (supported) mode → 201", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "json" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<{ channel?: string }>().channel).toBe("json");
+  });
+
+  it("2.T4 — TTY (default channel) agent create still spawns (state → working)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json<{ id: string; channel?: string }>();
+    expect(created.channel).toBe("tmux");
+
+    // The background spawn job (mocked spawnSession) flips the session working.
+    await new Promise((r) => setTimeout(r, 250));
+    const getRes = await app.inject({ method: "GET", url: `/sessions/${created.id}` });
+    expect(getRes.json<{ state: string }>().state).toBe("working");
   });
 
   it("assigns sequential slots for multiple sessions", async () => {

@@ -9,6 +9,7 @@ import { registerHealthRoute } from "./routes/health.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
+import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerModeRoutes } from "./routes/modes.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerFsRoutes } from "./routes/fs.js";
@@ -133,6 +134,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   registerProjectRoutes(app);
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);
+  registerAttachmentRoutes(app);
   registerModeRoutes(app);
   registerSettingsRoutes(app);
   registerFsRoutes(app);

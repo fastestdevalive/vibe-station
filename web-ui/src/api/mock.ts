@@ -1,8 +1,12 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  Attachment,
+  BeginEditResponse,
   ChangedPathEntry,
+  Channel,
   CliId,
+  NormalizedEvent,
   CreateDirectSessionBody,
   CreateModeBody,
   CreateProjectBody,
@@ -15,12 +19,17 @@ import type {
   Mode,
   Project,
   ProjectBranchesResponse,
+  SendChatResponse,
   SendInputBody,
   Session,
+  SessionMeta,
   Settings,
   SupportedCli,
+  TranscriptResponse,
+  TranscriptPage,
   TreeEntry,
   UpdateModeBody,
+  UploadAttachmentsResponse,
   WSEvent,
   Worktree,
 } from "./types";
@@ -259,12 +268,22 @@ export function createMockApi() {
 
   let daemonDown = false;
 
+  /** In-memory JSON-chat transcripts keyed by sessionId (replayed on openChat). */
+  const chatTranscripts = new Map<string, NormalizedEvent[]>();
+  let mockTurnSeq = 0;
+
   const api = {
     __test: {
       simulateExit,
       emit,
       setDaemonDown(v: boolean) {
         daemonDown = v;
+      },
+      /** Push an event into a mock transcript (for chat:replay in tests). */
+      pushChatEvent(sessionId: string, event: NormalizedEvent) {
+        const list = chatTranscripts.get(sessionId) ?? [];
+        list.push(event);
+        chatTranscripts.set(sessionId, list);
       },
     },
 
@@ -343,14 +362,16 @@ export function createMockApi() {
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
+      const wtId = `wt-${Date.now()}`;
       const wt: Worktree = {
-        id: `wt-${Date.now()}`,
+        id: wtId,
         projectId: body.projectId,
         branch: body.branch,
         baseBranch: body.baseBranch ?? "main",
         baseSha: "mock-base-sha",
         createdAt: nowIso(),
         pinnedAt: null,
+        mainSessionId: `${wtId}-m`,
       };
       worktrees.push(wt);
       treeStore[wt.id] = {
@@ -658,10 +679,10 @@ export function createMockApi() {
 
     async getSupportedClis(): Promise<SupportedCli[]> {
       return [
-        { id: "claude", defaultModel: "sonnet" },
-        { id: "cursor", defaultModel: "auto" },
-        { id: "opencode", defaultModel: "opencode/big-pickle" },
-        { id: "gemini", defaultModel: "gemini-2.5-pro" },
+        { id: "claude", defaultModel: "sonnet", supportsJson: true },
+        { id: "cursor", defaultModel: "auto", supportsJson: true },
+        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true },
+        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true },
       ];
     },
 
@@ -681,9 +702,9 @@ export function createMockApi() {
       if (cli === "cursor") {
         return { models: ["auto", "composer-2-fast", "gpt-5.3-codex"] };
       }
-      if (cli === "gemini") {
+      if (cli === "agy") {
         return {
-          models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
+          models: ["Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Low)", "Claude Sonnet 4.6 (Thinking)"],
         };
       }
       return { models: ["opencode/big-pickle", "opencode/other"] };
@@ -867,6 +888,218 @@ export function createMockApi() {
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
       return { base: dir, entries };
+    },
+
+    // ── JSON agent chat (mock) ────────────────────────────────────────────────
+
+    async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
+      const events = chatTranscripts.get(sessionId) ?? [];
+      if (sinceSeq !== undefined) {
+        const delta = events.filter((e) => (e.logSeq ?? -1) > sinceSeq);
+        emit({ type: "chat:replay", sessionId, events: structuredClone(delta) });
+        return;
+      }
+      // Bounded tail cursor mirror: the mock has no turn indexing, so replay all
+      // and report no older rows (hasMore:false).
+      const oldestSeq = events.length ? events[0]!.logSeq : undefined;
+      emit({
+        type: "chat:replay",
+        sessionId,
+        events: structuredClone(events),
+        ...(oldestSeq !== undefined ? { oldestSeq } : {}),
+        hasMore: false,
+      });
+    },
+
+    async closeChat(_sessionId: string): Promise<void> {},
+
+    async sendChat(
+      sessionId: string,
+      message: string,
+      attachmentIds?: string[],
+    ): Promise<SendChatResponse> {
+      const turnId = `turn-${++mockTurnSeq}`;
+      const userEvent: NormalizedEvent = {
+        id: `evt-${Date.now()}-${mockTurnSeq}`,
+        sessionId,
+        ts: nowIso(),
+        provider: "claude",
+        kind: "user",
+        role: "user",
+        text: message,
+        turnId,
+        ...(attachmentIds?.length
+          ? { attachments: attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
+          : {}),
+      };
+      api.__test.pushChatEvent(sessionId, userEvent);
+      emit({ type: "session:message", sessionId, event: userEvent });
+      return { turnId, queuePosition: 0 };
+    },
+
+    async stopChat(_sessionId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async cancelQueuedTurn(_sessionId: string, _turnId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
+    async beginEditQueuedTurn(sessionId: string, turnId: string): Promise<BeginEditResponse> {
+      const events = chatTranscripts.get(sessionId) ?? [];
+      // Last `user` event for this turn wins (mirrors edited-supersede semantics).
+      const userEv = [...events].reverse().find((e) => e.kind === "user" && e.turnId === turnId);
+      return {
+        turnId,
+        message: userEv?.text ?? "",
+        attachments: userEv?.attachments ?? [],
+        queueIndex: 0,
+      };
+    },
+
+    async resubmitQueuedTurn(
+      sessionId: string,
+      turnId: string,
+      body: { edited: boolean; message?: string; attachmentIds?: string[] },
+    ): Promise<{ ok: true; turnId: string }> {
+      if (body.edited) {
+        const userEvent: NormalizedEvent = {
+          id: `evt-${Date.now()}-${++mockTurnSeq}`,
+          sessionId,
+          ts: nowIso(),
+          provider: "claude",
+          kind: "user",
+          role: "user",
+          text: body.message ?? "",
+          turnId,
+          edited: true,
+          ...(body.attachmentIds?.length
+            ? { attachments: body.attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
+            : {}),
+        };
+        api.__test.pushChatEvent(sessionId, userEvent);
+        emit({ type: "session:message", sessionId, event: userEvent });
+      }
+      return { ok: true, turnId };
+    },
+
+    async promoteQueuedTurn(_sessionId: string, turnId: string): Promise<{ ok: true; turnId: string }> {
+      return { ok: true, turnId };
+    },
+
+    async forkChat(
+      sessionId: string,
+      turnId: string,
+      message: string,
+      attachmentIds?: string[],
+    ): Promise<{ ok: true; turnId: string }> {
+      // Truncate at the forked turn: everything from that turn onward is dropped
+      // (superseded), then the edited message runs as a fresh turn (mirrors R3.4).
+      const events = chatTranscripts.get(sessionId) ?? [];
+      const forkIdx = events.findIndex((e) => e.turnId === turnId);
+      const supersededTurnIds = new Set<string>();
+      if (forkIdx >= 0) {
+        for (const e of events.slice(forkIdx)) if (e.turnId) supersededTurnIds.add(e.turnId);
+        chatTranscripts.set(sessionId, events.slice(0, forkIdx));
+      }
+      emit({ type: "session:fork", sessionId, supersededTurnIds: [...supersededTurnIds] });
+      const newTurnId = `turn-${++mockTurnSeq}`;
+      const userEvent: NormalizedEvent = {
+        id: `evt-${Date.now()}-${mockTurnSeq}`,
+        sessionId,
+        ts: nowIso(),
+        provider: "claude",
+        kind: "user",
+        role: "user",
+        text: message,
+        turnId: newTurnId,
+        ...(attachmentIds?.length
+          ? { attachments: attachmentIds.map((id) => ({ id, name: id, path: `/uploads/${id}`, size: 0, mime: "application/octet-stream" })) }
+          : {}),
+      };
+      api.__test.pushChatEvent(sessionId, userEvent);
+      emit({ type: "session:message", sessionId, event: userEvent });
+      return { ok: true, turnId: newTurnId };
+    },
+
+    async setSessionModel(
+      _sessionId: string,
+      model: string | null,
+    ): Promise<{ ok: true; model: string | null }> {
+      return { ok: true, model };
+    },
+
+    async setSessionChannel(
+      sessionId: string,
+      channel: Channel,
+    ): Promise<{ ok: true; channel: Channel }> {
+      const s = sessions.find((x) => x.id === sessionId);
+      if (s) {
+        s.channel = channel;
+        s.useTmux = channel === "tmux";
+        // Mirror the switch to other tabs (R1.7): patch the session record + meta.
+        emit({ type: "session:updated", sessionId, channel });
+        emit({
+          type: "session:meta",
+          sessionId,
+          meta: {
+            sessionId,
+            channel,
+            cli: "claude",
+            turnState: "idle",
+            queueDepth: 0,
+            queuedTurnIds: [],
+            editingTurnIds: [],
+          },
+        });
+      }
+      return { ok: true, channel };
+    },
+
+    async uploadAttachments(_sessionId: string, files: File[]): Promise<UploadAttachmentsResponse> {
+      const attachments: Attachment[] = files.map((f, i) => ({
+        id: `att-${Date.now()}-${i}`,
+        name: f.name,
+        path: `/mock/uploads/${f.name}`,
+        size: f.size,
+        mime: f.type || "application/octet-stream",
+      }));
+      return { attachments };
+    },
+
+    async getTranscript(sessionId: string): Promise<TranscriptResponse> {
+      return { events: structuredClone(chatTranscripts.get(sessionId) ?? []) };
+    },
+
+    async getTranscriptPage(
+      sessionId: string,
+      beforeSeq: number,
+      limit = 20,
+    ): Promise<TranscriptPage> {
+      const events = chatTranscripts.get(sessionId) ?? [];
+      const older = events.filter((e) => (e.logSeq ?? -1) < beforeSeq);
+      const page = older.slice(Math.max(0, older.length - limit));
+      return {
+        events: structuredClone(page),
+        ...(page.length ? { oldestSeq: page[0]!.logSeq } : {}),
+        hasMore: page.length < older.length,
+      };
+    },
+
+    async getTranscriptAll(sessionId: string): Promise<TranscriptResponse> {
+      return { events: structuredClone(chatTranscripts.get(sessionId) ?? []) };
+    },
+
+    async getMeta(sessionId: string): Promise<SessionMeta> {
+      return {
+        sessionId,
+        channel: "json",
+        cli: "claude",
+        turnState: "idle",
+        queueDepth: 0,
+        queuedTurnIds: [],
+        editingTurnIds: [],
+      };
     },
 
     subscribe(sessionIds: string[]): () => void {

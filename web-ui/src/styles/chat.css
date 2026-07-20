@@ -1,0 +1,818 @@
+/* JSON agent chat — 100gb tokens (tokens.css). Rendered beside a permanently
+   mounted TerminalPane and toggled by CSS visibility (Decision 14). */
+
+.agent-pane-slot {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.agent-pane-slot__terminal {
+  min-height: 0;
+}
+
+.chat-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+}
+.chat-pane--hidden {
+  display: none;
+}
+
+.chat-pane__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-pane__state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 100%;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+.chat-pane__empty {
+  flex-direction: column;
+}
+.chat-pane__empty-icon {
+  font-size: var(--font-size-3xl);
+  margin-bottom: var(--space-2);
+}
+.chat-pane__empty-title {
+  color: var(--fg-secondary);
+  font-weight: var(--font-weight-medium);
+}
+.chat-pane__empty-sub {
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+}
+
+/* ── Message list ─────────────────────────────────────────────────────────── */
+
+.chat-message-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.chat-msg {
+  display: flex;
+  max-width: 100%;
+}
+.chat-msg--user {
+  justify-content: flex-end;
+}
+.chat-msg--assistant {
+  justify-content: flex-start;
+}
+.chat-msg--pending {
+  opacity: 0.6;
+}
+
+/* An answered user turn with an inline "edit → fork" affordance (P4/R3.1). The
+   ✎ button sits to the left of the right-aligned bubble, revealed on hover. */
+.chat-user-turn {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+.chat-user-turn .chat-msg {
+  flex: 0 1 auto;
+}
+.chat-user-turn__edit {
+  flex: 0 0 auto;
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted, currentColor);
+  cursor: pointer;
+  opacity: 0;
+  padding: var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: 0.9em;
+  transition: opacity 0.12s ease;
+}
+.chat-user-turn:hover .chat-user-turn__edit,
+.chat-user-turn__edit:focus-visible {
+  opacity: 0.7;
+}
+.chat-user-turn__edit:hover {
+  opacity: 1;
+}
+/* A cancelled queued turn: kept in history, dimmed, with a "not sent" caption. */
+.chat-user-turn--cancelled {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.chat-user-turn--cancelled .chat-msg {
+  opacity: 0.55;
+}
+.chat-user-turn__cancelled {
+  font-size: 0.75em;
+  font-style: italic;
+  color: var(--fg-muted);
+  padding-right: var(--space-1);
+}
+.chat-msg--forking {
+  width: 100%;
+}
+.chat-msg--forking .chat-queued-editor {
+  width: 100%;
+}
+
+.chat-bubble {
+  border-radius: var(--radius-lg);
+  padding: var(--space-2) var(--space-3);
+  max-width: min(80%, 720px);
+  overflow-x: auto;
+  line-height: var(--line-height-normal);
+}
+.chat-bubble--user {
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-primary);
+  border-bottom-right-radius: var(--radius-sm);
+}
+/* Copilot-style agent messages: no card, full-width prose that sits flush with
+   the tool/error cards (which are already full-width flex children). */
+.chat-bubble--assistant {
+  background: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  max-width: 100%;
+}
+.chat-bubble__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-bubble__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+/* Strip the shared markdown-preview card chrome inside the chat pane so agent
+   prose (and thinking blocks) render as bare text. Scoped to .chat-pane so the
+   file-preview pane — which shares .workspace-markdown-preview — is untouched. */
+.chat-pane .workspace-markdown-preview {
+  padding: 0;
+  background: transparent;
+}
+.chat-pane .workspace-markdown-preview > :first-child { margin-top: 0; }
+.chat-pane .workspace-markdown-preview > :last-child { margin-bottom: 0; }
+
+/* ── Markdown segments (prose + inline mermaid diagrams) ───────────────────── */
+
+.chat-md-segments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.mermaid-view svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ── Thinking block ───────────────────────────────────────────────────────── */
+
+.chat-thinking {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+.chat-thinking__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  font-family: inherit;
+  font-size: inherit;
+}
+.chat-thinking__body {
+  border-left: var(--border-width-2) solid var(--border-subtle);
+  padding-left: var(--space-3);
+  margin-left: var(--space-1);
+  opacity: 0.85;
+}
+
+/* ── Tool cards ───────────────────────────────────────────────────────────── */
+
+.chat-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.chat-tool-card {
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-sm);
+  overflow: hidden;
+}
+.chat-tool-card--error {
+  border-color: var(--destructive);
+}
+.chat-tool-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+}
+.chat-tool-card__name {
+  font-weight: var(--font-weight-medium);
+}
+.chat-tool-card__inline {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.chat-tool-card__status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.chat-tool-card__body,
+.chat-tool-card__pre {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  overflow-x: auto;
+  border-top: var(--border-width) solid var(--border-subtle);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Error card ───────────────────────────────────────────────────────────── */
+
+.chat-error-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-width) solid var(--destructive);
+  background: var(--destructive-muted);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+.chat-error-card__body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.chat-error-card__retry {
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-primary);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* ── Pending / queued ─────────────────────────────────────────────────────── */
+
+.chat-pending {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+}
+.chat-pending__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.chat-pending__cancel {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0 var(--space-1);
+}
+.chat-status-note {
+  align-self: center;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-style: italic;
+  padding: var(--space-1) 0;
+}
+
+/* ── "Load earlier" affordance at the top of the loaded window (R2.2/R2.5) ──── */
+
+.chat-load-earlier {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+}
+.chat-load-earlier__btn,
+.chat-load-earlier__all {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  background: transparent;
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+.chat-load-earlier__btn:hover:not(:disabled),
+.chat-load-earlier__all:hover:not(:disabled) {
+  color: var(--fg-default);
+  border-color: var(--border-default);
+}
+.chat-load-earlier__btn:disabled,
+.chat-load-earlier__all:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ── Queued user row: bubble + edit / send-now / cancel affordances ─────────── */
+
+/* ── Queued-message tray (above the composer) ──────────────────────────────── */
+
+.chat-queued-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--border-width) solid var(--border-subtle);
+}
+.chat-queued-tray__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+.chat-queued-tray__row:focus-visible {
+  outline: 2px solid var(--chat-accent);
+  outline-offset: 1px;
+}
+.chat-queued-tray__row--pending {
+  opacity: 0.7;
+  border-style: dashed;
+}
+.chat-queued-tray__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+.chat-queued-tray__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  /* Affordances are quiet by default; the row reveals them on hover/focus. */
+  opacity: 0.55;
+  transition: opacity 0.12s ease;
+}
+.chat-queued-tray__row:hover .chat-queued-tray__actions,
+.chat-queued-tray__row:focus-within .chat-queued-tray__actions {
+  opacity: 1;
+}
+.chat-queued-tray__action {
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+}
+.chat-queued-tray__action:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--border-subtle);
+  background: var(--bg-card);
+}
+.chat-queued-tray__action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chat-queued-tray__badge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--chat-accent);
+  font-style: italic;
+}
+
+/* ── Thinking hint (anchored under the latest user message) ────────────────── */
+
+.chat-thinking-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  font-style: italic;
+  line-height: 1;
+}
+.chat-thinking-hint__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--chat-accent);
+  animation: chat-thinking-pulse 1.1s ease-in-out infinite;
+}
+@keyframes chat-thinking-pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-hint__dot { animation: none; }
+}
+
+/* ── Inline queued-turn editor ─────────────────────────────────────────────── */
+
+.chat-queued-editor {
+  align-self: flex-end;
+  width: min(80%, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: var(--border-width) solid var(--chat-accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+}
+.chat-queued-editor--dragover {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--chat-accent) 8%, var(--bg-card));
+}
+.chat-queued-editor__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.chat-queued-editor__textarea {
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--fg-primary);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+.chat-queued-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.chat-queued-editor__attach {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  font-size: var(--font-size-sm);
+}
+/* Push Discard/Save to the right of the attach button. */
+.chat-queued-editor__discard {
+  margin-left: auto;
+}
+
+/* ── Footer: status bar + composer ────────────────────────────────────────── */
+
+.chat-pane__footer {
+  border-top: var(--border-width) solid var(--border-subtle);
+  background: var(--bg-secondary);
+}
+
+.chat-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+}
+.chat-statusbar__info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.chat-statusbar__model,
+.chat-statusbar__mode {
+  color: var(--fg-secondary);
+}
+
+/* ── Channel toggle (JSON → terminal) ──────────────────────────────────────── */
+.chat-statusbar__channel {
+  background: none;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  padding: 0 var(--space-2);
+  font: inherit;
+  line-height: 1.4;
+}
+.chat-statusbar__channel:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+}
+.chat-statusbar__channel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Live model switcher (status bar) ──────────────────────────────────────── */
+
+.chat-model-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.chat-model-switch__button {
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  font: inherit;
+  line-height: 1.4;
+}
+.chat-model-switch__button:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+}
+.chat-model-switch__caret {
+  opacity: 0.6;
+}
+.chat-model-switch__popover {
+  position: absolute;
+  bottom: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-md, 0 6px 24px rgba(0, 0, 0, 0.28));
+}
+.chat-model-switch__option {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.chat-model-switch__option:hover,
+.chat-model-switch__option:focus-visible {
+  background: var(--bg-elevated);
+  outline: none;
+}
+.chat-model-switch__option--active {
+  color: var(--fg-primary);
+  font-weight: var(--font-weight-medium, 600);
+  background: var(--bg-active);
+}
+.chat-model-switch__note {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+.chat-model-switch__note--error {
+  color: var(--destructive);
+}
+.chat-model-switch__error {
+  font-size: var(--font-size-xs);
+  color: var(--destructive);
+}
+.chat-statusbar__turn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.chat-statusbar__state {
+  /* Bare inline span otherwise — flexbox centers the spinner against the label
+     instead of dropping it to the text baseline. */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.chat-statusbar__state--error {
+  color: var(--destructive);
+}
+.chat-statusbar__stop {
+  padding: 2px var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+/* ── Composer ─────────────────────────────────────────────────────────────── */
+
+.chat-composer {
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.chat-composer--dragover {
+  outline: var(--border-width-2) dashed var(--chat-accent);
+  outline-offset: -4px;
+  background: var(--bg-hover);
+}
+.chat-composer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.chat-composer__error {
+  color: var(--destructive);
+  font-size: var(--font-size-xs);
+}
+.chat-composer__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+.chat-composer__textarea {
+  flex: 1;
+  min-height: 40px;
+  max-height: 200px;
+  resize: vertical;
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+.chat-composer__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.chat-composer__file-input {
+  display: none;
+}
+.chat-composer__attach,
+.chat-composer__send,
+.chat-composer__stop {
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  cursor: pointer;
+  min-width: 36px;
+  line-height: 1;
+}
+.chat-composer__send {
+  background: var(--chat-accent);
+  color: var(--fg-inverse);
+  border-color: var(--chat-accent);
+}
+.chat-composer__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.chat-composer__hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-faint);
+}
+
+/* ── Attachment picker (create dialogs — stages files pre-session) ─────────── */
+
+.attachment-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: var(--border-width) dashed var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+.attachment-picker--dragover {
+  border-color: var(--chat-accent);
+  background: var(--bg-hover);
+}
+.attachment-picker__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.attachment-picker__hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-faint);
+}
+
+/* ── Attachment chip ──────────────────────────────────────────────────────── */
+
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  font-size: var(--font-size-xs);
+  max-width: 220px;
+}
+.chat-attachment-chip--error {
+  border-color: var(--destructive);
+  color: var(--destructive);
+}
+.chat-attachment-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attachment-chip__meta {
+  color: var(--fg-muted);
+}
+.chat-attachment-chip__remove {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+/* ── Spinner ──────────────────────────────────────────────────────────────── */
+
+.chat-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--chat-accent);
+  border-radius: var(--radius-full);
+  animation: chat-spin 0.7s linear infinite;
+}
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Tab channel marker ───────────────────────────────────────────────────── */
+
+.tab__channel-icon {
+  margin-left: var(--space-1);
+  font-size: var(--font-size-xs);
+  opacity: 0.75;
+}

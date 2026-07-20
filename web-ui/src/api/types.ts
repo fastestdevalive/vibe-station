@@ -34,6 +34,12 @@ export interface Worktree {
    * default sort order (newest first).
    */
   pinnedAt: string | null;
+  /**
+   * Id of the worktree's main (slot `m`) agent session. Present on create so the
+   * JSON create flow can upload + send its first turn to the main agent. Null for
+   * legacy/edge records with no main session.
+   */
+  mainSessionId?: string | null;
 }
 
 /**
@@ -46,6 +52,12 @@ export type FileScope = "worktree" | "project";
 export type SessionType = "agent" | "terminal";
 
 export type SessionState = "not_started" | "working" | "idle" | "done" | "exited";
+
+/**
+ * Execution channel (mirror of daemon `Channel`). `json` = structured JSON
+ * agent chat (ChatPane) instead of a TTY (TerminalPane).
+ */
+export type Channel = "tmux" | "pty" | "json";
 
 export interface Session {
   id: string;
@@ -65,9 +77,133 @@ export interface Session {
   lifecycleState: SessionState;
   tmuxName: string;
   useTmux?: boolean;
+  /** Execution channel; absent on legacy rows (treat as tmux/pty). */
+  channel?: Channel;
   createdAt: string;
   /** When set, the session is pinned to the top of its sidebar group. */
   pinnedAt?: string | null;
+}
+
+/** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
+export interface UsageInfo {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreateTokens: number;
+  totalTokens: number;
+  contextWindow?: number;
+  costUsd?: number;
+  model: string;
+}
+
+/** A file attached to a user message (mirror of daemon `Attachment`). */
+export interface Attachment {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  mime: string;
+}
+
+export type NormalizedEventProvider = "claude" | "cursor" | "opencode";
+
+export type NormalizedEventKind =
+  | "session_init"
+  | "user"
+  | "thinking"
+  | "text"
+  | "tool_use"
+  | "tool_result"
+  | "usage"
+  | "result"
+  | "error"
+  | "status";
+
+/** One normalized chat event (mirror of daemon `NormalizedEvent`). */
+export interface NormalizedEvent {
+  id: string;
+  sessionId: string;
+  ts: string;
+  provider: NormalizedEventProvider;
+  kind: NormalizedEventKind;
+  role?: "user" | "assistant";
+  text?: string;
+  toolName?: string;
+  toolId?: string;
+  toolInput?: unknown;
+  toolResult?: { content?: string; isError?: boolean };
+  usage?: UsageInfo;
+  model?: string;
+  turnId?: string;
+  attachments?: Attachment[];
+  /** Marks a superseding `user` event from editing a queued turn (last wins). */
+  edited?: boolean;
+  /** Marks a superseding `user` event for a queued turn cancelled before it ran —
+   *  kept in history but never processed by the agent (last wins). */
+  cancelled?: boolean;
+  /** True when this event was truncated away by a fork (R3.4) — filtered on render
+   *  as a client-side guard; the daemon already excludes superseded rows from replay. */
+  superseded?: boolean;
+  agentChatId?: string;
+  /** Durable monotonic pagination cursor assigned by the daemon at persist. */
+  logSeq?: number;
+}
+
+export type TurnState = "idle" | "queued" | "thinking" | "responding" | "tool" | "error";
+
+/** Response from POST /sessions/:id/chat (202). */
+export interface SendChatResponse {
+  turnId: string;
+  queuePosition: number;
+}
+
+/** Response from POST /sessions/:id/chat/queue/:turnId/edit (queue-controls). */
+export interface BeginEditResponse {
+  turnId: string;
+  /** Raw user text to prefill the inline editor. */
+  message: string;
+  /** Full attachment records to restore as chips in the editor. */
+  attachments: Attachment[];
+  /** Original queue index (informational). */
+  queueIndex: number;
+}
+
+/** Response from POST /sessions/:id/attachments (201). */
+export interface UploadAttachmentsResponse {
+  attachments: Attachment[];
+}
+
+/** Response from GET /sessions/:id/transcript (full or `since` delta). */
+export interface TranscriptResponse {
+  events: NormalizedEvent[];
+}
+
+/**
+ * A bounded transcript window + keyset cursor (tail-N or `beforeSeq` page).
+ * `oldestSeq` is the `logSeq` of the first event; `hasMore` is true when older
+ * rows exist before it (R2.1/R2.2).
+ */
+export interface TranscriptPage {
+  events: NormalizedEvent[];
+  oldestSeq?: number;
+  hasMore: boolean;
+}
+
+/** Cross-harness session meta feeding the status bar (mirror of daemon `SessionMeta`). */
+export interface SessionMeta {
+  sessionId: string;
+  channel: Channel;
+  modeId?: string;
+  modeName?: string;
+  cli: CliId;
+  model?: string;
+  turnState: TurnState;
+  queueDepth: number;
+  /** Runnable queued turnIds in FIFO order (per-turn badge + affordances). */
+  queuedTurnIds: string[];
+  /** turnIds withdrawn into the editing hold (drives the "editing" bubble). */
+  editingTurnIds: string[];
+  usage?: UsageInfo;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -76,6 +212,8 @@ export type CliId = string;
 export interface SupportedCli {
   id: string;
   defaultModel: string;
+  /** Whether this CLI can run the JSON agent-chat channel. */
+  supportsJson: boolean;
 }
 
 export interface Mode {
@@ -136,6 +274,8 @@ export type WSEvent =
       type: "session:updated";
       sessionId: string;
       pinnedAt?: string | null;
+      /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
+      channel?: Channel;
     }
   | {
       type: "session:error";
@@ -153,6 +293,36 @@ export type WSEvent =
       type: "session:resumed";
       sessionId: string;
       restoredFromHistory: boolean;
+    }
+  | {
+      /** JSON agent chat: bounded tail-N replay on chat:open (or a `sinceSeq`
+       *  delta, in which case the cursor fields are omitted). */
+      type: "chat:replay";
+      sessionId: string;
+      events: NormalizedEvent[];
+      /** `logSeq` of the oldest replayed event (keyset cursor for load-earlier). */
+      oldestSeq?: number;
+      /** True when older rows exist before `oldestSeq`. */
+      hasMore?: boolean;
+    }
+  | {
+      /** JSON agent chat: one live normalized event. */
+      type: "session:message";
+      sessionId: string;
+      event: NormalizedEvent;
+    }
+  | {
+      /** JSON agent chat: usage/model/turn-state update. */
+      type: "session:meta";
+      sessionId: string;
+      meta: SessionMeta;
+    }
+  | {
+      /** JSON agent chat: an edit-a-sent-message fork truncated these turns —
+       *  other tabs drop the superseded bubbles and re-sync (P4/R3.6). */
+      type: "session:fork";
+      sessionId: string;
+      supersededTurnIds: string[];
     }
   | {
       type: "file:changed";
@@ -245,6 +415,8 @@ export interface CreateWorktreeBody {
   baseBranch?: string;
   prompt?: string;
   useTmux?: boolean;
+  /** `"json"` selects the JSON agent-chat channel for the main agent. */
+  channel?: Channel;
 }
 
 export interface CreateSessionBody {
@@ -253,6 +425,8 @@ export interface CreateSessionBody {
   type: SessionType;
   prompt?: string;
   useTmux?: boolean;
+  /** `"json"` selects the JSON agent-chat channel. */
+  channel?: Channel;
   /** Optional display name for terminals; blank → daemon assigns "Terminal N". */
   name?: string;
 }
@@ -265,6 +439,8 @@ export interface CreateDirectSessionBody {
   modeId?: string;
   prompt?: string;
   useTmux?: boolean;
+  /** `"json"` selects the JSON agent-chat channel. */
+  channel?: Channel;
   name?: string;
 }
 

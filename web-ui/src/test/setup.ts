@@ -27,6 +27,12 @@ HTMLCanvasElement.prototype.getContext = function getContext() {
   return null;
 };
 
+// jsdom doesn't implement scrollIntoView; the chat MessageList calls it on new
+// messages. Provide a no-op so those renders don't throw.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 afterEach(() => {
   cleanup();
   localStorage.clear();
