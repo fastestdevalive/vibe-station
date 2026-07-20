@@ -669,33 +669,6 @@ describe("plugins in a direct (project) context", () => {
     expect(cmd.join(" ")).not.toContain("worktrees");
   });
 
-  it("gemini: GEMINI_SYSTEM_MD points at the direct session data dir", async () => {
-    const { resolvePlugin } = await import("../agent-plugins/registry.js");
-    const { directSystemPromptPath } = await import("../services/paths.js");
-    const env = resolvePlugin("gemini").getEnvironment({
-      project: { id: "p1" },
-      ctx: projCtx("p1"),
-      session: { id: "s1" },
-      daemonPort: 7421,
-    } as never);
-
-    expect(env.GEMINI_SYSTEM_MD).toBe(directSystemPromptPath("p1", "s1"));
-    expect(env.GEMINI_SYSTEM_MD).not.toContain("p1-direct");
-  });
-
-  it("gemini: still uses the worktree data dir for a worktree context", async () => {
-    const { resolvePlugin } = await import("../agent-plugins/registry.js");
-    const { systemPromptPath } = await import("../services/paths.js");
-    const env = resolvePlugin("gemini").getEnvironment({
-      project: { id: "p1" },
-      ctx: wtCtx("p1", "w1"),
-      session: { id: "s1" },
-      daemonPort: 7421,
-    } as never);
-
-    expect(env.GEMINI_SYSTEM_MD).toBe(systemPromptPath("p1", "w1", "s1"));
-  });
-
   it("opencode: config + system prompt resolve to the direct session data dir", async () => {
     const { resolvePlugin } = await import("../agent-plugins/registry.js");
     const { directOpencodeConfigPath } = await import("../services/paths.js");

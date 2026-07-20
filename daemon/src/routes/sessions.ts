@@ -1238,14 +1238,20 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const restoreArgv = await plugin.getRestoreCommand?.({
       session,
       project,
-      worktree,
+      cwd,
       ...(model ? { model } : {}),
     });
 
     if (restoreArgv) {
       // Resume path — same as POST /resume: self-heal hooks, then spawn the argv.
       if (plugin.setupWorkspaceHooks) await plugin.setupWorkspaceHooks(cwd);
-      const launchCfg = { project, worktree, session, daemonPort: 0, ...(model ? { model } : {}) };
+      const launchCfg = {
+        project,
+        ctx: resolvedContextOf(project, worktree),
+        session,
+        daemonPort: 0,
+        ...(model ? { model } : {}),
+      };
       const env: Record<string, string> = {
         VST_SESSION: session.id,
         VST_SPAWN_TOKEN: session.id,
@@ -1257,7 +1263,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       };
       await spawnSessionFromArgv({
         project,
-        worktree,
+        cwd,
+        worktreeId: worktree.id,
         session,
         argv: restoreArgv,
         env,
@@ -1267,7 +1274,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // as the /resume capture above: a CWD-keyed capture source can return
       // a different session's conversation).
       if (!session.agentChatId) {
-        const capturedId = (await plugin.captureChatId?.({ session, project, worktree })) ?? null;
+        const capturedId = (await plugin.captureChatId?.({ session, project, cwd })) ?? null;
         if (capturedId) session.agentChatId = capturedId;
       }
     } else {
