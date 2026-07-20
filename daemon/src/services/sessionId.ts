@@ -41,18 +41,24 @@ export function reserveNextWorktreeNum(project: ProjectRecord): number {
 }
 
 /**
- * Reserve the next free agent slot number (a{n}) for a worktree.
+ * Reserve the next agent slot (a{n}) for a worktree — monotonic, never reused.
+ *
+ * Uses the persisted high-water counter `worktree.agentSeq`. Legacy worktrees
+ * (no counter yet) lazily seed from `max(existing agent slot nums)`. The
+ * `Number.isFinite` filter is REQUIRED so a non-numeric slot can't poison the
+ * counter to NaN. A deleted agent's number is never recycled.
+ *
+ * Pure: the caller MUST persist the returned number as `agentSeq` in the same
+ * `mutateProject` update that appends the session record.
  */
 export function reserveNextAgentSlot(worktree: WorktreeRecord): `a${number}` {
-  const usedNums = new Set(
-    worktree.sessions
-      .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("a"))
-      .map((s) => parseInt((s.slot as string).slice(1), 10)),
-  );
-  for (let n = 1; n < 100_000; n++) {
-    if (!usedNums.has(n)) return `a${n}`;
-  }
-  throw new Error(`Could not reserve agent slot for worktree ${worktree.id}`);
+  const existing = worktree.sessions
+    .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("a"))
+    .map((s) => parseInt((s.slot as string).slice(1), 10))
+    .filter(Number.isFinite);
+  const seed = Math.max(0, ...existing);
+  const n = (worktree.agentSeq ?? seed) + 1;
+  return `a${n}`;
 }
 
 /**

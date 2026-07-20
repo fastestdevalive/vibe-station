@@ -290,4 +290,23 @@ describe("Session routes", () => {
     expect(r1.json<SessionRecord>().slot).toBe("a1");
     expect(r2.json<SessionRecord>().slot).toBe("a2");
   });
+
+  it("does not reuse an agent slot/id after delete (monotonic)", async () => {
+    const create = () =>
+      app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+      });
+
+    const first = (await create()).json<SessionRecord>();
+    expect(first.slot).toBe("a1");
+
+    const del = await app.inject({ method: "DELETE", url: `/sessions/${first.id}` });
+    expect(del.statusCode).toBe(200);
+
+    const second = (await create()).json<SessionRecord>();
+    expect(second.slot).toBe("a2");
+    expect(second.id).not.toBe(first.id);
+  });
 });
