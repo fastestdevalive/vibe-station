@@ -852,10 +852,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             fallbackMs: plugin.getReadySignal().fallbackMs,
           });
 
-          // Capture chat ID for future resumes (self-healing for legacy sessions)
-          const capturedId = await plugin.captureChatId?.({ session, project, cwd }) ?? null;
-          if (capturedId) {
-            session.agentChatId = capturedId;
+          // Capture chat ID for future resumes (self-healing for legacy
+          // sessions that don't have one yet). Only fills a GAP — never
+          // overwrites an already-known id. `captureChatId` for a CWD-keyed
+          // capture source (agy) can otherwise return a DIFFERENT, unrelated
+          // session's conversation if one was ever resumed more recently in
+          // the same worktree (see agy.ts's chatIdBaselines block comment).
+          if (!session.agentChatId) {
+            const capturedId = await plugin.captureChatId?.({ session, project, cwd }) ?? null;
+            if (capturedId) {
+              session.agentChatId = capturedId;
+            }
           }
         } else {
           // Fresh launch path: build prompt and spawn normally
@@ -1256,8 +1263,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         env,
         fallbackMs: plugin.getReadySignal().fallbackMs,
       });
-      const capturedId = (await plugin.captureChatId?.({ session, project, worktree })) ?? null;
-      if (capturedId) session.agentChatId = capturedId;
+      // Self-heal only — never overwrite an already-known id (same reasoning
+      // as the /resume capture above: a CWD-keyed capture source can return
+      // a different session's conversation).
+      if (!session.agentChatId) {
+        const capturedId = (await plugin.captureChatId?.({ session, project, worktree })) ?? null;
+        if (capturedId) session.agentChatId = capturedId;
+      }
     } else {
       // Fresh launch — an empty session with nothing to resume (J12).
       const { buildPrompt } = await import("../services/promptBuilder.js");
@@ -1384,6 +1396,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         // session's (plausible — same CLI splash), flip the fresh session to
         // "idle" one tick after this handler marks it "working".
         clearIdleTracking(id);
+        // Self-heal `agentChatId` against the CLI's own live state (agy —
+        // see `refreshChatIdOnToggle`'s doc comment / the chatIdBaselines
+        // block in agy.ts). Unlike the resume-path captures above, this
+        // INTENTIONALLY overwrites even an already-set id: the whole point
+        // is correcting a possibly-wrong value with the freshest truth,
+        // captured at the one moment it's most trustworthy — right after a
+        // real, live conversation the user was just using. No-ops for
+        // plugins that don't implement it (claude/opencode/cursor already
+        // capture reliably and shouldn't be second-guessed here).
+        const refreshedId = (await plugin.refreshChatIdOnToggle?.({ session, project, worktree })) ?? null;
+        if (refreshedId) session.agentChatId = refreshedId;
         // Reset the tmux name back to the JSON `__direct__` placeholder so the
         // record is consistent for JSON mode, then flip the invariant.
         session.tmuxName = jsonTmuxName;
