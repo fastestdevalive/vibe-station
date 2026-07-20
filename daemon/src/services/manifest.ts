@@ -7,6 +7,7 @@ import { readFile, writeFile, rename, open, mkdir } from "node:fs/promises";
 import type { ProjectRecord } from "../types.js";
 import { manifestPath, manifestTmpPath, projectDir } from "./paths.js";
 import { resolveUseTmux } from "./resolveUseTmux.js";
+import { normalizeChannel } from "./channel.js";
 
 export async function readManifest(projectId: string): Promise<ProjectRecord> {
   const content = await readFile(manifestPath(projectId), "utf8");
@@ -22,15 +23,19 @@ export async function readManifest(projectId: string): Promise<ProjectRecord> {
     record.directSessions = [];
   }
 
-  // Normalize useTmux for worktree sessions
+  // Normalize useTmux for worktree sessions, then backfill `channel`
+  // (Decision 1): legacy sessions get `tmux`/`pty` from useTmux; JSON pins
+  // useTmux=false.
   for (const worktree of record.worktrees) {
     for (const session of worktree.sessions) {
       session.useTmux = resolveUseTmux(session.useTmux);
+      normalizeChannel(session);
     }
   }
   // Normalize useTmux for direct sessions
   for (const session of record.directSessions) {
     session.useTmux = resolveUseTmux(session.useTmux);
+    normalizeChannel(session);
   }
   return record;
 }

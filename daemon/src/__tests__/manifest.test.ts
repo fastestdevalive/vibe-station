@@ -120,6 +120,70 @@ describe("manifest read/write", () => {
     const loaded = await readManifest(projectId);
     expect(loaded.worktrees[0]!.sessions[0]!.useTmux).toBe(true);
   });
+
+  it("1.T3 — legacy manifest without `channel` backfills channel from useTmux; json pins useTmux=false", async () => {
+    const { readManifest } = await import("../services/manifest.js");
+    const { writeFile, mkdir: mkdirFs } = await import("node:fs/promises");
+    const { manifestPath, projectDir } = await import("../services/paths.js");
+
+    const projectId = "channel-backfill";
+    const rawManifest = JSON.stringify({
+      id: projectId,
+      absolutePath: "/fake/path",
+      prefix: "chbf",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [
+        {
+          id: "d1",
+          slot: "d1",
+          type: "agent",
+          tmuxName: "__direct__-d1",
+          useTmux: false,
+          // channel intentionally absent → should backfill "pty"
+          lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+        },
+        {
+          id: "d2",
+          slot: "d2",
+          type: "agent",
+          tmuxName: "__direct__-d2",
+          useTmux: true,
+          channel: "json", // json must pin useTmux=false
+          lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+        },
+      ],
+      worktrees: [
+        {
+          id: "wt-1",
+          branch: "main",
+          baseBranch: "main",
+          baseSha: "abc123",
+          createdAt: new Date().toISOString(),
+          sessions: [
+            {
+              id: "m",
+              slot: "m",
+              type: "agent",
+              tmuxName: "vst-chbf-1-m",
+              useTmux: true, // no channel → backfill "tmux"
+              lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+            },
+          ],
+        },
+      ],
+    });
+
+    await mkdirFs(projectDir(projectId), { recursive: true });
+    await writeFile(manifestPath(projectId), rawManifest, "utf8");
+
+    const loaded = await readManifest(projectId);
+    expect(loaded.worktrees[0]!.sessions[0]!.channel).toBe("tmux");
+    expect(loaded.directSessions[0]!.channel).toBe("pty");
+    expect(loaded.directSessions[1]!.channel).toBe("json");
+    expect(loaded.directSessions[1]!.useTmux).toBe(false);
+  });
 });
 
 describe("project-store", () => {

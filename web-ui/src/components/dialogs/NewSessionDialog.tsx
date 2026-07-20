@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Mode, Worktree } from "@/api/types";
+import type { Mode, SupportedCli, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
@@ -8,6 +8,8 @@ import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
 import { NewModeDialog } from "./NewModeDialog";
 import { InitialArtifactsField } from "./InitialArtifactsField";
+import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { sendJsonFirstTurn } from "@/api/firstTurn";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -43,6 +45,9 @@ export function NewSessionDialog({
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
   const [useTmux, setUseTmux] = useState(true);
+  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [files, setFiles] = useState<File[]>([]);
+  const [clis, setClis] = useState<SupportedCli[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
@@ -50,13 +55,17 @@ export function NewSessionDialog({
   useEffect(() => {
     if (!open) return;
     if (initialPromptProp) setInitialPrompt(initialPromptProp);
+    setChannel("terminal");
+    setFiles([]);
     void (async () => {
-      const [wts, ms] = await Promise.all([
+      const [wts, ms, cs] = await Promise.all([
         api.listWorktrees(projectId),
         api.listModes(),
+        api.getSupportedClis(),
       ]);
       setWorktrees(wts);
       setModes(ms);
+      setClis(cs);
       if (wts[0]) setExistingWtId(wts[0].id);
       const preferred =
         initialModeId && ms.some((m) => m.id === initialModeId)
@@ -95,6 +104,20 @@ export function NewSessionDialog({
     })();
   }, [open, api, projectId, initialPromptProp, initialModeId]);
 
+  // JSON channel is only offered for CLIs whose plugin supportsJson (daemon
+  // gates this too). Default to allowed until capabilities load.
+  const selectedCli = modes.find((m) => m.id === modeId)?.cli;
+  const jsonSupported =
+    selectedCli == null || clis.length === 0
+      ? true
+      : (clis.find((c) => c.id === selectedCli)?.supportsJson ?? true);
+  const isJson = channel === "json";
+
+  // If the selected mode's CLI can't run JSON, snap back to terminal.
+  useEffect(() => {
+    if (!jsonSupported && channel === "json") setChannel("terminal");
+  }, [jsonSupported, channel]);
+
   async function submit() {
     setError(null);
     if (wtChoice === "new" && !newWtBranch.trim()) {
@@ -110,22 +133,46 @@ export function NewSessionDialog({
       if (wtChoice === "new") {
         // POST /worktrees already spawns the main `m` agent session with the
         // selected mode + prompt. No additional createSession needed.
-        await api.createWorktree({
-          projectId,
-          branch: newWtBranch.trim(),
-          modeId: modeId || "mode-1",
-          baseBranch: baseBranch.trim() || undefined,
-          prompt: initialPrompt.trim() || undefined,
-          useTmux,
-        });
+        if (isJson) {
+          // JSON: create the worktree's agent idle (channel:json, no prompt in
+          // the body → no daemon auto-enqueue), then upload staged files + send
+          // the prompt as turn 1 against the main agent.
+          const wt = await api.createWorktree({
+            projectId,
+            branch: newWtBranch.trim(),
+            modeId: modeId || "mode-1",
+            baseBranch: baseBranch.trim() || undefined,
+            channel: "json",
+          });
+          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, initialPrompt, files);
+        } else {
+          await api.createWorktree({
+            projectId,
+            branch: newWtBranch.trim(),
+            modeId: modeId || "mode-1",
+            baseBranch: baseBranch.trim() || undefined,
+            prompt: initialPrompt.trim() || undefined,
+            useTmux,
+          });
+        }
       } else {
-        await api.createSession({
-          worktreeId: existingWtId,
-          modeId: modeId || null,
-          type: "agent",
-          prompt: initialPrompt.trim() || undefined,
-          useTmux,
-        });
+        if (isJson) {
+          const sess = await api.createSession({
+            worktreeId: existingWtId,
+            modeId: modeId || null,
+            type: "agent",
+            channel: "json",
+          });
+          await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
+        } else {
+          await api.createSession({
+            worktreeId: existingWtId,
+            modeId: modeId || null,
+            type: "agent",
+            prompt: initialPrompt.trim() || undefined,
+            useTmux,
+          });
+        }
       }
       onCreated?.();
       onClose();
@@ -251,17 +298,61 @@ export function NewSessionDialog({
         onChange={(e) => setInitialPrompt(e.target.value)}
       />
       <InitialArtifactsField />
-      <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <input
-          type="checkbox"
-          id="use-tmux-checkbox"
-          checked={useTmux}
-          onChange={(e) => setUseTmux(e.target.checked)}
-        />
-        <label htmlFor="use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
-          Use tmux (recommended — survives daemon restart, better concurrent device support)
+      <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Channel</div>
+      <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
+          <input
+            type="radio"
+            name="new-session-channel"
+            checked={channel === "terminal"}
+            onChange={() => setChannel("terminal")}
+          />
+          <span>⌨ Terminal</span>
+        </label>
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            cursor: jsonSupported ? "pointer" : "not-allowed",
+            opacity: jsonSupported ? 1 : 0.5,
+          }}
+        >
+          <input
+            type="radio"
+            name="new-session-channel"
+            checked={channel === "json"}
+            disabled={!jsonSupported}
+            onChange={() => setChannel("json")}
+          />
+          <span>💬 JSON chat</span>
         </label>
       </div>
+      {!jsonSupported ? (
+        <div className="field-label" style={{ marginTop: "var(--space-2)", fontWeight: "normal", color: "var(--fg-muted)" }}>
+          JSON chat not available for {selectedCli} yet.
+        </div>
+      ) : null}
+      {isJson ? (
+        <>
+          <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
+            Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
+          </div>
+          <AttachmentPicker files={files} onChange={setFiles} />
+        </>
+      ) : (
+        <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          <input
+            type="checkbox"
+            id="use-tmux-checkbox"
+            checked={useTmux}
+            onChange={(e) => setUseTmux(e.target.checked)}
+          />
+          <label htmlFor="use-tmux-checkbox" style={{ cursor: "pointer", userSelect: "none" }}>
+            Use tmux (recommended — survives daemon restart, better concurrent device support)
+          </label>
+        </div>
+      )}
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
     {newModeOpen && (

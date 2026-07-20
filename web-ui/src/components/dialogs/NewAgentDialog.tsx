@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
-import type { CreateProjectBody, Mode, Project, Settings } from "@/api/types";
+import type { CreateProjectBody, Mode, Project, Settings, SupportedCli } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
+import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { sendJsonFirstTurn } from "@/api/firstTurn";
 
 interface NewAgentDialogProps {
   open: boolean;
@@ -151,8 +153,11 @@ export function NewAgentDialog({
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [files, setFiles] = useState<File[]>([]);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
+  const [clis, setClis] = useState<SupportedCli[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -167,6 +172,12 @@ export function NewAgentDialog({
         if (ms[0]) setModeId(ms[0].id);
       } catch {
         // Modes not available — submit stays disabled (no modeId).
+      }
+
+      try {
+        setClis(await api.getSupportedClis());
+      } catch {
+        // Capabilities not available — JSON stays enabled (daemon still gates).
       }
 
       try {
@@ -185,6 +196,19 @@ export function NewAgentDialog({
       }
     })();
   }, [open, api]);
+
+  // JSON channel is only offered for CLIs whose plugin supportsJson (daemon
+  // gates this too). Default to allowed until capabilities load.
+  const selectedCli = modes.find((m) => m.id === modeId)?.cli;
+  const jsonSupported =
+    selectedCli == null || clis.length === 0
+      ? true
+      : (clis.find((c) => c.id === selectedCli)?.supportsJson ?? true);
+
+  // If the selected mode's CLI can't run JSON, snap back to terminal.
+  useEffect(() => {
+    if (!jsonSupported && channel === "json") setChannel("terminal");
+  }, [jsonSupported, channel]);
 
   // R7: seed parentDir from defaultProjectsDir once it resolves (async), as
   // long as the user hasn't already typed something into Directory.
@@ -277,6 +301,8 @@ export function NewAgentDialog({
     setBranches([]);
     setBranchesError(null);
     setPrompt("");
+    setChannel("terminal");
+    setFiles([]);
     setError(null);
     setSubmitting(false);
   }
@@ -544,18 +570,56 @@ export function NewAgentDialog({
       const body: CreateProjectBody = { name: trimmedName };
       const dir = expandHome(parentDir.trim(), homeDir);
       if (dir) body.dir = dir;
-      body.startAgent = {
-        modeId,
-        prompt: prompt.trim() || undefined,
-        useWorktree,
-        branch: useWorktree ? trimmedBranch : undefined,
-      };
+
+      const isJson = channel === "json";
+      // JSON: register the project WITHOUT a one-shot startAgent (that path only
+      // spawns a TTY session). The project is git-inited regardless, so we then
+      // create the worktree/session on the json channel and send turn 1 —
+      // mirroring the existing-project path. Terminal keeps the one-shot spawn.
+      if (!isJson) {
+        body.startAgent = {
+          modeId,
+          prompt: prompt.trim() || undefined,
+          useWorktree,
+          branch: useWorktree ? trimmedBranch : undefined,
+        };
+      }
 
       const result = await api.createProject(body);
-      // The daemon already spawned the agent (worktree+session or direct
-      // session) as part of this call — so onCreated is just a refresh hook,
-      // never a second spawn trigger.
+      // The daemon already spawned the agent (terminal) or just registered the
+      // project (json) — onCreated is a refresh hook, never a second spawn.
       onCreated?.(result.project);
+
+      if (isJson) {
+        let worktreeId: string | undefined;
+        let sessionId: string | undefined;
+        if (useWorktree && result.project.isGit) {
+          const wt = await api.createWorktree({
+            projectId: result.project.id,
+            branch: trimmedBranch,
+            baseBranch: result.project.defaultBranch,
+            modeId,
+            channel: "json",
+          });
+          worktreeId = wt.id;
+          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+        } else {
+          const sess = await api.createDirectSession({
+            target: "direct",
+            projectId: result.project.id,
+            type: "agent",
+            modeId,
+            channel: "json",
+          });
+          sessionId = sess.id;
+          await sendJsonFirstTurn(api, sess.id, prompt, files);
+        }
+        handleClose();
+        if (worktreeId) navigate(`/worktree/${worktreeId}`);
+        else if (sessionId) navigate(`/session/${sessionId}`);
+        return;
+      }
+
       // Project created but no agent started (e.g. mode not found) — surface the
       // warning inline and keep the dialog open instead of silently closing.
       if (result.warning && !result.worktree && !result.session) {
@@ -618,26 +682,39 @@ export function NewAgentDialog({
         return;
       }
 
+      const isJson = channel === "json";
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
       if (useWorktree && project.isGit) {
+        // JSON (Dec 8): create idle (no prompt in the body → no daemon
+        // auto-enqueue), then upload staged files + send the prompt as turn 1.
         const wt = await api.createWorktree({
           projectId: project.id,
           branch: trimmedBranch,
           baseBranch: project.defaultBranch,
           modeId,
-          prompt: prompt.trim() || undefined,
+          ...(isJson
+            ? { channel: "json" as const }
+            : { prompt: prompt.trim() || undefined }),
         });
         worktreeId = wt.id;
+        if (isJson) {
+          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+        }
       } else {
         const sess = await api.createDirectSession({
           target: "direct",
           projectId: project.id,
           type: "agent",
           modeId,
-          prompt: prompt.trim() || undefined,
+          ...(isJson
+            ? { channel: "json" as const }
+            : { prompt: prompt.trim() || undefined }),
         });
         sessionId = sess.id;
+        if (isJson) {
+          await sendJsonFirstTurn(api, sess.id, prompt, files);
+        }
       }
 
       // onCreated already fired right after registration (above).
@@ -671,26 +748,40 @@ export function NewAgentDialog({
 
     setSubmitting(true);
     try {
+      const isJson = channel === "json";
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
       if (useWorktree && !worktreeDisabled) {
+        // JSON (Dec 8): create idle (no prompt in the body → no daemon
+        // auto-enqueue), then upload staged files + send the prompt as turn 1
+        // against the returned worktree's main agent.
         const wt = await api.createWorktree({
           projectId: selectedProject.id,
           branch: trimmedBranch,
           baseBranch: baseBranch.trim() || undefined,
           modeId,
-          prompt: prompt.trim() || undefined,
+          ...(isJson
+            ? { channel: "json" as const }
+            : { prompt: prompt.trim() || undefined }),
         });
         worktreeId = wt.id;
+        if (isJson) {
+          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+        }
       } else {
         const sess = await api.createDirectSession({
           target: "direct",
           projectId: selectedProject.id,
           type: "agent",
           modeId,
-          prompt: prompt.trim() || undefined,
+          ...(isJson
+            ? { channel: "json" as const }
+            : { prompt: prompt.trim() || undefined }),
         });
         sessionId = sess.id;
+        if (isJson) {
+          await sendJsonFirstTurn(api, sess.id, prompt, files);
+        }
       }
 
       onCreated?.(selectedProject);
@@ -1063,6 +1154,51 @@ export function NewAgentDialog({
                 onChange={(e) => setPrompt(e.target.value)}
               />
             </div>
+
+            <div className="form-field">
+              <label>Channel</label>
+              <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="agent-channel"
+                    checked={channel === "terminal"}
+                    onChange={() => setChannel("terminal")}
+                  />
+                  <span>⌨ Terminal</span>
+                </label>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--space-2)",
+                    cursor: jsonSupported ? "pointer" : "not-allowed",
+                    opacity: jsonSupported ? 1 : 0.5,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="agent-channel"
+                    checked={channel === "json"}
+                    disabled={!jsonSupported}
+                    onChange={() => setChannel("json")}
+                  />
+                  <span>💬 JSON chat</span>
+                </label>
+              </div>
+              {!jsonSupported ? (
+                <div className="form-hint">JSON chat not available for {selectedCli} yet.</div>
+              ) : null}
+            </div>
+
+            {/* Attachments — shown for the JSON channel across all paths
+                (brand-new project, add-path, and existing project). */}
+            {channel === "json" && jsonSupported ? (
+              <div className="form-field">
+                <label>Attachments <span className="form-optional">(optional)</span></label>
+                <AttachmentPicker files={files} onChange={setFiles} />
+              </div>
+            ) : null}
           </div>
         ) : null}
 

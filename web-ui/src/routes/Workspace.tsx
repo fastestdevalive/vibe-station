@@ -6,6 +6,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { TerminalPane } from "@/components/layout/TerminalPane";
+import { AgentPaneSlot } from "@/components/layout/AgentPaneSlot";
 import { ToolPanel } from "@/components/layout/ToolPanel";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
@@ -179,7 +180,9 @@ export function Workspace() {
   const agentPane = (
     <div className="pane-stack">
       <TabsStrip api={api} worktreeId={activeWorktreeId} kind="agent" />
-      <TerminalPane api={api} sessionId={activeSessionId} session={activeSession} />
+      {/* TerminalPane stays permanently mounted; ChatPane is toggled beside it
+          by CSS visibility for JSON-channel agents (Decision 14). */}
+      <AgentPaneSlot api={api} sessionId={activeSessionId} session={activeSession} />
     </div>
   );
 
@@ -195,12 +198,9 @@ export function Workspace() {
   // terminal dock are wired to the PROJECT base dir via scope="project".
   const directAgentPane = directSession ? (
     <div className="pane-stack">
-      {/* No agent TabsStrip — single agent, no tabs. */}
-      <TerminalPane
-        api={api}
-        sessionId={directSession.id}
-        session={directSession}
-      />
+      {/* No agent TabsStrip — single agent, no tabs. TerminalPane stays mounted;
+          ChatPane toggles beside it for a JSON direct agent (Decision 14). */}
+      <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} />
     </div>
   ) : null;
 

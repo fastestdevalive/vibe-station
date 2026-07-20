@@ -21,6 +21,7 @@ import { hasSession, capturePane } from "./tmux.js";
 import { getAllProjects, mutateProject } from "../state/project-store.js";
 import { broadcastAll } from "../broadcaster.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
+import { sessionChannel } from "./channel.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
 
 export const POLL_INTERVAL_MS = 1000;
@@ -110,6 +111,11 @@ async function pollSession(
   session: SessionRecord,
 ): Promise<void> {
   if (session.lifecycle.state === "not_started") return;
+
+  // JSON channel (Decision 11): turn/queue state is authoritative — there is no
+  // tmux pane or direct-pty stream to poll. `JsonAgentSession` drives lifecycle,
+  // so skip the TTY heuristics entirely.
+  if (sessionChannel(session) === "json") return;
 
   // Direct-pty exit is event-driven (via DirectPtyStream.onExit → markSessionExited).
   // The poller only handles idle detection for direct-pty sessions that are still alive.
