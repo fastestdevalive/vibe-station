@@ -54,11 +54,9 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
-import { worktreePath as getWorktreePath } from "../services/paths.js";
 import type {
   SessionRecord,
   ProjectRecord,
-  WorktreeRecord,
   NormalizedEvent,
   NormalizedEventKind,
 } from "../types.js";
@@ -476,11 +474,10 @@ export function createAgyPlugin(): AgentPlugin {
     async getRestoreCommand(args: {
       session: SessionRecord;
       project: ProjectRecord;
-      worktree: WorktreeRecord;
+      cwd: string;
       model?: string;
     }): Promise<string[] | null> {
-      const { session, project, worktree, model } = args;
-      const cwd = getWorktreePath(project.id, worktree.id);
+      const { session, cwd, model } = args;
       const id = session.agentChatId ?? (await readLatestAgyConversationId(cwd));
       if (!id) return null;
       const argv = ["agy", "--conversation", id, "--dangerously-skip-permissions"];
