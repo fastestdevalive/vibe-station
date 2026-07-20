@@ -7,14 +7,29 @@
  * `~/.gemini/antigravity-cli/`.
  *
  * TTY mode:
- *   Launch:        `agy --dangerously-skip-permissions [--model "<name>"]`
+ *   Launch:        `agy --dangerously-skip-permissions --log-file <path> [--model "<name>"]`
  *   Task prompt:   inline via `-i "<prompt>"` (--prompt-interactive: runs the
  *                  prompt then stays interactive — like gemini's -i).
  *   System prompt: agy exposes NO system-prompt flag/env, so it is folded into
  *                  the first `-i` message (like cursor bakes it into message 1).
- *   Chat id:       captured from `~/.gemini/antigravity-cli/cache/last_conversations.json`
- *                  which maps `cwd → latest conversation_id` (verified live).
+ *   Chat id:       captured by tailing a PER-SESSION `--log-file` for its
+ *                  "Created/Streaming conversation <id>" lines (see the block
+ *                  comment above `agyLogPath`) — NOT `last_conversations.json`
+ *                  (`cwd → latest conversation_id`), which is only flushed on
+ *                  a graceful `/quit` and is otherwise stale/wrong for any
+ *                  session vibe-station kills via `tmux kill-session`
+ *                  (verified live — this was a real, shipped-then-reverted
+ *                  bug; see the chat-id capture block comment for the full
+ *                  investigation trail). That file is kept ONLY as a final
+ *                  fallback in `getRestoreCommand` below.
  *   Resume:        `agy --conversation <id>` (verified; `--continue`/`-c` = most recent).
+ *   Known gap:     a brand-new (never-before-trusted) cwd shows an
+ *                  interactive "Do you trust this folder?" prompt that
+ *                  `--dangerously-skip-permissions` does NOT bypass (verified
+ *                  live) — the task prompt never runs until something sends
+ *                  Enter. Not fixed here; `captureChatId` degrades safely
+ *                  (times out to null) and `refreshChatIdOnToggle` self-heals
+ *                  once the user gets past the prompt and actually converses.
  *
  * JSON mode (verified live, agy 1.1.2):
  *   agy's `--print`/`-p`/`--prompt` is a STRING flag whose value IS the prompt.
@@ -32,8 +47,8 @@
  *   name, so `model` is threaded in from the requested model.
  */
 
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
+import { promises as fs, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -150,12 +165,21 @@ export function parseAgyResultLine(
   return events;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Path to agy's per-cwd conversation index (`cwd → latest conversation_id`). */
 function agyLastConversationsPath(): string {
   return join(homedir(), ".gemini", "antigravity-cli", "cache", "last_conversations.json");
 }
 
-/** Read the latest agy conversation id for a given workspace cwd (best-effort). */
+/**
+ * Read the latest agy conversation id for a given workspace cwd (best-effort).
+ * NOTE: only reliable as a LAST-RESORT fallback (`getRestoreCommand` below) —
+ * see the chat-id capture block comment for why this cannot be trusted as a
+ * primary signal.
+ */
 async function readLatestAgyConversationId(cwd: string): Promise<string | null> {
   try {
     const raw = await fs.readFile(agyLastConversationsPath(), "utf8");
@@ -165,6 +189,96 @@ async function readLatestAgyConversationId(cwd: string): Promise<string | null> 
   } catch {
     return null;
   }
+}
+
+/**
+ * Chat-id capture (serious bug, two design iterations — see the
+ * json-mode-followups investigation):
+ *
+ * Iteration 1 (WRONG, do not resurrect): read `last_conversations.json`
+ * (`cwd → latest conversation_id`, no session identity) once, right after
+ * spawn. Unsafe because a premature read in a reused cwd silently returns a
+ * DIFFERENT, unrelated conversation's id instead of failing.
+ *
+ * Iteration 2 (ALSO WRONG): baseline-diff-poll the same cache file. This
+ * assumed the cache eventually reflects the truth if you wait/compare
+ * against a snapshot. False: EMPIRICALLY VERIFIED (spawn an interactive
+ * `agy` session, let it fully answer, inspect the cache — no entry) that
+ * `last_conversations.json` is only written on a GRACEFUL exit (`/quit`) in
+ * TTY mode. vibe-station's teardown (`killSession`, `tmux.ts`) sends SIGHUP,
+ * never a graceful quit — so the cache for a killed session's cwd never
+ * updates, and any code trusting it (however carefully diffed) just adopts
+ * whatever STALE entry was already sitting there from a previous, unrelated
+ * conversation in the same reused cwd. This is how iteration 2 reproduced
+ * the exact original bug through a different code path.
+ *
+ * Iteration 3 (current): agy accepts `--log-file <path>` and logs
+ * `Created conversation <id>` once at conversation start and
+ * `Streaming conversation <id>` on every turn thereafter (including
+ * resumed ones) — VERIFIED LIVE, independent of graceful vs. killed exit,
+ * because the id is logged as the conversation happens, not flushed on
+ * shutdown. Pointing `--log-file` at a PER-SESSION path (keyed by our own
+ * session id, not cwd) makes this a session-scoped signal with no
+ * cross-session ambiguity and no baseline/diffing needed at all: any match
+ * found in THIS session's own log file is unambiguously this session's own
+ * conversation.
+ */
+function agyLogPath(sessionId: string): string {
+  return join(homedir(), ".vibe-station", "agy-logs", `${sessionId}.log`);
+}
+
+/** Regex-match order matters: prefer the LAST "Streaming" line (fires on
+ *  every turn, so it reflects the CURRENT conversation even after a resume)
+ *  and only fall back to the LAST "Created" line (fires once, at the very
+ *  first turn) when no "Streaming" line exists yet. Line text is agy's own
+ *  internal glog output, not a documented contract — kept intentionally
+ *  tolerant (`[\da-f-]{36}`, no anchors) against minor format drift. */
+async function parseLastConversationIdFromLog(logPath: string): Promise<string | null> {
+  let content: string;
+  try {
+    content = await fs.readFile(logPath, "utf8");
+  } catch {
+    return null;
+  }
+  const lastMatch = (re: RegExp): string | null => {
+    let last: string | null = null;
+    for (const m of content.matchAll(re)) {
+      const id = m[1];
+      if (id) last = id;
+    }
+    return last;
+  };
+  return (
+    lastMatch(/Streaming conversation ([\da-f-]{36})/g) ??
+    lastMatch(/Created conversation ([\da-f-]{36})/g)
+  );
+}
+
+export const CHAT_ID_POLL_TIMEOUT_MS = 30_000;
+export const CHAT_ID_POLL_INTERVAL_MS = 500;
+
+/**
+ * Poll the session's `--log-file` until a conversation id appears, or the
+ * timeout elapses (→ null). Extracted as a standalone function (rather than
+ * inlined in `captureChatId`) so tests can drive it with a short real
+ * timeout/interval instead of fighting fake timers around a real internal
+ * async loop + real fs I/O — vitest's fake timers don't reliably virtualize
+ * that combination, and a real 30s wait per test is not acceptable.
+ * Production call sites always use the exported defaults.
+ */
+export async function pollLogForConversationId(
+  logPath: string,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<string | null> {
+  const timeoutMs = opts.timeoutMs ?? CHAT_ID_POLL_TIMEOUT_MS;
+  const intervalMs = opts.intervalMs ?? CHAT_ID_POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const id = await parseLastConversationIdFromLog(logPath);
+    if (id) return id;
+    await sleep(intervalMs);
+  }
+  return null;
 }
 
 // Exact display names as printed by `agy models` (must match for --model to
@@ -198,6 +312,14 @@ export function createAgyPlugin(): AgentPlugin {
       const argv = ["agy", "--dangerously-skip-permissions"];
       if (cfg.model) argv.push("--model", cfg.model);
       if (cfg.session.agentChatId) argv.push("--conversation", cfg.session.agentChatId);
+      // Session-scoped log so captureChatId/refreshChatIdOnToggle can read
+      // this session's OWN "Created/Streaming conversation <id>" lines —
+      // see the block comment above `agyLogPath`. Directory is created
+      // synchronously since getLaunchCommand itself must stay synchronous
+      // (AgentPlugin interface, spawn.ts).
+      const logPath = agyLogPath(cfg.session.id);
+      mkdirSync(dirname(logPath), { recursive: true });
+      argv.push("--log-file", logPath);
       return argv;
     },
 
@@ -234,15 +356,29 @@ export function createAgyPlugin(): AgentPlugin {
       return {};
     },
 
-    async captureChatId(args: {
-      session: SessionRecord;
-      project: ProjectRecord;
-      worktree: WorktreeRecord;
-    }): Promise<string | null> {
-      // agy writes `cwd → latest conversation_id` into last_conversations.json
-      // once the conversation is created; read it back for the worktree cwd.
-      const cwd = getWorktreePath(args.project.id, args.worktree.id);
-      return readLatestAgyConversationId(cwd);
+    // No provideChatId: agy has no pre-mint equivalent (unlike cursor's
+    // `create-chat`), and the log-file design needs no pre-spawn baseline —
+    // the log itself is the session-scoped source of truth (see block
+    // comment above `agyLogPath`).
+
+    async captureChatId(args: { session: SessionRecord }): Promise<string | null> {
+      // Poll THIS session's own log file (written via --log-file, wired in
+      // getLaunchCommand) for its "Created/Streaming conversation <id>"
+      // line. Session-scoped by construction — no cross-session ambiguity,
+      // no baseline/diffing needed.
+      return pollLogForConversationId(agyLogPath(args.session.id));
+    },
+
+    /**
+     * Self-heal on tty→json toggle (see the block comment above
+     * `agyLogPath`). No poll needed here — by the time a user toggles a
+     * session they've been actively using, its log file already has real
+     * conversation lines regardless of how the terminal was just torn down
+     * (killSession never lets agy flush `last_conversations.json`, but the
+     * log lines were written live, during the conversation, not at exit).
+     */
+    async refreshChatIdOnToggle(args: { session: SessionRecord }): Promise<string | null> {
+      return parseLastConversationIdFromLog(agyLogPath(args.session.id));
     },
 
     supportsJson(): boolean {
