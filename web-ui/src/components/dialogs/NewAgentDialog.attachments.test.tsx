@@ -31,10 +31,10 @@ describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
     // Branches finish loading (base-branch select appears) before submit is enabled.
     await screen.findByText("Bugfix"); // modes loaded (mode select)
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /JSON chat/i })).toBeInTheDocument(),
+      expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeInTheDocument(),
     );
 
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.type(screen.getByLabelText(/Initial prompt/i), "refactor");
     const file = new File(["x"], "notes.md", { type: "text/markdown" });
     await userEvent.upload(screen.getByLabelText("Attach files"), file);

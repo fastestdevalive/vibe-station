@@ -30,9 +30,9 @@ describe("NewAgentDialog create-new-project JSON path", () => {
 
     await screen.findByText("Bugfix"); // modes loaded
     await waitFor(() =>
-      expect(screen.getByRole("radio", { name: /JSON chat/i })).toBeInTheDocument(),
+      expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeInTheDocument(),
     );
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.type(screen.getByLabelText(/Initial prompt/i), "scaffold it");
 
     const startBtn = await screen.findByRole("button", { name: /Create & Start/i });

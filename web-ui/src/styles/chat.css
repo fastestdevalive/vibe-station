@@ -9,6 +9,101 @@
 }
 .agent-pane-slot__terminal {
   min-height: 0;
+  /* Positioning context for the terminal→JSON channel toggle overlay. */
+  position: relative;
+}
+
+/* ── Channel toggle (BOTH directions — item 4, Decision 6): one shared
+   top-right overlay style, positioned relative to the nearest positioned
+   ancestor (`.agent-pane-slot__terminal` for tty→json, `.chat-pane` for
+   json→tty) so both directions render in the exact same screen corner. ── */
+.channel-toggle-button {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 10;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  padding: 0 var(--space-2);
+  font: inherit;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+.channel-toggle-button:hover:not(:disabled) {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+  opacity: 1;
+}
+.channel-toggle-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Exited terminal: the toggle drops out of the top-right overlay and sits in
+   normal flow just below the "Session exited / Resume" banner. Neutralize the
+   shared button's absolute positioning so it lays out inline (right-aligned). */
+.terminal-exited-toggle {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-2);
+}
+.terminal-exited-toggle .channel-toggle-button {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+/* ── Terminal-mode file upload (item 3) — separate control from the channel
+   toggle above (Decision 6); own corner so the two overlays never collide. */
+.terminal-attachment-upload {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  max-width: min(320px, 60%);
+}
+.terminal-attachment-upload .attachment-picker {
+  padding: 0;
+  border: none;
+  background: none;
+}
+.terminal-attachment-upload .attachment-picker__row {
+  padding: 0;
+}
+.terminal-attachment-upload .attachment-picker__hint {
+  display: none;
+}
+.terminal-attachment-upload .attachment-picker__row .btn {
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  opacity: 0.85;
+  font: inherit;
+  line-height: 1.6;
+  padding: 0 var(--space-2);
+}
+.terminal-attachment-upload .attachment-picker__row .btn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+  opacity: 1;
+}
+.terminal-attachment-upload__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.terminal-attachment-upload__error {
+  font-size: var(--font-size-sm);
+  color: var(--destructive);
 }
 
 .chat-pane {
@@ -19,6 +114,9 @@
   background: var(--bg-primary);
   color: var(--fg-primary);
   font-family: var(--font-sans);
+  /* Positioning context for the json→terminal channel toggle overlay (item 4) —
+     mirrors `.agent-pane-slot__terminal` on the tty→json side. */
+  position: relative;
 }
 .chat-pane--hidden {
   display: none;
@@ -543,26 +641,6 @@
 .chat-statusbar__model,
 .chat-statusbar__mode {
   color: var(--fg-secondary);
-}
-
-/* ── Channel toggle (JSON → terminal) ──────────────────────────────────────── */
-.chat-statusbar__channel {
-  background: none;
-  border: var(--border-width) solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg-secondary);
-  cursor: pointer;
-  padding: 0 var(--space-2);
-  font: inherit;
-  line-height: 1.4;
-}
-.chat-statusbar__channel:hover:not(:disabled) {
-  color: var(--fg-primary);
-  border-color: var(--fg-secondary);
-}
-.chat-statusbar__channel:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ── Live model switcher (status bar) ──────────────────────────────────────── */

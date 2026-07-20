@@ -214,6 +214,13 @@ export interface SupportedCli {
   defaultModel: string;
   /** Whether this CLI can run the JSON agent-chat channel. */
   supportsJson: boolean;
+  /**
+   * Whether this CLI ships a native-history importer — i.e. a terminal→JSON
+   * switch can backfill the terminal-phase turns into the JSON view. When
+   * false (cursor/agy), the toggle still works but returns lossily: those turns
+   * won't appear in JSON chat, though the agent still has them via --resume.
+   */
+  importsNativeHistory: boolean;
 }
 
 export interface Mode {

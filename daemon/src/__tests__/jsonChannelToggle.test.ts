@@ -229,6 +229,30 @@ async function getAgentChatId(sid: string): Promise<string | undefined> {
     .find((s) => s.id === sid)?.agentChatId;
 }
 
+async function getLifecycleState(sid: string): Promise<string | undefined> {
+  const { getProject } = await import("../state/project-store.js");
+  return getProject(PROJECT_ID)
+    ?.worktrees.flatMap((w) => w.sessions)
+    .find((s) => s.id === sid)?.lifecycle.state;
+}
+
+/** Force a session's persisted lifecycle to "exited" (simulates a real prior
+ *  tmux death) — the exact precondition the stale-banner bug needs. */
+async function forceExited(sid: string): Promise<void> {
+  const { mutateProject } = await import("../state/project-store.js");
+  await mutateProject(PROJECT_ID, (p) => ({
+    ...p,
+    worktrees: p.worktrees.map((w) => ({
+      ...w,
+      sessions: w.sessions.map((s) =>
+        s.id === sid
+          ? { ...s, lifecycle: { state: "exited" as const, lastTransitionAt: new Date().toISOString() } }
+          : s,
+      ),
+    })),
+  }));
+}
+
 describe("P3 — JSON↔terminal channel toggle", () => {
   let app: FastifyInstance;
   let port: number;
@@ -343,14 +367,28 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     expect(res.json<{ error: string }>().error).toContain("worktree");
   });
 
-  it("P3.T1 — 400 for cursor + agy (no native-history importer, R1.6)", async () => {
-    const cursor = await app.inject({ method: "PATCH", url: `/sessions/${CURSOR_SID}/channel`, payload: { channel: "tmux" } });
-    expect(cursor.statusCode).toBe(400);
-    expect(cursor.json<{ error: string }>().error).toContain("cursor");
+  it("P3.T1 — cursor + agy (no native-history importer) toggle in BOTH directions, lossily", async () => {
+    // json → tty is always allowed (reads nothing of ours).
+    for (const sid of [CURSOR_SID, AGY_SID]) {
+      const toTty = await app.inject({ method: "PATCH", url: `/sessions/${sid}/channel`, payload: { channel: "tmux" } });
+      expect(toTty.statusCode).toBe(200);
+      expect(toTty.json<{ channel: string }>().channel).toBe("tmux");
+      expect(await getChannel(sid)).toBe("tmux");
+    }
 
-    const agy = await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "tmux" } });
-    expect(agy.statusCode).toBe(400);
-    expect(agy.json<{ error: string }>().error).toContain("agy");
+    // Configure a native import payload; it must NOT be consumed for these CLIs.
+    hoisted.importEvents = [ev("user", { role: "user", text: "terminal only", turnId: "t1" })];
+
+    // tty → json succeeds but skips the backfill (lossy return, historyImported:false).
+    for (const sid of [CURSOR_SID, AGY_SID]) {
+      const toJson = await app.inject({ method: "PATCH", url: `/sessions/${sid}/channel`, payload: { channel: "json" } });
+      expect(toJson.statusCode).toBe(200);
+      expect(toJson.json<{ channel: string; historyImported: boolean }>().channel).toBe("json");
+      expect(toJson.json<{ historyImported: boolean }>().historyImported).toBe(false);
+      expect(await getChannel(sid)).toBe("json");
+    }
+    // The importer was never invoked for a no-importer CLI.
+    expect(hoisted.importCalls).toBe(0);
   });
 
   it("P3.T1 — invalid channel value → 400; unknown session → 404", async () => {
@@ -397,6 +435,7 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     expect(toJson.json<{ channel: string }>().channel).toBe("json");
     expect(await getChannel(JSON_SID)).toBe("json");
     expect(await getAgentChatId(JSON_SID)).toBe("chat-1"); // still continuous (J5)
+    expect(toJson.json<{ historyImported: boolean }>().historyImported).toBe(true);
     expect(hoisted.importCalls).toBe(1);
 
     // Transcript now has the original JSON turn + the NEW terminal turn, but the
@@ -448,6 +487,48 @@ describe("P3 — JSON↔terminal channel toggle", () => {
 
     expect(observed.some((m) => m.type === "session:updated" && m.channel === "tmux")).toBe(true);
     expect(observed.some((m) => m.type === "session:meta" && m.meta?.channel === "tmux")).toBe(true);
+  });
+
+  it("P3.T3b — json→tty resets a stale 'exited' lifecycle to 'working' and broadcasts session:state (stale Resume-banner bug)", async () => {
+    await runTurn(app, JSON_SID, "hi");
+    // Simulate a record left at "exited" from some earlier, real tmux death —
+    // the poller (lifecycle.ts) never clears this on its own; only an
+    // explicit reset at spawn time can, exactly like /resume does.
+    await forceExited(JSON_SID);
+    expect(await getLifecycleState(JSON_SID)).toBe("exited");
+
+    const observed = await new Promise<{ type: string; sessionId?: string; state?: string }[]>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const msgs: { type: string; sessionId?: string; state?: string }[] = [];
+      const t = setTimeout(() => {
+        ws.close();
+        reject(new Error(`timeout; got ${JSON.stringify(msgs.map((m) => m.type))}`));
+      }, 6000);
+      ws.on("open", () => {
+        setTimeout(() => {
+          void app.inject({ method: "PATCH", url: `/sessions/${JSON_SID}/channel`, payload: { channel: "tmux" } });
+        }, 100);
+      });
+      ws.on("message", (data: Buffer) => {
+        msgs.push(JSON.parse(data.toString("utf8")));
+        if (msgs.some((m) => m.type === "session:state" && m.sessionId === JSON_SID)) {
+          clearTimeout(t);
+          ws.close();
+          resolve(msgs);
+        }
+      });
+      ws.on("error", (e) => {
+        clearTimeout(t);
+        reject(e);
+      });
+    });
+
+    // Already-open tabs must see the live reset via WS, not just on reload.
+    expect(observed.some((m) => m.type === "session:state" && m.sessionId === JSON_SID && m.state === "working"))
+      .toBe(true);
+    // And the durable record itself must be corrected — a page load right
+    // after the toggle must not show the banner again either.
+    expect(await getLifecycleState(JSON_SID)).toBe("working");
   });
 
   // ── P3.T4 — empty-session toggle (J12/J13) ────────────────────────────────

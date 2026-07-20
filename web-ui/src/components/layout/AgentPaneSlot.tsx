@@ -1,6 +1,8 @@
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
+import { TerminalChannelToggle } from "./TerminalChannelToggle";
+import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
 
 interface AgentPaneSlotProps {
@@ -23,6 +25,17 @@ interface AgentPaneSlotProps {
  */
 export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
+  // The channel toggle is handed to `TerminalPane` so a single owner decides its
+  // placement: a top-right overlay while the terminal is live, but rendered
+  // in-flow BELOW the "Session exited / Resume" banner once the session exits
+  // (json-mode-followups item 4). Driving that off `TerminalPane`'s own banner
+  // state — instead of second-guessing it here — is why the toggle can no longer
+  // land on top of the banner and swallow clicks meant for Resume.
+  const channelToggle =
+    !isJson && session ? <TerminalChannelToggle api={api} session={session} /> : null;
+  // The attachment-upload overlay is still a plain top-corner overlay that only
+  // makes sense on a live terminal, so keep gating it out once the pane exits.
+  const terminalLive = !isJson && session?.lifecycleState !== "exited";
   return (
     <div className="agent-pane-slot">
       <div
@@ -33,7 +46,9 @@ export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
           api={api}
           sessionId={isJson ? null : sessionId}
           session={isJson ? undefined : session}
+          channelToggle={channelToggle}
         />
+        {terminalLive && session ? <TerminalAttachmentUpload api={api} session={session} /> : null}
       </div>
       <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} />
     </div>

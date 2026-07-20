@@ -213,11 +213,11 @@ export function DirectAgentDialog({
                   disabled={!jsonSupported}
                   onChange={() => setChannel("json")}
                 />
-                <span>💬 JSON chat</span>
+                <span>💬 Rich Chat</span>
               </label>
             </div>
             {!jsonSupported ? (
-              <div className="form-hint">JSON chat not available for {selectedCli} yet.</div>
+              <div className="form-hint">Rich Chat not available for {selectedCli} yet.</div>
             ) : null}
           </div>
 

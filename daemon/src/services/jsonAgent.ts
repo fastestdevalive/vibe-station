@@ -20,6 +20,7 @@ import type { AgentPlugin, TurnInput, TurnContext } from "./spawn.js";
 import type { TranscriptMeta, TranscriptPage, TranscriptStore, ImportOutcome } from "./transcriptStore.js";
 import { openSqliteTranscriptStore, transcriptDbPath } from "./sqliteTranscriptStore.js";
 import { getNativeHistoryImporter } from "./nativeHistoryImporter.js";
+import { capToolResultContent } from "./toolResultCap.js";
 import {
   worktreePath as getWorktreePath,
   sessionDataDir,
@@ -881,6 +882,7 @@ export class JsonAgentSession {
     // token count — keep the last real usage instead.
     if (hasRealUsage(ev.usage)) this.usage = ev.usage;
 
+    capToolResultContent(ev);
     this.persist(ev);
     this.stream.emitMessage(ev);
     this.updateTurnState(ev.kind);

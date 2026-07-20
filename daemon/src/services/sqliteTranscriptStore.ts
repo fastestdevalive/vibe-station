@@ -24,6 +24,7 @@ import type {
   TranscriptStore,
 } from "./transcriptStore.js";
 import { migrateJsonlIntoDb } from "./transcriptMigration.js";
+import { capToolResultContent, TOOL_RESULT_MAX_BYTES } from "./toolResultCap.js";
 
 /** A usage event reflects a real model call only when it billed tokens. */
 function hasRealUsage(usage: UsageInfo | undefined): usage is UsageInfo {
@@ -95,6 +96,35 @@ export class SqliteTranscriptStore implements TranscriptStore {
 
     // One-time legacy import (idempotent + transactional; keeps the .jsonl).
     if (opts.jsonlPath) migrateJsonlIntoDb(this.db, this.sessionId, opts.jsonlPath);
+
+    // Oversized `tool_result` backfill (json-mode-followups item 1, Decision 3).
+    // Runs on every open but is naturally idempotent: once a row's payload is
+    // capped, its length drops well under `TOOL_RESULT_MAX_BYTES` and it never
+    // matches the WHERE clause again on a later open. Scans ALL rows for the
+    // session INCLUDING `superseded = 1` — those stay reachable via `since()`
+    // gap-fills even after a fork truncates them from the live branch, so they
+    // must be capped too, not just live rows. `LENGTH(payload)` is a safe
+    // superset filter (payload always includes the content plus JSON overhead,
+    // so it's never shorter than the raw content), avoiding a full parse of
+    // every row just to find the rare oversized ones.
+    const oversizedRows = this.db
+      .prepare(
+        "SELECT seq, payload FROM message WHERE session_id = ? AND kind = 'tool_result' AND LENGTH(payload) > ?",
+      )
+      .all(this.sessionId, TOOL_RESULT_MAX_BYTES) as { seq: number; payload: string }[];
+    if (oversizedRows.length > 0) {
+      const backfillUpdateStmt = this.db.prepare(
+        "UPDATE message SET payload = ? WHERE session_id = ? AND seq = ?",
+      );
+      const backfill = this.db.transaction(() => {
+        for (const r of oversizedRows) {
+          const ev = JSON.parse(r.payload) as NormalizedEvent;
+          capToolResultContent(ev);
+          backfillUpdateStmt.run(JSON.stringify(ev), this.sessionId, r.seq);
+        }
+      });
+      backfill();
+    }
 
     // Seed the writer cursor from the durable max (bounded query, R0.3/J8).
     const row = this.db
@@ -255,6 +285,7 @@ export class SqliteTranscriptStore implements TranscriptStore {
         }
         for (const ev of group.events) {
           ev.logSeq = localNext;
+          capToolResultContent(ev);
           this.insertStmt.run(
             this.sessionId,
             localNext,

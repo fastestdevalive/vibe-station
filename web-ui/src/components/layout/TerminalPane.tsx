@@ -2,7 +2,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -19,6 +19,14 @@ interface TerminalPaneProps {
   sessionId: string | null;
   /** Full session record for the rendered session (used for useTmux). */
   session?: Session;
+  /**
+   * Optional channel-toggle affordance (json-mode-followups item 4). This pane
+   * owns its placement: a top-right overlay while the terminal is live, but
+   * rendered in normal flow directly below the "Session exited / Resume" banner
+   * once the session exits — so the two never overlap. The agent pane passes it;
+   * the terminal dock omits it.
+   */
+  channelToggle?: ReactNode;
 }
 
 /**
@@ -40,7 +48,7 @@ function isXtermAutoResponse(data: string): boolean {
   );
 }
 
-export function TerminalPane({ api, sessionId, session }: TerminalPaneProps) {
+export function TerminalPane({ api, sessionId, session, channelToggle }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -374,22 +382,30 @@ export function TerminalPane({ api, sessionId, session }: TerminalPaneProps) {
   return (
     <div className="terminal-pane-root">
       {showBanner ? (
-        <div className="terminal-resume-banner">
-          <span className="terminal-resume-banner__msg">Session exited.</span>
-          <span className="terminal-resume-banner__action">
-            {resumePending ? (
-              <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">
-                <span className="terminal-resume-busy__ring" aria-hidden />
-                <span className="terminal-resume-busy__label">Resuming…</span>
-              </span>
-            ) : (
-              <button type="button" className="terminal-resume-banner__btn" onClick={() => void resume()}>
-                Resume
-              </button>
-            )}
-          </span>
-        </div>
-      ) : null}
+        <>
+          <div className="terminal-resume-banner">
+            <span className="terminal-resume-banner__msg">Session exited.</span>
+            <span className="terminal-resume-banner__action">
+              {resumePending ? (
+                <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">
+                  <span className="terminal-resume-busy__ring" aria-hidden />
+                  <span className="terminal-resume-busy__label">Resuming…</span>
+                </span>
+              ) : (
+                <button type="button" className="terminal-resume-banner__btn" onClick={() => void resume()}>
+                  Resume
+                </button>
+              )}
+            </span>
+          </div>
+          {/* Exited: render the channel toggle in normal flow BELOW the banner so
+              it no longer overlaps the banner / Resume button. */}
+          {channelToggle ? <div className="terminal-exited-toggle">{channelToggle}</div> : null}
+        </>
+      ) : (
+        // Live: the toggle is the usual top-right overlay (its own absolute CSS).
+        channelToggle
+      )}
       {!atBottom && mountTerminal && !showSpawningOverlay ? (
         <button
           type="button"
