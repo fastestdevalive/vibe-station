@@ -549,6 +549,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextTerminalSeq}`;
     }
 
+    // Agent slots are monotonic (never reused). Persist the high-water number.
+    let nextAgentSeq: number | undefined;
+    if (type === "agent") {
+      nextAgentSeq = parseInt(slot.slice(1), 10);
+    }
+
     const sessionRecord: SessionRecord = {
       id: sessionId,
       slot,
@@ -610,6 +616,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           ? {
               ...w,
               ...(nextTerminalSeq != null ? { terminalSeq: nextTerminalSeq } : {}),
+              ...(nextAgentSeq != null ? { agentSeq: nextAgentSeq } : {}),
               sessions: [...w.sessions, sessionRecord],
             }
           : w,

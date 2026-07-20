@@ -221,6 +221,12 @@ export interface WorktreeRecord {
    * names stay stable/unambiguous across a worktree's lifetime.
    */
   terminalSeq?: number;
+  /**
+   * Monotonic high-water counter for agent slots (a{n}). Only ever increments —
+   * a deleted agent's number is never reused, so agent session ids
+   * (`<worktree>-a{n}`) never recur across the worktree's lifetime.
+   */
+  agentSeq?: number;
   sessions: SessionRecord[];
 }
 
