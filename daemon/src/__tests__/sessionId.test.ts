@@ -122,6 +122,51 @@ describe("reserveNextWorktreeNum", () => {
     expect(reserveNextWorktreeNum(project)).toBe(5); // skips the orphaned vs-4 dir
   });
 
+describe("reserveNextAgentSlot", () => {
+  const wtWith = (agentSeq: number | undefined, aNums: number[]): WorktreeRecord => ({
+    ...makeWorktree("vs-1"),
+    ...(agentSeq != null ? { agentSeq } : {}),
+    sessions: aNums.map((n) => ({
+      id: `vs-1-a${n}`,
+      slot: `a${n}` as const,
+      type: "agent" as const,
+      tmuxName: `vr-vs-1-a${n}`,
+      useTmux: true,
+      lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
+    })),
+  });
+
+  it("uses agentSeq high-water: freed number is not reused", async () => {
+    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
+    // 7 agents created (agentSeq=7), a1 deleted → sessions a2..a7
+    expect(reserveNextAgentSlot(wtWith(7, [2, 3, 4, 5, 6, 7]))).toBe("a8");
+  });
+
+  it("legacy worktree (no agentSeq) seeds from max existing slot", async () => {
+    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
+    expect(reserveNextAgentSlot(wtWith(undefined, [1, 2, 3]))).toBe("a4");
+  });
+
+  it("fresh worktree yields a1", async () => {
+    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
+    expect(reserveNextAgentSlot(wtWith(undefined, []))).toBe("a1");
+  });
+
+  it("non-numeric agent slot does not poison the counter to NaN", async () => {
+    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
+    const wt = wtWith(undefined, []);
+    wt.sessions.push({
+      id: "vs-1-ax",
+      slot: "ax" as unknown as `a${number}`,
+      type: "agent",
+      tmuxName: "vr-vs-1-ax",
+      useTmux: true,
+      lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+    });
+    expect(reserveNextAgentSlot(wt)).toBe("a1");
+  });
+});
+
   it("two-phase window: a reserve/bump with no append still advances the counter", async () => {
     const { mutateProject, addProject, getProject, _clearStoreForTest } = await import(
       "../state/project-store.js"
