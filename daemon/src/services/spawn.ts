@@ -131,6 +131,28 @@ export interface AgentPlugin {
     cwd: string;
   }): Promise<string | null>;
   /**
+   * Called on a tty→json channel toggle, AFTER the terminal has been torn
+   * down, to re-verify `agentChatId` against the CLI's own live state.
+   * Optional — only implement this when the plugin's `captureChatId` is
+   * fragile enough that a stale/wrong value could have been captured at
+   * spawn time without erroring (e.g. agy's cache file is keyed by cwd, not
+   * by session, so a premature read can silently return a DIFFERENT
+   * conversation's id rather than failing). By the time a user actually
+   * toggles a live terminal session, the CLI's own state should correctly
+   * reflect that session's real conversation — this is the self-healing
+   * moment. CLIs with a reliable session-scoped `captureChatId` (claude,
+   * opencode) should NOT implement this: their already-correct
+   * `agentChatId` should be trusted as-is, and for opencode specifically,
+   * re-invoking its poll-based `captureChatId` here would hang for its full
+   * 30s timeout (the token file it polls for was already consumed at spawn
+   * time and will never reappear).
+   */
+  refreshChatIdOnToggle?(args: {
+    session: SessionRecord;
+    project: ProjectRecord;
+    worktree: WorktreeRecord;
+  }): Promise<string | null>;
+  /**
    * Return the list of models available for this CLI.
    * Each plugin owns its own discovery strategy — callers never branch on CLI name.
    */

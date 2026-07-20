@@ -17,6 +17,14 @@ const hoisted = vi.hoisted(() => ({
   importEvents: [] as NormalizedEvent[],
   importWatermark: "0",
   importCalls: 0,
+  // agy chat-id-refresh fix (json-mode-followups): controllable per-test
+  // return value + call counters for the mock plugin's captureChatId /
+  // refreshChatIdOnToggle, so tests can assert the toggle handler's
+  // "self-heal only when unset" (captureChatId) vs "always refresh"
+  // (refreshChatIdOnToggle) behavior without needing a real agy install.
+  refreshChatIdReturn: null as string | null,
+  captureChatIdCalls: 0,
+  refreshChatIdCalls: 0,
 }));
 
 vi.mock("../services/paths.js", async () => {
@@ -96,7 +104,12 @@ vi.mock("../agent-plugins/registry.js", async (importOriginal) => {
       return args.session.agentChatId ? ["claude", "--resume", args.session.agentChatId] : null;
     },
     async captureChatId(args: { session: { agentChatId?: string } }) {
+      hoisted.captureChatIdCalls++;
       return args.session.agentChatId ?? null;
+    },
+    async refreshChatIdOnToggle() {
+      hoisted.refreshChatIdCalls++;
+      return hoisted.refreshChatIdReturn;
     },
     async *runTurn(input: { message: string }, ctx: { session: { id: string } }, signal: AbortSignal) {
       if (hoisted.gate) await hoisted.gate;
@@ -286,6 +299,9 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     hoisted.importEvents = [];
     hoisted.importWatermark = "0";
     hoisted.importCalls = 0;
+    hoisted.refreshChatIdReturn = null;
+    hoisted.captureChatIdCalls = 0;
+    hoisted.refreshChatIdCalls = 0;
     const { _clearStoreForTest } = await import("../state/project-store.js");
     const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
     const { _resetModesCacheForTest } = await import("../routes/modes.js");
@@ -389,6 +405,49 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     }
     // The importer was never invoked for a no-importer CLI.
     expect(hoisted.importCalls).toBe(0);
+  });
+
+  it("P3.T1b — tty→json ALWAYS adopts refreshChatIdOnToggle's value, even overwriting an already-set agentChatId (agy chat-id race fix)", async () => {
+    // Get AGY_SID onto tmux with a KNOWN (possibly stale) agentChatId first.
+    await runTurn(app, AGY_SID, "hi"); // seeds agentChatId = "chat-1" (TURN's session_init)
+    const toTty = await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "tmux" } });
+    expect(toTty.statusCode).toBe(200);
+    expect(await getAgentChatId(AGY_SID)).toBe("chat-1");
+
+    // The plugin's live state says the REAL conversation is actually
+    // something else — this is exactly the corrected-value case.
+    hoisted.refreshChatIdReturn = "corrected-real-conversation";
+    const toJson = await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "json" } });
+    expect(toJson.statusCode).toBe(200);
+    expect(hoisted.refreshChatIdCalls).toBe(1);
+    // Overwritten, not left at the stale "chat-1".
+    expect(await getAgentChatId(AGY_SID)).toBe("corrected-real-conversation");
+  });
+
+  it("P3.T1c — tty→json leaves agentChatId untouched when refreshChatIdOnToggle returns null (no live signal)", async () => {
+    await runTurn(app, AGY_SID, "hi");
+    await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "tmux" } });
+    expect(await getAgentChatId(AGY_SID)).toBe("chat-1");
+
+    hoisted.refreshChatIdReturn = null; // e.g. the cache file has no entry for this cwd
+    const toJson = await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "json" } });
+    expect(toJson.statusCode).toBe(200);
+    expect(hoisted.refreshChatIdCalls).toBe(1);
+    expect(await getAgentChatId(AGY_SID)).toBe("chat-1"); // unchanged, not clobbered with null
+  });
+
+  it("P3.T1d — resume-path captureChatId self-heal is skipped once agentChatId is already known (no blind overwrite)", async () => {
+    // json→tty's restore path calls plugin.captureChatId to self-heal a
+    // LEGACY session with no agentChatId yet — it must NOT re-call (and
+    // thus cannot clobber) once a value is already on record.
+    await runTurn(app, AGY_SID, "hi"); // agentChatId = "chat-1" now
+    hoisted.captureChatIdCalls = 0;
+
+    const toTty = await app.inject({ method: "PATCH", url: `/sessions/${AGY_SID}/channel`, payload: { channel: "tmux" } });
+    expect(toTty.statusCode).toBe(200);
+    // Already known → self-heal call skipped entirely.
+    expect(hoisted.captureChatIdCalls).toBe(0);
+    expect(await getAgentChatId(AGY_SID)).toBe("chat-1");
   });
 
   it("P3.T1 — invalid channel value → 400; unknown session → 404", async () => {
