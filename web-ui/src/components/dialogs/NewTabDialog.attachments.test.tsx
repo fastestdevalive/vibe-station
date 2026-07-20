@@ -20,7 +20,7 @@ describe("NewTabDialog JSON attachments at creation", () => {
     await screen.findByText("Bugfix"); // modes loaded
 
     // Choose JSON, type a prompt, stage a file.
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.type(screen.getByLabelText("Prompt"), "fix the bug");
     const file = new File(["hello"], "log.txt", { type: "text/plain" });
     await userEvent.upload(screen.getByLabelText("Attach files"), file);

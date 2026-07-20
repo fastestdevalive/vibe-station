@@ -23,7 +23,7 @@ describe("DirectAgentDialog JSON attachments at creation", () => {
     );
     await screen.findByText("Bugfix"); // modes loaded
 
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.type(screen.getByLabelText(/Initial Prompt/i), "add a test");
     const file = new File(["x"], "diagram.png", { type: "image/png" });
     await userEvent.upload(screen.getByLabelText("Attach files"), file);

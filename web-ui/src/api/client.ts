@@ -796,6 +796,21 @@ export function createClientApi() {
       return parseJson<UploadAttachmentsResponse>(res);
     },
 
+    /**
+     * Remove a staged-but-not-yet-consumed attachment (json-mode-followups item
+     * 3, Decision 8). Terminal-mode uploads are "live" the moment the daemon
+     * writes the pending-uploads reference, so removal needs a real server-side
+     * delete — unlike JSON-mode's composer, which drops an unsent draft locally.
+     */
+    async deleteAttachment(sessionId: string, uploadId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(uploadId)}`,
+        { method: "DELETE" },
+      );
+      return parseJson<{ ok: true }>(res);
+    },
+
     /** Full normalized transcript (replay fallback when WS is unavailable). */
     async getTranscript(sessionId: string): Promise<TranscriptResponse> {
       const root = baseUrl();

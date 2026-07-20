@@ -292,7 +292,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   <span
                     className="tab__channel-icon"
                     aria-hidden
-                    title={s.channel === "json" ? "JSON chat agent" : "Terminal agent"}
+                    title={s.channel === "json" ? "Rich Chat agent (json based)" : "Terminal agent"}
                   >
                     {s.channel === "json" ? "💬" : "⌨"}
                   </span>

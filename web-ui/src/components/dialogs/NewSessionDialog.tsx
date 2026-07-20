@@ -325,12 +325,12 @@ export function NewSessionDialog({
             disabled={!jsonSupported}
             onChange={() => setChannel("json")}
           />
-          <span>💬 JSON chat</span>
+          <span>💬 Rich Chat</span>
         </label>
       </div>
       {!jsonSupported ? (
         <div className="field-label" style={{ marginTop: "var(--space-2)", fontWeight: "normal", color: "var(--fg-muted)" }}>
-          JSON chat not available for {selectedCli} yet.
+          Rich Chat not available for {selectedCli} yet.
         </div>
       ) : null}
       {isJson ? (

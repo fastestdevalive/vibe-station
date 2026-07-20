@@ -193,6 +193,20 @@ export function parseClaudeStreamLine(
   return [];
 }
 
+/** A `hooks.<Event>` array entry: one command hook, no matcher. */
+function hookEntry(command: string): { hooks: { type: string; command: string }[] } {
+  return { hooks: [{ type: "command", command }] };
+}
+
+/** True when `command` already appears in a `hooks.<Event>` array (idempotent merge). */
+function hasHookCommand(entries: unknown[], command: string): boolean {
+  return entries.some(
+    (entry) =>
+      Array.isArray((entry as { hooks?: unknown[] }).hooks) &&
+      (entry as { hooks: { type?: string; command?: string }[] }).hooks.some((h) => h.command === command),
+  );
+}
+
 async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promise<void> {
   let content = "";
   try {
@@ -276,6 +290,7 @@ export function createClaudePlugin(): AgentPlugin {
     async setupWorkspaceHooks(worktreePath: string): Promise<void> {
       const claudeDir = join(worktreePath, ".claude");
       const hookScriptPath = join(claudeDir, "vibe-recorder.sh");
+      const uploadsHookScriptPath = join(claudeDir, "vibe-uploads.sh");
       const settingsPath = join(claudeDir, "settings.json");
 
       await fs.mkdir(claudeDir, { recursive: true });
@@ -294,10 +309,39 @@ export function createClaudePlugin(): AgentPlugin {
 
       await fs.writeFile(hookScriptPath, hookScript, { mode: 0o755 });
 
-      // Add .claude/ to .gitignore (best-effort)
-      await ensureGitignoreEntry(join(worktreePath, ".gitignore"), ".claude/").catch(() => {});
+      // Terminal-mode file upload (json-mode-followups item 3, Decision 8):
+      // a UserPromptSubmit hook that reads the pending-uploads dir written by
+      // `POST /sessions/:id/attachments`, prints each referenced path as
+      // prompt context, and DELETES each entry after printing (real files,
+      // one per upload — never a combined manifest, so this is a plain glob +
+      // per-file unlink). `token` == the session id (VST_SPAWN_TOKEN).
+      const uploadsHookScript = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'token="${VST_SPAWN_TOKEN:-}"',
+        '[ -z "$token" ] && exit 0',
+        'dir="$CLAUDE_PROJECT_DIR/.vibe-station/pending-uploads/$token"',
+        '[ -d "$dir" ] || exit 0',
+        "shopt -s nullglob",
+        'files=("$dir"/*)',
+        '[ ${#files[@]} -eq 0 ] && exit 0',
+        'echo "The user attached the following file(s) via the vibe-station UI — use the Read tool to view them if relevant to the request:"',
+        'for f in "${files[@]}"; do',
+        '  path=$(cat "$f")',
+        '  echo "- $path"',
+        '  rm -f "$f"',
+        "done",
+      ].join("\n") + "\n";
 
-      // Merge our SessionStart hook entry into .claude/settings.json
+      await fs.writeFile(uploadsHookScriptPath, uploadsHookScript, { mode: 0o755 });
+
+      // Add .claude/ and .vibe-station/ to .gitignore (best-effort). The latter
+      // also covers the pre-existing agent-chat-ids dir (not previously ignored).
+      await ensureGitignoreEntry(join(worktreePath, ".gitignore"), ".claude/").catch(() => {});
+      await ensureGitignoreEntry(join(worktreePath, ".gitignore"), ".vibe-station/").catch(() => {});
+
+      // Merge our hook entries into .claude/settings.json (idempotent — only
+      // rewritten when an entry is actually missing).
       let settings: Record<string, unknown> = {};
       try {
         const existing = await fs.readFile(settingsPath, "utf8");
@@ -306,23 +350,21 @@ export function createClaudePlugin(): AgentPlugin {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
 
-      const existingHooks = settings.hooks as Record<string, unknown[]> | undefined;
-      const sessionStartHooks = (existingHooks?.SessionStart ?? []) as unknown[];
-      const alreadyPresent = sessionStartHooks.some(
-        (entry) =>
-          Array.isArray((entry as { hooks?: unknown[] }).hooks) &&
-          (entry as { hooks: { type?: string; command?: string }[] }).hooks.some(
-            (h) => h.command === ".claude/vibe-recorder.sh",
-          ),
-      );
+      const hooks = (settings.hooks as Record<string, unknown[]> | undefined) ?? {};
+      const sessionStartHooks = (hooks.SessionStart ?? []) as unknown[];
+      const uploadHooks = (hooks.UserPromptSubmit ?? []) as unknown[];
+      const needsSessionStart = !hasHookCommand(sessionStartHooks, ".claude/vibe-recorder.sh");
+      const needsUploads = !hasHookCommand(uploadHooks, ".claude/vibe-uploads.sh");
 
-      if (!alreadyPresent) {
-        const ourEntry = {
-          hooks: [{ type: "command", command: ".claude/vibe-recorder.sh" }],
-        };
+      if (needsSessionStart || needsUploads) {
         settings.hooks = {
-          ...(settings.hooks as Record<string, unknown>),
-          SessionStart: [...sessionStartHooks, ourEntry],
+          ...hooks,
+          SessionStart: needsSessionStart
+            ? [...sessionStartHooks, hookEntry(".claude/vibe-recorder.sh")]
+            : sessionStartHooks,
+          UserPromptSubmit: needsUploads
+            ? [...uploadHooks, hookEntry(".claude/vibe-uploads.sh")]
+            : uploadHooks,
         };
         await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
       }

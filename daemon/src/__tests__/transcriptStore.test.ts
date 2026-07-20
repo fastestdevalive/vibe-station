@@ -212,6 +212,77 @@ describe("P4.T1 — markSupersededFrom (fork truncation, R3.4)", () => {
   });
 });
 
+describe("1.T4 — oversized tool_result backfill migration (incl. superseded rows)", () => {
+  it("caps both a live and a superseded oversized row on reopen, idempotently", async () => {
+    const { TOOL_RESULT_MAX_BYTES } = await import("../services/toolResultCap.js");
+    const bigA = "A".repeat(TOOL_RESULT_MAX_BYTES + 100);
+    const bigB = "B".repeat(TOOL_RESULT_MAX_BYTES + 200);
+
+    // s1.append() does NOT cap — capping only happens at the jsonAgent
+    // handleEvent / importTransaction call sites — so this seeds genuinely
+    // oversized rows, as if written before the cap existed.
+    const s1 = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    s1.append(ev("user", { text: "q1", turnId: "t1" }));
+    s1.append(ev("tool_result", { turnId: "t1", toolId: "t1", toolResult: { content: bigA } }));
+    const forkSeq = s1.append(ev("user", { text: "q2", turnId: "t2" }));
+    s1.append(ev("tool_result", { turnId: "t2", toolId: "t2", toolResult: { content: bigB } }));
+    // Fork/edit truncates t2 — it's superseded but still reachable via since().
+    s1.markSupersededFrom(forkSeq);
+    s1.close();
+
+    // Reopen: the constructor-time backfill migration must cap BOTH rows,
+    // including the superseded one.
+    const s2 = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    const liveResult = s2.readAll().find((e) => e.kind === "tool_result");
+    expect(liveResult?.toolResult?.content).not.toContain(bigA);
+    expect(liveResult?.toolResult?.content).toContain("omitted");
+
+    // Superseded row excluded from readAll — check it via a raw since() gap-fill
+    // from before the fork point (since() does not filter by superseded... but
+    // readAll/tail do). Use since(-1) is not valid; instead reopen and inspect
+    // via the underlying DB file directly is overkill — use markSupersededFrom's
+    // sibling read path: `since` DOES exclude superseded too, so assert via the
+    // raw sqlite file instead.
+    s2.close();
+
+    const Database = (await import("better-sqlite3")).default;
+    const raw = new Database(transcriptDbPath(dataDir));
+    const rows = raw
+      .prepare("SELECT payload FROM message WHERE session_id = ? AND kind = 'tool_result' ORDER BY seq ASC")
+      .all(SESSION_ID) as { payload: string }[];
+    raw.close();
+    expect(rows).toHaveLength(2);
+    const parsed = rows.map((r) => JSON.parse(r.payload));
+    expect(parsed[0].toolResult.content).not.toContain(bigA);
+    expect(parsed[0].toolResult.content).toContain("omitted");
+    expect(parsed[1].toolResult.content).not.toContain(bigB);
+    expect(parsed[1].toolResult.content).toContain("omitted");
+
+    // Third open: idempotent — no further mutation, rows already capped/short.
+    const s3 = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    const raw2 = new Database(transcriptDbPath(dataDir));
+    const rows2 = raw2
+      .prepare("SELECT payload FROM message WHERE session_id = ? AND kind = 'tool_result' ORDER BY seq ASC")
+      .all(SESSION_ID) as { payload: string }[];
+    raw2.close();
+    expect(rows2.map((r) => r.payload)).toEqual(rows.map((r) => r.payload));
+    s3.close();
+  });
+
+  it("leaves a normal-size tool_result row unchanged across reopen", () => {
+    const normalContent = "short read result";
+    const s1 = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    s1.append(ev("user", { text: "q1", turnId: "t1" }));
+    s1.append(ev("tool_result", { turnId: "t1", toolId: "t1", toolResult: { content: normalContent } }));
+    s1.close();
+
+    const s2 = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    const result = s2.readAll().find((e) => e.kind === "tool_result");
+    expect(result?.toolResult?.content).toBe(normalContent);
+    s2.close();
+  });
+});
+
 describe("P0.T2 / P0.T4 — legacy messages.jsonl migration", () => {
   const legacyLines = [
     // Legacy lines carry NO logSeq (backward-compat, N3).

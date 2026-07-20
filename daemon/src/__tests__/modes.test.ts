@@ -53,16 +53,23 @@ describe("Mode routes", () => {
     expect(res.json()).toEqual([]);
   });
 
-  it("GET /supported-clis lists all CLIs with defaultModel + supportsJson", async () => {
+  it("GET /supported-clis lists all CLIs with defaultModel + supportsJson + importsNativeHistory", async () => {
     const res = await app.inject({ method: "GET", url: "/supported-clis" });
     expect(res.statusCode).toBe(200);
-    const body = res.json<Array<{ id: string; defaultModel: string; supportsJson: boolean }>>();
+    const body = res.json<
+      Array<{ id: string; defaultModel: string; supportsJson: boolean; importsNativeHistory: boolean }>
+    >();
     expect(body.find((c) => c.id === "claude")?.supportsJson).toBe(true);
-    // agy (Antigravity CLI) registers with JSON support enabled.
+    // claude + opencode ship a native-history importer; cursor + agy don't (yet).
+    expect(body.find((c) => c.id === "claude")?.importsNativeHistory).toBe(true);
+    expect(body.find((c) => c.id === "opencode")?.importsNativeHistory).toBe(true);
+    expect(body.find((c) => c.id === "cursor")?.importsNativeHistory).toBe(false);
+    // agy (Antigravity CLI) registers with JSON support enabled but no importer.
     expect(body.find((c) => c.id === "agy")).toEqual({
       id: "agy",
       defaultModel: "Gemini 3.1 Pro (High)",
       supportsJson: true,
+      importsNativeHistory: false,
     });
     expect(body.map((c) => c.id).sort()).toEqual(["agy", "claude", "cursor", "opencode"]);
   });

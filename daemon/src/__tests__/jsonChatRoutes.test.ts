@@ -124,7 +124,7 @@ function makeSession(): SessionRecord {
   };
 }
 
-/** A non-JSON (pty) direct session — used to prove attachment uploads are rejected. */
+/** A non-JSON (pty) direct AGENT session — terminal-channel upload target (item 3). */
 function makeTtySession(): SessionRecord {
   return {
     id: TTY_SESSION_ID,
@@ -132,6 +132,21 @@ function makeTtySession(): SessionRecord {
     type: "agent",
     modeId: "m",
     tmuxName: "__direct__-y",
+    useTmux: false,
+    channel: "pty",
+    lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+  };
+}
+
+const PLAIN_TERMINAL_SESSION_ID = `${PROJECT_ID}-d3`;
+
+/** A plain (non-agent) terminal session — no CLI to read an upload, still rejected. */
+function makePlainTerminalSession(): SessionRecord {
+  return {
+    id: PLAIN_TERMINAL_SESSION_ID,
+    slot: "t1",
+    type: "terminal",
+    tmuxName: "__direct__-z",
     useTmux: false,
     channel: "pty",
     lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
@@ -181,7 +196,7 @@ describe("JSON chat REST + WS", () => {
       isGit: true,
       defaultBranch: "main",
       createdAt: new Date().toISOString(),
-      directSessions: [makeSession(), makeTtySession()],
+      directSessions: [makeSession(), makeTtySession(), makePlainTerminalSession()],
       worktrees: [],
     } as ProjectRecord);
   });
@@ -370,7 +385,7 @@ describe("JSON chat REST + WS", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("Fix #4 — attachment upload to a non-JSON session → 400", async () => {
+  it("item 3 — attachment upload to a terminal-channel (pty) AGENT session now succeeds (was Fix #4's 400)", async () => {
     const boundary = "----vsttestnonjson";
     const body =
       `--${boundary}\r\n` +
@@ -381,6 +396,26 @@ describe("JSON chat REST + WS", () => {
     const res = await app.inject({
       method: "POST",
       url: `/sessions/${TTY_SESSION_ID}/attachments`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(res.statusCode).toBe(201);
+    const { attachments } = res.json<{ attachments: Array<{ id: string; name: string; path: string }> }>();
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]!.path).toContain(join("sessions", TTY_SESSION_ID, "uploads"));
+  });
+
+  it("item 3 — attachment upload to a plain (non-agent) terminal session → 400", async () => {
+    const boundary = "----vsttestplainterm";
+    const body =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="files"; filename="x.txt"\r\n` +
+      `Content-Type: text/plain\r\n\r\n` +
+      `data\r\n` +
+      `--${boundary}--\r\n`;
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${PLAIN_TERMINAL_SESSION_ID}/attachments`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: body,
     });

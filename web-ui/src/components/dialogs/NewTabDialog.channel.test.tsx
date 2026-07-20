@@ -12,7 +12,7 @@ describe("NewTabDialog channel toggle (5.T3 / 5.T4)", () => {
 
     await screen.findByText("Bugfix"); // modes loaded
 
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.click(screen.getByText("Create"));
 
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
@@ -29,14 +29,14 @@ describe("NewTabDialog channel toggle (5.T3 / 5.T4)", () => {
       { id: "n", name: "No-JSON", cli: "nojson", context: "x" },
     ]);
     vi.spyOn(api, "getSupportedClis").mockResolvedValue([
-      { id: "nojson", defaultModel: "auto", supportsJson: false },
+      { id: "nojson", defaultModel: "auto", supportsJson: false, importsNativeHistory: false },
     ]);
     render(<NewTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
 
     await screen.findByText("No-JSON"); // mode loaded
-    const jsonRadio = screen.getByRole("radio", { name: /JSON chat/i });
+    const jsonRadio = screen.getByRole("radio", { name: /Rich Chat/i });
     await waitFor(() => expect(jsonRadio).toBeDisabled());
-    expect(screen.getByText(/JSON chat not available for nojson/i)).toBeInTheDocument();
+    expect(screen.getByText(/Rich Chat not available for nojson/i)).toBeInTheDocument();
   });
 
   it("leaves the default (terminal) create unchanged — no channel, useTmux sent (5.T4)", async () => {

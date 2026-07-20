@@ -19,7 +19,7 @@ describe("NewSessionDialog channel + attachments", () => {
     await screen.findByText("Bugfix"); // modes loaded
     // Default is "New worktree" — provide a branch.
     await userEvent.type(screen.getByLabelText("New worktree branch"), "feat/x");
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.click(screen.getByText("Create"));
 
     await waitFor(() => expect(wtSpy).toHaveBeenCalled());
@@ -36,7 +36,7 @@ describe("NewSessionDialog channel + attachments", () => {
 
     await screen.findByText("Bugfix");
     await userEvent.click(screen.getByRole("radio", { name: /Existing worktree/i }));
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await userEvent.click(screen.getByText("Create"));
 
     await waitFor(() => expect(sessSpy).toHaveBeenCalled());
@@ -66,7 +66,7 @@ describe("NewSessionDialog channel + attachments", () => {
     await screen.findByText("Bugfix");
 
     expect(screen.queryByLabelText("Attach files")).toBeNull();
-    await userEvent.click(screen.getByRole("radio", { name: /JSON chat/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
     await waitFor(() => expect(screen.getByLabelText("Attach files")).toBeInTheDocument());
   });
 });

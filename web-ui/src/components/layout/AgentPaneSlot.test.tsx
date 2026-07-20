@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ApiInstance } from "@/api";
@@ -9,14 +9,27 @@ let terminalMounts = 0;
 let terminalUnmounts = 0;
 
 vi.mock("./TerminalPane", () => ({
-  TerminalPane: ({ sessionId }: { sessionId: string | null }) => {
+  TerminalPane: ({
+    sessionId,
+    channelToggle,
+  }: {
+    sessionId: string | null;
+    channelToggle?: ReactNode;
+  }) => {
     useEffect(() => {
       terminalMounts += 1;
       return () => {
         terminalUnmounts += 1;
       };
     }, []);
-    return <div data-testid="terminal" data-session={sessionId ?? "null"} />;
+    // The real TerminalPane decides the toggle's placement (top-right overlay
+    // while live, in-flow below the exited banner). Here we just surface whether
+    // AgentPaneSlot handed it the toggle at all.
+    return (
+      <div data-testid="terminal" data-session={sessionId ?? "null"}>
+        {channelToggle}
+      </div>
+    );
   },
 }));
 
@@ -24,6 +37,18 @@ vi.mock("./ChatPane", () => ({
   ChatPane: ({ visible }: { visible: boolean }) => (
     <div data-testid="chatpane" data-visible={String(visible)} />
   ),
+}));
+
+// The channel toggle fetches modes on its own; stub it out — this suite only
+// asserts the terminal/chat remount invariant.
+vi.mock("./TerminalChannelToggle", () => ({
+  TerminalChannelToggle: () => <div data-testid="channel-toggle" />,
+}));
+
+// Same reasoning: the terminal upload control (item 3) also fetches modes on
+// its own — stub it out too.
+vi.mock("./TerminalAttachmentUpload", () => ({
+  TerminalAttachmentUpload: () => <div data-testid="attachment-upload" />,
 }));
 
 // Import AFTER the mocks are registered (vi.mock is hoisted, but keep it explicit).
@@ -87,5 +112,26 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(terminalMounts).toBe(1);
     expect(container.querySelector('[data-testid="terminal"]')?.getAttribute("data-session")).toBe("tty1");
     expect(container.querySelector('[data-testid="chatpane"]')?.getAttribute("data-visible")).toBe("false");
+  });
+
+  it("hands the channel toggle to TerminalPane and shows the upload overlay for a live terminal session", () => {
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />,
+    );
+    expect(container.querySelector('[data-testid="channel-toggle"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="attachment-upload"]')).not.toBeNull();
+  });
+
+  it("keeps handing TerminalPane the channel toggle when exited, but hides the upload overlay (Resume banner bug)", () => {
+    // The channel toggle now lives inside TerminalPane, which renders it in
+    // normal flow BELOW its own "Session exited / Resume" banner (no overlap),
+    // so AgentPaneSlot keeps passing it even when exited. The upload overlay is
+    // a plain top-corner overlay that only makes sense live, so it stays gated.
+    const exited: Session = { ...session("tty1", "tmux"), lifecycleState: "exited" };
+    const { container } = render(<AgentPaneSlot api={api} sessionId="tty1" session={exited} />);
+    expect(terminalMounts).toBe(1);
+    expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="channel-toggle"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="attachment-upload"]')).toBeNull();
   });
 });

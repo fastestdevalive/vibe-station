@@ -26,7 +26,7 @@ import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import { resolveChannel, sessionChannel, channelTransition } from "../services/channel.js";
 import { hasNativeHistoryImporter } from "../services/nativeHistoryImporter.js";
-import { persistLifecycleState } from "../services/lifecycle.js";
+import { persistLifecycleState, clearIdleTracking } from "../services/lifecycle.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import {
   enqueueChatTurn,
@@ -1281,11 +1281,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
   // PATCH …/sessions/:id/channel — live JSON↔terminal toggle (P3, R1.1–R1.7).
   // Idle-gated (409 when a turn is active/queued/held for edit); worktree-only
-  // (400 for direct sessions — no restore path, R1.5); gated per-CLI on native-
-  // history importer availability (400 for cursor/agy, R1.6). json→tty spawns the
-  // TTY resuming the same agentChatId; tty→json tears the TTY down, re-establishes
-  // the JSON session, and backfills terminal-phase turns via the P2 importer
-  // (R1.4). The switch is mirrored to other open tabs (R1.7).
+  // (400 for direct sessions — no restore path, R1.5). Works for EVERY agent CLI
+  // in both directions: json→tty spawns the TTY resuming the same agentChatId;
+  // tty→json tears the TTY down and re-establishes the JSON session. The
+  // terminal-phase turns are backfilled via the P2 importer ONLY for CLIs that
+  // ship a native-history importer (claude/opencode); CLIs without one
+  // (cursor/agy) skip the backfill and return lossily (`historyImported:false`)
+  // — the model still has those turns via --resume. The switch is mirrored to
+  // other open tabs (R1.7).
   app.patch("/sessions/:id/channel", async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = z.object({ channel: z.enum(["json", "tmux", "pty"]) }).safeParse(req.body);
@@ -1315,12 +1318,6 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!mode) return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
     const plugin = resolvePlugin(mode.cli);
 
-    // R1.6 — only CLIs with a native-history importer can toggle (claude + opencode);
-    // cursor + agy are blocked until their importers ship.
-    if (!hasNativeHistoryImporter(mode.cli)) {
-      return reply.status(400).send({ error: `${mode.cli} does not support channel toggle` });
-    }
-
     const fromJson = current === "json";
     const toJson = target === "json";
     const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
@@ -1333,6 +1330,18 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
     }
 
+    // Compute the record's target channel + `useTmux` invariant (R1.2) up front:
+    // the json→tty spawn below reads `session.useTmux`/`session.tmuxName`, so the
+    // flip must land BEFORE the spawn (not after) or the TTY comes up on the
+    // stale JSON placeholder.
+    const { channel: newChannel, useTmux: newUseTmux } = channelTransition(target);
+    // JSON sessions keep the `__direct__-<id>` placeholder tmux name; a terminal
+    // needs a REAL window name allocated exactly like session-create does
+    // (sessions.ts:539 — `buildTmuxName(prefix, wtNum, slot)`).
+    const wtNum = parseInt(worktree.id.split("-").at(-1) ?? "1", 10);
+    const jsonTmuxName = `__direct__-${session.id}`;
+    const ttyTmuxName = newUseTmux ? buildTmuxName(project.prefix, wtNum, session.slot) : jsonTmuxName;
+
     try {
       if (fromJson) {
         // json → tty: detach the in-memory JSON session (idle-gated, so this only
@@ -1343,6 +1352,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         jsonAgentToClose?.abortAndDrain();
         jsonAgentRegistry.delete(id);
         jsonAgentToClose?.dispose();
+        // Allocate the real terminal tmux name + flip the useTmux/channel
+        // invariant BEFORE spawning so the pane attaches to a live window.
+        session.tmuxName = ttyTmuxName;
+        session.channel = newChannel;
+        session.useTmux = newUseTmux;
         await spawnTtyForWorktreeAgent({
           project,
           worktree,
@@ -1353,6 +1367,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         });
       } else {
         // tty → json: tear the TTY down (reuse the DELETE teardown primitives).
+        // Read `session.useTmux` BEFORE flipping it (still the terminal value here).
         if (session.useTmux) {
           try {
             await killSession(session.tmuxName);
@@ -1362,16 +1377,34 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         } else {
           directPtyRegistry.get(id)?.kill?.();
         }
+        // This teardown isn't a poller-detected exit, so the poller's own
+        // idle-hash cleanup never runs — clear it explicitly. Otherwise a
+        // STALE hash can survive into a LATER json→tty toggle and, if the new
+        // pane's first captured lines happen to hash identical to the old
+        // session's (plausible — same CLI splash), flip the fresh session to
+        // "idle" one tick after this handler marks it "working".
+        clearIdleTracking(id);
+        // Reset the tmux name back to the JSON `__direct__` placeholder so the
+        // record is consistent for JSON mode, then flip the invariant.
+        session.tmuxName = jsonTmuxName;
+        session.channel = newChannel;
+        session.useTmux = newUseTmux;
       }
     } catch (err) {
       return reply.status(500).send({ error: `Failed to switch channel: ${String(err)}` });
     }
 
-    // Flip the record's channel + `useTmux` invariant (R1.2), persisting any
-    // agentChatId the json→tty restore may have self-healed.
-    const { channel: newChannel, useTmux: newUseTmux } = channelTransition(target);
-    session.channel = newChannel;
-    session.useTmux = newUseTmux;
+    // Persist the flipped channel + `useTmux` invariant + the new tmuxName,
+    // along with any agentChatId the json→tty restore may have self-healed.
+    //
+    // json→tty ALSO resets `lifecycle` to "working", mirroring `/resume`
+    // (sessions.ts ~L913-919). Without this, a record left at "exited" from
+    // any PRIOR real tmux death stays "exited" forever: the lifecycle poller
+    // (services/lifecycle.ts ~L185) explicitly refuses to touch a session
+    // whose state isn't already "working"/"idle" — spawning a brand-new,
+    // genuinely live tmux window does not by itself clear a stale "exited"
+    // record, so the terminal pane keeps showing the "Session exited /
+    // Resume" banner over a terminal that is actually live and working.
     await mutateProject(project.id, (p) => ({
       ...p,
       worktrees: p.worktrees.map((w) =>
@@ -1384,7 +1417,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
                       ...s,
                       channel: newChannel,
                       useTmux: newUseTmux,
+                      tmuxName: session.tmuxName,
                       ...(session.agentChatId ? { agentChatId: session.agentChatId } : {}),
+                      ...(fromJson
+                        ? { lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() } }
+                        : {}),
                     }
                   : s,
               ),
@@ -1395,12 +1432,23 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     // Compute the fresh meta to mirror to other tabs.
     let meta: SessionMeta;
+    // Whether terminal-phase turns were backfilled into the JSON transcript.
+    // Only true on a tty→json switch for a CLI that ships a native-history
+    // importer; cursor/agy skip the backfill (lossy return), and json→tty never
+    // imports.
+    let historyImported = false;
     if (toJson) {
       // tty → json: register a fresh JSON session (reads the now-json record) and
-      // backfill the terminal-phase turns from the native store (R1.4).
+      // backfill the terminal-phase turns from the native store (R1.4) — but only
+      // for CLIs with a native-history importer. Without one (cursor/agy) we skip
+      // the backfill and return lossily; the agent still has those turns via
+      // --resume, they just won't appear in the JSON view.
       const resolved = await resolveJsonAgent(id, daemonPort);
       if (resolved.ok) {
-        await resolved.agent.importNativeHistory();
+        if (hasNativeHistoryImporter(mode.cli)) {
+          await resolved.agent.importNativeHistory();
+          historyImported = true;
+        }
         meta = resolved.agent.getMeta();
       } else {
         meta = {
@@ -1434,7 +1482,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // the chat/terminal pane flip) + broadcast the fresh meta (status bar).
     broadcastAll({ type: "session:updated", sessionId: id, channel: newChannel });
     broadcastAll({ type: "session:meta", sessionId: id, meta });
-    return reply.send({ ok: true, channel: newChannel });
+    if (fromJson) {
+      // Mirrors the `lifecycle` reset in the mutateProject merge above — an
+      // already-open tab's TerminalPane only clears its "Session exited /
+      // Resume" banner on `session:state`/`session:resumed`
+      // (useSubscription.ts ~L44-46, ~L72-76), NOT on `session:updated` or
+      // `session:meta`. Without this, a tab open at toggle time keeps
+      // showing the stale banner over a genuinely live terminal until its
+      // next reconnect/reload.
+      broadcastAll({ type: "session:state", sessionId: id, state: "working" });
+    }
+    return reply.send({ ok: true, channel: newChannel, historyImported });
   });
 
   // GET /sessions/:id/transcript — bounded normalized history (R2.1–R2.3).

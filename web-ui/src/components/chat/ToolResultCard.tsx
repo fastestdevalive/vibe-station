@@ -16,13 +16,27 @@ export function looksLikeUnifiedDiff(text: string): boolean {
 }
 
 /**
+ * Client-side mirror of the server's `TOOL_RESULT_MAX_BYTES` cap
+ * (`daemon/src/services/toolResultCap.ts`). Defense-in-depth only — the
+ * server caps both write paths (live turns + at-rest import backfill), so
+ * this guard mainly protects against a stale cached transcript fetched
+ * before the one-time backfill migration ran.
+ */
+const CLIENT_TOOL_RESULT_MAX_CHARS = 20_000;
+
+function capForDisplay(text: string): string {
+  if (text.length <= CLIENT_TOOL_RESULT_MAX_CHARS) return text;
+  return `(tool result omitted — ${text.length} chars)`;
+}
+
+/**
  * Tool output attached to a tool card. Collapsible; unified diffs render via the
  * shared DiffView (Decision 9), everything else as monospace. Error styling when
  * the tool reported a failure.
  */
 export function ToolResultCard({ toolName, content, isError }: ToolResultCardProps) {
   const [open, setOpen] = useState(false);
-  const text = content ?? "";
+  const text = capForDisplay(content ?? "");
   const isDiff = !isError && looksLikeUnifiedDiff(text);
   const label = isError ? "Error" : `${toolName ?? "Tool"} result`;
 

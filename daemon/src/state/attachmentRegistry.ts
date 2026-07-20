@@ -26,6 +26,20 @@ export function getAttachment(sessionId: string, uploadId: string): Attachment |
   return bySession.get(sessionId)?.get(uploadId);
 }
 
+/**
+ * Remove one upload (json-mode-followups item 3, Decision 8) — used by the new
+ * `DELETE /sessions/:id/attachments/:uploadId` route so a staged-but-unconsumed
+ * terminal upload can be removed before it's injected. Returns the removed
+ * record (undefined if it was already gone) so the caller can locate the
+ * staged file / pending-uploads reference to unlink.
+ */
+export function removeAttachment(sessionId: string, uploadId: string): Attachment | undefined {
+  const map = bySession.get(sessionId);
+  const attachment = map?.get(uploadId);
+  map?.delete(uploadId);
+  return attachment;
+}
+
 export function clearSessionAttachments(sessionId: string): void {
   bySession.delete(sessionId);
 }

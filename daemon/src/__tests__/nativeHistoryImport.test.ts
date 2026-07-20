@@ -352,6 +352,43 @@ describe("P2.T5 — import observability", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1.T3/1.T5 — tool_result size cap on the AT-REST importTransaction path
+// (json-mode-followups item 1): this is a SEPARATE write path from the
+// live-turn `handleEvent`, so it needs its own cap call site + coverage.
+// ---------------------------------------------------------------------------
+describe("1.T3/1.T5 — importTransaction tool_result size cap (at-rest backfill path)", () => {
+  it("caps an oversized terminal-phase tool_result on tty→json toggle backfill", async () => {
+    const { TOOL_RESULT_MAX_BYTES } = await import("../services/toolResultCap.js");
+    const store = openSqliteTranscriptStore(tmp, SESSION_ID);
+    const bigContent = "B".repeat(TOOL_RESULT_MAX_BYTES + 1234);
+    const imported: NormalizedEvent[] = [
+      ev("user", { role: "user", text: "read a big log", turnId: "native1" }),
+      ev("tool_result", { toolId: "t1", turnId: "native1", toolResult: { content: bigContent } }),
+    ];
+    store.importTransaction(imported, { cli: "claude", cursor: "1" });
+
+    const persisted = store.readAll().find((e) => e.kind === "tool_result");
+    expect(persisted?.toolResult?.content).not.toContain(bigContent);
+    expect(persisted?.toolResult?.content).toContain("omitted");
+    store.close();
+  });
+
+  it("leaves a normal-size tool_result unchanged through the import path", () => {
+    const store = openSqliteTranscriptStore(tmp, SESSION_ID);
+    const normalContent = "a short grep match\n";
+    const imported: NormalizedEvent[] = [
+      ev("user", { role: "user", text: "grep something", turnId: "native2" }),
+      ev("tool_result", { toolId: "t2", turnId: "native2", toolResult: { content: normalContent } }),
+    ];
+    store.importTransaction(imported, { cli: "claude", cursor: "2" });
+
+    const persisted = store.readAll().find((e) => e.kind === "tool_result");
+    expect(persisted?.toolResult?.content).toBe(normalContent);
+    store.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Registry — the P3 toggle gate (claude + opencode present; cursor + agy absent)
 // ---------------------------------------------------------------------------
 describe("native-history importer registry (P3 gate)", () => {

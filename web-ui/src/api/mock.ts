@@ -679,10 +679,10 @@ export function createMockApi() {
 
     async getSupportedClis(): Promise<SupportedCli[]> {
       return [
-        { id: "claude", defaultModel: "sonnet", supportsJson: true },
-        { id: "cursor", defaultModel: "auto", supportsJson: true },
-        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true },
-        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true },
+        { id: "claude", defaultModel: "sonnet", supportsJson: true, importsNativeHistory: true },
+        { id: "cursor", defaultModel: "auto", supportsJson: true, importsNativeHistory: false },
+        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true, importsNativeHistory: true },
+        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true, importsNativeHistory: false },
       ];
     },
 
@@ -1065,6 +1065,10 @@ export function createMockApi() {
         mime: f.type || "application/octet-stream",
       }));
       return { attachments };
+    },
+
+    async deleteAttachment(_sessionId: string, _uploadId: string): Promise<{ ok: true }> {
+      return { ok: true };
     },
 
     async getTranscript(sessionId: string): Promise<TranscriptResponse> {

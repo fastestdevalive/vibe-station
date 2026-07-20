@@ -7,6 +7,14 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * When true, disables the confirm button and blocks `onConfirm` from firing
+   * (json-mode-followups item 2, Decision 4). Re-evaluated on every render so
+   * a value derived from LIVE state (e.g. session busy-ness) can flip while
+   * the dialog sits open, instead of going stale at the moment it was opened.
+   * Defaults `false` — fully backward-compatible with existing callers.
+   */
+  confirmDisabled?: boolean;
 }
 
 export function ConfirmDialog({
@@ -16,6 +24,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   onConfirm,
   onCancel,
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   return (
     <Dialog
@@ -30,6 +39,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onConfirm}
+            disabled={confirmDisabled}
             style={{ borderColor: "var(--destructive)", color: "var(--destructive)" }}
           >
             {confirmLabel}

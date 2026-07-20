@@ -15,6 +15,7 @@ import {
   SUPPORTED_CLIS,
   type CliId,
 } from "../agent-plugins/registry.js";
+import { hasNativeHistoryImporter } from "../services/nativeHistoryImporter.js";
 
 const MAX_MODES = 10;
 
@@ -176,6 +177,7 @@ export function registerModeRoutes(app: FastifyInstance): void {
         id,
         defaultModel: plugin.defaultModel,
         supportsJson: plugin.supportsJson?.() === true,
+        importsNativeHistory: hasNativeHistoryImporter(id),
       };
     });
     return reply.send(list);
