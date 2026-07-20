@@ -57,7 +57,7 @@ daemon
 - **Structured, not a TTY.** Renders in the web UI's `ChatPane` (message list + composer + status bar) instead of `TerminalPane`. `channel: "json"` forces `useTmux = false`.
 - **Per-turn spawn.** No live process between turns; the conversation resumes via the persisted `agentChatId`. Survives daemon restarts (stateless between turns) — a `working` JSON session reconciles to `idle` on boot; a running turn's child is killed (orphan-safe, Decision 13). How `agentChatId` is obtained/kept correct differs per CLI (pre-mint, hook, or log-file inference) and across the JSON↔terminal toggle — see [AGENT-CHAT-ID-CAPTURE.md](./AGENT-CHAT-ID-CAPTURE.md).
 - **Plugin-owned normalization.** Each `AgentPlugin.runTurn()` yields provider-agnostic `NormalizedEvent`s; the daemon core never parses raw CLI JSON.
-- **Transcript.** Every event is appended to `messages.jsonl` under `sessionDataDir` and replayed on `chat:open`. `SessionMeta` (tokens/model/turn-state) rebuilds from the transcript tail after a restart.
+- **Transcript.** Every event is appended to `messages.jsonl` under `sessionDataDir` and replayed on `chat:open`. `SessionMeta` (tokens/model/turn-state) rebuilds from the transcript tail after a restart. How each CLI reports token usage (and which fields the daemon has to reshape vs. compute itself) differs per CLI — see [TOKEN-USAGE.md](./TOKEN-USAGE.md).
 - **Attachments.** Files upload under `sessionDataDir/uploads/` (outside the checkout), cleaned automatically with the session; absolute paths are injected into the message.
 - **Turn queue.** The daemon owns a per-session FIFO queue (`POST /chat` is always accepted, `202`); turns run strictly sequentially.
 
