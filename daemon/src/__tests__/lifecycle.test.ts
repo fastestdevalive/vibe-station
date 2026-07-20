@@ -9,6 +9,7 @@ import {
   IDLE_THRESHOLD_MS,
   POLL_INTERVAL_MS,
   _resetIdleTrackingForTest,
+  clearIdleTracking,
   runLifecyclePollOnce,
 } from "../services/lifecycle.js";
 import type { ProjectRecord, LifecycleState } from "../types.js";
@@ -215,5 +216,51 @@ describe("lifecycle polling behavior", () => {
     tmux.hasSession.mockResolvedValue(true);
     tmux.capturePane.mockResolvedValue("second");
     await expect(runLifecyclePollOnce()).resolves.toBeUndefined();
+  });
+
+  it("clearIdleTracking prevents a stale hash from an earlier tmux window flipping a freshly-respawned session straight to idle (json-mode-followups toggle bug)", async () => {
+    // A tty→json toggle kills the tmux window directly (not via the poller's
+    // own exit-detection), so nothing clears this session's tracking entry
+    // on its own — this simulates that teardown NOT calling clearIdleTracking.
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("same splash text");
+    await runLifecyclePollOnce(); // seeds the tracking entry
+
+    // A later json→tty toggle respawns a NEW tmux window whose first captured
+    // lines happen to hash identical to the old one (plausible — same CLI
+    // splash/prompt). Without clearing, the STALE stableSince survives.
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
+      await runLifecyclePollOnce();
+      // Bug reproduced: a fresh window immediately reads as "idle" because
+      // the leaked entry's `stableSince` is already older than the threshold.
+      expect(await getCurrentState()).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clearIdleTracking called at teardown avoids the stale-idle flip on the next respawn", async () => {
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("same splash text");
+    await runLifecyclePollOnce(); // seeds the tracking entry
+
+    // The fix: the tty→json teardown path calls this explicitly.
+    clearIdleTracking("sess-l");
+
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
+      await runLifecyclePollOnce();
+      // No leaked entry → this poll is treated as the FIRST sighting of the
+      // new window (idleTracking.ts: `if (!entry) { ...; return; }`), so it
+      // does not immediately flip to idle.
+      expect(await getCurrentState()).toBe("working");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

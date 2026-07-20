@@ -123,3 +123,19 @@ The lock is scoped to one `WSConnection`. Two browser tabs legitimately hold two
 - **Don't move attach outside the lock:** the race occurs precisely because `attach` is an async park point. Splitting into "register then attach" outside the lock recreates the bug.
 - **Symptom if violated:** `tmux list-clients -t <session>` shows >1 client for a single browser → duplicated ("double") echo that a page refresh temporarily clears.
 - **Invariant:** for any `(conn, sessionId)`, at most one `TmuxOutputStream` should be live (i.e., have a non-killed PTY) at any moment. The stale-stream teardown in `sessionOpen.ts` reinforces this but only works reliably once the lock prevents interleaving across the attach await.
+
+---
+
+## UI terminology — "Rich Chat" in the UI, `"json"` in the code
+
+**The split is deliberate, not inconsistent.** The structured, per-turn chat channel (as opposed to a raw terminal) is:
+
+- **In the UI:** always labeled **"Rich Chat"** (button labels, dialog titles/copy, tooltips, hint text). Where a qualifier is useful for a technical reader, add `(json based)` — e.g. `"Switch to Rich Chat"` / `"Rich Chat (json based)"` — see `web-ui/src/components/chat/ChannelToggleButton.tsx`'s `COPY` table and `web-ui/src/components/layout/TabsStrip.tsx`'s tab tooltip for the established pattern.
+- **In the code:** always `"json"` — the `Channel` enum value (`daemon/src/types.ts`, `daemon/src/ws/protocol.ts`, `web-ui/src/api/types.ts`), file/identifier names (`jsonAgent.ts`, `JsonAgentSession`, `jsonAgentChat.ts`, `jsonAgentRegistry.ts`, `jsonAgentStream.ts`, `resolveJsonAgent`, etc.), route paths, WS event names, and every comment/doc describing the mechanism. `"json"` is the more literal, technically accurate name (the channel's defining trait is that the CLI is driven via structured JSON output) and renaming the code layer to chase the UI label would touch persisted session records (`channel: "json"` already exists in on-disk manifests) for no real benefit.
+
+### What to watch for
+
+- **Do not rename the code to `"rich-chat"` / `RichChat*`** to "match" the UI — this was considered and explicitly rejected. The UI label and the code identifier are allowed to diverge; keep them that way.
+- **Do not change UI copy back to "JSON chat" / "JSON mode"** to "match" the code — same reasoning in reverse. If you're editing a component and see `"json"` in a prop/variable name right next to `"Rich Chat"` in the JSX it renders, that's correct, not a bug — leave both as they are.
+- **New UI copy for this channel:** use "Rich Chat"; add `(json based)` only where the technical detail is genuinely useful to the reader (a tooltip, an advanced-settings hint), not in every occurrence.
+- **New code identifiers for this channel:** use `json`/`Json`-prefixed names, consistent with the existing files above.

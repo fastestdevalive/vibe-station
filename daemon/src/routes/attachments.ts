@@ -11,17 +11,43 @@
  * We hand-roll a tiny multipart parser (no `@fastify/multipart` dependency): a
  * raw-buffer content-type parser collects the body, then we split on the
  * boundary. Uploads are small; this keeps the dependency surface minimal.
+ *
+ * json-mode-followups item 3: the same route also serves terminal-channel
+ * (tmux/pty) agent sessions. For those, the handler ALSO writes a
+ * pending-upload reference file into the worktree-local (or direct-session
+ * checkout-local) `.vibe-station/pending-uploads/<sessionId>/` directory —
+ * the SOLE store a claude `UserPromptSubmit` hook reads on the next prompt
+ * (`agent-plugins/claude.ts` `setupWorkspaceHooks`, Decision 8). This is a
+ * generic, CLI-agnostic filesystem mechanism (no `if (cli === "claude")`
+ * branch here) — only claude's hook happens to read it today.
  */
 
 import type { FastifyInstance } from "fastify";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { findJsonSessionContext } from "../services/jsonAgentChat.js";
 import { sessionChannel } from "../services/channel.js";
-import { sessionDataDir, directSessionDataDir } from "../services/paths.js";
-import { registerAttachment } from "../state/attachmentRegistry.js";
+import { sessionDataDir, directSessionDataDir, worktreePath } from "../services/paths.js";
+import { registerAttachment, removeAttachment } from "../state/attachmentRegistry.js";
 import type { Attachment } from "../types.js";
+import type { ProjectRecord, WorktreeRecord } from "../types.js";
+
+/** Absolute checkout path a session's hooks run against (worktree or direct-project). */
+function checkoutPathFor(project: ProjectRecord, worktree: WorktreeRecord | null): string {
+  return worktree ? worktreePath(project.id, worktree.id) : project.absolutePath;
+}
+
+/** `<checkout>/.vibe-station/pending-uploads/<sessionId>/<uploadId>-<name>` (Decision 8). */
+function pendingUploadRefPath(
+  project: ProjectRecord,
+  worktree: WorktreeRecord | null,
+  sessionId: string,
+  uploadId: string,
+  name: string,
+): string {
+  return join(checkoutPathFor(project, worktree), ".vibe-station", "pending-uploads", sessionId, `${uploadId}-${name}`);
+}
 
 /** Per-file size cap. */
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -113,11 +139,14 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findJsonSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
-    // Attachments only make sense for JSON agent-chat sessions — the paths are
-    // injected into a chat turn. Reject TTY (tmux/pty) sessions.
-    if (sessionChannel(ctx.session) !== "json") {
-      return reply.status(400).send({ error: `Session '${id}' is not a JSON-channel session` });
+    // Attachments only make sense for AGENT sessions — a plain terminal has no
+    // CLI to read the file. JSON-channel sessions inject the path into the next
+    // chat turn; terminal-channel (tmux/pty) sessions stage a pending-uploads
+    // reference for a `UserPromptSubmit` hook to pick up (item 3).
+    if (ctx.session.type !== "agent") {
+      return reply.status(400).send({ error: `Session '${id}' is not an agent session` });
     }
+    const channel = sessionChannel(ctx.session);
 
     const boundary = boundaryFrom(req.headers["content-type"]);
     if (!boundary || !Buffer.isBuffer(req.body)) {
@@ -159,8 +188,49 @@ export function registerAttachmentRoutes(app: FastifyInstance): void {
       };
       registerAttachment(id, attachment);
       attachments.push(attachment);
+
+      // Terminal-channel: also stage the pending-upload reference the
+      // UserPromptSubmit hook reads (Decision 8). JSON-channel keeps its
+      // existing draft-then-inject flow (`injectAttachments`, untouched).
+      if (channel !== "json") {
+        const refPath = pendingUploadRefPath(ctx.project, ctx.worktree, id, uploadId, safeName);
+        mkdirSync(join(refPath, ".."), { recursive: true });
+        writeFileSync(refPath, abs, "utf8");
+      }
     }
 
     return reply.status(201).send({ attachments });
+  });
+
+  /**
+   * Remove a staged-but-not-yet-consumed upload (item 3, Decision 8). Real
+   * server-side delete — terminal-mode uploads are "live" the instant the
+   * pending-uploads reference is written, unlike JSON-mode's client-only
+   * draft removal. Removes the staged file (`sessionDataDir/uploads/<id>/`)
+   * AND the pending-uploads reference if one exists; tolerates either being
+   * already gone (ENOENT — e.g. a race with the hook consuming it first).
+   */
+  app.delete("/sessions/:id/attachments/:uploadId", async (req, reply) => {
+    const { id, uploadId } = req.params as { id: string; uploadId: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    const attachment = removeAttachment(id, uploadId);
+    if (!attachment) return reply.status(404).send({ error: `Upload '${uploadId}' not found` });
+
+    const uploadsRoot = ctx.worktree
+      ? join(sessionDataDir(ctx.project.id, ctx.worktree.id, ctx.session.id), "uploads")
+      : join(directSessionDataDir(ctx.project.id, ctx.session.id), "uploads");
+    // `force: true` already tolerates ENOENT.
+    rmSync(join(uploadsRoot, uploadId), { recursive: true, force: true });
+
+    const refPath = pendingUploadRefPath(ctx.project, ctx.worktree, id, uploadId, attachment.name);
+    try {
+      unlinkSync(refPath);
+    } catch {
+      /* not a terminal-channel upload, or the hook already consumed it — tolerated */
+    }
+
+    return reply.status(200).send({ ok: true });
   });
 }

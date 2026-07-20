@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { SessionMeta, TurnState } from "@/api/types";
 import { ModelSwitch } from "./ModelSwitch";
-import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { ChannelToggleButton } from "./ChannelToggleButton";
 
 interface StatusBarProps {
   meta: SessionMeta | null;
@@ -61,24 +61,24 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: Stat
   // queued, or held-for-edit turn.
   const canToggle = !!(api && sessionId && meta && meta.channel === "json");
   const idle = state === "idle" && queue === 0 && (meta?.editingTurnIds.length ?? 0) === 0;
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [toggling, setToggling] = useState(false);
-  const [toggleError, setToggleError] = useState<string | null>(null);
 
-  const doToggle = async () => {
-    if (!api || !sessionId) return;
-    setToggling(true);
-    setToggleError(null);
-    try {
-      await api.setSessionChannel(sessionId, "tmux");
-      setConfirmOpen(false);
-    } catch {
-      // Most commonly a 409 (a turn started between the click and confirm).
-      setToggleError("Couldn't switch — the session is busy. Try again when idle.");
-    } finally {
-      setToggling(false);
-    }
-  };
+  // Resolve the CLI's native-history-import capability (first-class flag from
+  // GET /supported-clis) so we can warn before a lossy switch. null = unknown;
+  // we default to NOT warning until it resolves. cursor/agy → false.
+  const cli = meta?.cli;
+  const [importsHistory, setImportsHistory] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!api || !cli) return undefined;
+    setImportsHistory(null);
+    let live = true;
+    void api.getSupportedClis().then((clis) => {
+      if (!live) return;
+      setImportsHistory(clis.find((c) => c.id === cli)?.importsNativeHistory ?? true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [api, cli]);
 
   return (
     <div className="chat-statusbar" data-turn-state={state ?? "idle"}>
@@ -98,21 +98,6 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: Stat
           <span className="chat-statusbar__model">{model}</span>
         ) : null}
         {meta?.modeName ? <span className="chat-statusbar__mode">{meta.modeName}</span> : null}
-        {canToggle ? (
-          <button
-            type="button"
-            className="chat-statusbar__channel"
-            onClick={() => setConfirmOpen(true)}
-            disabled={!idle}
-            title={
-              idle
-                ? "Switch this session to a raw terminal (keeps the same conversation)"
-                : "Finish or clear the queue before switching channel"
-            }
-          >
-            ⇄ Terminal
-          </button>
-        ) : null}
       </div>
       <div className="chat-statusbar__turn">
         <span className={`chat-statusbar__state chat-statusbar__state--${state ?? "idle"}`}>
@@ -126,20 +111,24 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: Stat
           </button>
         ) : null}
       </div>
-      <ConfirmDialog
-        open={confirmOpen}
-        title="Switch to terminal?"
-        message={
-          toggleError ??
-          "This closes the JSON chat and reopens the same conversation in a raw terminal (resumed via --resume). You can switch back to JSON chat from the terminal — your terminal-phase turns will be backfilled here."
-        }
-        confirmLabel={toggling ? "Switching…" : "Switch to terminal"}
-        onConfirm={() => void doToggle()}
-        onCancel={() => {
-          setConfirmOpen(false);
-          setToggleError(null);
-        }}
-      />
+      {/* Positioned via CSS as a top-right overlay of the whole `.chat-pane`
+          (item 4) — NOT visually anchored to this row, even though it's
+          declared here alongside the rest of the toggle's gating logic. */}
+      {canToggle ? (
+        <ChannelToggleButton
+          api={api!}
+          sessionId={sessionId!}
+          direction="toTerminal"
+          triggerDisabled={!idle}
+          confirmBlocked={!idle}
+          blockedMessage="The session just went busy — wait for it to finish (or clear the queue) before switching."
+          {...(importsHistory === false
+            ? {
+                warning: `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`,
+              }
+            : {})}
+        />
+      ) : null}
     </div>
   );
 }

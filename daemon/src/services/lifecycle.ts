@@ -42,6 +42,25 @@ export function _resetIdleTrackingForTest(): void {
   idleTracking.clear();
 }
 
+/**
+ * Clear ONE session's idle-hash tracking entry. Exit paths already do this
+ * (below, and `markSessionExited`) so an exited→respawned session starts
+ * clean. The one gap: a tty→json toggle kills the tmux window via
+ * `killSession` directly (not through the exit-detection path), so the
+ * poller's `useTmux === false` branch — session type checks aside, this also
+ * covers the tmux case — never gets a chance to delete the entry (it only
+ * deletes on a detected EXIT, and this teardown isn't one). A stale entry
+ * left behind can then survive into a LATER json→tty toggle: if the new
+ * pane's first `CAPTURE_LINES` happen to hash identical to the old session's
+ * (plausible — same CLI splash/prompt), `stableAge` is already past
+ * `IDLE_THRESHOLD_MS` and the fresh session flips to "idle" one tick after
+ * being marked "working". Call this whenever a session's tmux/pty is torn
+ * down outside the poller's own exit-detection.
+ */
+export function clearIdleTracking(sessionId: string): void {
+  idleTracking.delete(sessionId);
+}
+
 function hashPane(output: string): string {
   return createHash("sha1").update(output, "utf8").digest("hex");
 }

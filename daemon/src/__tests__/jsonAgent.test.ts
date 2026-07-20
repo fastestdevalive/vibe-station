@@ -529,6 +529,108 @@ describe("JsonAgentSession — aborted turn stops appending trailing events (Fix
   });
 });
 
+describe("JsonAgentSession — 1.T2/1.T5 tool_result size cap (live-turn path)", () => {
+  let project: ProjectRecord;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-cap-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("1.T2 — an oversized live tool_result is capped before persist + broadcast", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const { TOOL_RESULT_MAX_BYTES } = await import("../services/toolResultCap.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const bigContent = "A".repeat(TOOL_RESULT_MAX_BYTES + 5000);
+    const capPlugin = {
+      ...mockPlugin(""),
+      // eslint-disable-next-line require-yield
+      async *runTurn(_input: unknown, ctx: TurnContext): AsyncIterable<NormalizedEvent> {
+        const sid = ctx.session.id;
+        yield ev(sid, "session_init", { model: "claude-sonnet-4-5" });
+        yield ev(sid, "tool_use", { toolName: "Read", toolId: "t1" });
+        yield ev(sid, "tool_result", { toolId: "t1", toolResult: { content: bigContent } });
+        yield ev(sid, "result", {});
+      },
+    } as unknown as AgentPlugin;
+
+    const emitted: NormalizedEvent[] = [];
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: capPlugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+    agent.stream.on("message", (e: NormalizedEvent) => emitted.push(e));
+
+    agent.enqueue({ message: "read the big file" });
+    await agent.settled();
+
+    // Broadcast over the WS is capped too (same event object, capped before emit).
+    const emittedResult = emitted.find((e) => e.kind === "tool_result");
+    expect(emittedResult?.toolResult?.content).not.toContain(bigContent);
+    expect(emittedResult?.toolResult?.content).toContain("omitted");
+
+    // Persisted transcript is capped, not raw.
+    const persistedResult = agent.readTranscript().find((e) => e.kind === "tool_result");
+    expect(persistedResult?.toolResult?.content).not.toContain(bigContent);
+    expect(persistedResult?.toolResult?.content).toContain("omitted");
+  });
+
+  it("1.T5 — a normal-size tool_result persists unchanged through the live-turn path", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const normalContent = "diff --git a/x b/x\n+hello\n";
+    const normalPlugin = {
+      ...mockPlugin(""),
+      // eslint-disable-next-line require-yield
+      async *runTurn(_input: unknown, ctx: TurnContext): AsyncIterable<NormalizedEvent> {
+        const sid = ctx.session.id;
+        yield ev(sid, "session_init", { model: "claude-sonnet-4-5" });
+        yield ev(sid, "tool_result", { toolId: "t1", toolResult: { content: normalContent } });
+        yield ev(sid, "result", {});
+      },
+    } as unknown as AgentPlugin;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: normalPlugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.enqueue({ message: "small diff" });
+    await agent.settled();
+
+    const persistedResult = agent.readTranscript().find((e) => e.kind === "tool_result");
+    expect(persistedResult?.toolResult?.content).toBe(normalContent);
+  });
+});
+
 const linuxIt = process.platform === "linux" ? it : it.skip;
 
 describe("JsonAgentSession — abort kills the whole descendant tree (Fix #3)", () => {
