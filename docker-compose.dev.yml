@@ -9,7 +9,7 @@
 # CLI binaries are bind-mounted read-only from the host so that
 # GET /cli-models works inside the container. gemini is installed directly in the image;
 # ~/.gemini is bind-mounted so OAuth credentials are available inside the container.
-# Override paths with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN if yours differ.
+# Override paths with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN, AGY_BIN if yours differ.
 
 services:
   vst-dev:
@@ -34,8 +34,16 @@ services:
       - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
       - ${CURSOR_BIN:-${HOME}/.local/bin/cursor-agent}:/usr/local/bin/cursor-agent:ro
       - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
-      # Gemini is installed in the image; mount host credentials so OAuth works
-      - ${HOME}/.gemini:/home/vst/.gemini:ro
+      - ${AGY_BIN:-${HOME}/.local/bin/agy}:/usr/local/bin/agy:ro
+      # Gemini/agy creds: mount host ~/.gemini READ-ONLY as a seed. The container
+      # entrypoint (see `command:` below) copies it into a WRITABLE /home/vst/.gemini
+      # on startup — agy (antigravity-cli) writes logs/cache/conversations under
+      # ~/.gemini/antigravity-cli and fails hard on a read-only mount. The bulky
+      # `antigravity` and `antigravity-browser-profile` dirs (~1.9G, the desktop
+      # IDE + its browser profile) are skipped during the copy — agy-cli needs
+      # neither. Refreshed host OAuth tokens re-propagate only on container
+      # recreate (the copy is guarded by a `.seeded` marker), not on restart.
+      - ${HOME}/.gemini:/seed/gemini:ro
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)
@@ -52,8 +60,32 @@ services:
       # files reference `.git/worktrees/<id>` metadata that no longer exists).
       - vst-dev-projects:/home/vst/projects
 
-    # Rebuild daemon when its source changes:
-    #   docker compose -f docker-compose.dev.yml up --build
+    # Overrides the image CMD to first seed a WRITABLE ~/.gemini from the
+    # read-only /seed/gemini mount (skipping the huge browser profile), then
+    # runs the daemon + Vite exactly like dev.Dockerfile's CMD.
+    command:
+      - sh
+      - -c
+      - |
+        if [ ! -f /home/vst/.gemini/.seeded ]; then
+          echo 'Seeding writable ~/.gemini from /seed/gemini (excluding browser profile)...'
+          mkdir -p /home/vst/.gemini
+          for item in /seed/gemini/*; do
+            case "$$(basename "$$item")" in
+              antigravity|antigravity-browser-profile) continue ;;
+            esac
+            cp -a "$$item" /home/vst/.gemini/ 2>/dev/null || true
+          done
+          touch /home/vst/.gemini/.seeded
+          echo 'Seed complete.'
+        fi
+        rm -f /home/vst/.vibe-station/.daemon.lock
+        node cli/dist/daemon/main.js &
+        echo 'Waiting for daemon...'
+        until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
+        echo 'Daemon ready.'
+        bash /app/scripts/seed-file-search-demo.sh || echo '[seed] non-fatal seed error — continuing'
+        pnpm --filter @vibestation/web dev
     stdin_open: true
     tty: true
 

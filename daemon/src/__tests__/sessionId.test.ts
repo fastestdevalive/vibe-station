@@ -122,6 +122,35 @@ describe("reserveNextWorktreeNum", () => {
     expect(reserveNextWorktreeNum(project)).toBe(5); // skips the orphaned vs-4 dir
   });
 
+  it("two-phase window: a reserve/bump with no append still advances the counter", async () => {
+    const { mutateProject, addProject, getProject, _clearStoreForTest } = await import(
+      "../state/project-store.js"
+    );
+    const { reserveNextWorktreeNum } = await import("../services/sessionId.js");
+
+    _clearStoreForTest();
+    const project = makeProject({ worktrees: [] });
+    await addProject(project);
+
+    // Simulate the route's reserve-and-bump mutateProject call, WITHOUT the
+    // subsequent append (as if worktree creation crashed right after the bump).
+    let reserved!: number;
+    await mutateProject("proj-1", (p) => {
+      reserved = reserveNextWorktreeNum(p);
+      return { ...p, nextWorktreeNum: reserved + 1 };
+    });
+    expect(reserved).toBe(1);
+
+    // No worktree was ever appended for number 1 — it's burned.
+    const afterCrash = getProject("proj-1")!;
+    expect(afterCrash.worktrees).toEqual([]);
+    expect(afterCrash.nextWorktreeNum).toBe(2);
+
+    // The next create must skip the burned number 1.
+    expect(reserveNextWorktreeNum(afterCrash)).toBe(2);
+  });
+});
+
 describe("reserveNextAgentSlot", () => {
   const wtWith = (agentSeq: number | undefined, aNums: number[]): WorktreeRecord => ({
     ...makeWorktree("vs-1"),
@@ -152,6 +181,12 @@ describe("reserveNextAgentSlot", () => {
     expect(reserveNextAgentSlot(wtWith(undefined, []))).toBe("a1");
   });
 
+  it("high-water dominates a stale/low agentSeq (no colliding slot)", async () => {
+    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
+    // agentSeq (2) is lower than the max live slot (a5) — must not reuse a3..a5.
+    expect(reserveNextAgentSlot(wtWith(2, [3, 4, 5]))).toBe("a6");
+  });
+
   it("non-numeric agent slot does not poison the counter to NaN", async () => {
     const { reserveNextAgentSlot } = await import("../services/sessionId.js");
     const wt = wtWith(undefined, []);
@@ -164,34 +199,5 @@ describe("reserveNextAgentSlot", () => {
       lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
     });
     expect(reserveNextAgentSlot(wt)).toBe("a1");
-  });
-});
-
-  it("two-phase window: a reserve/bump with no append still advances the counter", async () => {
-    const { mutateProject, addProject, getProject, _clearStoreForTest } = await import(
-      "../state/project-store.js"
-    );
-    const { reserveNextWorktreeNum } = await import("../services/sessionId.js");
-
-    _clearStoreForTest();
-    const project = makeProject({ worktrees: [] });
-    await addProject(project);
-
-    // Simulate the route's reserve-and-bump mutateProject call, WITHOUT the
-    // subsequent append (as if worktree creation crashed right after the bump).
-    let reserved!: number;
-    await mutateProject("proj-1", (p) => {
-      reserved = reserveNextWorktreeNum(p);
-      return { ...p, nextWorktreeNum: reserved + 1 };
-    });
-    expect(reserved).toBe(1);
-
-    // No worktree was ever appended for number 1 — it's burned.
-    const afterCrash = getProject("proj-1")!;
-    expect(afterCrash.worktrees).toEqual([]);
-    expect(afterCrash.nextWorktreeNum).toBe(2);
-
-    // The next create must skip the burned number 1.
-    expect(reserveNextWorktreeNum(afterCrash)).toBe(2);
   });
 });

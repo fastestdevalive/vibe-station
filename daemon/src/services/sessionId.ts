@@ -48,6 +48,12 @@ export function reserveNextWorktreeNum(project: ProjectRecord): number {
  * `Number.isFinite` filter is REQUIRED so a non-numeric slot can't poison the
  * counter to NaN. A deleted agent's number is never recycled.
  *
+ * We take `max(agentSeq, maxExisting)` rather than trusting `agentSeq` alone:
+ * if a manifest ever carried a counter lower than a live `a{n}` slot (hand-edit,
+ * or a future writer that appends without bumping it), trusting the counter
+ * would hand out a colliding, already-in-use slot. The `max` guarantees the
+ * result is always strictly greater than every existing slot number.
+ *
  * Pure: the caller MUST persist the returned number as `agentSeq` in the same
  * `mutateProject` update that appends the session record.
  */
@@ -57,7 +63,7 @@ export function reserveNextAgentSlot(worktree: WorktreeRecord): `a${number}` {
     .map((s) => parseInt((s.slot as string).slice(1), 10))
     .filter(Number.isFinite);
   const seed = Math.max(0, ...existing);
-  const n = (worktree.agentSeq ?? seed) + 1;
+  const n = Math.max(worktree.agentSeq ?? 0, seed) + 1;
   return `a${n}`;
 }
 
