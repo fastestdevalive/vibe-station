@@ -3941,7 +3941,6 @@ a.dashboard-card.dashboard-card--session {
   pointer-events: none;
 }
 
-
 .initial-artifacts__primary {
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
@@ -3951,15 +3950,4 @@ a.dashboard-card.dashboard-card--session {
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   max-width: 40ch;
-}
-
-.initial-artifacts__badge {
-  font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-muted);
-  border: var(--border-width) solid var(--border-default);
-  border-radius: var(--radius-full);
-  padding: 1px var(--space-2);
-  font-weight: normal;
 }

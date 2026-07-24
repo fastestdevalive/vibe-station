@@ -70,31 +70,32 @@
   gap: var(--space-1);
   max-width: min(320px, 60%);
 }
-.terminal-attachment-upload .attachment-picker {
-  padding: 0;
-  border: none;
-  background: none;
-}
-.terminal-attachment-upload .attachment-picker__row {
-  padding: 0;
-}
-.terminal-attachment-upload .attachment-picker__hint {
-  display: none;
-}
-.terminal-attachment-upload .attachment-picker__row .btn {
-  background: var(--bg-elevated);
+/* `AttachmentPicker`'s `compact` variant (see AttachmentPicker.tsx) — a
+   small pill-style trigger instead of the full dropzone used at session
+   creation, sized to fit this absolutely-positioned corner overlay. */
+.terminal-attachment-upload .initial-artifacts--compact {
+  flex-direction: row;
+  align-items: center;
+  width: auto;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   color: var(--fg-secondary);
   opacity: 0.85;
   font: inherit;
   line-height: 1.6;
-  padding: 0 var(--space-2);
 }
-.terminal-attachment-upload .attachment-picker__row .btn:hover {
+.terminal-attachment-upload .initial-artifacts--compact:hover:not(.initial-artifacts--disabled) {
   color: var(--fg-primary);
   border-color: var(--fg-secondary);
   opacity: 1;
+  background: var(--bg-elevated);
+}
+.terminal-attachment-upload .initial-artifacts--compact .initial-artifacts__primary {
+  font-size: var(--font-size-sm);
+  color: inherit;
 }
 .terminal-attachment-upload__chips {
   display: flex;

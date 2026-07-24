@@ -26,8 +26,9 @@ interface TerminalAttachmentUploadProps {
  * writes a pending-uploads reference a claude `UserPromptSubmit` hook reads
  * (and deletes) on the next prompt submitted in the terminal.
  *
- * Reuses `AttachmentPicker` (button + drop zone) and `AttachmentChip` (the
- * pending list) as-is — no new picker/chip UI (Decision 7). `AttachmentPicker`
+ * Reuses `AttachmentPicker` (its `compact` variant — a small pill trigger,
+ * not the full creation-time dropzone) and `AttachmentChip` (the pending
+ * list) as-is — no new picker/chip UI (Decision 7). `AttachmentPicker`
  * is driven with an always-empty `files` prop so it never renders its own
  * (blank-path, upload-not-yet-happened) previews; this component renders the
  * REAL uploaded `Attachment`s via `AttachmentChip`, with `onRemove` wired to
@@ -107,7 +108,7 @@ export function TerminalAttachmentUpload({ api, session }: TerminalAttachmentUpl
         </div>
       ) : null}
       {error ? <div className="terminal-attachment-upload__error">{error}</div> : null}
-      <AttachmentPicker files={[]} onChange={(files) => void upload(files)} disabled={uploading} />
+      <AttachmentPicker files={[]} onChange={(files) => void upload(files)} disabled={uploading} compact />
     </div>
   );
 }
