@@ -8,6 +8,14 @@ interface AttachmentPickerProps {
   files: File[];
   onChange: (files: File[]) => void;
   disabled?: boolean;
+  /**
+   * Compact variant for embedding in small overlays (e.g.
+   * `TerminalAttachmentUpload`, which sits absolutely-positioned in the
+   * terminal pane's corner) — smaller footprint, shorter copy, and no
+   * "starting context" hint (this variant is used to attach files to an
+   * already-running session, not at creation time).
+   */
+  compact?: boolean;
 }
 
 /**
@@ -17,7 +25,7 @@ interface AttachmentPickerProps {
  * after the session is created (see `sendJsonFirstTurn`). Reuses `AttachmentChip`
  * for the 100gb-styled chip list.
  */
-export function AttachmentPicker({ files, onChange, disabled }: AttachmentPickerProps) {
+export function AttachmentPicker({ files, onChange, disabled, compact }: AttachmentPickerProps) {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -29,12 +37,21 @@ export function AttachmentPicker({ files, onChange, disabled }: AttachmentPicker
     onChange(files.filter((_, i) => i !== index));
   }
 
+  function open() {
+    if (!disabled) inputRef.current?.click();
+  }
+
   return (
     <div
-      className={`initial-artifacts${dragOver ? " initial-artifacts--dragover" : ""}${disabled ? " initial-artifacts--disabled" : ""}`}
-      onClick={() => {
-        if (!disabled) {
-          inputRef.current?.click();
+      className={`initial-artifacts${compact ? " initial-artifacts--compact" : ""}${dragOver ? " initial-artifacts--dragover" : ""}${disabled ? " initial-artifacts--disabled" : ""}`}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
         }
       }}
       onDragOver={(e) => {
@@ -76,11 +93,13 @@ export function AttachmentPicker({ files, onChange, disabled }: AttachmentPicker
           ))}
         </div>
       ) : null}
-      <ImagePlus size={20} aria-hidden style={{ color: "var(--fg-muted)" }} />
-      <div className="initial-artifacts__primary">Drop images or files here, or click to browse</div>
-      <div className="initial-artifacts__hint">
-        Shared with the agent as starting context.
+      <ImagePlus size={compact ? 14 : 20} aria-hidden style={{ color: "var(--fg-muted)" }} />
+      <div className="initial-artifacts__primary">
+        {compact ? "Attach files" : "Drop images or files here, or click to browse"}
       </div>
+      {compact ? null : (
+        <div className="initial-artifacts__hint">Shared with the agent as starting context.</div>
+      )}
     </div>
   );
 }

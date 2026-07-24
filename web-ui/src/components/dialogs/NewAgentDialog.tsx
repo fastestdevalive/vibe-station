@@ -590,6 +590,20 @@ export function NewAgentDialog({
       // project (json) — onCreated is a refresh hook, never a second spawn.
       onCreated?.(result.project);
 
+      // KNOWN RACE (applies to every `uploadAttachments` call below too):
+      // for terminal-channel (non-JSON) sessions, `body.startAgent.prompt` is
+      // baked into the CLI's spawn argv and the daemon fires the spawn
+      // fire-and-forget as part of handling `createProject` above — before
+      // this function even resumes. The claude UserPromptSubmit hook that
+      // reads pending-uploads can fire before this later, separate
+      // uploadAttachments round trip finishes writing them, so attachments
+      // can be missing from turn 1. The JSON path avoids this by creating the
+      // session idle and only sending turn 1 (with attachment ids attached)
+      // once the upload response comes back — see `sendJsonFirstTurn` below.
+      // Fixing this for real needs queue-based delivery for the initial
+      // terminal prompt (mirroring how /sessions/:id/chat is "always
+      // accepted" for JSON) — /sessions/:id/input 409s if the CLI process
+      // isn't registered yet.
       if (!isJson && files.length > 0) {
         const sessId = result.session?.id ?? result.worktree?.mainSessionId;
         if (sessId) {
@@ -708,6 +722,7 @@ export function NewAgentDialog({
         if (isJson) {
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
         } else if (files.length > 0 && wt.mainSessionId) {
+          // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(wt.mainSessionId, files);
         }
       } else {
@@ -724,6 +739,7 @@ export function NewAgentDialog({
         if (isJson) {
           await sendJsonFirstTurn(api, sess.id, prompt, files);
         } else if (files.length > 0) {
+          // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(sess.id, files);
         }
       }
@@ -779,6 +795,7 @@ export function NewAgentDialog({
         if (isJson) {
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
         } else if (files.length > 0 && wt.mainSessionId) {
+          // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(wt.mainSessionId, files);
         }
       } else {
@@ -795,6 +812,7 @@ export function NewAgentDialog({
         if (isJson) {
           await sendJsonFirstTurn(api, sess.id, prompt, files);
         } else if (files.length > 0) {
+          // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(sess.id, files);
         }
       }
@@ -1210,8 +1228,6 @@ export function NewAgentDialog({
                 <div className="form-hint">Rich Chat not available for {selectedCli} yet.</div>
               ) : null}
             </div>
-
-
           </div>
         ) : null}
 
