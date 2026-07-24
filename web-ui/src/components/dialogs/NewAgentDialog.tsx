@@ -590,6 +590,13 @@ export function NewAgentDialog({
       // project (json) — onCreated is a refresh hook, never a second spawn.
       onCreated?.(result.project);
 
+      if (!isJson && files.length > 0) {
+        const sessId = result.session?.id ?? result.worktree?.mainSessionId;
+        if (sessId) {
+          await api.uploadAttachments(sessId, files);
+        }
+      }
+
       if (isJson) {
         let worktreeId: string | undefined;
         let sessionId: string | undefined;
@@ -700,6 +707,8 @@ export function NewAgentDialog({
         worktreeId = wt.id;
         if (isJson) {
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+        } else if (files.length > 0 && wt.mainSessionId) {
+          await api.uploadAttachments(wt.mainSessionId, files);
         }
       } else {
         const sess = await api.createDirectSession({
@@ -714,6 +723,8 @@ export function NewAgentDialog({
         sessionId = sess.id;
         if (isJson) {
           await sendJsonFirstTurn(api, sess.id, prompt, files);
+        } else if (files.length > 0) {
+          await api.uploadAttachments(sess.id, files);
         }
       }
 
@@ -767,6 +778,8 @@ export function NewAgentDialog({
         worktreeId = wt.id;
         if (isJson) {
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+        } else if (files.length > 0 && wt.mainSessionId) {
+          await api.uploadAttachments(wt.mainSessionId, files);
         }
       } else {
         const sess = await api.createDirectSession({
@@ -781,6 +794,8 @@ export function NewAgentDialog({
         sessionId = sess.id;
         if (isJson) {
           await sendJsonFirstTurn(api, sess.id, prompt, files);
+        } else if (files.length > 0) {
+          await api.uploadAttachments(sess.id, files);
         }
       }
 
@@ -1156,6 +1171,11 @@ export function NewAgentDialog({
             </div>
 
             <div className="form-field">
+              <label>Attachments <span className="form-optional">(optional)</span></label>
+              <AttachmentPicker files={files} onChange={setFiles} />
+            </div>
+
+            <div className="form-field">
               <label>Channel</label>
               <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
                 <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
@@ -1191,14 +1211,7 @@ export function NewAgentDialog({
               ) : null}
             </div>
 
-            {/* Attachments — shown for the JSON channel across all paths
-                (brand-new project, add-path, and existing project). */}
-            {channel === "json" && jsonSupported ? (
-              <div className="form-field">
-                <label>Attachments <span className="form-optional">(optional)</span></label>
-                <AttachmentPicker files={files} onChange={setFiles} />
-              </div>
-            ) : null}
+
           </div>
         ) : null}
 

@@ -3909,7 +3909,7 @@ a.dashboard-card.dashboard-card--session {
   border-left: var(--border-width) solid var(--border-default);
 }
 
-/* Creation-time "initial context" dropzone (New worktree / New agent). Placeholder. */
+/* Creation-time "initial context" dropzone (New worktree / New agent) */
 .initial-artifacts {
   display: flex;
   flex-direction: column;
@@ -3921,9 +3921,26 @@ a.dashboard-card.dashboard-card--session {
   border-radius: var(--radius-md);
   background: var(--bg-input);
   color: var(--fg-muted);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.initial-artifacts:hover:not(.initial-artifacts--disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.initial-artifacts--dragover {
+  border-color: var(--chat-accent) !important;
+  background: var(--bg-hover) !important;
+}
+
+.initial-artifacts--disabled {
   cursor: not-allowed;
   opacity: 0.7;
+  pointer-events: none;
 }
+
 
 .initial-artifacts__primary {
   font-size: var(--font-size-sm);

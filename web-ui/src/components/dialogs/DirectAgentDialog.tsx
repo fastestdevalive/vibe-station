@@ -98,13 +98,16 @@ export function DirectAgentDialog({
         });
         await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
       } else {
-        await api.createDirectSession({
+        const sess = await api.createDirectSession({
           target: "direct",
           projectId,
           type: "agent",
           modeId,
           prompt: initialPrompt.trim() || undefined,
         });
+        if (files.length > 0) {
+          await api.uploadAttachments(sess.id, files);
+        }
       }
       onCreated?.();
       handleClose();
@@ -186,6 +189,11 @@ export function DirectAgentDialog({
           </div>
 
           <div className="form-field">
+            <label>Attachments <span className="form-optional">(optional)</span></label>
+            <AttachmentPicker files={files} onChange={setFiles} />
+          </div>
+
+          <div className="form-field">
             <label>Channel</label>
             <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
               <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
@@ -221,12 +229,7 @@ export function DirectAgentDialog({
             ) : null}
           </div>
 
-          {channel === "json" ? (
-            <div className="form-field">
-              <label>Attachments <span className="form-optional">(optional)</span></label>
-              <AttachmentPicker files={files} onChange={setFiles} />
-            </div>
-          ) : null}
+
 
           {error && <div className="dialog-error">{error}</div>}
         </div>

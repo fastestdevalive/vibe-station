@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { Attachment } from "@/api/types";
 import { AttachmentChip } from "./AttachmentChip";
+import { ImagePlus } from "lucide-react";
 
 interface AttachmentPickerProps {
   /** Staged File objects (uploaded later, once a session exists). */
@@ -30,7 +31,12 @@ export function AttachmentPicker({ files, onChange, disabled }: AttachmentPicker
 
   return (
     <div
-      className={`attachment-picker${dragOver ? " attachment-picker--dragover" : ""}`}
+      className={`initial-artifacts${dragOver ? " initial-artifacts--dragover" : ""}${disabled ? " initial-artifacts--disabled" : ""}`}
+      onClick={() => {
+        if (!disabled) {
+          inputRef.current?.click();
+        }
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         if (!disabled) setDragOver(true);
@@ -43,8 +49,24 @@ export function AttachmentPicker({ files, onChange, disabled }: AttachmentPicker
         addFiles(Array.from(e.dataTransfer.files));
       }}
     >
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        aria-label="Attach files"
+        disabled={disabled}
+        onChange={(e) => {
+          addFiles(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
       {files.length > 0 ? (
-        <div className="chat-composer__chips">
+        <div
+          className="chat-composer__chips"
+          style={{ marginBottom: "var(--space-2)", width: "100%", display: "flex", flexWrap: "wrap", justifyItems: "center", justifyContent: "center", gap: "var(--space-2)" }}
+          onClick={(e) => e.stopPropagation()}
+        >
           {files.map((f, i) => (
             <AttachmentChip
               key={`${f.name}-${f.size}-${i}`}
@@ -54,30 +76,10 @@ export function AttachmentPicker({ files, onChange, disabled }: AttachmentPicker
           ))}
         </div>
       ) : null}
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        className="chat-composer__file-input"
-        aria-label="Attach files"
-        disabled={disabled}
-        onChange={(e) => {
-          addFiles(Array.from(e.target.files ?? []));
-          e.target.value = "";
-        }}
-      />
-      <div className="attachment-picker__row">
-        <button
-          type="button"
-          className="btn btn--secondary"
-          disabled={disabled}
-          onClick={() => inputRef.current?.click()}
-        >
-          📎 Attach files
-        </button>
-        <span className="attachment-picker__hint" aria-hidden>
-          or drop files here
-        </span>
+      <ImagePlus size={20} aria-hidden style={{ color: "var(--fg-muted)" }} />
+      <div className="initial-artifacts__primary">Drop images or files here, or click to browse</div>
+      <div className="initial-artifacts__hint">
+        Shared with the agent as starting context.
       </div>
     </div>
   );
@@ -93,3 +95,4 @@ function fileToAttachment(f: File, i: number): Attachment {
     mime: f.type || "application/octet-stream",
   };
 }
+

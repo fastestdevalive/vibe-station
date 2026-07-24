@@ -27,7 +27,7 @@ function session(extra: Partial<Session> = {}): Session {
 describe("TerminalAttachmentUpload (item 3, Decision 5 hard-gate)", () => {
   it("3.T4 — renders the attach control for a terminal-channel claude session", async () => {
     render(<TerminalAttachmentUpload api={createMockApi()} session={session()} />);
-    expect(await screen.findByRole("button", { name: /attach files/i })).toBeTruthy();
+    expect(await screen.findByLabelText(/attach files/i)).toBeTruthy();
   });
 
   it("3.T4 — hides for a CLI with no UserPromptSubmit hook (cursor)", async () => {
@@ -35,7 +35,7 @@ describe("TerminalAttachmentUpload (item 3, Decision 5 hard-gate)", () => {
     const listSpy = vi.spyOn(api, "listModes");
     render(<TerminalAttachmentUpload api={api} session={session({ modeId: "mode-2" })} />);
     await waitFor(() => expect(listSpy).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: /attach files/i })).toBeNull();
+    expect(screen.queryByLabelText(/attach files/i)).toBeNull();
   });
 
   it("hides for a plain (non-agent) terminal session", () => {
@@ -45,12 +45,12 @@ describe("TerminalAttachmentUpload (item 3, Decision 5 hard-gate)", () => {
         session={session({ type: "terminal", modeId: null })}
       />,
     );
-    expect(screen.queryByRole("button", { name: /attach files/i })).toBeNull();
+    expect(screen.queryByLabelText(/attach files/i)).toBeNull();
   });
 
   it("hides when the session is already on the JSON channel (its own composer handles attachments)", () => {
     render(<TerminalAttachmentUpload api={createMockApi()} session={session({ channel: "json" })} />);
-    expect(screen.queryByRole("button", { name: /attach files/i })).toBeNull();
+    expect(screen.queryByLabelText(/attach files/i)).toBeNull();
   });
 
   it("uploading a file shows a pending chip; removing it calls the DELETE route", async () => {
