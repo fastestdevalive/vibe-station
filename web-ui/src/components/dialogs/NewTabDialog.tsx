@@ -71,6 +71,15 @@ export function NewTabDialog({
       });
       await sendJsonFirstTurn(api, sess.id, prompt, files);
     } else {
+      // KNOWN RACE: unlike the JSON path above, the daemon spawns the CLI
+      // with `prompt` baked into argv fire-and-forget as soon as this route
+      // handler runs — before this call even returns. The claude
+      // UserPromptSubmit hook that reads pending-uploads can fire before the
+      // uploadAttachments call below (a separate, later round trip) finishes
+      // writing them, so attachments can be missing from turn 1. Fixing this
+      // for real needs queue-based delivery for the initial terminal prompt
+      // (mirroring how /sessions/:id/chat is "always accepted" for JSON) —
+      // /sessions/:id/input 409s if the CLI process isn't registered yet.
       const sess = await api.createSession({
         worktreeId,
         modeId: modeId || null,

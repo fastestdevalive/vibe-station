@@ -145,6 +145,20 @@ export function NewSessionDialog({
           });
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, initialPrompt, files);
         } else {
+          // KNOWN RACE (unlike the JSON path above, which creates idle and
+          // only sends turn 1 — with attachment ids — once the upload
+          // response comes back): the daemon spawns the CLI with `prompt`
+          // baked into argv as soon as createWorktree's route handler runs,
+          // fire-and-forget, *before* this call even returns. The claude
+          // UserPromptSubmit hook that reads pending-uploads can fire before
+          // this uploadAttachments call (a separate later round trip)
+          // finishes writing them, so attachments can be missing from turn 1.
+          // See daemon/src/agent-plugins/claude.ts (composeLaunchPrompt /
+          // setupWorkspaceHooks) and daemon/src/routes/worktrees.ts
+          // (fire-and-forget runMainSpawnJob). Fixing this for real needs a
+          // queue-based delivery for the initial terminal prompt (mirroring
+          // how /sessions/:id/chat is "always accepted" for JSON), since
+          // /sessions/:id/input 409s if the CLI process isn't registered yet.
           const wt = await api.createWorktree({
             projectId,
             branch: newWtBranch.trim(),
@@ -167,6 +181,8 @@ export function NewSessionDialog({
           });
           await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
         } else {
+          // Known race with the initial prompt — see the comment on the
+          // `createWorktree` branch above.
           const sess = await api.createSession({
             worktreeId: existingWtId,
             modeId: modeId || null,
