@@ -201,3 +201,39 @@ describe("reserveNextAgentSlot", () => {
     expect(reserveNextAgentSlot(wt)).toBe("a1");
   });
 });
+
+describe("agentHighWaterMark", () => {
+  const wtWith = (agentSeq: number | undefined, aNums: number[]): WorktreeRecord => ({
+    ...makeWorktree("vs-1"),
+    ...(agentSeq != null ? { agentSeq } : {}),
+    sessions: aNums.map((n) => ({
+      id: `vs-1-a${n}`,
+      slot: `a${n}` as const,
+      type: "agent" as const,
+      tmuxName: `vr-vs-1-a${n}`,
+      useTmux: true,
+      lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
+    })),
+  });
+
+  it("is 0 for a fresh worktree", async () => {
+    const { agentHighWaterMark } = await import("../services/sessionId.js");
+    expect(agentHighWaterMark(wtWith(undefined, []))).toBe(0);
+  });
+
+  it("falls back to live slots when agentSeq is unset (legacy worktree)", async () => {
+    const { agentHighWaterMark } = await import("../services/sessionId.js");
+    expect(agentHighWaterMark(wtWith(undefined, [1, 2, 3]))).toBe(3);
+  });
+
+  it("prefers the persisted counter when it is higher than live slots", async () => {
+    const { agentHighWaterMark } = await import("../services/sessionId.js");
+    // agentSeq=5 survives after a1/a2 were the only ones left, then deleted.
+    expect(agentHighWaterMark(wtWith(5, [1, 2]))).toBe(5);
+  });
+
+  it("prefers live slots when the counter is stale/lower", async () => {
+    const { agentHighWaterMark } = await import("../services/sessionId.js");
+    expect(agentHighWaterMark(wtWith(2, [3, 4, 5]))).toBe(5);
+  });
+});

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";
 import {
   reserveNextAgentSlot,
+  agentHighWaterMark,
   reserveNextTerminalSlot,
   reserveNextDirectSlot,
   buildTmuxName,
@@ -688,12 +689,22 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (ctx.kind === "worktree") {
       // Worktree session: cleanup worktree-scoped data dir
       cleanupSessionDataDir(project.id, ctx.worktree.id, id);
-      // Remove from worktree's sessions array
+      // Remove from worktree's sessions array, preserving the monotonic agent
+      // high-water. `agentSeq` is otherwise only written on agent CREATE, so a
+      // legacy worktree (agents created before agentSeq existed) that has all
+      // its agents deleted would lose the high-water and restart at a1. Capture
+      // it here — max over every current agent slot number (including the one
+      // being removed) — so a deleted slot is never reused.
       await mutateProject(project.id, (p) => ({
         ...p,
         worktrees: p.worktrees.map((w) =>
           w.id === ctx.worktree.id
-            ? { ...w, sessions: w.sessions.filter((s) => s.id !== id) }
+            ? {
+                ...w,
+                // Capture the high-water BEFORE filtering out the session.
+                agentSeq: agentHighWaterMark(w),
+                sessions: w.sessions.filter((s) => s.id !== id),
+              }
             : w,
         ),
       }));
