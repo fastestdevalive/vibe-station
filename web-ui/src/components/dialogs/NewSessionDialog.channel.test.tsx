@@ -60,13 +60,11 @@ describe("NewSessionDialog channel + attachments", () => {
     expect(body.useTmux).toBe(true);
   });
 
-  it("shows the attachment picker only for the JSON channel", async () => {
+  it("shows the attachment picker for all channels", async () => {
     const api = createMockApi();
     renderDialog(api);
     await screen.findByText("Bugfix");
 
-    expect(screen.queryByLabelText("Attach files")).toBeNull();
-    await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
-    await waitFor(() => expect(screen.getByLabelText("Attach files")).toBeInTheDocument());
+    expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
   });
 });

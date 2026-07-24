@@ -3,7 +3,6 @@ import type { ApiInstance } from "@/api";
 import type { Mode, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Select } from "../ui/Select";
-import { InitialArtifactsField } from "./InitialArtifactsField";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 
@@ -72,13 +71,16 @@ export function NewTabDialog({
       });
       await sendJsonFirstTurn(api, sess.id, prompt, files);
     } else {
-      await api.createSession({
+      const sess = await api.createSession({
         worktreeId,
         modeId: modeId || null,
         type: "agent",
         prompt: prompt.trim() || undefined,
         useTmux,
       });
+      if (files.length > 0) {
+        await api.uploadAttachments(sess.id, files);
+      }
     }
     onCreated?.();
     onClose();
@@ -119,7 +121,10 @@ export function NewTabDialog({
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
       />
-      <InitialArtifactsField />
+      <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
+        Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
+      </div>
+      <AttachmentPicker files={files} onChange={setFiles} />
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Channel</div>
       <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
         <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
@@ -154,14 +159,6 @@ export function NewTabDialog({
         <div className="field-label" style={{ marginTop: "var(--space-2)", fontWeight: "normal", color: "var(--fg-muted)" }}>
           Rich Chat not available for {selectedCli} yet.
         </div>
-      ) : null}
-      {isJson ? (
-        <>
-          <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
-            Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
-          </div>
-          <AttachmentPicker files={files} onChange={setFiles} />
-        </>
       ) : null}
       {!isJson ? (
         <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>

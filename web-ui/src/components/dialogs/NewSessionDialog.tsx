@@ -6,9 +6,8 @@ import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
-import { NewModeDialog } from "./NewModeDialog";
-import { InitialArtifactsField } from "./InitialArtifactsField";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { NewModeDialog } from "./NewModeDialog";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 
 interface NewSessionDialogProps {
@@ -146,7 +145,7 @@ export function NewSessionDialog({
           });
           await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, initialPrompt, files);
         } else {
-          await api.createWorktree({
+          const wt = await api.createWorktree({
             projectId,
             branch: newWtBranch.trim(),
             modeId: modeId || "mode-1",
@@ -154,6 +153,9 @@ export function NewSessionDialog({
             prompt: initialPrompt.trim() || undefined,
             useTmux,
           });
+          if (files.length > 0 && wt.mainSessionId) {
+            await api.uploadAttachments(wt.mainSessionId, files);
+          }
         }
       } else {
         if (isJson) {
@@ -165,13 +167,16 @@ export function NewSessionDialog({
           });
           await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
         } else {
-          await api.createSession({
+          const sess = await api.createSession({
             worktreeId: existingWtId,
             modeId: modeId || null,
             type: "agent",
             prompt: initialPrompt.trim() || undefined,
             useTmux,
           });
+          if (files.length > 0) {
+            await api.uploadAttachments(sess.id, files);
+          }
         }
       }
       onCreated?.();
@@ -297,7 +302,10 @@ export function NewSessionDialog({
         value={initialPrompt}
         onChange={(e) => setInitialPrompt(e.target.value)}
       />
-      <InitialArtifactsField />
+      <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
+        Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
+      </div>
+      <AttachmentPicker files={files} onChange={setFiles} />
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Channel</div>
       <div role="radiogroup" aria-label="Channel" style={{ display: "flex", gap: "var(--space-4)" }}>
         <label style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", cursor: "pointer" }}>
@@ -333,14 +341,7 @@ export function NewSessionDialog({
           Rich Chat not available for {selectedCli} yet.
         </div>
       ) : null}
-      {isJson ? (
-        <>
-          <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
-            Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
-          </div>
-          <AttachmentPicker files={files} onChange={setFiles} />
-        </>
-      ) : (
+      {!isJson && (
         <div style={{ marginTop: "var(--space-4)", display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
           <input
             type="checkbox"
