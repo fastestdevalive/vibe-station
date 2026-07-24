@@ -41,29 +41,40 @@ export function reserveNextWorktreeNum(project: ProjectRecord): number {
 }
 
 /**
+ * Highest agent slot number ever assigned in a worktree — the monotonic
+ * high-water mark for `a{n}` slots.
+ *
+ * Returns `max(worktree.agentSeq ?? 0, ...current agent slot numbers)`. Taking
+ * the max of BOTH the persisted counter and the live slots (rather than trusting
+ * `agentSeq` alone) matters for two cases:
+ *   - Legacy worktrees whose agents predate `agentSeq`: the counter is unset, so
+ *     the live slots supply the mark.
+ *   - A stale/hand-edited counter lower than a live slot: the live slots win, so
+ *     we never hand out a colliding, already-in-use number.
+ * The `Number.isFinite` filter is REQUIRED so a non-numeric slot can't poison
+ * the result to NaN.
+ *
+ * Callers persist this (or `+1`) back to `agentSeq` so the mark survives even
+ * after every agent is deleted.
+ */
+export function agentHighWaterMark(worktree: WorktreeRecord): number {
+  const existing = worktree.sessions
+    .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("a"))
+    .map((s) => parseInt((s.slot as string).slice(1), 10))
+    .filter(Number.isFinite);
+  return Math.max(worktree.agentSeq ?? 0, 0, ...existing);
+}
+
+/**
  * Reserve the next agent slot (a{n}) for a worktree — monotonic, never reused.
- *
- * Uses the persisted high-water counter `worktree.agentSeq`. Legacy worktrees
- * (no counter yet) lazily seed from `max(existing agent slot nums)`. The
- * `Number.isFinite` filter is REQUIRED so a non-numeric slot can't poison the
- * counter to NaN. A deleted agent's number is never recycled.
- *
- * We take `max(agentSeq, maxExisting)` rather than trusting `agentSeq` alone:
- * if a manifest ever carried a counter lower than a live `a{n}` slot (hand-edit,
- * or a future writer that appends without bumping it), trusting the counter
- * would hand out a colliding, already-in-use slot. The `max` guarantees the
- * result is always strictly greater than every existing slot number.
+ * Returns one past the high-water mark; a deleted agent's number is never
+ * recycled.
  *
  * Pure: the caller MUST persist the returned number as `agentSeq` in the same
  * `mutateProject` update that appends the session record.
  */
 export function reserveNextAgentSlot(worktree: WorktreeRecord): `a${number}` {
-  const existing = worktree.sessions
-    .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("a"))
-    .map((s) => parseInt((s.slot as string).slice(1), 10))
-    .filter(Number.isFinite);
-  const seed = Math.max(0, ...existing);
-  const n = Math.max(worktree.agentSeq ?? 0, seed) + 1;
+  const n = agentHighWaterMark(worktree) + 1;
   return `a${n}`;
 }
 
