@@ -309,4 +309,36 @@ describe("Session routes", () => {
     expect(second.slot).toBe("a2");
     expect(second.id).not.toBe(first.id);
   });
+
+  it("legacy worktree: deleting ALL agents does not restart the next one at a1", async () => {
+    const create = () =>
+      app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+      });
+
+    // Create a1 and a2, then simulate a LEGACY worktree by stripping agentSeq —
+    // as if these agents predated the monotonic-slot counter.
+    const a1 = (await create()).json<SessionRecord>();
+    const a2 = (await create()).json<SessionRecord>();
+    expect([a1.slot, a2.slot]).toEqual(["a1", "a2"]);
+
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId ? { ...w, agentSeq: undefined } : w,
+      ),
+    }));
+
+    // Delete every agent BEFORE creating a new one — the reported failure mode.
+    expect((await app.inject({ method: "DELETE", url: `/sessions/${a1.id}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "DELETE", url: `/sessions/${a2.id}` })).statusCode).toBe(200);
+
+    // The delete handler captured the high-water, so the next slot is a3 — not a1.
+    const next = (await create()).json<SessionRecord>();
+    expect(next.slot).toBe("a3");
+    expect(next.id).toBe(`${worktreeId}-a3`);
+  });
 });
