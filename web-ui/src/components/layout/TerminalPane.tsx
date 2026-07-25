@@ -128,6 +128,12 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       lineHeight: 1.2,
       scrollback: 10000,
       allowProposedApi: true,
+      // On macOS the Option key is not a true Alt/Meta key by default — the OS
+      // composes special characters (e.g. Option+P -> "π") before xterm.js can
+      // encode it as an ESC-prefixed escape sequence. Without this, Alt/Option
+      // shortcuts inside the PTY (e.g. Claude Code's Alt+P model selector)
+      // never reach the CLI. No-op on non-Mac platforms.
+      macOptionIsMeta: true,
       theme: {
         background: "#0f0f0f",
         foreground: "#e5e5e5",
