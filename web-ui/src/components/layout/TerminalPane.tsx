@@ -40,12 +40,14 @@ interface TerminalPaneProps {
  * combos all encode differently), so this is safe to drop unconditionally.
  */
 function isXtermAutoResponse(data: string): boolean {
+  /* eslint-disable no-control-regex */
   return (
     /^\x1b\[\?[\d;]+c$/.test(data) ||
     /^\x1b\[>[\d;]+c$/.test(data) ||
     /^\x1b\[\d+;\d+R$/.test(data) ||
     /^\x1b\[0n$/.test(data)
   );
+  /* eslint-enable no-control-regex */
 }
 
 export function TerminalPane({ api, sessionId, session, channelToggle }: TerminalPaneProps) {
