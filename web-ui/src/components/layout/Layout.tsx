@@ -165,7 +165,7 @@ export function Layout({
   const dockWrapper = () => regionWrapper(terminalDock, terminalFullscreen);
 
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
-  // (stacked). The terminal dock is independent and always sits at the bottom.
+  // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
   const vertical = toolSplitOrientation === "vertical";
   const topRow = toolsInSplit ? (
     <PanelGroup
@@ -173,13 +173,30 @@ export function Layout({
       autoSaveId={`vs-ide-top-${wt}-${toolSplitOrientation}`}
       style={{ width: "100%", height: "100%" }}
     >
-      <Panel defaultSize={58} minSize={25}>
-        {agentWrapper()}
-      </Panel>
-      <PanelResizeHandle className={`resize-handle ${vertical ? "resize-handle--row" : "resize-handle--col"}`} />
-      <Panel defaultSize={42} minSize={18}>
-        {wrap(toolPanel)}
-      </Panel>
+      {[
+        vertical ? (
+          <Panel defaultSize={42} minSize={18} key="tools">
+            {wrap(toolPanel)}
+          </Panel>
+        ) : (
+          <Panel defaultSize={58} minSize={25} key="agent">
+            {agentWrapper()}
+          </Panel>
+        ),
+        <PanelResizeHandle
+          className={`resize-handle ${vertical ? "resize-handle--row" : "resize-handle--col"}`}
+          key="handle"
+        />,
+        vertical ? (
+          <Panel defaultSize={58} minSize={25} key="agent">
+            {agentWrapper()}
+          </Panel>
+        ) : (
+          <Panel defaultSize={42} minSize={18} key="tools">
+            {wrap(toolPanel)}
+          </Panel>
+        ),
+      ]}
     </PanelGroup>
   ) : (
     agentWrapper()
