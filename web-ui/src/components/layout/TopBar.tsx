@@ -5,6 +5,7 @@ import {
   PanelBottom,
   PanelLeft,
   PanelRight,
+  PanelTop,
   Rows2,
   Search,
   SquareTerminal,
@@ -266,9 +267,9 @@ export function TopBar({
                 title="Toggle tool panel"
                 onClick={toggleToolPanel}
               >
-                {/* Vertical split docks the tool panel to the bottom, so mirror
-                    that with a bottom-panel icon instead of the right-panel one. */}
-                {toolSplitOrientation === "vertical" ? <PanelBottom size={17} /> : <PanelRight size={17} />}
+                {/* Vertical split docks the tool panel to the top, so mirror
+                    that with a top-panel icon instead of the right-panel one. */}
+                {toolSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
               </button>
             </div>
           </>
