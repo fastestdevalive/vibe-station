@@ -534,6 +534,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
             state: "not_started",
             lastTransitionAt: new Date().toISOString(),
           },
+          ...(prompt ? { initialPrompt: prompt } : {}),
         };
 
         const worktreeRecord = {
@@ -663,6 +664,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
             state: "not_started",
             lastTransitionAt: new Date().toISOString(),
           },
+          ...(prompt ? { initialPrompt: prompt } : {}),
         };
 
         // Persist session

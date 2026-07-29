@@ -353,6 +353,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           state: "not_started",
           lastTransitionAt: new Date().toISOString(),
         },
+        ...(result.data.prompt ? { initialPrompt: result.data.prompt } : {}),
       };
 
       const worktreeRecord: WorktreeRecord = {
