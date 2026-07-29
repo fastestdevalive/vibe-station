@@ -201,6 +201,16 @@ export interface SessionRecord {
    * Currently surfaced for direct sessions via the sidebar actions menu.
    */
   pinnedAt?: string; // ISO8601
+  /**
+   * The user's original create-dialog task prompt. Kept so `POST
+   * /sessions/:id/resume` can re-deliver it when a resume falls back to a
+   * fresh launch (no `agentChatId` was ever captured, i.e. the session never
+   * actually established a conversation — see spawn.ts's `composeLaunchPrompt`
+   * plugins, which only inject a task prompt when one is passed in). Consumed
+   * only while `agentChatId` is absent, and cleared once the session is marked
+   * done, so a session that DID run never silently replays its first prompt.
+   */
+  initialPrompt?: string;
 }
 
 export interface WorktreeRecord {

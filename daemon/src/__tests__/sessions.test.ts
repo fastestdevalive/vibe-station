@@ -228,6 +228,95 @@ describe("Session routes", () => {
     expect(session.state).toBe("working");
   });
 
+  it("POST /sessions/:id/resume replays initialPrompt on a fresh-launch fallback (no agentChatId yet)", async () => {
+    const { spawnSession } = await import("../services/spawn.js");
+    const spawnMock = vi.mocked(spawnSession);
+    spawnMock.mockClear();
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", prompt: "fix the flaky test" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const sessionId = createRes.json<SessionRecord>().id;
+    // Initial create already triggers a background spawn — clear that call so
+    // we only inspect the one triggered by /resume below.
+    await new Promise((r) => setTimeout(r, 200));
+    spawnMock.mockClear();
+
+    const resumeRes = await app.inject({ method: "POST", url: `/sessions/${sessionId}/resume` });
+    expect(resumeRes.statusCode).toBe(200);
+
+    // No agentChatId was ever captured (mocked spawnSession never sets one),
+    // and getRestoreCommand for `claude` finds nothing on disk in this sandboxed
+    // cwd, so resume must fall into the fresh-launch branch and re-inject the
+    // original prompt rather than dropping it.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]?.[0]?.taskPrompt).toBe("fix the flaky test");
+  });
+
+  it("POST /sessions/:id/resume does NOT replay initialPrompt once a real conversation exists (agentChatId set)", async () => {
+    const { spawnSession, spawnSessionFromArgv } = await import("../services/spawn.js");
+    const spawnMock = vi.mocked(spawnSession);
+    const spawnArgvMock = vi.mocked(spawnSessionFromArgv);
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", prompt: "fix the flaky test" },
+    });
+    const sessionId = createRes.json<SessionRecord>().id;
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Simulate a session that already ran a real turn and had its chat id
+    // captured — mirrors what captureChatId would have set post-spawn.
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? { ...w, sessions: w.sessions.map((s) => (s.id === sessionId ? { ...s, agentChatId: "fake-uuid-1234" } : s)) }
+          : w,
+      ),
+    }));
+
+    spawnMock.mockClear();
+    spawnArgvMock.mockClear();
+
+    const resumeRes = await app.inject({ method: "POST", url: `/sessions/${sessionId}/resume` });
+    expect(resumeRes.statusCode).toBe(200);
+
+    // With an agentChatId present, claude's getRestoreCommand returns a
+    // restore argv, so resume takes the spawnSessionFromArgv path — the
+    // fresh-launch branch (and its initialPrompt replay) is never reached.
+    expect(spawnArgvMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("POST /sessions/:id/resume is a no-op when the session's tmux pane is already alive", async () => {
+    const { hasSession } = await import("../services/tmux.js");
+    const { spawnSession, spawnSessionFromArgv } = await import("../services/spawn.js");
+    const hasSessionMock = vi.mocked(hasSession);
+    const spawnMock = vi.mocked(spawnSession);
+    const spawnArgvMock = vi.mocked(spawnSessionFromArgv);
+
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+    await new Promise((r) => setTimeout(r, 200));
+
+    spawnMock.mockClear();
+    spawnArgvMock.mockClear();
+    hasSessionMock.mockResolvedValueOnce(true);
+
+    const res = await app.inject({ method: "POST", url: `/sessions/${mainId}/resume` });
+    expect(res.statusCode).toBe(200);
+    // Neither spawn path should run — an already-live pane must never be
+    // killed and replaced by a racing resume.
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(spawnArgvMock).not.toHaveBeenCalled();
+  });
+
   it("1.T4 — channel:json create carries channel through serializeSession and does NOT spawn", async () => {
     const res = await app.inject({
       method: "POST",

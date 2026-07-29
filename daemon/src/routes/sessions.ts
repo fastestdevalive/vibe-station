@@ -9,7 +9,7 @@ import {
   buildTmuxName,
   buildDirectTmuxName,
 } from "../services/sessionId.js";
-import { killSession, newSession, pasteBuffer, capturePane } from "../services/tmux.js";
+import { killSession, newSession, pasteBuffer, capturePane, hasSession } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
 import { resolvedContextOf } from "../services/context.js";
@@ -458,6 +458,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           state: "not_started",
           lastTransitionAt: new Date().toISOString(),
         },
+        ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
       };
 
       // Spawn terminal immediately if type=terminal
@@ -577,6 +578,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         state: "not_started",
         lastTransitionAt: new Date().toISOString(),
       },
+      ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
     };
 
     // Spawn terminal session immediately if type=terminal
@@ -792,6 +794,27 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       id,
       "done",
     );
+
+    // Drop the replay-only initial prompt now the session is explicitly
+    // done — a future resume must never re-issue it (see the resume
+    // handler's `replayInitialPrompt` gate).
+    if (ctx.session.initialPrompt) {
+      const stripInitialPrompt = (s: SessionRecord): SessionRecord =>
+        s.id === id ? { ...s, initialPrompt: undefined } : s;
+      await mutateProject(ctx.project.id, (p) =>
+        ctx.kind === "worktree"
+          ? {
+              ...p,
+              worktrees: p.worktrees.map((w) =>
+                w.id === ctx.worktree.id
+                  ? { ...w, sessions: w.sessions.map(stripInitialPrompt) }
+                  : w,
+              ),
+            }
+          : { ...p, directSessions: p.directSessions.map(stripInitialPrompt) },
+      );
+    }
+
     return reply.send({ ok: true });
   });
 
@@ -809,6 +832,25 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const cwd = isWorktreeSession
       ? worktreePath(project.id, worktree!.id)
       : project.absolutePath;
+
+    // Guard against a resume racing an already-live pane/pty (double-click,
+    // or a resume firing while the create-time spawn is still in flight).
+    // Without this, the agent branch below calls spawnSession/spawnSessionFromArgv,
+    // which unconditionally kill any existing tmux pane for this session
+    // (killStaleTmuxSession in spawn.ts) — so a second resume can tear down a
+    // pane that already has a real prompt/conversation running and replace it
+    // with a blank one. If something is already alive, just report current
+    // state instead of respawning.
+    const alreadyRunning = session.useTmux
+      ? await hasSession(session.tmuxName)
+      : !!directPtyRegistry.get(id);
+    if (alreadyRunning) {
+      return reply.send(serializeSession(
+        isWorktreeSession ? worktree!.id : null,
+        project.id,
+        session,
+      ));
+    }
 
     let restoredFromHistory = false;
 
@@ -883,7 +925,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             }
           }
         } else {
-          // Fresh launch path: build prompt and spawn normally
+          // Fresh launch path: build prompt and spawn normally.
+          //
+          // Re-deliver the original create-dialog prompt ONLY when no
+          // conversation was ever established (`agentChatId` absent). Once a
+          // real chat id exists, the session actually ran — replaying the
+          // first prompt on every future resume would silently re-issue a
+          // stale instruction to an agent that may have finished long ago.
+          const replayInitialPrompt = !session.agentChatId && !!session.initialPrompt;
           const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
 
           if (isWorktreeSession) {
@@ -892,6 +941,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
               project,
               worktree: worktree!,
               modeContext: mode.context,
+              ...(replayInitialPrompt ? { userPrompt: session.initialPrompt } : {}),
             });
             await spawnSession({
               project,
@@ -908,6 +958,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             const builtPrompt = await buildDirectPrompt({
               project,
               modeContext: mode.context,
+              ...(replayInitialPrompt ? { userPrompt: session.initialPrompt } : {}),
             });
             await spawnDirectSession({
               project,

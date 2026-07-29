@@ -54,6 +54,38 @@ describe("manifest read/write", () => {
     expect(loaded).toEqual(project);
   });
 
+  it("round-trips a session's initialPrompt", async () => {
+    const { writeManifest, readManifest } = await import("../services/manifest.js");
+    const project = makeProject("prompt-project");
+    const withSession: ProjectRecord = {
+      ...project,
+      worktrees: [
+        {
+          id: "wt-1",
+          branch: "feat",
+          baseBranch: "main",
+          baseSha: "deadbeef",
+          createdAt: new Date().toISOString(),
+          sessions: [
+            {
+              id: "wt-1-m",
+              slot: "m",
+              type: "agent",
+              modeId: "bugfix",
+              tmuxName: "vr-wt-1-m",
+              useTmux: true,
+              lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+              initialPrompt: "fix the flaky test",
+            },
+          ],
+        },
+      ],
+    };
+    await writeManifest(withSession);
+    const loaded = await readManifest("prompt-project");
+    expect(loaded.worktrees[0]?.sessions[0]?.initialPrompt).toBe("fix the flaky test");
+  });
+
   it("uses atomic write (tmp file is renamed)", async () => {
     const { writeManifest } = await import("../services/manifest.js");
     const { access } = await import("node:fs/promises");
