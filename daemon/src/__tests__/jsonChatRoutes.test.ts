@@ -463,6 +463,90 @@ describe("JSON chat REST + WS", () => {
     expect(body.turnState).toBe("idle");
   });
 
+  it("2.T3/2.T6 — a done JSON session serves transcript + meta from disk without reviving the agent", async () => {
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+
+    // Run a turn so there is a transcript on disk, then mark the session done.
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "hi" } });
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    const done = await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/done` });
+    expect(done.statusCode).toBe(200);
+    // Marking done released the JsonAgentSession (SQLite handle + queue).
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+
+    // Reading the transcript must NOT re-register an agent...
+    const transcript = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript` });
+    expect(transcript.statusCode).toBe(200);
+    expect(transcript.json<{ events: NormalizedEvent[] }>().events.length).toBeGreaterThan(0);
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+
+    // ...and neither must chat:open — it serves a disk snapshot plus meta, so
+    // the status bar/model switcher still render on a done session.
+    const frames = await new Promise<any[]>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const seen: any[] = [];
+      const t = setTimeout(() => {
+        ws.close();
+        resolve(seen);
+      }, 800);
+      ws.on("open", () => ws.send(JSON.stringify({ type: "chat:open", sessionId: SESSION_ID })));
+      ws.on("message", (data: Buffer) => {
+        seen.push(JSON.parse(data.toString("utf8")));
+      });
+      ws.on("error", (err) => {
+        clearTimeout(t);
+        reject(err);
+      });
+    });
+    expect(frames.some((f) => f.type === "chat:replay")).toBe(true);
+    expect(frames.some((f) => f.type === "session:meta")).toBe(true);
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+
+    // Sending a message is the deliberate way back — it re-creates the agent.
+    const resume = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/chat`,
+      payload: { message: "back" },
+    });
+    expect(resume.statusCode).toBe(202);
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeDefined();
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+  });
+
+  it("2.T8 — the auto-enqueued turn 1 is suppressed when the session was marked done during create", async () => {
+    // Create schedules startJsonCreateTurn in the background; a user who marks
+    // the brand-new session done before that lands must not have turn 1 spawn
+    // (and re-create the JsonAgentSession the release just tore down).
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    const { startJsonCreateTurn } = await import("../services/jsonAgentChat.js");
+    jsonAgentRegistry.clear();
+
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/done` });
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+
+    await startJsonCreateTurn({ sessionId: SESSION_ID, prompt: "turn one", daemonPort: 0 });
+
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+    const state = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}` });
+    expect(state.json<{ state: string }>().state).toBe("done");
+  });
+
+  it("2.T7 — PATCH …/chat/model on a done session → 409, and does not revive the agent", async () => {
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "hi" } });
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/done` });
+
+    const patch = await app.inject({
+      method: "PATCH",
+      url: `/sessions/${SESSION_ID}/chat/model`,
+      payload: { model: "opus" },
+    });
+    expect(patch.statusCode).toBe(409);
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+  });
+
   // 1.T5 — queue-controls REST error mapping (happy-path mechanics unit-tested
   // in jsonChatQueue.test.ts; here we assert the route wiring + status codes).
   it("queue-controls — edit / promote / resubmit on a non-queued turn → 404", async () => {

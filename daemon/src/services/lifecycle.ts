@@ -259,7 +259,14 @@ export async function markSessionExited(
     session = project.directSessions.find((s) => s.id === sessionId);
   }
 
-  if (!session || session.lifecycle.state === "exited") return;
+  // `done` is deliberate and terminal — marking a session done kills its pane
+  // on purpose, and the direct-pty `onExit` callback fires right back into
+  // here. Without this guard that callback would demote the session to
+  // `exited` moments after the user marked it done (and the broadcast would
+  // overwrite `done` in every connected client's store).
+  if (!session || session.lifecycle.state === "exited" || session.lifecycle.state === "done") {
+    return;
+  }
 
   idleTracking.delete(sessionId);
   broadcastAll({ type: "session:exited", sessionId });

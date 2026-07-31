@@ -122,6 +122,16 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(container.querySelector('[data-testid="attachment-upload"]')).not.toBeNull();
   });
 
+  it("3.T3 — hides the upload overlay for a session marked done (its pane is released)", () => {
+    // "Mark as done" kills the tmux/pty process just like an exit does, so the
+    // live-terminal-only upload overlay must be gated for `done` too.
+    const done: Session = { ...session("tty1", "tmux"), lifecycleState: "done" };
+    const { container } = render(<AgentPaneSlot api={api} sessionId="tty1" session={done} />);
+    expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="channel-toggle"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="attachment-upload"]')).toBeNull();
+  });
+
   it("keeps handing TerminalPane the channel toggle when exited, but hides the upload overlay (Resume banner bug)", () => {
     // The channel toggle now lives inside TerminalPane, which renders it in
     // normal flow BELOW its own "Session exited / Resume" banner (no overlap),

@@ -41,7 +41,8 @@ import {
   resolveJsonAgent,
 } from "../services/jsonAgentChat.js";
 import { resolveCliModels } from "./modes.js";
-import { getAttachment, clearSessionAttachments } from "../state/attachmentRegistry.js";
+import { getAttachment } from "../state/attachmentRegistry.js";
+import { releaseSessionRuntime } from "../services/sessionRuntime.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord, Channel, Attachment, SessionMeta } from "../types.js";
 
 /**
@@ -149,6 +150,31 @@ function findWorktreeContext(
   return null;
 }
 
+/**
+ * A spawn job finished — but the user may have marked the session `done` (or
+ * dismissed it) while the spawn was still in flight, which is easy to do since
+ * a spawn takes seconds. Two things then go wrong unless we re-check:
+ *
+ *  1. The job's completion write would clobber `done` with `working`/`exited`
+ *     (it also writes back a STALE captured `session` object).
+ *  2. Worse, the spawn created its pane/child AFTER the release already killed
+ *     everything — a leaked process the user believes they retired.
+ *
+ * So: if the session is no longer live by the time the spawn lands, release
+ * whatever it just created and skip the lifecycle write entirely.
+ *
+ * Returns true when the caller should skip its own persist/broadcast.
+ */
+async function releaseIfRetiredDuringSpawn(sessionId: string): Promise<boolean> {
+  const ctx = findSessionContext(sessionId);
+  // Gone entirely (dismissed mid-spawn) — nothing left to write to, but the
+  // spawn may still have produced a pane after DELETE's teardown ran.
+  if (!ctx) return true;
+  if (ctx.session.lifecycle.state !== "done") return false;
+  await releaseSessionRuntime(ctx.session);
+  return true;
+}
+
 async function runAgentSpawnJob(opts: {
   project: ProjectRecord;
   worktree: WorktreeRecord;
@@ -182,6 +208,7 @@ async function runAgentSpawnJob(opts: {
       taskPrompt: builtPrompt.taskPrompt,
       model: mode.model,
     });
+    if (await releaseIfRetiredDuringSpawn(sessionId)) return;
     session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({
       ...p,
@@ -194,6 +221,7 @@ async function runAgentSpawnJob(opts: {
     broadcastAll({ type: "session:state", sessionId, state: "working" });
   } catch (err) {
     const reason = String(err);
+    if (await releaseIfRetiredDuringSpawn(sessionId)) return;
     session.lifecycle = { state: "exited", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({
       ...p,
@@ -239,6 +267,7 @@ async function runDirectAgentSpawnJob(opts: {
       taskPrompt: builtPrompt.taskPrompt,
       model: mode.model,
     });
+    if (await releaseIfRetiredDuringSpawn(sessionId)) return;
     session.lifecycle = { state: "working", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({
       ...p,
@@ -247,6 +276,7 @@ async function runDirectAgentSpawnJob(opts: {
     broadcastAll({ type: "session:state", sessionId, state: "working" });
   } catch (err) {
     const reason = String(err);
+    if (await releaseIfRetiredDuringSpawn(sessionId)) return;
     session.lifecycle = { state: "exited", lastTransitionAt: new Date().toISOString() };
     await mutateProject(project.id, (p) => ({
       ...p,
@@ -666,27 +696,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       });
     }
 
-    // Abort any live JSON turn BEFORE purge (Decision 13): kill the turn's
-    // process group so no orphaned child keeps mutating the checkout, and drop
-    // the queue. Cheap no-op for TTY sessions (registry miss). dispose() closes
-    // the session's own SQLite handle — the registry delete alone leaks the
-    // fd (better-sqlite3 has no reliable GC finalizer to fall back on).
-    const jsonAgentToClose = jsonAgentRegistry.get(id);
-    jsonAgentToClose?.abortAndDrain();
-    jsonAgentRegistry.delete(id);
-    jsonAgentToClose?.dispose();
-    clearSessionAttachments(id);
-
-    // Kill session (tmux or direct-pty)
-    if (!session.useTmux) {
-      directPtyRegistry.get(id)?.kill?.();
-    } else {
-      try {
-        await killSession(session.tmuxName);
-      } catch {
-        // best-effort
-      }
-    }
+    // Release every live resource BEFORE purge (Decision 13): the JSON turn's
+    // process group (so no orphaned child keeps mutating the checkout), its
+    // SQLite handle, the tmux pane / direct-pty child, and the idle tracker.
+    // Delete is destructive, so staged attachments go too.
+    await releaseSessionRuntime(session, { clearAttachments: true });
 
     if (ctx.kind === "worktree") {
       // Worktree session: cleanup worktree-scoped data dir
@@ -775,8 +789,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, pinnedAt: nextPinnedAt ?? null });
   });
 
-  // POST /sessions/:id/done — mark an agent session as done (metadata only; no
-  // process kill). Terminals have no "done" concept, so reject them.
+  // POST /sessions/:id/done — retire an agent session: RELEASE its runtime
+  // resources (tmux pane / direct-pty child / JsonAgentSession + SQLite handle)
+  // and mark it `done`. Everything needed for a later `POST /:id/resume`
+  // survives — the manifest record with its `agentChatId`, the session data
+  // dir, staged attachments, and the CLI's own history — so "done" is a pause,
+  // not a delete. Terminals have no "done" concept, so reject them.
   app.post("/sessions/:id/done", async (req, reply) => {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
@@ -784,6 +802,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (ctx.session.type !== "agent") {
       return reply.status(400).send({ error: "Only agent sessions can be marked done." });
     }
+    // Idempotent: a repeat call has nothing left to release.
+    if (ctx.session.lifecycle.state === "done") return reply.send({ ok: true });
+
+    // Release BEFORE persisting so the `done` broadcast is the last word the
+    // clients hear: releasing a JSON session unwinds its drain, which would
+    // otherwise persist a trailing `idle` (the `released` latch inside
+    // `JsonAgentSession` suppresses it, but ordering costs nothing).
+    await releaseSessionRuntime(ctx.session);
 
     ctx.session.lifecycle = { state: "done", lastTransitionAt: new Date().toISOString() };
     // persistLifecycleState handles both the worktree and direct branches and
@@ -1266,6 +1292,18 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       .safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: "invalid model" });
 
+    // `resolveJsonAgent` lazily re-creates a released JsonAgentSession (and
+    // reopens its SQLite handles). For a session the user marked `done` that
+    // would resurrect the very resources "mark as done" freed — without even
+    // moving the session out of `done`. Refuse instead; sending a message is
+    // the deliberate way to bring a done session back.
+    const modelCtx = findSessionContext(id);
+    if (modelCtx?.session.lifecycle.state === "done") {
+      return reply.status(409).send({
+        error: "Session is done — send a message to resume it before switching model.",
+      });
+    }
+
     const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
     const resolved = await resolveJsonAgent(id, daemonPort);
     if (!resolved.ok) {
@@ -1437,9 +1475,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         // dispose() closes the SQLite handle so a repeated json→tty→json cycle
         // doesn't accumulate one open store per toggle.
         const jsonAgentToClose = jsonAgentRegistry.get(id);
-        jsonAgentToClose?.abortAndDrain();
         jsonAgentRegistry.delete(id);
-        jsonAgentToClose?.dispose();
+        await jsonAgentToClose?.release();
         // Allocate the real terminal tmux name + flip the useTmux/channel
         // invariant BEFORE spawning so the pane attaches to a live window.
         session.tmuxName = ttyTmuxName;
