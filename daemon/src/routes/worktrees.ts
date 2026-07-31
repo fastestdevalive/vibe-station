@@ -8,8 +8,6 @@ import { getProject, getAllProjects, mutateProject } from "../state/project-stor
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
 import { reserveNextWorktreeNum, buildTmuxName } from "../services/sessionId.js";
 import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists } from "../services/git.js";
-import { killSession } from "../services/tmux.js";
-import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir } from "../services/paths.js";
@@ -21,9 +19,8 @@ import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import { resolveChannel } from "../services/channel.js";
-import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import { startJsonCreateTurn } from "../services/jsonAgentChat.js";
-import { clearSessionAttachments } from "../state/attachmentRegistry.js";
+import { releaseSessionRuntime } from "../services/sessionRuntime.js";
 import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord, Channel } from "../types.js";
 
@@ -539,8 +536,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, worktree: apiWorktree });
   });
 
-  // POST /worktrees/:id/done — mark all agent sessions as done (metadata only; no process kill)
-
+  // POST /worktrees/:id/done — put the whole worktree to rest: every agent
+  // session is released + marked `done`, and every TERMINAL session is released
+  // + marked `exited` (terminals have no `done` state of their own). Releasing
+  // the terminals is the point — a worktree "done" that leaves shells running
+  // still holds a tmux server and whatever long-running dev process was in it.
+  // Nothing on disk is removed, so every session stays resumable via
+  // `POST /sessions/:id/resume`.
   app.post("/worktrees/:id/done", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
@@ -548,13 +550,32 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
     let updated = 0;
-    for (const session of worktree.sessions.filter((s) => s.type === "agent")) {
-      session.lifecycle = { state: "done", lastTransitionAt: new Date().toISOString() };
-      await persistLifecycleState(project.id, wtId, session.id, "done");
-      broadcastAll({ type: "session:state", sessionId: session.id, state: "done" });
-      updated += 1;
+    let terminalsReleased = 0;
+
+    for (const session of worktree.sessions) {
+      if (session.type === "agent") {
+        // Idempotent — a second call must not re-count already-done agents.
+        if (session.lifecycle.state === "done") continue;
+        await releaseSessionRuntime(session);
+        session.lifecycle = { state: "done", lastTransitionAt: new Date().toISOString() };
+        // persistLifecycleState broadcasts `session:state` itself.
+        await persistLifecycleState(project.id, wtId, session.id, "done");
+        updated += 1;
+        continue;
+      }
+
+      if (session.lifecycle.state === "exited") continue;
+      // Terminals: persist `exited` BEFORE the kill. Killing a direct-pty child
+      // fires `DirectPtyStream.onExit` → `markSessionExited`, which early-
+      // returns once the state is already `exited` — so writing first turns
+      // that callback into a no-op instead of a duplicate broadcast.
+      session.lifecycle = { state: "exited", lastTransitionAt: new Date().toISOString() };
+      await persistLifecycleState(project.id, wtId, session.id, "exited");
+      await releaseSessionRuntime(session);
+      terminalsReleased += 1;
     }
-    return reply.send({ ok: true, updated });
+
+    return reply.send({ ok: true, updated, terminalsReleased });
   });
 
   // DELETE /worktrees/:id
@@ -571,23 +592,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     // Kill all sessions (tmux or direct-pty)
     for (const session of worktree.sessions) {
-      // Abort any live JSON turn BEFORE purge (Decision 13) so no orphaned turn
-      // child keeps writing into the worktree mid-removal. dispose() closes the
-      // session's own SQLite handle (registry delete alone leaks the fd).
-      const jsonAgentToClose = jsonAgentRegistry.get(session.id);
-      jsonAgentToClose?.abortAndDrain();
-      jsonAgentRegistry.delete(session.id);
-      jsonAgentToClose?.dispose();
-      clearSessionAttachments(session.id);
-      if (!session.useTmux) {
-        directPtyRegistry.get(session.id)?.kill?.();
-      } else {
-        try {
-          await killSession(session.tmuxName);
-        } catch {
-          // best-effort
-        }
-      }
+      // Release every live resource BEFORE purge (Decision 13) so no orphaned
+      // turn child keeps writing into the worktree mid-removal. Deleting is
+      // destructive, so staged attachments go too.
+      await releaseSessionRuntime(session, { clearAttachments: true });
       // Best-effort cleanup of per-session data dir
       cleanupSessionDataDir(project.id, wtId, session.id);
     }

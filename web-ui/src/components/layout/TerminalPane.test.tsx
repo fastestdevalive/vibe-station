@@ -85,6 +85,45 @@ describe("TerminalPane", () => {
     expect(screen.getByText(/Session exited/i)).toBeInTheDocument();
   });
 
+  it("3.T1 — resume banner shown with done copy when the session was marked done", () => {
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "done" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    // Marking done kills the pane on the daemon, so the pane must offer the
+    // same one-click recovery as an exit — with copy that says why.
+    expect(screen.getByText(/Session marked done/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Session exited/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /Resume/i })).toBeInTheDocument();
+  });
+
+  it("3.T2 — a done session never opens a stream (its pane is already gone)", () => {
+    const spy = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "done" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("3.T2b — clicking Resume on a done session resumes and re-opens the stream", async () => {
+    const user = userEvent.setup();
+    const resumeSpy = vi.spyOn(api, "resumeSession");
+    const openSpy = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "done" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    await user.click(screen.getByRole("button", { name: /Resume/i }));
+    await waitFor(() => {
+      expect(resumeSpy).toHaveBeenCalledWith("sess-main");
+      expect(openSpy).toHaveBeenCalledWith("sess-main", expect.any(Number), expect.any(Number));
+    });
+    resumeSpy.mockRestore();
+    openSpy.mockRestore();
+  });
+
   it("clicking Resume calls api.resumeSession", async () => {
     const user = userEvent.setup();
     const spy = vi.spyOn(api, "resumeSession");

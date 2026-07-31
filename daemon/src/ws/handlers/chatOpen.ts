@@ -24,6 +24,7 @@ import {
   resolveJsonAgent,
   readSessionTail,
   readSessionSince,
+  readSessionMeta,
   type JsonSessionContext,
 } from "../../services/jsonAgentChat.js";
 import type { NormalizedEvent, SessionMeta } from "../../types.js";
@@ -44,6 +45,24 @@ export async function handleChatOpen(
   }
 
   conn.subscribe([sessionId]);
+
+  // A session marked `done` has had its JsonAgentSession released — SQLite
+  // handle closed, turn queue dropped. `resolveJsonAgent` would lazily
+  // RE-CREATE it (reopening 3 WAL fds) just to render a read-only transcript,
+  // silently undoing the release that "mark as done" performed. Serve it from
+  // disk instead. Sending a message resumes the session for real (the enqueue
+  // path re-creates the agent and flips lifecycle back to `working`).
+  if (ctx.session.lifecycle.state === "done") {
+    // Drop any live entry from a PREVIOUS open of this same session — the
+    // early return below skips the unregister in the live branch, and a stale
+    // entry would pin the just-released agent (and its listeners) alive.
+    conn.unregisterChatStream(sessionId);
+    sendSnapshot(conn, ctx, sessionId, sinceSeq);
+    // `useChat` has no other meta source, so without this the status bar,
+    // model switcher and usage read blank on every done session.
+    conn.send({ type: "session:meta", sessionId, meta: await readSessionMeta(ctx, 0) });
+    return;
+  }
 
   // Resolve (lazily create) the JsonAgentSession so we can attach to its stream
   // and read its current meta. No spawn happens here — only on enqueue.

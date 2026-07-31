@@ -91,6 +91,19 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     lifecycleState != null &&
     lifecycleState !== "not_started";
 
+  // "Mark as done" releases the session's runtime: the daemon kills the tmux
+  // pane / pty child, so there is nothing left to attach to. Every open would
+  // just cost a failed `tmux has-session` round-trip and a transient error
+  // frame. The terminal still MOUNTS (so its existing scrollback stays
+  // readable) — it simply never re-opens a stream until Resume.
+  const paneReleased = lifecycleState === "done";
+  // Read through a ref inside the mount effect: making it a dependency would
+  // tear down and rebuild the whole xterm instance the moment a session is
+  // marked done — exactly the remount churn the stable-tree-position rule
+  // (web-ui AGENTS.md §7-41) exists to avoid.
+  const paneReleasedRef = useRef(paneReleased);
+  paneReleasedRef.current = paneReleased;
+
   const spawnReason = lifecycleState === "not_started" ? "spawning" : "reconnecting";
 
   const { sessionState } = useSessionOutput(api, activeSessionId);
@@ -221,9 +234,12 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     });
 
     // Open session synchronously after fit. Daemon won't emit chunks
-    // until openSession lands.
-    markSessionAttachPending(activeSessionId);
-    void api.openSession(activeSessionId, term.cols, term.rows);
+    // until openSession lands. Skipped for a released (done) session — its
+    // pane is gone; Resume is what brings it back.
+    if (!paneReleasedRef.current) {
+      markSessionAttachPending(activeSessionId);
+      void api.openSession(activeSessionId, term.cols, term.rows);
+    }
 
     // Mobile vertical-swipe scrolling. In normal buffer it scrolls xterm's
     // scrollback; in alternate buffer (vim/htop/tmux copy-mode) it sends
@@ -352,7 +368,8 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
         everOnline &&
         activeSessionId &&
         termRef.current &&
-        mountTerminal
+        mountTerminal &&
+        !paneReleasedRef.current
       ) {
         termRef.current.reset();
         markSessionAttachPending(activeSessionId);
@@ -385,14 +402,22 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
   }
 
   const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
-  const showBanner = state === "exited" || sessionState === "exited";
+  // `done` gets the same banner as `exited`: the daemon has killed the pane in
+  // both cases and Resume is the same one-click recovery. Without this a
+  // done session would render a frozen, dead terminal with no way back — the
+  // daemon sends no exit frame when it kills the pane under an attached
+  // client, so this store state is the ONLY signal the pane gets.
+  const showBanner = state === "done" || state === "exited" || sessionState === "exited";
+  // `done` is checked before the local `sessionState`, which the dying pty can
+  // push to "exited" — the deliberate state must win over the side effect.
+  const bannerMsg = state === "done" ? "Session marked done." : "Session exited.";
 
   return (
     <div className="terminal-pane-root">
       {showBanner ? (
         <>
           <div className="terminal-resume-banner">
-            <span className="terminal-resume-banner__msg">Session exited.</span>
+            <span className="terminal-resume-banner__msg">{bannerMsg}</span>
             <span className="terminal-resume-banner__action">
               {resumePending ? (
                 <span className="terminal-resume-busy" role="status" aria-live="polite" aria-label="Resuming session">

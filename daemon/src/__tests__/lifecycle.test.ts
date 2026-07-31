@@ -242,6 +242,32 @@ describe("lifecycle polling behavior", () => {
     }
   });
 
+  it("markSessionExited leaves a `done` session alone (mark-as-done kills the pane on purpose)", async () => {
+    await seedProject("done");
+    const { markSessionExited } = await import("../services/lifecycle.js");
+
+    // This is exactly what DirectPtyStream.onExit fires after `releaseSessionRuntime`
+    // kills the child of a session the user just marked done.
+    await markSessionExited("proj-l", "wt-l", "sess-l");
+
+    expect(await getCurrentState()).toBe("done");
+    expect(emittedStateChanges()).not.toContain("exited");
+    expect(
+      broadcaster.broadcastAll.mock.calls.some(
+        ([msg]) => (msg as { type?: string }).type === "session:exited",
+      ),
+    ).toBe(false);
+  });
+
+  it("markSessionExited still marks a working session exited", async () => {
+    await seedProject("working");
+    const { markSessionExited } = await import("../services/lifecycle.js");
+
+    await markSessionExited("proj-l", "wt-l", "sess-l");
+
+    expect(await getCurrentState()).toBe("exited");
+  });
+
   it("clearIdleTracking called at teardown avoids the stale-idle flip on the next respawn", async () => {
     await seedProject("working");
     tmux.capturePane.mockResolvedValue("same splash text");

@@ -46,6 +46,15 @@ import type {
 } from "../types.js";
 
 /**
+ * How long `release()` waits for an aborted turn's drain to unwind before
+ * closing the SQLite handle anyway. The wait exists so the common case closes
+ * a quiescent store; the cap exists so a wedged child can never hang the
+ * `POST /sessions/:id/done` request. Safe to expire: `released` has already
+ * neutralised every writer, and the child's process group is already SIGKILLed.
+ */
+const RELEASE_DRAIN_TIMEOUT_MS = 2000;
+
+/**
  * Inject absolute attachment paths into a user message (Decision 5). The agent
  * reads the files by absolute path (they live under `sessionDataDir`, not the
  * checkout). Applied at RUN time (not enqueue) so the queued turn retains the
@@ -264,6 +273,21 @@ export class JsonAgentSession {
   /** Live per-turn child PIDs (own process groups) for orphan-kill safety (Decision 13). */
   private readonly livePids = new Set<number>();
 
+  /**
+   * Set by `release()` — this instance is being torn down and must never write
+   * again. Two late writers exist and both would corrupt state after release:
+   *
+   * 1. `drain()`'s `finally` persists lifecycle `idle` as the aborted turn
+   *    unwinds. That lands AFTER the caller has persisted `done`, silently
+   *    demoting a deliberately-done session back to idle.
+   * 2. `persist()` appends to the SQLite store, which `dispose()` has closed —
+   *    a straggler event would throw.
+   *
+   * Both check this latch. It is a latch rather than an ordering rule because
+   * the unwinding is asynchronous and cannot be awaited race-free otherwise.
+   */
+  private released = false;
+
   constructor(opts: JsonAgentSessionOptions) {
     this.project = opts.project;
     this.worktree = opts.worktree;
@@ -413,6 +437,28 @@ export class JsonAgentSession {
     } catch {
       /* already closed / best-effort */
     }
+  }
+
+  /**
+   * Full teardown for a session that is being retired but KEPT on disk
+   * (`POST /sessions/:id/done`, `POST /worktrees/:id/done`, delete, worktree
+   * delete). Latches `released` first so neither the unwinding drain nor a
+   * straggler event can write after us, aborts the active turn + queue, waits
+   * (bounded) for the drain to unwind, then closes the SQLite handle.
+   *
+   * Idempotent. Never throws. The 2 s cap means a wedged child cannot hang the
+   * HTTP request — `released` has already neutralised anything it might write,
+   * and `abortAndDrain` has already SIGKILLed its process group.
+   */
+  async release(): Promise<void> {
+    if (this.released) return;
+    this.released = true;
+    this.abortAndDrain();
+    await Promise.race([
+      this.settled().catch(() => {}),
+      new Promise<void>((resolve) => setTimeout(resolve, RELEASE_DRAIN_TIMEOUT_MS)),
+    ]);
+    this.dispose();
   }
 
   /**
@@ -711,6 +757,9 @@ export class JsonAgentSession {
 
   /** Persist the session lifecycle to the manifest (JSON channel, Decision 11). */
   private async persistLifecycle(state: LifecycleState): Promise<void> {
+    // Released sessions are terminal (`done`) — the drain's trailing `idle`
+    // must not demote them. See the `released` field comment.
+    if (this.released) return;
     try {
       const { persistLifecycleState } = await import("./lifecycle.js");
       await persistLifecycleState(this.project.id, this.worktree?.id, this.session.id, state);
@@ -905,6 +954,9 @@ export class JsonAgentSession {
   }
 
   private persist(ev: NormalizedEvent): void {
+    // The store handle is closed once released — a straggler event from the
+    // unwinding turn would throw against a closed database.
+    if (this.released) return;
     // Append-only through the store; assigns + stamps the durable `logSeq`
     // synchronously before the WS send (N3).
     this.store.append(ev);

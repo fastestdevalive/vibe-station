@@ -200,6 +200,14 @@ export async function startJsonCreateTurn(opts: {
   daemonPort: number;
 }): Promise<void> {
   if (!opts.prompt || !opts.prompt.trim()) return;
+  // The user can mark the session done (or dismiss it) between create and this
+  // background call. Enqueuing then RE-CREATES the JsonAgentSession that the
+  // release just tore down and spawns turn 1 against it — a session the user
+  // believes is retired quietly starts burning tokens. A later, deliberate
+  // `POST /chat` is still the documented way to resume; only this automatic
+  // turn-1 is suppressed.
+  const preCtx = findJsonSessionContext(opts.sessionId);
+  if (!preCtx || preCtx.session.lifecycle.state === "done") return;
   const res = await enqueueChatTurn({
     sessionId: opts.sessionId,
     message: opts.prompt,

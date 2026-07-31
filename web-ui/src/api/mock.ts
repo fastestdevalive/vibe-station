@@ -404,18 +404,31 @@ export function createMockApi() {
       return { ok: true };
     },
 
-    async markWorktreeDone(id: string): Promise<{ ok: true; updated: number }> {
+    async markWorktreeDone(
+      id: string,
+    ): Promise<{ ok: true; updated: number; terminalsReleased: number }> {
       const wtExists = worktrees.some((w) => w.id === id);
-      const agents = sessions.filter((s) => s.worktreeId === id && s.type === "agent");
       if (!wtExists) throw new ApiError("not found", 404);
       let updated = 0;
-      for (const s of agents) {
-        s.state = "done";
-        s.lifecycleState = "done";
-        emit({ type: "session:state", sessionId: s.id, state: "done" });
-        updated += 1;
+      let terminalsReleased = 0;
+      // Mirrors the daemon: agents → done, terminals → exited (their processes
+      // are released too, which the mock has no equivalent of).
+      for (const s of sessions.filter((x) => x.worktreeId === id)) {
+        if (s.type === "agent") {
+          if (s.lifecycleState === "done") continue;
+          s.state = "done";
+          s.lifecycleState = "done";
+          emit({ type: "session:state", sessionId: s.id, state: "done" });
+          updated += 1;
+        } else {
+          if (s.lifecycleState === "exited") continue;
+          s.state = "exited";
+          s.lifecycleState = "exited";
+          emit({ type: "session:state", sessionId: s.id, state: "exited" });
+          terminalsReleased += 1;
+        }
       }
-      return { ok: true, updated };
+      return { ok: true, updated, terminalsReleased };
     },
 
     async pinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
@@ -539,6 +552,10 @@ export function createMockApi() {
       if (s.type !== "agent") throw new ApiError("only agent sessions can be marked done", 400);
       s.state = "done";
       s.lifecycleState = "done";
+      // Parity with markWorktreeDone (and with the daemon, which broadcasts via
+      // persistLifecycleState) — without this the pane never learns it is done
+      // and no Resume banner appears.
+      emit({ type: "session:state", sessionId: id, state: "done" });
       return { ok: true };
     },
 
