@@ -35,7 +35,11 @@ export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
     !isJson && session ? <TerminalChannelToggle api={api} session={session} /> : null;
   // The attachment-upload overlay is still a plain top-corner overlay that only
   // makes sense on a live terminal, so keep gating it out once the pane exits.
-  const terminalLive = !isJson && session?.lifecycleState !== "exited";
+  // `done` releases the pane exactly like `exited` does (the daemon kills the
+  // tmux/pty process), so the upload overlay — which only makes sense against a
+  // live terminal — is hidden for both.
+  const terminalLive =
+    !isJson && session?.lifecycleState !== "exited" && session?.lifecycleState !== "done";
   return (
     <div className="agent-pane-slot">
       <div

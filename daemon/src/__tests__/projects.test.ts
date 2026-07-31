@@ -143,6 +143,40 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     expect(getRes.json<ProjectRecord[]>()).toHaveLength(0);
   });
 
+  it("DELETE /projects/:id releases direct-pty / json sessions, not just tmux panes", async () => {
+    // Regression: this path used to call killSession() only. A `useTmux: false`
+    // session (every direct-pty and every json session) has no pane, so its pty
+    // child and its JsonAgentSession — turn process group + open SQLite handles
+    // — survived while the project data dir they point at was rm -rf'd.
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/projects",
+      payload: { path: repoDir },
+    });
+    const project = createRes.json<ProjectRecord>();
+
+    const { mutateProject } = await import("../state/project-store.js");
+    const ptySession = {
+      id: `${project.id}-d1`,
+      slot: "d1" as const,
+      type: "agent" as const,
+      modeId: "m",
+      tmuxName: `__direct__-${project.id}-d1`,
+      useTmux: false,
+      lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
+    };
+    await mutateProject(project.id, (p) => ({ ...p, directSessions: [ptySession] }));
+
+    const { directPtyRegistry } = await import("../state/directPtyRegistry.js");
+    const kill = vi.fn();
+    directPtyRegistry.set(ptySession.id, { kill } as never);
+
+    const delRes = await app.inject({ method: "DELETE", url: `/projects/${project.id}` });
+    expect(delRes.statusCode).toBe(200);
+    expect(kill).toHaveBeenCalledOnce();
+    directPtyRegistry.delete(ptySession.id);
+  });
+
   it("DELETE /projects/:id 404 for unknown project", async () => {
     const res = await app.inject({ method: "DELETE", url: "/projects/nonexistent" });
     expect(res.statusCode).toBe(404);

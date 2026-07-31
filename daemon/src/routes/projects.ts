@@ -26,6 +26,7 @@ import { slugify, isSafeProjectId } from "../services/slugify.js";
 import { projectDir, assertSafeToDelete } from "../services/paths.js";
 import { readSettings } from "../services/config.js";
 import { broadcastAll } from "../broadcaster.js";
+import { releaseSessionRuntime } from "../services/sessionRuntime.js";
 import type { ProjectRecord, SessionRecord } from "../types.js";
 
 /**
@@ -801,29 +802,19 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       return reply.status(404).send({ error: `Project '${id}' not found` });
     }
 
-    // Cascade: kill all tmux sessions and remove worktree dirs
-    // (tmux kills and git worktree removes happen here; import lazily to avoid
-    //  circular deps — these services may not be available in Phase 3 yet)
-
-    // Kill direct sessions first
+    // Cascade: release every session's runtime, then remove the worktree dirs.
+    // This MUST go through releaseSessionRuntime, not a bare `killSession`: a
+    // `useTmux: false` session (direct-pty, and every json session) has no pane
+    // to kill, so tmux-only teardown left its pty child and its JsonAgentSession
+    // — turn process group and open SQLite handles — running while the code
+    // below rm -rf's the very data dir those handles point at.
     for (const session of project.directSessions) {
-      try {
-        const { killSession } = await import("../services/tmux.js");
-        await killSession(session.tmuxName);
-      } catch {
-        // best-effort
-      }
+      await releaseSessionRuntime(session, { clearAttachments: true });
     }
 
-    // Then kill worktree sessions and remove worktrees
     for (const wt of project.worktrees) {
       for (const session of wt.sessions) {
-        try {
-          const { killSession } = await import("../services/tmux.js");
-          await killSession(session.tmuxName);
-        } catch {
-          // best-effort
-        }
+        await releaseSessionRuntime(session, { clearAttachments: true });
       }
       try {
         const { worktreeRemove } = await import("../services/git.js");

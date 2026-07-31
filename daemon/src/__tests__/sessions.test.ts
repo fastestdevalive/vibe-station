@@ -51,6 +51,9 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
     spawnSessionFromArgv: vi.fn(async () => {
       // Mock: do nothing
     }),
+    spawnDirectSession: vi.fn(async () => {
+      // Mock: do nothing
+    }),
   };
 });
 
@@ -315,6 +318,149 @@ describe("Session routes", () => {
     // killed and replaced by a racing resume.
     expect(spawnMock).not.toHaveBeenCalled();
     expect(spawnArgvMock).not.toHaveBeenCalled();
+  });
+
+  // ─── POST /sessions/:id/done — releases resources, stays resumable ───────
+  describe("POST /sessions/:id/done releases runtime resources", () => {
+    async function mainSession(): Promise<SessionRecord> {
+      const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+      return listRes.json<SessionRecord[]>()[0]!;
+    }
+
+    it("2.T1 — kills the tmux pane and keeps the session record", async () => {
+      const tmux = await import("../services/tmux.js");
+      vi.mocked(tmux.killSession).mockClear();
+      const main = await mainSession();
+
+      const res = await app.inject({ method: "POST", url: `/sessions/${main.id}/done` });
+      expect(res.statusCode).toBe(200);
+
+      expect(vi.mocked(tmux.killSession)).toHaveBeenCalledWith(main.tmuxName);
+
+      // The record survives — "done" is a pause, not a delete.
+      const after = await app.inject({ method: "GET", url: `/sessions/${main.id}` });
+      expect(after.statusCode).toBe(200);
+      expect(after.json<{ state: string }>().state).toBe("done");
+    });
+
+    it("2.T1b — is idempotent: a second call is a no-op that does not re-kill", async () => {
+      const tmux = await import("../services/tmux.js");
+      const main = await mainSession();
+
+      expect((await app.inject({ method: "POST", url: `/sessions/${main.id}/done` })).statusCode).toBe(200);
+      vi.mocked(tmux.killSession).mockClear();
+      const second = await app.inject({ method: "POST", url: `/sessions/${main.id}/done` });
+
+      expect(second.statusCode).toBe(200);
+      expect(vi.mocked(tmux.killSession)).not.toHaveBeenCalled();
+    });
+
+    it("2.T2 — a done session still resumes (record + agentChatId survived the release)", async () => {
+      const main = await mainSession();
+      await app.inject({ method: "POST", url: `/sessions/${main.id}/done` });
+
+      const res = await app.inject({ method: "POST", url: `/sessions/${main.id}/resume` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ state: string }>().state).toBe("working");
+    });
+
+    it("2.T1c — DIRECT (project-level) agent: done kills its pane and stays resumable", async () => {
+      const tmux = await import("../services/tmux.js");
+      // Direct sessions live in project.directSessions and have no worktree —
+      // the same release path has to reach them.
+      const created = await app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { projectId, target: "direct", type: "agent", modeId: "bugfix" },
+      });
+      expect(created.statusCode).toBe(201);
+      const direct = created.json<SessionRecord>();
+      expect(direct.slot).toMatch(/^d\d+$/);
+
+      vi.mocked(tmux.killSession).mockClear();
+      const res = await app.inject({ method: "POST", url: `/sessions/${direct.id}/done` });
+      expect(res.statusCode).toBe(200);
+      expect(vi.mocked(tmux.killSession)).toHaveBeenCalledWith(direct.tmuxName);
+
+      const after = await app.inject({ method: "GET", url: `/sessions/${direct.id}` });
+      expect(after.json<{ state: string }>().state).toBe("done");
+
+      const resumed = await app.inject({ method: "POST", url: `/sessions/${direct.id}/resume` });
+      expect(resumed.statusCode).toBe(200);
+      expect(resumed.json<{ state: string }>().state).toBe("working");
+    });
+
+    it("2.T1d — done DURING spawn: the spawn job must not resurrect the session", async () => {
+      // Marking done while an agent is still spawning is easy to do (a spawn
+      // takes seconds). The background job must neither clobber `done` nor
+      // leave behind the pane it created after the release already ran.
+      const spawnModule = await import("../services/spawn.js");
+      const tmux = await import("../services/tmux.js");
+      let releaseSpawn!: () => void;
+      const gate = new Promise<void>((r) => {
+        releaseSpawn = r;
+      });
+      vi.mocked(spawnModule.spawnSession).mockImplementationOnce(async () => {
+        await gate;
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+      });
+      const sess = created.json<SessionRecord>();
+
+      // Retire it while the spawn is parked.
+      expect((await app.inject({ method: "POST", url: `/sessions/${sess.id}/done` })).statusCode).toBe(200);
+
+      vi.mocked(tmux.killSession).mockClear();
+      releaseSpawn();
+      await new Promise((r) => setTimeout(r, 100));
+
+      // State survived the job's completion write...
+      const after = await app.inject({ method: "GET", url: `/sessions/${sess.id}` });
+      expect(after.json<{ state: string }>().state).toBe("done");
+      // ...and the pane the spawn created after our kill was reaped.
+      expect(vi.mocked(tmux.killSession)).toHaveBeenCalledWith(sess.tmuxName);
+    });
+
+    it("2.T1e — done DURING a FAILING spawn also stays done", async () => {
+      const spawnModule = await import("../services/spawn.js");
+      let failSpawn!: () => void;
+      const gate = new Promise<void>((_, rej) => {
+        failSpawn = () => rej(new Error("boom"));
+      });
+      vi.mocked(spawnModule.spawnSession).mockImplementationOnce(async () => {
+        await gate;
+      });
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+      });
+      const sess = created.json<SessionRecord>();
+      await app.inject({ method: "POST", url: `/sessions/${sess.id}/done` });
+
+      failSpawn();
+      await new Promise((r) => setTimeout(r, 100));
+
+      const after = await app.inject({ method: "GET", url: `/sessions/${sess.id}` });
+      // The failure path used to write `exited` over the user's `done`.
+      expect(after.json<{ state: string }>().state).toBe("done");
+    });
+
+    it("2.T2b — terminals are still rejected", async () => {
+      const created = await app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "terminal" },
+      });
+      const term = created.json<SessionRecord>();
+      const res = await app.inject({ method: "POST", url: `/sessions/${term.id}/done` });
+      expect(res.statusCode).toBe(400);
+    });
   });
 
   it("1.T4 — channel:json create carries channel through serializeSession and does NOT spawn", async () => {

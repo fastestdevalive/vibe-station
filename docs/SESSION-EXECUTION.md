@@ -68,3 +68,70 @@ daemon
 | Output | `tmuxOutput.ts` | `directPtyOutput.ts` | NDJSON → `NormalizedEvent` (WS `session:message`) |
 | Web pane | `TerminalPane` | `TerminalPane` | `ChatPane` |
 | Survive restart | yes | no | yes (resume via chat id) |
+
+## Retiring a session: `done` vs `delete`
+
+Both go through one shared teardown — `releaseSessionRuntime()`
+(`daemon/src/services/sessionRuntime.ts`) — which frees every LIVE resource a
+session holds and touches nothing on disk:
+
+| Freed by `releaseSessionRuntime` | Kept |
+|---|---|
+| tmux pane (and the agent CLI process tree under it) | `SessionRecord` in the manifest, incl. `agentChatId` |
+| direct-pty child (`useTmux: false`) | session data dir (system prompt, transcript SQLite) |
+| `JsonAgentSession`: in-flight turn's process group, turn queue, SQLite WAL handle (3 fds), stream listeners | the worktree checkout |
+| lifecycle poller's idle-hash entry | the CLI's own history (`~/.claude/projects/<slug>/<uuid>.jsonl`) |
+| staged attachments — **only** with `{ clearAttachments: true }` (delete does; done does not) | |
+
+- `POST /sessions/:id/done` — release + mark `done`. Agent sessions only (400 for
+  terminals). Idempotent.
+- `POST /worktrees/:id/done` — same for every agent in the worktree, plus every
+  TERMINAL session (released and marked `exited`, since terminals have no `done`
+  state). Returns `{ ok, updated, terminalsReleased }`.
+- `DELETE /sessions/:id` / `DELETE /worktrees/:id` — the same release, then the
+  destructive part (data dir, manifest record, optionally the checkout).
+
+### Coming back
+
+- TTY session → `POST /sessions/:id/resume` (`getRestoreCommand` → `--resume <agentChatId>`
+  in a fresh pane). The UI surfaces this as the "Session marked done. / Resume"
+  banner, which `TerminalPane` renders for `done` exactly as it does for `exited`.
+- JSON session → just send a message; `POST /sessions/:id/chat` re-creates the
+  `JsonAgentSession` and flips the lifecycle back to `working`. Read-only paths
+  (`chat:open`, `GET /transcript`, `GET /meta`) deliberately serve a done session
+  from disk WITHOUT re-creating the agent, so browsing a done chat does not undo
+  the release. `PATCH /chat/model` refuses with `409` for the same reason.
+
+### What must never demote `done`
+
+`done` is deliberate and terminal, and three code paths would otherwise write
+over it — all three now check for it explicitly:
+
+1. The lifecycle poller's dead-pane detection (`lifecycle.ts` — skips `done`).
+2. `markSessionExited`, which `DirectPtyStream.onExit` fires when the release
+   kills the pty child.
+3. `JsonAgentSession`'s drain, whose `finally` persists a trailing `idle` as the
+   aborted turn unwinds — suppressed by the `released` latch that `release()`
+   sets before it aborts anything.
+
+### Every retire path, and what it frees
+
+| User action | Endpoint | Releases runtime? | Record kept? |
+|---|---|---|---|
+| Session menu → **Mark as done** (agents, worktree AND direct) | `POST /sessions/:id/done` | yes | yes — resumable |
+| Session menu → **Dismiss (keep files)** | `DELETE /sessions/:id` | yes | no — record + data dir removed ("files" = your checkout) |
+| Worktree menu → **Mark as done** | `POST /worktrees/:id/done` | yes, every agent + terminal | yes |
+| Worktree menu / dashboard → **Dismiss (keep files)** | `DELETE /worktrees/:id` | yes, every session | no — checkout stays on disk |
+| Worktree menu → **Delete worktree…** | `DELETE /worktrees/:id?purge=true` | yes | no — checkout removed too |
+| Terminal tab **×** | `DELETE /sessions/:id` | yes | no |
+| Project menu → **Hide project** | `PATCH /projects/:id` | **NO** — everything keeps running | yes |
+
+- "Dismiss" is never client-side — both variants are real daemon deletes.
+- `POST /sessions/:id/done` works for direct (project-level) sessions too: `findSessionContext` resolves both, and `releaseSessionRuntime` branches on `useTmux`, not on worktree-ness.
+- There is no bulk retire for a project's direct sessions (no `POST /projects/:id/done`) — the only bulk path is the worktree one.
+
+### Retiring mid-spawn
+
+- An agent spawn takes seconds, and the user can mark done inside that window.
+- Both spawn jobs (`runAgentSpawnJob`, `runDirectAgentSpawnJob`) re-check the session's CURRENT state before their completion write, via `releaseIfRetiredDuringSpawn`. If it is `done` (or the record is gone), they release whatever the spawn just created and skip the write — otherwise the job would clobber `done` with `working`/`exited` AND leak the pane it created after the release ran.
+- `startJsonCreateTurn` (the auto-enqueued turn 1) is likewise suppressed for a session already marked `done`, so a retired session never starts spending tokens on its own. A deliberate `POST /chat` is still the resume path.

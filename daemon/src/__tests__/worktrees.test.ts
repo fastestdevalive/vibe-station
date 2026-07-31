@@ -442,7 +442,9 @@ describe("Worktree routes", () => {
     vi.mocked(spawnModule.spawnSession).mockResolvedValue(undefined);
   });
 
-  it("POST /worktrees/:id/done marks agent sessions as done", async () => {
+  it("POST /worktrees/:id/done marks agent sessions as done and kills their panes", async () => {
+    const tmux = await import("../services/tmux.js");
+    const killSpy = vi.spyOn(tmux, "killSession"); // calls through: really kills the pane
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
@@ -456,7 +458,7 @@ describe("Worktree routes", () => {
       url: `/worktrees/${wt.id}/done`,
     });
     expect(doneRes.statusCode).toBe(200);
-    const body = doneRes.json<{ ok: boolean; updated: number }>();
+    const body = doneRes.json<{ ok: boolean; updated: number; terminalsReleased: number }>();
     expect(body.ok).toBe(true);
     expect(body.updated).toBeGreaterThanOrEqual(1);
 
@@ -465,7 +467,64 @@ describe("Worktree routes", () => {
       url: `/sessions/${wt.id}-m`,
     });
     expect(sessRes.statusCode).toBe(200);
-    expect(sessRes.json<{ state: string }>().state).toBe("done");
+    const main = sessRes.json<{ state: string; tmuxName: string }>();
+    expect(main.state).toBe("done");
+    // The whole point of the feature: the pane is actually gone.
+    expect(killSpy).toHaveBeenCalledWith(main.tmuxName);
+    killSpy.mockRestore();
+  });
+
+  it("2.T4 — POST /worktrees/:id/done also releases terminals (marked exited)", async () => {
+    const tmux = await import("../services/tmux.js");
+    const killSpy = vi.spyOn(tmux, "killSession"); // calls through: really kills the pane
+    const wtRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `done-term-${Date.now()}`, modeId: "bug-fix" },
+    });
+    const wt = wtRes.json<{ id: string }>();
+
+    const termRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId: wt.id, type: "terminal" },
+    });
+    expect(termRes.statusCode).toBe(201);
+    const term = termRes.json<{ id: string; tmuxName: string }>();
+
+    const doneRes = await app.inject({ method: "POST", url: `/worktrees/${wt.id}/done` });
+    const body = doneRes.json<{ updated: number; terminalsReleased: number }>();
+    expect(body.terminalsReleased).toBe(1);
+
+    const after = await app.inject({ method: "GET", url: `/sessions/${term.id}` });
+    // Terminals have no `done` state of their own — they retire as `exited`,
+    // which is also what the UI's Resume banner keys off.
+    expect(after.json<{ state: string }>().state).toBe("exited");
+    expect(killSpy).toHaveBeenCalledWith(term.tmuxName);
+    killSpy.mockRestore();
+  });
+
+  it("2.T5 — POST /worktrees/:id/done is idempotent (second call updates nothing)", async () => {
+    const tmux = await import("../services/tmux.js");
+    const killSpy = vi.spyOn(tmux, "killSession"); // calls through: really kills the pane
+    const wtRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `done-idem-${Date.now()}`, modeId: "bug-fix" },
+    });
+    const wt = wtRes.json<{ id: string }>();
+
+    const first = await app.inject({ method: "POST", url: `/worktrees/${wt.id}/done` });
+    expect(first.json<{ updated: number }>().updated).toBeGreaterThanOrEqual(1);
+
+    killSpy.mockClear();
+    const second = await app.inject({ method: "POST", url: `/worktrees/${wt.id}/done` });
+    expect(second.statusCode).toBe(200);
+    const body = second.json<{ updated: number; terminalsReleased: number }>();
+    expect(body.updated).toBe(0);
+    expect(body.terminalsReleased).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
   });
 
   // ─── PATCH /worktrees/:id/pin ───────────────────────────────────────────

@@ -309,12 +309,20 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
-    async markWorktreeDone(id: string): Promise<{ ok: true; updated: number }> {
+    /**
+     * Mark every agent session in a worktree done and RELEASE the worktree's
+     * runtime resources: agent panes/processes are killed, terminals are killed
+     * and marked exited. Nothing on disk is removed — each session resumes via
+     * `resumeSession` (or, for Rich Chat, by sending a message).
+     */
+    async markWorktreeDone(
+      id: string,
+    ): Promise<{ ok: true; updated: number; terminalsReleased: number }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/done`, {
         method: "POST",
       });
-      return parseJson<{ ok: true; updated: number }>(res);
+      return parseJson<{ ok: true; updated: number; terminalsReleased: number }>(res);
     },
 
     async pinWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
@@ -386,7 +394,11 @@ export function createClientApi() {
       return parseJson<{ ok: true; pinnedAt: string | null }>(res);
     },
 
-    /** Mark an agent session as done (metadata only; no process kill). */
+    /**
+     * Mark an agent session done: the daemon kills its tmux pane / pty child and
+     * releases its Rich Chat session. The session record, its history and any
+     * staged attachments survive, so `resumeSession` brings it back.
+     */
     async markSessionDone(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/done`, {
