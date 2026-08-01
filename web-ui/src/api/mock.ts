@@ -14,6 +14,7 @@ import type {
   CreateSessionBody,
   CreateWorktreeBody,
   FileScope,
+  FsCheckResponse,
   FsCompleteResponse,
   HealthResponse,
   Mode,
@@ -884,7 +885,7 @@ export function createMockApi() {
       else if (resolved.startsWith("~/")) resolved = `${MOCK_HOME}/${resolved.slice(2)}`;
 
       if (!resolved.startsWith("/")) {
-        return { base: resolved, entries: [] };
+        return { base: resolved, entries: [], truncated: false };
       }
 
       let dir: string;
@@ -904,7 +905,30 @@ export function createMockApi() {
         .map((name) => ({ name, path: `${dir === "/" ? "" : dir}/${name}` }))
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
-      return { base: dir, entries };
+      // The fixed mock tree never exceeds MAX_ENTRIES, so this is always
+      // false — kept as a real field (not hardcoded at call sites) so it
+      // stays structurally identical to the daemon's response.
+      return { base: dir, entries, truncated: false };
+    },
+
+    async checkFsPath(path: string): Promise<FsCheckResponse> {
+      let resolved = path;
+      if (resolved === "~") resolved = MOCK_HOME;
+      else if (resolved.startsWith("~/")) resolved = `${MOCK_HOME}/${resolved.slice(2)}`;
+
+      // Normalize away trailing slash for lookup
+      if (resolved.endsWith("/") && resolved !== "/") {
+        resolved = resolved.slice(0, -1);
+      }
+
+      const exists = !!MOCK_FS_TREE[resolved] || Object.keys(MOCK_FS_TREE).some(dir => dir.startsWith(resolved + "/"));
+      const isDirectory = exists; // mock tree only contains directories
+      const isGit = exists && (resolved.includes("project") || resolved.includes("code") || resolved.includes("proj-a") || resolved.includes("proj-b"));
+      // Mock dirs are all "already has commits" when they're git — the
+      // no-commits-yet hint branch is exercised in tests via a checkFsPath spy.
+      const hasCommitsVal = isGit ? true : null;
+
+      return { exists, isDirectory, isGit, hasCommits: hasCommitsVal };
     },
 
     // ── JSON agent chat (mock) ────────────────────────────────────────────────

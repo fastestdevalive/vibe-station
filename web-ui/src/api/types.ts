@@ -533,4 +533,19 @@ export interface FsCompleteResponse {
   base: string;
   /** Child directories matching the completion, sorted by name (capped). */
   entries: { name: string; path: string }[];
+  /** True when the directory has more matching entries than were returned
+   *  (i.e. `entries` was capped) — surfaced so a full-listing UI (the Browse
+   *  dialog) can tell the user results are incomplete instead of silently
+   *  omitting entries past the cap. */
+  truncated: boolean;
+}
+
+/** Response from GET /fs/check — path inspection metadata. */
+export interface FsCheckResponse {
+  exists: boolean;
+  isDirectory: boolean;
+  isGit: boolean;
+  /** Whether the repo's HEAD resolves to a commit. Only meaningful when
+   *  `isGit` is true — null otherwise (not a repo, or path doesn't exist). */
+  hasCommits: boolean | null;
 }
