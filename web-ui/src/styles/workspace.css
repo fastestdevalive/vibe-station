@@ -3951,3 +3951,101 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-muted);
   max-width: 40ch;
 }
+
+/* Nested dialog (Folder Chooser opened from within New Agent) — same base
+   z-index as .dialog-overlay, bumped so it reliably paints above the parent
+   dialog's overlay/card regardless of DOM append order. Escape/Tab handling
+   between the two is governed by the openDialogs stack in Dialog.tsx, not by
+   this z-index — this only affects paint order. */
+.dialog-overlay--nested {
+  z-index: 1010;
+}
+
+/* Folder Chooser Dialog */
+.dialog-card--folder-chooser {
+  max-width: 580px;
+  width: min(95vw, 580px);
+  height: min(70vh, 500px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dialog-card--folder-chooser .dialog-card__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.folder-chooser {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: var(--space-3);
+  overflow: hidden;
+}
+.folder-chooser__nav {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.folder-chooser__path-input {
+  flex: 1;
+}
+.folder-chooser__list-container {
+  flex: 1;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  overflow-y: auto;
+  min-height: 200px;
+  outline: none;
+}
+.folder-chooser__list-container:focus-visible {
+  border-color: var(--accent);
+}
+.folder-chooser__status {
+  padding: var(--space-4);
+  color: var(--fg-muted);
+  text-align: center;
+  font-size: var(--font-size-sm);
+}
+.folder-chooser__list {
+  display: flex;
+  flex-direction: column;
+}
+.folder-chooser__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.1s ease;
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+}
+.folder-chooser__item:hover {
+  background: var(--bg-hover);
+}
+.folder-chooser__item--selected {
+  background: var(--bg-active);
+  color: var(--accent);
+}
+.folder-chooser__item-icon {
+  font-size: var(--font-size-md);
+}
+.folder-chooser__truncated-hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+.folder-chooser__selection-hint {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}

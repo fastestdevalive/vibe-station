@@ -1,10 +1,12 @@
 import {
   useEffect,
+  useId,
   useRef,
-  useCallback,
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+
+const openDialogs: (() => void)[] = [];
 
 interface DialogProps {
   open: boolean;
@@ -26,12 +28,18 @@ export function Dialog({
   onClose,
   children,
   footer,
-  ariaLabelledBy = "dialog-title",
+  ariaLabelledBy,
   overlayClassName,
   cardClassName,
 }: DialogProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+  // Per-instance id by default — a hardcoded "dialog-title" would collide
+  // (duplicate DOM id) as soon as two Dialogs are open at once (e.g. the
+  // Folder Chooser nested inside New Agent), which breaks the accessible-name
+  // lookup via aria-labelledby for BOTH dialogs, not just the nested one.
+  const generatedTitleId = useId();
+  const titleId = ariaLabelledBy ?? generatedTitleId;
 
   // Keep the latest `onClose` in a ref so the keydown handler can stay
   // permanently stable. Callers commonly pass a new inline `onClose` on every
@@ -41,36 +49,68 @@ export function Dialog({
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      onCloseRef.current();
-    }
-    if (e.key === "Tab" && cardRef.current) {
-      const focusables = cardRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      );
-      const list = [...focusables].filter((el) => !el.hasAttribute("disabled"));
-      if (list.length === 0) return;
-      const first = list[0];
-      const last = list[list.length - 1];
-      if (!first || !last) return;
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-  }, []);
-
-  // Keydown listener — attached once per open. `handleKeyDown` is stable.
+  // Keydown listener — attached once per open. Restricts handling to the topmost dialog.
   useEffect(() => {
     if (!open) return undefined;
+
+    const closeFn = () => {
+      onCloseRef.current();
+    };
+    openDialogs.push(closeFn);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only respond if this is the topmost dialog in the stack
+      if (openDialogs[openDialogs.length - 1] !== closeFn) {
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeFn();
+      }
+
+      if (e.key === "Tab" && cardRef.current) {
+        const focusables = cardRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        const list = [...focusables].filter((el) => !el.hasAttribute("disabled"));
+        if (list.length === 0) return;
+        const first = list[0];
+        const last = list[list.length - 1];
+        if (!first || !last) return;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, handleKeyDown]);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      const idx = openDialogs.indexOf(closeFn);
+      if (idx !== -1) {
+        openDialogs.splice(idx, 1);
+      }
+    };
+  }, [open]);
+
+  // Focus restore on close
+  useEffect(() => {
+    if (!open) return undefined;
+    const activeElBeforeOpen = document.activeElement as HTMLElement | null;
+    return () => {
+      if (activeElBeforeOpen && typeof activeElBeforeOpen.focus === "function") {
+        setTimeout(() => {
+          activeElBeforeOpen.focus();
+        }, 0);
+      }
+    };
+  }, [open]);
 
   // Auto-focus on open — keyed on `open` ONLY so background re-renders never
   // re-steal focus. Target priority: an explicit [data-autofocus] field, else
@@ -106,12 +146,12 @@ export function Dialog({
         className={cardClassName ? `dialog-card ${cardClassName}` : "dialog-card"}
         role="dialog"
         aria-modal="true"
-        aria-labelledby={ariaLabelledBy}
+        aria-labelledby={titleId}
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="dialog-card__header">
-          <span id={ariaLabelledBy}>{title}</span>
+          <span id={titleId}>{title}</span>
           <button type="button" className="icon-btn" aria-label="Close dialog" onClick={onClose}>
             ×
           </button>
