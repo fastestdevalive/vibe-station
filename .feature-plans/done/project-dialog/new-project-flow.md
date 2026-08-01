@@ -5,7 +5,7 @@
 **Issue:** non-git-projects (enhancement)
 **Branch:** `revisit-projects`
 **Status:** Pending
-**Parent design:** `.feature-plans/wip/non-git-projects.md`
+**Parent design:** `.feature-plans/done/project-dialog/non-git-projects.md`
 
 **Reference files:**
 - Daemon routes: `daemon/src/routes/projects.ts:83-180`

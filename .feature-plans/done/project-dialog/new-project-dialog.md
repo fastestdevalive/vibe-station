@@ -6,7 +6,7 @@
 
 **Branch:** `revisit-projects` (amend the single squashed commit)
 **Status:** Pending
-**Mockup:** `.feature-plans/wip/new-project-dialog-mockup.md` (approved)
+**Mockup:** `.feature-plans/done/project-dialog/new-project-dialog-mockup.md` (approved)
 
 ---
 
