@@ -33,6 +33,21 @@ export async function isGitRepo(dir: string): Promise<boolean> {
 }
 
 /**
+ * Returns true if `dir`'s HEAD resolves to a commit, i.e. the repo has at
+ * least one commit. Used to describe accurately what `project-setup.sh` will
+ * do to an already-git directory: it runs `git add -A && git commit` whenever
+ * HEAD doesn't resolve, even if the directory is already a repo.
+ */
+export async function hasCommits(dir: string): Promise<boolean> {
+  try {
+    await runGit(["-C", dir, "rev-parse", "--verify", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Detect the default branch for a repo using the fallback chain from
  * HIGH-LEVEL-DESIGN.md §5:
  * 1. git symbolic-ref refs/remotes/origin/HEAD

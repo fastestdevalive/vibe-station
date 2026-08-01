@@ -12,6 +12,7 @@ import type {
   CreateSessionBody,
   CreateWorktreeBody,
   FileScope,
+  FsCheckResponse,
   FsCompleteResponse,
   HealthResponse,
   Mode,
@@ -606,6 +607,13 @@ export function createClientApi() {
       const q = new URLSearchParams({ path });
       const res = await apiFetch(`${root}/fs/complete?${q}`);
       return parseJson<FsCompleteResponse>(res);
+    },
+
+    async checkFsPath(path: string): Promise<FsCheckResponse> {
+      const root = baseUrl();
+      const q = new URLSearchParams({ path });
+      const res = await apiFetch(`${root}/fs/check?${q}`);
+      return parseJson<FsCheckResponse>(res);
     },
 
     async send(message: {

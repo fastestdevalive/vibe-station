@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useId } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useId, Fragment } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
 import type { CreateProjectBody, Mode, Project, Settings, SupportedCli } from "@/api/types";
@@ -8,6 +8,8 @@ import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
+import { FolderChooserDialog } from "./FolderChooserDialog";
+import { useDirSuggestions } from "@/hooks/useDirSuggestions";
 
 interface NewAgentDialogProps {
   open: boolean;
@@ -22,9 +24,8 @@ type Mode_ = "search" | "create" | "add-path" | "existing";
 type ProjectRow =
   | { kind: "create" }
   | { kind: "add-path" }
+  | { kind: "path-suggestion"; entry: { name: string; path: string } }
   | { kind: "existing"; project: Project };
-
-const DIR_DEBOUNCE_MS = 150;
 
 function isAbsoluteQuery(q: string): boolean {
   return q.startsWith("/") || q === "~" || q.startsWith("~/");
@@ -38,9 +39,27 @@ function expandHome(p: string, home: string): string {
   return p;
 }
 
+/**
+ * Canonical form used for every "is this path already a project?" comparison:
+ * `~` expanded and trailing separators stripped, so `~/foo`, `/home/me/foo` and
+ * `/home/me/foo/` all resolve to the one string that project.path is stored as.
+ */
+function normalizePath(p: string, home: string): string {
+  return expandHome(p.trim(), home).replace(/\/+$/, "");
+}
+
 function matchesQuery(p: Project, q: string): boolean {
   if (!q) return true;
-  const needle = q.toLowerCase();
+  // Strip a trailing separator before matching. Selecting a path-suggestion
+  // (or an entry from the Browse dialog) always appends a trailing "/" to
+  // the query (R4-style — it lists that directory's children next) — without
+  // stripping it here, a query of "/reg/path/" would fail to substring-match
+  // a registered project's path "/reg/path" (no trailing slash), leaving the
+  // popup with zero rows: no add-path row (alreadyRegistered — which DOES
+  // strip trailing slashes — suppresses it) and no matching existing-project
+  // row either. A real dead end, not just a cosmetic miss.
+  const stripped = q.replace(/\/+$/, "");
+  const needle = (stripped || q).toLowerCase();
   return (
     p.name.toLowerCase().includes(needle) ||
     p.id.toLowerCase().includes(needle) ||
@@ -131,17 +150,27 @@ export function NewAgentDialog({
   const [popupOpen, setPopupOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const projectWrapperRef = useRef<HTMLDivElement>(null);
+  const pathSuggs = useDirSuggestions(api);
+  const [dirChooserOpen, setDirChooserOpen] = useState(false);
 
   // ── Directory combobox state (create mode only) ─────────────────────────
   const [parentDir, setParentDir] = useState("");
   const [defaultProjectsDir, setDefaultProjectsDir] = useState("");
   const [homeDir, setHomeDir] = useState("");
-  const [dirEntries, setDirEntries] = useState<{ name: string; path: string }[]>([]);
+  const parentDirSuggs = useDirSuggestions(api);
   const [dirPopupOpen, setDirPopupOpen] = useState(false);
   const [dirActiveIndex, setDirActiveIndex] = useState(0);
   const dirWrapperRef = useRef<HTMLDivElement>(null);
-  const dirReqIdRef = useRef(0);
-  const dirDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Git status check state ──────────────────────────────────────────────
+  const [isGitFolder, setIsGitFolder] = useState<boolean | null>(null);
+  // Only meaningful when isGitFolder === true. project-setup.sh makes an
+  // initial commit of the whole directory when HEAD doesn't resolve, so the
+  // hint copy needs this to describe accurately what submitting will do.
+  const [hasCommits, setHasCommits] = useState<boolean | null>(null);
+  const [checkingGit, setCheckingGit] = useState(false);
+  const checkGitReqIdRef = useRef(0);
+  const checkGitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Agent section — always visible once a project source is chosen ─────
   const [useWorktree, setUseWorktree] = useState(false);
@@ -231,7 +260,7 @@ export function NewAgentDialog({
       setParentDir(defaultProjectsDir);
       return;
     }
-    if (parentDir) scheduleDirFetch(parentDir);
+    if (parentDir) parentDirSuggs.scheduleFetch(parentDir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -292,7 +321,6 @@ export function NewAgentDialog({
     setPopupOpen(false);
     setActiveIndex(0);
     setParentDir("");
-    setDirEntries([]);
     setDirPopupOpen(false);
     setDirActiveIndex(0);
     setUseWorktree(false);
@@ -305,6 +333,11 @@ export function NewAgentDialog({
     setFiles([]);
     setError(null);
     setSubmitting(false);
+    pathSuggs.reset();
+    parentDirSuggs.reset();
+    setIsGitFolder(null);
+    setHasCommits(null);
+    setCheckingGit(false);
   }
 
   function handleClose() {
@@ -338,23 +371,86 @@ export function NewAgentDialog({
   // Cleanup the debounce timer on unmount.
   useEffect(() => {
     return () => {
-      if (dirDebounceRef.current) clearTimeout(dirDebounceRef.current);
+      if (checkGitDebounceRef.current) clearTimeout(checkGitDebounceRef.current);
     };
   }, []);
 
   // ── Project combobox rows ────────────────────────────────────────────────
   const trimmedQuery = query.trim();
-  const alreadyRegistered = useMemo(() => {
-    // Expand `~` and strip a trailing slash so `~/foo`, `/home/me/foo` and
-    // `/home/me/foo/` all match an already-registered project's absolute path.
-    const expanded = expandHome(trimmedQuery, homeDir).replace(/\/+$/, "");
-    return projects.some((p) => p.path === expanded);
-  }, [projects, trimmedQuery, homeDir]);
+  /**
+   * Resolve a path to the project already registered at it, if any. The single
+   * source of truth for that question — the add-path row, the auto-adopt effect
+   * and `adoptPath` all go through here so they can never disagree about
+   * whether a directory is "new".
+   */
+  const findRegisteredProject = useCallback(
+    (path: string): Project | null => {
+      const norm = normalizePath(path, homeDir);
+      if (!norm) return null;
+      return projects.find((p) => p.path === norm) ?? null;
+    },
+    [projects, homeDir],
+  );
+  const alreadyRegistered = useMemo(
+    () => findRegisteredProject(trimmedQuery) !== null,
+    [findRegisteredProject, trimmedQuery],
+  );
   const showAddPathRow = isAbsoluteQuery(trimmedQuery) && !alreadyRegistered;
   // Suppress the leading create/add-path row when the typed query is an absolute
   // path that's already a registered project — that project shows in the list
   // instead (matchesQuery matches on path), avoiding a dead-end "create" row.
   const showLeadingRow = !(isAbsoluteQuery(trimmedQuery) && alreadyRegistered);
+
+  // Debounced check for whether the typed path is already a Git repository
+  // (and whether it has any commits). Keyed on `showAddPathRow && trimmedQuery`
+  // rather than "mode === add-path && query changes" — once mode is add-path,
+  // any edit snaps it back to "search" (R5 in handleQueryChange), so the query
+  // can never change while add-path mode is active and that trigger would be
+  // dead code. Firing while the row is merely offered means the subtitle can
+  // reflect git status too, but it now runs on every keystroke, hence the
+  // debounce + request-id guard below (mirrors fetchDirSuggestions).
+  useEffect(() => {
+    if (!showAddPathRow || !trimmedQuery) {
+      setIsGitFolder(null);
+      setHasCommits(null);
+      setCheckingGit(false);
+      return;
+    }
+
+    let cancelled = false;
+    const reqId = ++checkGitReqIdRef.current;
+
+    if (checkGitDebounceRef.current) clearTimeout(checkGitDebounceRef.current);
+    checkGitDebounceRef.current = setTimeout(async () => {
+      setCheckingGit(true);
+      try {
+        const expanded = expandHome(trimmedQuery, homeDir);
+        const res = await api.checkFsPath(expanded);
+        if (reqId !== checkGitReqIdRef.current || cancelled) return;
+        if (res.exists && res.isDirectory) {
+          setIsGitFolder(res.isGit);
+          setHasCommits(res.isGit ? res.hasCommits : null);
+        } else {
+          setIsGitFolder(null);
+          setHasCommits(null);
+        }
+      } catch {
+        if (reqId !== checkGitReqIdRef.current || cancelled) return;
+        setIsGitFolder(null);
+        setHasCommits(null);
+      } finally {
+        if (reqId === checkGitReqIdRef.current && !cancelled) {
+          setCheckingGit(false);
+        }
+      }
+    }, 250); // ≥250ms — /fs/check shells out to git; avoid a spawn per keystroke
+
+    return () => {
+      cancelled = true;
+      if (checkGitDebounceRef.current) clearTimeout(checkGitDebounceRef.current);
+    };
+  }, [showAddPathRow, trimmedQuery, homeDir, api]);
+
   const filteredProjects = useMemo(
     () => projects.filter((p) => matchesQuery(p, trimmedQuery)),
     [projects, trimmedQuery],
@@ -365,17 +461,82 @@ export function NewAgentDialog({
     // slash-containing query can't be a valid project name anyway.
     const list: ProjectRow[] = [];
     if (showLeadingRow) {
-      list.push(showAddPathRow ? { kind: "add-path" } : { kind: "create" });
+      if (showAddPathRow) {
+        list.push({ kind: "add-path" });
+        for (const entry of pathSuggs.suggestions) {
+          list.push({ kind: "path-suggestion", entry });
+        }
+      } else {
+        list.push({ kind: "create" });
+      }
     }
     for (const p of filteredProjects) list.push({ kind: "existing", project: p });
     return list;
-  }, [showLeadingRow, showAddPathRow, filteredProjects]);
+  }, [showLeadingRow, showAddPathRow, pathSuggs.suggestions, filteredProjects]);
 
   useEffect(() => {
     setActiveIndex((i) => Math.min(i, rows.length - 1));
   }, [rows.length]);
 
+  /**
+   * Commit to a directory, whatever route the user took to pick it (the
+   * add-existing row, the Browse chooser, or a stale add-path mode). The choice
+   * of flow is derived from the path itself, never from which control was
+   * clicked: a directory that is already a registered project adopts that
+   * project — chip, real project name, its branch list — instead of offering to
+   * register it a second time (which the daemon would 409 anyway).
+   */
+  function adoptPath(rawPath: string) {
+    setError(null);
+    setBranch("feature");
+    setPopupOpen(false);
+    setActiveIndex(0);
+
+    const existing = findRegisteredProject(rawPath);
+    if (existing) {
+      setMode("existing");
+      setSelectedProject(existing);
+      // A non-git project can't have a worktree; a git one defaults to it.
+      setUseWorktree(existing.isGit === true);
+      return;
+    }
+
+    setMode("add-path");
+    setSelectedProject(null);
+    setUseWorktree(false);
+    const trimmed = rawPath.trim();
+    // Drop a trailing separator so the value matches what gets registered, but
+    // never blank out a bare "/".
+    setQuery(trimmed.replace(/\/+$/, "") || trimmed);
+  }
+
+  /**
+   * Safety net for the same rule: if we're sitting in add-path mode for a path
+   * that turns out to be a registered project, correct to existing mode. This
+   * catches the race where `listProjects()` hadn't resolved yet when the user
+   * clicked "Add existing directory" — without it, submitting 409s with
+   * "already registered" and dead-ends the dialog.
+   */
+  useEffect(() => {
+    if (mode !== "add-path") return;
+    const existing = findRegisteredProject(trimmedQuery);
+    if (!existing) return;
+    setMode("existing");
+    setSelectedProject(existing);
+    setUseWorktree(existing.isGit === true);
+    setBranch("feature");
+    setError(null);
+  }, [mode, trimmedQuery, findRegisteredProject]);
+
   function selectProjectRow(row: ProjectRow) {
+    if (row.kind === "path-suggestion") {
+      const pathWithTrailingSep = row.entry.path.endsWith("/") ? row.entry.path : row.entry.path + "/";
+      setQuery(pathWithTrailingSep);
+      pathSuggs.fetchSuggestions(pathWithTrailingSep);
+      setActiveIndex(0);
+      return;
+    }
+
     setError(null);
     setBranch("feature");
     // Default worktree OFF; only an existing git repo flips it on below. Setting
@@ -386,8 +547,9 @@ export function NewAgentDialog({
       setMode("create");
       setQuery(trimmedQuery);
     } else if (row.kind === "add-path") {
-      setMode("add-path");
-      setQuery(trimmedQuery);
+      // Routed through adoptPath so the path decides the flow, not the row.
+      adoptPath(trimmedQuery);
+      return;
     } else {
       setMode("existing");
       setSelectedProject(row.project);
@@ -404,6 +566,12 @@ export function NewAgentDialog({
     if (mode !== "search") setMode("search");
     setPopupOpen(true);
     setActiveIndex(0);
+    const trimmed = value.trim();
+    if (isAbsoluteQuery(trimmed)) {
+      pathSuggs.scheduleFetch(trimmed);
+    } else {
+      pathSuggs.reset();
+    }
   }
 
   function clearSelection() {
@@ -447,45 +615,26 @@ export function NewAgentDialog({
   }
 
   // ── Directory combobox ───────────────────────────────────────────────────
-  function scheduleDirFetch(path: string) {
-    if (dirDebounceRef.current) clearTimeout(dirDebounceRef.current);
-    dirDebounceRef.current = setTimeout(() => {
-      void fetchDirSuggestions(path);
-    }, DIR_DEBOUNCE_MS);
-  }
-
-  async function fetchDirSuggestions(path: string) {
-    const reqId = ++dirReqIdRef.current;
-    try {
-      const res = await api.fsComplete(path);
-      if (reqId !== dirReqIdRef.current) return; // stale response — a newer request superseded it
-      setDirEntries(res.entries);
-      setDirActiveIndex(0);
-    } catch {
-      if (reqId !== dirReqIdRef.current) return;
-      setDirEntries([]);
-    }
-  }
-
   function handleParentDirChange(value: string) {
     setParentDir(value);
     setDirPopupOpen(true);
     if (value.trim()) {
-      scheduleDirFetch(value);
+      parentDirSuggs.scheduleFetch(value);
     } else {
-      setDirEntries([]);
+      parentDirSuggs.reset();
     }
   }
 
   function selectDirEntry(path: string) {
     setParentDir(path);
     setDirPopupOpen(false);
-    scheduleDirFetch(path);
+    parentDirSuggs.scheduleFetch(path);
   }
 
   function handleDirKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (!dirPopupOpen || dirEntries.length === 0) {
-      if (e.key === "ArrowDown" && dirEntries.length > 0) {
+    const suggestions = parentDirSuggs.suggestions;
+    if (!dirPopupOpen || suggestions.length === 0) {
+      if (e.key === "ArrowDown" && suggestions.length > 0) {
         setDirPopupOpen(true);
         e.preventDefault();
       }
@@ -494,7 +643,7 @@ export function NewAgentDialog({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        setDirActiveIndex((i) => Math.min(i + 1, dirEntries.length - 1));
+        setDirActiveIndex((i) => Math.min(i + 1, suggestions.length - 1));
         break;
       case "ArrowUp":
         e.preventDefault();
@@ -503,7 +652,7 @@ export function NewAgentDialog({
       case "Enter": {
         e.preventDefault();
         e.nativeEvent.stopImmediatePropagation();
-        const entry = dirEntries[dirActiveIndex];
+        const entry = suggestions[dirActiveIndex];
         if (entry) selectDirEntry(entry.path);
         break;
       }
@@ -864,7 +1013,48 @@ export function NewAgentDialog({
   const activeDescendant =
     popupOpen && rows[activeIndex] ? `${projectListboxId}-${activeIndex}` : undefined;
   const dirActiveDescendant =
-    dirPopupOpen && dirEntries[dirActiveIndex] ? `${dirListboxId}-${dirActiveIndex}` : undefined;
+    dirPopupOpen && parentDirSuggs.suggestions[dirActiveIndex]
+      ? `${dirListboxId}-${dirActiveIndex}`
+      : undefined;
+
+  // Copy for the "Add existing directory" row's subtitle and the form hint
+  // below the input. Must match what submitAddPath's setup:true actually runs
+  // (project-setup.sh — see daemon/src/assets/project-setup.sh): it inits git
+  // + writes a .gitignore (only if absent) when the dir isn't a repo, but ALSO
+  // makes an initial commit of the whole directory whenever HEAD doesn't
+  // resolve — including for an already-git dir that just has no commits yet.
+  const addPathGitCopy = (() => {
+    if (checkingGit) {
+      return { subtitle: "Checking directory git status…", hint: "Checking directory git status…" };
+    }
+    if (isGitFolder === true) {
+      if (hasCommits === false) {
+        return {
+          subtitle: "Git repository detected (no commits yet)",
+          hint:
+            "ⓘ Registers this directory as a project. It’s already a git repository with no commits " +
+            "yet, so an initial commit of its current contents will be made.",
+        };
+      }
+      return {
+        subtitle: "Git repository detected",
+        hint: "ⓘ Registers this directory as a project (git repository detected).",
+      };
+    }
+    if (isGitFolder === false) {
+      return {
+        subtitle: "Not yet a vibe-station project (will initialize git)",
+        hint:
+          "ⓘ Registers this directory, runs git init, adds a .gitignore, and makes an initial " +
+          "commit of the directory's current contents.",
+      };
+    }
+    // null — not yet checked, or the check failed. Generic fallback copy.
+    return {
+      subtitle: "not yet a vibe-station project",
+      hint: "ⓘ Registers this directory and sets up git (init + .gitignore) if not already present.",
+    };
+  })();
 
   return (
     <Dialog
@@ -893,131 +1083,183 @@ export function NewAgentDialog({
         {/* Project combobox */}
         <div className="form-field">
           <label htmlFor={projectFieldId}>Project</label>
-          <div className="combobox-wrapper" ref={projectWrapperRef}>
-            {mode === "existing" && selectedProject ? (
-              <div className="project-chip">
-                <span className="project-chip__icon" aria-hidden>◧</span>
-                <span className="project-chip__name">{selectedProject.name}</span>
-                <button
-                  type="button"
-                  className="project-chip__remove"
-                  aria-label="Clear selected project"
-                  onClick={clearSelection}
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <Input
-                id={projectFieldId}
-                type="text"
-                role="combobox"
-                aria-expanded={popupOpen}
-                aria-controls={projectListboxId}
-                aria-activedescendant={activeDescendant}
-                autoComplete="off"
-                placeholder="Search projects or type a new name…"
-                value={query}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                onFocus={() => {
-                  // Only auto-open on focus while still searching — in
-                  // create/add-path mode the popup reopens on edit (R5), not
-                  // on a mere click to reposition the cursor.
-                  if (mode === "search") setPopupOpen(true);
-                }}
-                onKeyDown={handleProjectKeyDown}
-                autoFocus
-              />
+          <div style={{ display: "flex", gap: "var(--space-2)", width: "100%" }}>
+            <div className="combobox-wrapper" ref={projectWrapperRef} style={{ flex: 1 }}>
+              {mode === "existing" && selectedProject ? (
+                <div className="project-chip">
+                  <span className="project-chip__icon" aria-hidden>◧</span>
+                  <span className="project-chip__name">{selectedProject.name}</span>
+                  <button
+                    type="button"
+                    className="project-chip__remove"
+                    aria-label="Clear selected project"
+                    onClick={clearSelection}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <Input
+                  id={projectFieldId}
+                  type="text"
+                  role="combobox"
+                  aria-expanded={popupOpen}
+                  aria-controls={projectListboxId}
+                  aria-activedescendant={activeDescendant}
+                  autoComplete="off"
+                  placeholder="Search projects or type a new name…"
+                  value={query}
+                  onChange={(e) => handleQueryChange(e.target.value)}
+                  onFocus={() => {
+                    // Only auto-open on focus while still searching — in
+                    // create/add-path mode the popup reopens on edit (R5), not
+                    // on a mere click to reposition the cursor.
+                    if (mode === "search") setPopupOpen(true);
+                  }}
+                  onKeyDown={handleProjectKeyDown}
+                  autoFocus
+                />
+              )}
+
+              {popupOpen && mode !== "existing" ? (
+                <div className="combobox-popup" role="listbox" id={projectListboxId}>
+                  {rows.map((row, idx) => {
+                    const prevRow = rows[idx - 1];
+                    const showSuggestionsHeader = row.kind === "path-suggestion" && prevRow?.kind !== "path-suggestion";
+                    const showExistingHeader = row.kind === "existing" && prevRow?.kind !== "existing";
+                    const key = row.kind === "existing"
+                      ? row.project.id
+                      : row.kind === "path-suggestion"
+                        ? `suggest-${row.entry.path}`
+                        : row.kind;
+
+                    return (
+                      <Fragment key={key}>
+                        {showSuggestionsHeader && (
+                          <div className="combobox-popup__group-label" role="presentation">
+                            SUGGESTED DIRECTORIES
+                          </div>
+                        )}
+                        {showExistingHeader && (
+                          <div className="combobox-popup__group-label" role="presentation">
+                            USE EXISTING{trimmedQuery ? ` (${filteredProjects.length})` : ""}
+                          </div>
+                        )}
+
+                        {row.kind === "add-path" && (
+                          <button
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            id={`${projectListboxId}-${idx}`}
+                            aria-selected={activeIndex === idx}
+                            className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectProjectRow(row);
+                            }}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                          >
+                            <span className="combobox-option__title">
+                              <span aria-hidden>＋</span>
+                              {`Add existing directory "${trimmedQuery}"`}
+                            </span>
+                            <span className="combobox-option__subtitle">
+                              {addPathGitCopy.subtitle}
+                            </span>
+                          </button>
+                        )}
+
+                        {row.kind === "create" && (
+                          <button
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            id={`${projectListboxId}-${idx}`}
+                            aria-selected={activeIndex === idx}
+                            className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectProjectRow(row);
+                            }}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                          >
+                            <span className="combobox-option__title">
+                              <span aria-hidden>✦</span>
+                              {trimmedQuery ? `Create new project "${trimmedQuery}"` : "Create new project"}
+                            </span>
+                            <span className="combobox-option__subtitle">
+                              {trimmedQuery
+                                ? `Creates ${dirDisplay}/${trimmedQuery}`
+                                : "Start typing a name…"}
+                            </span>
+                          </button>
+                        )}
+
+                        {row.kind === "path-suggestion" && (
+                          <button
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            id={`${projectListboxId}-${idx}`}
+                            aria-selected={activeIndex === idx}
+                            className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectProjectRow(row);
+                            }}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                          >
+                            <span className="combobox-option__title">
+                              <span aria-hidden>📁</span>
+                              {row.entry.path}
+                            </span>
+                          </button>
+                        )}
+
+                        {row.kind === "existing" && (
+                          <button
+                            type="button"
+                            role="option"
+                            tabIndex={-1}
+                            id={`${projectListboxId}-${idx}`}
+                            aria-selected={activeIndex === idx}
+                            className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectProjectRow(row);
+                            }}
+                            onMouseEnter={() => setActiveIndex(idx)}
+                          >
+                            <span className="combobox-option__title">
+                              <span aria-hidden>▸</span>
+                              {row.project.name}
+                            </span>
+                            <span className="combobox-option__subtitle">{row.project.path}</span>
+                          </button>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+            {(!selectedProject) && (
+              <button
+                type="button"
+                className="btn btn--secondary"
+                onClick={() => setDirChooserOpen(true)}
+                style={{ whiteSpace: "nowrap" }}
+              >
+                📁 Browse
+              </button>
             )}
-
-            {popupOpen && mode !== "existing" ? (
-              <div className="combobox-popup" role="listbox" id={projectListboxId}>
-                {showLeadingRow && showAddPathRow ? (
-                  <button
-                    type="button"
-                    role="option"
-                    tabIndex={-1}
-                    id={`${projectListboxId}-0`}
-                    aria-selected={activeIndex === 0}
-                    className={`combobox-option${activeIndex === 0 ? " combobox-option--active" : ""}`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      selectProjectRow({ kind: "add-path" });
-                    }}
-                    onMouseEnter={() => setActiveIndex(0)}
-                  >
-                    <span className="combobox-option__title">
-                      <span aria-hidden>＋</span>
-                      {`Add existing directory "${trimmedQuery}"`}
-                    </span>
-                    <span className="combobox-option__subtitle">not yet a vibe-station project</span>
-                  </button>
-                ) : showLeadingRow ? (
-                  <button
-                    type="button"
-                    role="option"
-                    tabIndex={-1}
-                    id={`${projectListboxId}-0`}
-                    aria-selected={activeIndex === 0}
-                    className={`combobox-option${activeIndex === 0 ? " combobox-option--active" : ""}`}
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      selectProjectRow({ kind: "create" });
-                    }}
-                    onMouseEnter={() => setActiveIndex(0)}
-                  >
-                    <span className="combobox-option__title">
-                      <span aria-hidden>✦</span>
-                      {trimmedQuery ? `Create new project "${trimmedQuery}"` : "Create new project"}
-                    </span>
-                    <span className="combobox-option__subtitle">
-                      {trimmedQuery
-                        ? `Creates ${dirDisplay}/${trimmedQuery}`
-                        : "Start typing a name…"}
-                    </span>
-                  </button>
-                ) : null}
-
-                {filteredProjects.length > 0 ? (
-                  <div className="combobox-popup__group-label" role="presentation">
-                    USE EXISTING{trimmedQuery ? ` (${filteredProjects.length})` : ""}
-                  </div>
-                ) : null}
-                {filteredProjects.map((p, i) => {
-                  const idx = showLeadingRow ? i + 1 : i;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      role="option"
-                      tabIndex={-1}
-                      id={`${projectListboxId}-${idx}`}
-                      aria-selected={activeIndex === idx}
-                      className={`combobox-option${activeIndex === idx ? " combobox-option--active" : ""}`}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        selectProjectRow({ kind: "existing", project: p });
-                      }}
-                      onMouseEnter={() => setActiveIndex(idx)}
-                    >
-                      <span className="combobox-option__title">
-                        <span aria-hidden>▸</span>
-                        {p.name}
-                      </span>
-                      <span className="combobox-option__subtitle">{p.path}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
           </div>
           {mode === "existing" && selectedProject ? (
             <div className="form-hint">Using existing project at {selectedProject.path}</div>
           ) : null}
           {mode === "add-path" ? (
-            <div className="form-hint">
-              ⓘ Registers this directory and sets up git (init + .gitignore) if not already present.
-            </div>
+            <div className="form-hint">{addPathGitCopy.hint}</div>
           ) : null}
           {mode === "create" && !createNameValid ? (
             <div className="field-error">{validateProjectName(trimmedQuery)}</div>
@@ -1041,13 +1283,13 @@ export function NewAgentDialog({
                 value={parentDir}
                 onChange={(e) => handleParentDirChange(e.target.value)}
                 onFocus={() => {
-                  if (dirEntries.length > 0) setDirPopupOpen(true);
+                  if (parentDirSuggs.suggestions.length > 0) setDirPopupOpen(true);
                 }}
                 onKeyDown={handleDirKeyDown}
               />
-              {dirPopupOpen && dirEntries.length > 0 ? (
+              {dirPopupOpen && parentDirSuggs.suggestions.length > 0 ? (
                 <div className="combobox-popup" role="listbox" id={dirListboxId}>
-                  {dirEntries.map((entry, i) => (
+                  {parentDirSuggs.suggestions.map((entry, i) => (
                     <button
                       key={entry.path}
                       type="button"
@@ -1233,6 +1475,18 @@ export function NewAgentDialog({
 
         {error && <div className="dialog-error">{error}</div>}
       </div>
+      <FolderChooserDialog
+        open={dirChooserOpen}
+        onClose={() => setDirChooserOpen(false)}
+        // "Select Folder" is an explicit commit, so resolve it the same way the
+        // add-existing row does: adopt the registered project if there is one,
+        // otherwise drop into add-path with the git-aware hint. Previously this
+        // only set the query and left the dialog in search mode with the popup
+        // open — Continue stayed disabled and the user had to pick a row again.
+        onSelect={(path) => adoptPath(path)}
+        api={api}
+        initialPath={query || defaultProjectsDir || "/"}
+      />
     </Dialog>
   );
 }

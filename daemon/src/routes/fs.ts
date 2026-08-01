@@ -1,16 +1,22 @@
 /**
- * Filesystem autocomplete route — GET /fs/complete
+ * Filesystem routes — GET /fs/complete and GET /fs/check
  *
- * Backs the New Project dialog's "Directory" combobox with live filesystem
- * suggestions. Read-only, directories-only, capped, and defensive: the
- * daemon binds to 127.0.0.1 and is auth-gated, but this endpoint browses the
- * host filesystem so it stays conservative about what it exposes.
+ * `/fs/complete` backs the directory comboboxes and the Browse dialog with live
+ * filesystem suggestions. `/fs/check` reports whether a path exists, is a
+ * directory, is a git repo, and has any commits, so the New Agent dialog can
+ * describe accurately what registering it will do.
+ *
+ * Both are read-only, directories-only, capped, and defensive: the daemon binds
+ * to 127.0.0.1 and is auth-gated, but these endpoints browse the host
+ * filesystem so they stay conservative about what they expose. Neither ever
+ * 500s on an unreadable or half-typed path.
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
+import { hasCommits, isGitRepo } from "../services/git.js";
 
 const MAX_ENTRIES = 50;
 
@@ -35,6 +41,41 @@ function expandTilde(input: string): string {
 }
 
 export function registerFsRoutes(app: FastifyInstance): void {
+  // GET /fs/check?path=<path>
+  app.get("/fs/check", async (req, reply) => {
+    const result = QuerySchema.safeParse(req.query);
+    if (!result.success) {
+      return reply.status(400).send({ error: "Validation error", details: result.error.issues });
+    }
+    const { path: rawPath } = result.data;
+
+    if (rawPath.includes("\0")) {
+      return reply.status(400).send({ error: "Path cannot contain a null byte." });
+    }
+
+    const resolved = expandTilde(rawPath);
+    if (!isAbsolute(resolved)) {
+      return reply.status(400).send({ error: `Path must be absolute (or start with ~). Got: '${rawPath}'` });
+    }
+
+    try {
+      const stats = await stat(resolved);
+      const isDirectory = stats.isDirectory();
+      if (!isDirectory) {
+        return reply.send({ exists: true, isDirectory: false, isGit: false, hasCommits: null });
+      }
+      const isGit = await isGitRepo(resolved);
+      // Only meaningful for a git dir — project-setup.sh makes an initial
+      // commit of the whole directory whenever HEAD doesn't resolve, even for
+      // an already-git dir, so callers need this to describe setup accurately.
+      const commits = isGit ? await hasCommits(resolved) : null;
+      return reply.send({ exists: true, isDirectory: true, isGit, hasCommits: commits });
+    } catch {
+      // ENOENT/EACCES/etc — user is mid-typing or path doesn't exist. Never 500.
+      return reply.send({ exists: false, isDirectory: false, isGit: false, hasCommits: null });
+    }
+  });
+
   // GET /fs/complete?path=<partial>
   app.get("/fs/complete", async (req, reply) => {
     const result = QuerySchema.safeParse(req.query);
@@ -70,15 +111,30 @@ export function registerFsRoutes(app: FastifyInstance): void {
       dirents = await readdir(dir, { withFileTypes: true });
     } catch {
       // ENOENT/EACCES/etc — user is mid-typing, never 500.
-      return reply.send({ base: dir, entries: [] });
+      return reply.send({ base: dir, entries: [], truncated: false });
     }
 
-    // Cap BEFORE statting symlink dirents so a huge directory can't trigger
-    // thousands of stat() calls — take the first N matching-by-name dirents,
-    // then resolve which of those are actually directories.
-    const candidates = dirents
+    // Sort by name BEFORE capping, then cap. Sorting the (name-)filtered list
+    // is cheap (string compares only, no stat() calls) — it just needs to
+    // happen before slice() so the cap keeps the alphabetically-first N
+    // entries rather than an arbitrary readdir-order N. Capping before sort
+    // (the original approach) is fine for narrow prefix-matched type-ahead
+    // (rarely >50 matches) but actively misleading for a full directory
+    // listing (empty prefix) in the Browse dialog — e.g. `/usr/lib` could
+    // silently omit the very folder the user is looking for.
+    // Only directory-ish dirents count toward the cap and toward `truncated`.
+    // Filtering on the name alone would let plain files inflate the count: a
+    // directory holding 60 files and 2 subdirs would report truncated:true
+    // while omitting nothing, and the UI would show a "showing the first 50"
+    // warning over a two-item list. Symlinks are kept as candidates because
+    // only a stat() can say whether they point at a directory — and that stat
+    // stays bounded by the cap below, which is why the cap exists.
+    const filtered = dirents
       .filter((d) => prefix === "" || d.name.startsWith(prefix))
-      .slice(0, MAX_ENTRIES);
+      .filter((d) => d.isDirectory() || d.isSymbolicLink())
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const truncated = filtered.length > MAX_ENTRIES;
+    const candidates = filtered.slice(0, MAX_ENTRIES);
 
     const entries: { name: string; path: string }[] = [];
     for (const d of candidates) {
@@ -95,8 +151,6 @@ export function registerFsRoutes(app: FastifyInstance): void {
       }
     }
 
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-
-    return reply.send({ base: dir, entries });
+    return reply.send({ base: dir, entries, truncated });
   });
 }
