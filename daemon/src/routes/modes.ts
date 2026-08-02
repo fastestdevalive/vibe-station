@@ -1,6 +1,6 @@
 /**
  * Mode routes — CRUD for agent modes.
- * Stored in ~/.vibe-station/modes.json (max 10 modes).
+ * Stored in ~/.vibe-station/modes.json (max 20 modes).
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -17,7 +17,7 @@ import {
 } from "../agent-plugins/registry.js";
 import { hasNativeHistoryImporter } from "../services/nativeHistoryImporter.js";
 
-const MAX_MODES = 10;
+const MAX_MODES = 20;
 
 const CLI_ENUM_TUPLE = SUPPORTED_CLIS as [CliId, ...CliId[]];
 const cliIdSchema = z.enum(CLI_ENUM_TUPLE);
