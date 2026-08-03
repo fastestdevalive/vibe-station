@@ -58,6 +58,9 @@ export class WSConnection {
    * exceeds ~1MB, close with code 1009.
    */
   send(msg: ServerMessage): void {
+    if (this.ws.readyState !== 1) { // 1 is WebSocket.OPEN
+      return;
+    }
     const json = JSON.stringify(msg);
     const bufferSize = this.ws.bufferedAmount || 0;
 
