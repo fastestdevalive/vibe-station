@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Info, Pencil, Trash2 } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Mode } from "@/api/types";
-import { ApiError } from "@/api/errors";
 import { Button } from "@/components/ui/Button";
 import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
@@ -18,6 +17,10 @@ export function ModesSetting({ api }: ModesSettingProps) {
   const [editing, setEditing] = useState<Mode | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<{ id: string; msg: string } | null>(null);
+  // Transient banner shown after deleting a mode that active sessions reference —
+  // the mode's own row disappears immediately (mode:deleted removes it from
+  // `modes`), so this can't be shown inline per-row.
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const list = await api.listModes();
@@ -52,15 +55,28 @@ export function ModesSetting({ api }: ModesSettingProps) {
 
   async function confirmDelete(id: string) {
     setDeleteError(null);
+    // Clear any notice from a previous delete so a failed delete doesn't show
+    // stale "mode deleted" text alongside the new error.
+    setDeleteNotice(null);
     try {
-      await api.deleteMode(id);
+      const result = await api.deleteMode(id);
       setPendingDeleteId(null);
+      // Deleting an in-use mode is allowed — active sessions keep running with
+      // their original settings; only a later resume/restart falls back to
+      // defaults if the mode is gone by then. Let the user know when that
+      // applies to them.
+      if (result.affectedSessions > 0) {
+        const plural = result.affectedSessions === 1 ? "session" : "sessions";
+        setDeleteNotice(
+          `Mode deleted. ${result.affectedSessions} active ${plural} using it will keep running as-is; if one of them restarts later, it'll fall back to default settings.`,
+        );
+      } else {
+        setDeleteNotice(null);
+      }
     } catch (e) {
       // Always reset pending state so the row shows Edit/Delete again (not a stuck "Delete?")
       setPendingDeleteId(null);
-      const msg = e instanceof ApiError && e.status === 409
-        ? "This mode is being used by an active session. Stop the session first."
-        : (e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
       setDeleteError({ id, msg });
     }
   }
@@ -86,9 +102,37 @@ export function ModesSetting({ api }: ModesSettingProps) {
         <Info size={14} style={{ marginTop: 2, flexShrink: 0, color: "var(--fg-muted)" }} />
         <span style={{ fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5 }}>
           Editing a mode only affects new sessions — running sessions continue with their original
-          settings.
+          settings. Deleting a mode is allowed even if sessions are using it.
         </span>
       </div>
+
+      {deleteNotice && (
+        <div
+          style={{
+            display: "flex",
+            gap: "var(--space-2)",
+            padding: "var(--space-3)",
+            borderRadius: "var(--radius-sm)",
+            border: "var(--border-width) solid var(--border-default)",
+            background: "var(--bg-input)",
+            marginBottom: "var(--space-5)",
+            alignItems: "flex-start",
+          }}
+        >
+          <Info size={14} style={{ marginTop: 2, flexShrink: 0, color: "var(--fg-muted)" }} />
+          <span style={{ fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5, flex: 1 }}>
+            {deleteNotice}
+          </span>
+          <button
+            type="button"
+            onClick={() => setDeleteNotice(null)}
+            aria-label="Dismiss"
+            style={{ background: "none", border: "none", color: "var(--fg-muted)", cursor: "pointer", padding: 0, font: "inherit" }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
         {modes.length === 0 && (
