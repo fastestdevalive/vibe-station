@@ -188,4 +188,34 @@ describe("agy chat-id capture — log-file design (json-mode-followups, iteratio
     const id = await plugin.captureChatId?.({ session: s });
     expect(id).toBe("cccccccc-cccc-cccc-cccc-cccccccccccc");
   });
+
+  it("composeLaunchPrompt writes combined prompt file and returns shellLine launch config", async () => {
+    const { createAgyPlugin } = await import("../agent-plugins/agy.js");
+    const plugin = createAgyPlugin();
+    const s = session("sess-prompt-test");
+    const systemPromptFile = join(testHomeDir, "system_prompt.txt");
+
+    const result = plugin.composeLaunchPrompt({
+      systemPrompt: "System Rules",
+      taskPrompt: "Do the task",
+      sessionId: s.id,
+      systemPromptFile,
+      launchCfg: {
+        project: { id: "p1" },
+        ctx: { cwd: "/tmp" },
+        session: s,
+        daemonPort: 1234,
+        model: "Gemini 3.5 Flash (Medium)",
+      } as any,
+    });
+
+    expect(result.useShell).toBe(true);
+    expect(result.shellLine).toContain("agy --dangerously-skip-permissions");
+    expect(result.shellLine).toContain("--model 'Gemini 3.5 Flash (Medium)'");
+    expect(result.shellLine).toContain("-i \"$(cat '");
+
+    const { readFileSync } = await import("node:fs");
+    const writtenCombined = readFileSync(join(testHomeDir, "combined_prompt.txt"), "utf8");
+    expect(writtenCombined).toBe("System Rules\n\nDo the task");
+  });
 });
