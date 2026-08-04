@@ -47,13 +47,14 @@
  *   name, so `model` is threaded in from the requested model.
  */
 
-import { promises as fs, mkdirSync } from "node:fs";
+import { promises as fs, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
+import { sq } from "../services/shell.js";
 import type {
   SessionRecord,
   ProjectRecord,
@@ -342,14 +343,35 @@ export function createAgyPlugin(): AgentPlugin {
       launchCfg: LaunchConfig;
     }) {
       // Deliver the task prompt inline via -i so agy runs it on startup and stays
-      // interactive. agy has no system-prompt flag, so fold the system prompt in
-      // ahead of the task (like cursor bakes it into message 1). With no task
-      // prompt there is nothing to run — launch bare interactive.
+      // interactive. To avoid command-line / tmux argument length limits for very
+      // large prompts, write the combined prompt to a file and read it using $(cat)
+      // inside a shell wrapper.
       if (prompt.taskPrompt) {
         const combined = prompt.systemPrompt
           ? `${prompt.systemPrompt}\n\n${prompt.taskPrompt}`
           : prompt.taskPrompt;
-        return { launchArgs: ["-i", combined] };
+
+        const combinedPromptFile = join(dirname(prompt.systemPromptFile), "combined_prompt.txt");
+        writeFileSync(combinedPromptFile, combined, "utf8");
+
+        let shellLine = `agy --dangerously-skip-permissions`;
+        if (prompt.launchCfg.model) {
+          shellLine += ` --model ${sq(prompt.launchCfg.model)}`;
+        }
+        if (prompt.launchCfg.session.agentChatId) {
+          shellLine += ` --conversation ${sq(prompt.launchCfg.session.agentChatId)}`;
+        }
+        const logPath = agyLogPath(prompt.sessionId);
+        mkdirSync(dirname(logPath), { recursive: true });
+        shellLine += ` --log-file ${sq(logPath)}`;
+        shellLine += ` -i "$(cat ${sq(combinedPromptFile)})"`;
+
+        return {
+          useShell: true as const,
+          shellLine,
+          launchArgs: undefined,
+          postLaunchInput: undefined,
+        };
       }
       return {};
     },
