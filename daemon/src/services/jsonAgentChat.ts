@@ -71,21 +71,61 @@ interface ResolvedMode {
   modeId?: string;
   modeName?: string;
   context?: string;
+  /** True when the mode was deleted (or the session never had one) and this
+   * is a best-effort fallback rather than the session's actual configured mode. */
+  isFallback?: boolean;
 }
 
+/** Default CLI used when a session's mode has been deleted — matches the
+ * existing fallback in `readSessionMeta` below. */
+const FALLBACK_CLI: NormalizedEventProvider = "claude";
+
+/**
+ * Resolve a session's mode → cli/model/context. Modes can be deleted while
+ * still referenced by a session (Decision: deleting an in-use mode is
+ * allowed), so a missing mode is NOT an error here — it falls back instead of
+ * throwing, so a session whose mode vanished stays chattable/resumable
+ * instead of hard-failing on every turn.
+ *
+ * Always re-resolved from `modes.json` (even when a live `JsonAgentSession`
+ * already exists) rather than short-circuited off the live agent's own cached
+ * fields — the live agent doesn't cache `context`, and callers need a FRESH
+ * `mode.context` for the first-turn system prompt (turn 1 can run well after
+ * the agent object was created, e.g. via `chat:open` lazily registering it).
+ * When the mode is gone, prefer an already-live agent's frozen `cli`/
+ * `modeId`/`modeName` (accurate — captured before the deletion) over the bare
+ * "claude" default, since callers like `/chat/fork`'s plugin-capability gate
+ * and the model-switcher's "clear override" default depend on the real CLI.
+ */
 async function resolveMode(session: SessionRecord): Promise<ResolvedMode> {
   const modeId = session.modeId;
+  // No modeId at all is a structural invariant violation (every JSON agent
+  // session is created with one) — distinct from "mode was deleted later",
+  // which falls back below instead of throwing.
   if (!modeId) throw new Error("Session has no mode; JSON chat requires an agent mode");
   const { loadModes } = await import("../routes/modes.js");
   const modes = await loadModes();
   const mode = modes.find((m) => m.id === modeId);
-  if (!mode) throw new Error(`Mode '${modeId}' not found`);
+  if (mode) {
+    return {
+      cli: mode.cli as NormalizedEventProvider,
+      ...(mode.model ? { model: mode.model } : {}),
+      modeId: mode.id,
+      modeName: mode.name,
+      ...(mode.context ? { context: mode.context } : {}),
+    };
+  }
+  const live = jsonAgentRegistry.get(session.id);
+  console.warn(
+    `[json-chat] mode '${modeId}' not found for session ${session.id} — falling back to ${live?.getCli() ?? FALLBACK_CLI}`,
+  );
   return {
-    cli: mode.cli as NormalizedEventProvider,
-    ...(mode.model ? { model: mode.model } : {}),
-    modeId: mode.id,
-    modeName: mode.name,
-    ...(mode.context ? { context: mode.context } : {}),
+    cli: live?.getCli() ?? FALLBACK_CLI,
+    // `modeId` is guaranteed truthy here (checked above) — always keep the
+    // session's own modeId so the UI can still show "mode deleted" for it.
+    modeId: live?.getModeId() ?? modeId,
+    ...(live?.getModeName() ? { modeName: live.getModeName() } : {}),
+    isFallback: true,
   };
 }
 
@@ -105,6 +145,7 @@ export async function resolveJsonAgent(
   if (sessionChannel(ctx.session) !== "json") {
     return { ok: false, reason: "not_json", message: `Session '${sessionId}' is not a JSON-channel session` };
   }
+
   const mode = await resolveMode(ctx.session);
   const plugin = resolvePlugin(mode.cli);
   // A per-session model override (live status-bar switch) wins over the mode's

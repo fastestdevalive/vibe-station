@@ -150,22 +150,35 @@ export async function resolveCliModels(cli: CliId): Promise<{ models: string[]; 
 }
 
 /**
- * Check if any session references this modeId — worktree sessions AND direct
- * sessions. Missing directSessions here let a mode used only by a direct
- * session be deleted while in use.
+ * Count ACTIVE sessions referencing this modeId — worktree sessions AND
+ * direct sessions, excluding ones already `done`/`exited` (those aren't
+ * "active" and the UI copy specifically says "active sessions"). Missing
+ * directSessions here would undercount a mode used only by a direct session.
+ *
+ * This is informational only (surfaced in the DELETE response so the UI can
+ * tell the user how many sessions are affected) — it no longer blocks
+ * deletion. A currently-running session doesn't need the mode again once
+ * spawned (tmux/pty), and the JSON channel keeps its already-resolved
+ * cli/model/context cached in memory (see `resolveJsonAgent`). If a session
+ * later resumes/restarts and its mode is gone, mode resolution falls back
+ * gracefully (see `resolveMode` in jsonAgentChat.ts and the resume/channel
+ * handlers in routes/sessions.ts) rather than hard-failing.
  */
-function isModeInUse(modeId: string): boolean {
+function countSessionsUsingMode(modeId: string): number {
+  const isActive = (s: { lifecycle: { state: string } }) =>
+    s.lifecycle.state !== "done" && s.lifecycle.state !== "exited";
+  let count = 0;
   for (const project of getAllProjects()) {
     for (const wt of project.worktrees) {
       for (const session of wt.sessions) {
-        if (session.modeId === modeId) return true;
+        if (session.modeId === modeId && isActive(session)) count++;
       }
     }
     for (const session of project.directSessions) {
-      if (session.modeId === modeId) return true;
+      if (session.modeId === modeId && isActive(session)) count++;
     }
   }
-  return false;
+  return count;
 }
 
 export function registerModeRoutes(app: FastifyInstance): void {
@@ -276,21 +289,25 @@ export function registerModeRoutes(app: FastifyInstance): void {
   });
 
   // DELETE /modes/:id
+  //
+  // Deleting an in-use mode is allowed (Decision: modes can be deleted while
+  // sessions reference them). Sessions already running are unaffected — a
+  // spawned process doesn't need the mode config again, and a live JSON-channel
+  // agent keeps its own cached cli/model/context. Only a session that later
+  // resumes/restarts with this modeId gone falls back gracefully instead of
+  // erroring (see resolveMode/resolveJsonAgent and the resume/channel-toggle
+  // handlers). `affectedSessions` is informational so the UI can tell the user
+  // how many sessions reference the mode being removed.
   app.delete("/modes/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const modes = await loadModes();
     const mode = modes.find((m) => m.id === id);
     if (!mode) return reply.status(404).send({ error: `Mode '${id}' not found` });
 
-    if (isModeInUse(id)) {
-      return reply.status(409).send({
-        error: `Mode '${id}' is in use by active sessions. Kill those sessions first.`,
-        conflictWith: id,
-      });
-    }
+    const affectedSessions = countSessionsUsingMode(id);
 
     await saveModes(modes.filter((m) => m.id !== id));
     broadcastAll({ type: "mode:deleted", modeId: id });
-    return reply.send({ ok: true });
+    return reply.send({ ok: true, affectedSessions });
   });
 }

@@ -670,6 +670,23 @@ export class JsonAgentSession {
     return this.store.since(sinceSeq);
   }
 
+  /**
+   * The cli/modeId/modeName this instance was constructed with — frozen for
+   * its lifetime (set once from the mode resolved at creation time). Exposed
+   * so callers (e.g. `resolveJsonAgent`) can reuse an already-live agent's
+   * config instead of re-resolving `modeId → Mode`, which would break if the
+   * mode was since deleted (deleting an in-use mode is allowed).
+   */
+  getCli(): NormalizedEventProvider {
+    return this.cli;
+  }
+  getModeId(): string | undefined {
+    return this.modeId;
+  }
+  getModeName(): string | undefined {
+    return this.modeName;
+  }
+
   /** Latest cross-harness meta (rebuilt from transcript tail on construction). */
   getMeta(): SessionMeta {
     return {

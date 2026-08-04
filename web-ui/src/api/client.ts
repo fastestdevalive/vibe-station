@@ -562,12 +562,12 @@ export function createClientApi() {
       return parseJson<Mode>(res);
     },
 
-    async deleteMode(id: string): Promise<{ ok: true }> {
+    async deleteMode(id: string): Promise<{ ok: true; affectedSessions: number }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/modes/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      return parseJson<{ ok: true }>(res);
+      return parseJson<{ ok: true; affectedSessions: number }>(res);
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

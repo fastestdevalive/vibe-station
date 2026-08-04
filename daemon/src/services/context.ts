@@ -15,8 +15,9 @@
  *
  *   - ws/handlers/sessionLookup.ts scanned only worktrees, so session:open for
  *     a direct session answered "Session not found" while the agent was alive.
- *   - routes/modes.ts isModeInUse ignored direct sessions, so a mode in use
- *     could be deleted.
+ *   - routes/modes.ts's old in-use guard (since removed — deleting an in-use
+ *     mode is now allowed) ignored direct sessions, so a mode used only by a
+ *     direct session could slip past the "in use" check undercounted.
  *   - A fabricated worktree (`<project>-direct`) resolved to a NONEXISTENT
  *     directory, so plugins derived paths that silently pointed nowhere.
  *

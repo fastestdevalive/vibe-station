@@ -760,12 +760,12 @@ export function createMockApi() {
       return structuredClone(m);
     },
 
-    async deleteMode(id: string): Promise<{ ok: true }> {
+    async deleteMode(id: string): Promise<{ ok: true; affectedSessions: number }> {
       const idx = modes.findIndex((m) => m.id === id);
       if (idx === -1) throw new ApiError("not found", 404);
       modes.splice(idx, 1);
       emit({ type: "mode:deleted", modeId: id });
-      return { ok: true };
+      return { ok: true, affectedSessions: 0 };
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────
