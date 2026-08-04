@@ -161,6 +161,67 @@ describe("Mode routes", () => {
     expect(res.statusCode).toBe(404);
   });
 
+  it("DELETE /modes/:id succeeds even when a session is using it, reporting the count", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/modes",
+      payload: { name: "in-use", cli: "claude", context: "ctx" },
+    });
+    const modeId = createRes.json<Mode>().id;
+
+    const { addProject } = await import("../state/project-store.js");
+    await addProject({
+      id: "proj-in-use",
+      absolutePath: "/tmp/proj-in-use",
+      prefix: "piu",
+      isGit: true,
+      createdAt: new Date().toISOString(),
+      worktrees: [
+        {
+          id: "wt-1",
+          branch: "wt-1",
+          baseBranch: "main",
+          baseSha: "abc123",
+          createdAt: new Date().toISOString(),
+          sessions: [
+            {
+              id: "sess-1",
+              slot: "m",
+              type: "agent",
+              modeId,
+              tmuxName: "piu-wt-1-m",
+              useTmux: true,
+              lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+            },
+          ],
+        },
+      ],
+      directSessions: [
+        {
+          id: "sess-2",
+          slot: "d1",
+          type: "agent",
+          modeId,
+          tmuxName: "__direct__-sess-2",
+          useTmux: true,
+          lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+        },
+      ],
+    });
+
+    // Still shows up as normal before deletion.
+    const preList = await app.inject({ method: "GET", url: "/modes" });
+    expect(preList.json<Mode[]>()).toHaveLength(1);
+
+    const delRes = await app.inject({ method: "DELETE", url: `/modes/${modeId}` });
+    expect(delRes.statusCode).toBe(200);
+    // One worktree session + one direct session both reference this modeId.
+    expect(delRes.json<{ ok: true; affectedSessions: number }>().affectedSessions).toBe(2);
+
+    const postList = await app.inject({ method: "GET", url: "/modes" });
+    expect(postList.json<Mode[]>()).toHaveLength(0);
+  });
+
   it("GET /modes lists multiple created modes", async () => {
     await app.inject({
       method: "POST",

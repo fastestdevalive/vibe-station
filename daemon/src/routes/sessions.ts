@@ -884,9 +884,24 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (session.type === "agent" && session.modeId) {
       try {
         const modes = await (await import("../routes/modes.js")).loadModes();
-        const mode = modes.find((m) => m.id === session.modeId);
-        if (!mode) {
-          throw new Error(`Mode '${session.modeId}' not found`);
+        const found = modes.find((m) => m.id === session.modeId);
+        // Deleting an in-use mode is allowed — a session resuming after its
+        // mode was removed falls back instead of hard-failing the resume.
+        // Prefer a live JSON agent's own frozen cli (accurate — captured
+        // before the deletion) over the bare "claude" default; this mirrors
+        // the same fallback used by the JSON channel's resolveMode.
+        const liveAgentForFallback = found ? undefined : jsonAgentRegistry.get(session.id);
+        const mode = found ?? {
+          id: session.modeId!,
+          name: liveAgentForFallback?.getModeName() ?? "(deleted mode)",
+          cli: liveAgentForFallback?.getCli() ?? ("claude" as const),
+          context: "",
+          createdAt: new Date().toISOString(),
+        };
+        if (!found) {
+          console.warn(
+            `[resume] mode '${session.modeId}' not found for session ${session.id} — falling back to ${mode.cli} defaults`,
+          );
         }
 
         const plugin = resolvePlugin(mode.cli);
@@ -1438,10 +1453,25 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const { worktree } = ctx;
 
-    // Resolve mode → plugin.
+    // Resolve mode → plugin. Deleting an in-use mode is allowed, so a missing
+    // mode falls back instead of hard-failing the toggle: prefer the cli a
+    // live JSON agent already captured at construction time (accurate — it
+    // predates the deletion), else default to claude with no saved model/context.
     const modes = await (await import("../routes/modes.js")).loadModes();
-    const mode = session.modeId ? modes.find((m) => m.id === session.modeId) : undefined;
-    if (!mode) return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
+    const found = session.modeId ? modes.find((m) => m.id === session.modeId) : undefined;
+    const liveAgentForFallback = found ? undefined : jsonAgentRegistry.get(id);
+    const mode = found ?? {
+      id: session.modeId ?? "",
+      name: liveAgentForFallback?.getModeName() ?? "(deleted mode)",
+      cli: liveAgentForFallback?.getCli() ?? ("claude" as const),
+      context: "",
+      createdAt: new Date().toISOString(),
+    };
+    if (!found) {
+      console.warn(
+        `[channel-toggle] mode '${session.modeId}' not found for session ${session.id} — falling back to ${mode.cli} defaults`,
+      );
+    }
     const plugin = resolvePlugin(mode.cli);
 
     const fromJson = current === "json";
