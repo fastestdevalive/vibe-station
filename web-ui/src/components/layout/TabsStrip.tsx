@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
@@ -8,6 +8,7 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { PaneTools } from "@/components/layout/PaneTools";
 
 type TabKind = "agent" | "terminal";
 
@@ -40,9 +41,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const setActiveSession = useWorkspaceStore((s) =>
     isAgent ? s.setActiveSession : s.setActiveTerminalSession,
   );
-  const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
-  const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
-  const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
   const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
   const scrollRef = useRef<HTMLDivElement>(null);
   /** Context key ("scope:id") this instance already tried to auto-create for.
@@ -248,7 +246,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     useWorkspaceStore.getState().syncSessionsFromApi(all);
   }
 
-  const fsActive = workspacePaneFullscreen === fsTarget;
   const ariaLabel = isAgent ? "Agent sessions" : "Terminals";
 
   return (
@@ -323,44 +320,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           <Plus size={14} />
         </button>
       </div>
-      <div className="tabs-strip__tools">
-        <div className="tabs-strip__zoom" aria-label="Terminal zoom">
-          <span className="tabs-strip__zoom-label">Aa</span>
-          <button type="button" className="tab tab--icon" aria-label="Decrease terminal font" onClick={() => bumpTerminalFont(-0.05)}>
-            <Minus size={11} />
-          </button>
-          <button type="button" className="tab tab--icon" aria-label="Increase terminal font" onClick={() => bumpTerminalFont(0.05)}>
-            <Plus size={11} />
-          </button>
-        </div>
-        <div className="tabs-strip__fs">
-          <button
-            type="button"
-            className={`tab tab--icon${fsActive ? " tab--fs-active" : ""}`}
-            aria-label={fsActive ? "Exit fullscreen" : "Fullscreen"}
-            aria-pressed={fsActive}
-            title={fsActive ? "Exit fullscreen" : "Fullscreen"}
-            onClick={() => setWorkspacePaneFullscreen(fsActive ? null : fsTarget)}
-          >
-            {fsActive ? (
-              <Minimize2 size={13} strokeWidth={2} aria-hidden />
-            ) : (
-              <Maximize2 size={13} strokeWidth={2} aria-hidden />
-            )}
-          </button>
-        </div>
-        {!isAgent ? (
-          <button
-            type="button"
-            className="tab tab--icon tool-bar-btn"
-            aria-label="Close terminal dock"
-            title="Close terminal dock"
-            onClick={() => toggleTerminalDock()}
-          >
-            <X size={13} aria-hidden />
-          </button>
-        ) : null}
-      </div>
+      <PaneTools fsTarget={fsTarget} onCloseDock={!isAgent ? () => toggleTerminalDock() : undefined} />
 
       {isAgent ? (
         <NewTabDialog

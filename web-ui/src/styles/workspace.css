@@ -1537,6 +1537,17 @@
   min-height: 0;
 }
 
+/* A .tabs-strip that hosts only PaneTools (no tabs__scroll sibling) — e.g. a
+ * direct session's primary agent pane. Right-align the tools and drop the
+ * separator border-left that normally divides them from the tab list. */
+.tabs-strip--tools-only {
+  justify-content: flex-end;
+}
+
+.tabs-strip--tools-only .tabs-strip__tools {
+  border-left: none;
+}
+
 .tabs-strip__zoom {
   display: flex;
   flex-direction: row;

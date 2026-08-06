@@ -9,7 +9,7 @@ import {
   buildTmuxName,
   buildDirectTmuxName,
 } from "../services/sessionId.js";
-import { killSession, newSession, pasteBuffer, capturePane, hasSession } from "../services/tmux.js";
+import { killSession, newSession, pasteBuffer, capturePane, hasSession, sendKeys } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
 import { resolvedContextOf } from "../services/context.js";
@@ -1105,7 +1105,17 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const bufferId = `_vst_send-${id}`;
     try {
-      await pasteBuffer(session.tmuxName, bufferId, data + (sendEnter ? "\n" : ""));
+      // Paste the message on its own — pasteBuffer wraps it in bracketed-paste
+      // markers, so any newline embedded in the payload is delivered as literal
+      // text inside the input box, not as an Enter keystroke (see pasteBuffer's
+      // doc comment in tmux.ts). Submitting therefore requires a *separate*
+      // send-keys "Enter" after the paste completes, not a trailing "\n" baked
+      // into the pasted data.
+      await pasteBuffer(session.tmuxName, bufferId, data);
+      if (sendEnter) {
+        // Matches the paste-then-submit convention already used in spawn.ts.
+        await sendKeys(session.tmuxName, "", true);
+      }
     } catch (err) {
       return reply.status(500).send({ error: `Failed to send input: ${String(err)}` });
     }
