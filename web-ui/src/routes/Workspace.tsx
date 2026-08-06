@@ -7,6 +7,7 @@ import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { TerminalPane } from "@/components/layout/TerminalPane";
 import { AgentPaneSlot } from "@/components/layout/AgentPaneSlot";
+import { PaneTools } from "@/components/layout/PaneTools";
 import { ToolPanel } from "@/components/layout/ToolPanel";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
@@ -198,8 +199,14 @@ export function Workspace() {
   // terminal dock are wired to the PROJECT base dir via scope="project".
   const directAgentPane = directSession ? (
     <div className="pane-stack">
-      {/* No agent TabsStrip — single agent, no tabs. TerminalPane stays mounted;
-          ChatPane toggles beside it for a JSON direct agent (Decision 14). */}
+      {/* No agent TabsStrip — single agent, no tabs. Still needs the zoom/
+          fullscreen controls that TabsStrip normally bundles alongside the
+          tab list, so mount PaneTools directly instead of losing them.
+          TerminalPane stays mounted; ChatPane toggles beside it for a JSON
+          direct agent (Decision 14). */}
+      <div className="tabs-strip tabs-strip--tools-only" role="toolbar" aria-label="Terminal controls">
+        <PaneTools fsTarget="agent" />
+      </div>
       <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} />
     </div>
   ) : null;
