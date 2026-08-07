@@ -676,25 +676,15 @@
   opacity: 0;
 }
 
-/* Prototype drag-reorder handle (worktrees / direct sessions / tabs). Hidden
-   until hover/focus, matching the existing wt-menu-trigger reveal pattern. */
-.wt-drag-handle {
-  opacity: 0;
-  pointer-events: none;
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
-  transition: opacity var(--transition-fast);
+/* Prototype drag-reorder: the whole row is the drag surface (see
+   SortableRow's doc comment in LeftSidebar.tsx) — no dedicated handle. A
+   grab cursor on hover hints at the affordance without a visible control. */
+.wt-row-wrap {
+  cursor: grab;
 }
 
-.tree-row:hover .wt-drag-handle,
-.tree-row:focus-within .wt-drag-handle {
-  opacity: 0.6;
-  pointer-events: auto;
-}
-
-.wt-drag-handle:hover {
-  opacity: 1;
+.wt-row-wrap:active {
+  cursor: grabbing;
 }
 
 .tree-row--worktree:hover .wt-menu-trigger,
