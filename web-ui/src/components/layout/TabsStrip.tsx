@@ -1,9 +1,23 @@
 import { Plus } from "lucide-react";
 import { motion } from "framer-motion";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
-import { useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
+import { applySortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
@@ -29,6 +43,41 @@ interface TabsStripProps {
  *  window — see the release comment below. Module-scoped so it survives a
  *  remount (StrictMode's double-effect is covered by the per-instance ref). */
 const autoCreateInFlight = new Set<string>();
+
+interface SortableTabProps {
+  id: string;
+  children: (opts: {
+    setNodeRef: (el: HTMLElement | null) => void;
+    style: CSSProperties;
+    attributes: ReturnType<typeof useSortable>["attributes"];
+    listeners: ReturnType<typeof useSortable>["listeners"];
+    isDragging: boolean;
+  }) => ReactNode;
+}
+
+/**
+ * Drag-reorder wrapper for a single tab.
+ *
+ * IMPORTANT (AGENTS.md TerminalPane invariant): this wraps the tab *button*
+ * itself — no extra DOM node — and only ever changes `transform`/`transition`
+ * CSS via dnd-kit, never React tree position. The tab strip never renders
+ * TerminalPane/ChatPane directly (Workspace.tsx renders those once, outside
+ * this list, driven by `activeSessionId`), so even a full remount of a tab
+ * button here cannot tear down a terminal stream — but we still key strictly
+ * by session id and avoid index-based keys/positions, matching the invariant
+ * for future callers that copy this pattern into a pane-bearing list.
+ */
+function SortableTab({ id, children }: SortableTabProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  return children({ setNodeRef, style, attributes, listeners, isDragging });
+}
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
   const isAgent = kind === "agent";
@@ -67,6 +116,40 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const [newOpen, setNewOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<Session | null>(null);
 
+  // --- Prototype-only tab reordering + rename (no daemon persistence yet) ---
+  const sortScopeKey = `tabs:${kind}:${scope}:${worktreeId ?? "none"}`;
+  const sortOrders = useWorkspaceStore((s) => s.sortOrders);
+  const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
+  const sessionNameOverrides = useWorkspaceStore((s) => s.sessionNameOverrides);
+  const setSessionNameOverride = useWorkspaceStore((s) => s.setSessionNameOverride);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+  );
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (renamingId) renameInputRef.current?.select();
+  }, [renamingId]);
+
+  function labelFor(s: Session): string {
+    return sessionNameOverrides[s.id] ?? s.label;
+  }
+
+  function startRename(s: Session) {
+    setRenamingId(s.id);
+    setRenameValue(labelFor(s));
+  }
+
+  function commitRename() {
+    if (renamingId) {
+      const trimmed = renameValue.trim();
+      if (trimmed) setSessionNameOverride(renamingId, trimmed.slice(0, 60));
+    }
+    setRenamingId(null);
+  }
+
   // Project scope: direct-session terminals live in the global server store
   // (no worktree). Derive them instead of fetching per-worktree.
   const serverSessions = useServerStore((s) => s.sessions);
@@ -80,6 +163,29 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     [isProject, worktreeId, serverSessions, kind],
   );
   const sessions = isProject ? projectSessions : localSessions;
+  // Reorder purely by re-sorting this array before render — sessions stay
+  // keyed by `s.id` in the .map() below, so this never causes a remount of
+  // anything (and TabsStrip doesn't render TerminalPane/ChatPane itself
+  // anyway — see SortableTab's doc comment).
+  const orderedSessions = useMemo(() => {
+    const ids = sessions.map((s) => s.id);
+    const ordered = applySortOrder(sortOrders[sortScopeKey], ids);
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    return ordered.map((id) => byId.get(id)!).filter(Boolean);
+  }, [sessions, sortOrders, sortScopeKey]);
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = orderedSessions.map((s) => s.id);
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from === -1 || to === -1) return;
+    const next = ids.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, String(active.id));
+    setSortOrder(sortScopeKey, next);
+  }
 
   // Project scope: keep the active terminal selection valid as direct sessions
   // come and go (created/closed elsewhere). Pick a default when none is active.
@@ -254,63 +360,99 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         {sessions.length === 0 && !isAgent ? (
           <span className="tabs-strip__empty">No terminals — open one with +</span>
         ) : null}
-        {sessions.map((s) => {
-          const active = s.id === activeSessionId;
-          const closeable = s.slot !== "m";
-          return (
-            <button
-              key={s.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              data-active={active}
-              data-closeable={closeable ? "true" : undefined}
-              className="tab"
-              onClick={() => setActiveSession(s.id)}
-              style={{ position: "relative", flexShrink: 0 }}
-            >
-              {active ? (
-                <motion.span
-                  layoutId={`tab-indicator-${kind}`}
-                  style={{
-                    position: "absolute",
-                    bottom: -1,
-                    left: 0,
-                    right: 0,
-                    height: 2,
-                    background: "var(--fg-muted)",
-                    borderRadius: 1,
-                  }}
-                />
-              ) : null}
-              <span style={{ position: "relative", zIndex: 1 }}>
-                {s.label}
-                {isAgent ? (
-                  <span
-                    className="tab__channel-icon"
-                    aria-hidden
-                    title={s.channel === "json" ? "Rich Chat agent (json based)" : "Terminal agent"}
-                  >
-                    {s.channel === "json" ? "💬" : "⌨"}
-                  </span>
-                ) : null}
-              </span>
-              {closeable ? (
-                <span
-                  role="button"
-                  aria-label={`Close ${s.label}`}
-                  className="tab__close"
-                  onClick={(e) => { e.stopPropagation(); setCloseTarget(s); }}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setCloseTarget(s); } }}
-                  tabIndex={-1}
-                  style={{ position: "relative", zIndex: 1 }}
-                >
-                  ×
-                </span>
-              ) : null}
-            </button>
-          );
-        })}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext
+            items={orderedSessions.map((s) => s.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            {orderedSessions.map((s) => {
+              const active = s.id === activeSessionId;
+              const closeable = s.slot !== "m";
+              const label = labelFor(s);
+              const isRenaming = renamingId === s.id;
+              return (
+                <SortableTab key={s.id} id={s.id}>
+                  {({ setNodeRef, style, attributes, listeners }) => (
+                    <button
+                      ref={setNodeRef}
+                      {...attributes}
+                      {...listeners}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      data-active={active}
+                      data-closeable={closeable ? "true" : undefined}
+                      className="tab"
+                      onClick={() => { if (!isRenaming) setActiveSession(s.id); }}
+                      onDoubleClick={(e) => { e.stopPropagation(); startRename(s); }}
+                      style={{ position: "relative", flexShrink: 0, ...style }}
+                    >
+                      {active ? (
+                        <motion.span
+                          layoutId={`tab-indicator-${kind}`}
+                          style={{
+                            position: "absolute",
+                            bottom: -1,
+                            left: 0,
+                            right: 0,
+                            height: 2,
+                            background: "var(--fg-muted)",
+                            borderRadius: 1,
+                          }}
+                        />
+                      ) : null}
+                      <span style={{ position: "relative", zIndex: 1 }}>
+                        {isRenaming ? (
+                          <input
+                            ref={renameInputRef}
+                            className="tab__rename-input"
+                            value={renameValue}
+                            autoFocus
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onBlur={commitRename}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                              if (e.key === "Escape") { e.preventDefault(); setRenamingId(null); }
+                            }}
+                            maxLength={60}
+                            style={{ font: "inherit", width: `${Math.max(4, renameValue.length)}ch` }}
+                          />
+                        ) : (
+                          label
+                        )}
+                        {isAgent ? (
+                          <span
+                            className="tab__channel-icon"
+                            aria-hidden
+                            title={s.channel === "json" ? "Rich Chat agent (json based)" : "Terminal agent"}
+                          >
+                            {s.channel === "json" ? "💬" : "⌨"}
+                          </span>
+                        ) : null}
+                      </span>
+                      {closeable ? (
+                        <span
+                          role="button"
+                          aria-label={`Close ${label}`}
+                          className="tab__close"
+                          onClick={(e) => { e.stopPropagation(); setCloseTarget(s); }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setCloseTarget(s); } }}
+                          tabIndex={-1}
+                          style={{ position: "relative", zIndex: 1 }}
+                        >
+                          ×
+                        </span>
+                      ) : null}
+                    </button>
+                  )}
+                </SortableTab>
+              );
+            })}
+          </SortableContext>
+        </DndContext>
         <button
           type="button"
           className="tab tab--new"
