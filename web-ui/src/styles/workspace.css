@@ -676,6 +676,27 @@
   opacity: 0;
 }
 
+/* Prototype drag-reorder handle (worktrees / direct sessions / tabs). Hidden
+   until hover/focus, matching the existing wt-menu-trigger reveal pattern. */
+.wt-drag-handle {
+  opacity: 0;
+  pointer-events: none;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  transition: opacity var(--transition-fast);
+}
+
+.tree-row:hover .wt-drag-handle,
+.tree-row:focus-within .wt-drag-handle {
+  opacity: 0.6;
+  pointer-events: auto;
+}
+
+.wt-drag-handle:hover {
+  opacity: 1;
+}
+
 .tree-row--worktree:hover .wt-menu-trigger,
 .tree-row--worktree:focus-within .wt-menu-trigger,
 .wt-menu-trigger[aria-expanded="true"] {
@@ -1672,6 +1693,18 @@
 .tab--new {
   padding: var(--space-1) var(--space-2);
   color: var(--fg-muted);
+}
+
+/* Prototype: inline tab rename input (double-click a tab to trigger). */
+.tab__rename-input {
+  background: var(--bg-tertiary);
+  color: inherit;
+  border: 1px solid var(--fg-muted);
+  border-radius: 2px;
+  padding: 0 2px;
+  outline: none;
+  min-width: 4ch;
+  max-width: 20ch;
 }
 
 .terminal-wrap {

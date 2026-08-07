@@ -120,6 +120,51 @@ export interface WorkspaceState {
   markSessionAttachPending: (sessionId: string) => void;
   markSessionAttached: (sessionId: string) => void;
   clearSessionAttach: (sessionId: string) => void;
+
+  // --- Frontend-only prototype state (sqlite_agent_naming_plan.md skeleton) ---
+  // These are NOT persisted to the daemon — no rename/reorder endpoints exist
+  // yet. Local-only + localStorage (via zustand persist below) so the
+  // interactions are demoable and survive a page reload, but never pretend to
+  // be real server state. Field naming (nameOverride / sortOrder-by-scope)
+  // mirrors the future SQLite columns (`name`, `nameSource`, `sortOrder`)
+  // described in .feature-plans/sqlite_agent_naming_plan.md so wiring in the
+  // real backend later is a drop-in swap, not a redesign.
+  /** Session id -> user-set display name override (rename UI, optimistic/local only). */
+  sessionNameOverrides: Record<string, string>;
+  /** Worktree id -> user-set cosmetic display name override (mirrors future `worktrees.name`). */
+  worktreeNameOverrides: Record<string, string>;
+  setSessionNameOverride: (sessionId: string, name: string) => void;
+  setWorktreeNameOverride: (worktreeId: string, name: string) => void;
+  /**
+   * Drag-reorder state: scopeKey -> ordered list of item ids. Scopes used:
+   *   - `tabs:agent:${worktreeId}` / `tabs:terminal:${worktreeId}` — tab strip order
+   *   - `worktrees:${projectId}` — unpinned worktrees within a project
+   *   - `direct:${projectId}` — unpinned direct agent sessions within a project
+   *   - `pinned-worktrees` / `pinned-direct` — the pinned sub-lists (their own
+   *     reorderable scope, independent of pin recency — see LeftSidebar).
+   * Missing/unknown ids are just appended in their natural order by the
+   * `applySortOrder` helper below — this map only needs to hold the ids the
+   * user has actually dragged.
+   */
+  sortOrders: Record<string, string[]>;
+  setSortOrder: (scopeKey: string, orderedIds: string[]) => void;
+}
+
+/**
+ * Merge a persisted drag order with the current live id list: known ids are
+ * placed per the stored order, anything not yet in the stored order (new
+ * session/worktree) is appended at the end in its natural (server) order, and
+ * stale ids no longer present are dropped. Never reorders by mutating the
+ * live objects — callers re-sort their `.map()` input by this id list only,
+ * keeping every item keyed by its own stable id (no index-keying, no remounts).
+ */
+export function applySortOrder(order: string[] | undefined, liveIds: string[]): string[] {
+  if (!order || order.length === 0) return liveIds;
+  const liveSet = new Set(liveIds);
+  const known = order.filter((id) => liveSet.has(id));
+  const knownSet = new Set(known);
+  const rest = liveIds.filter((id) => !knownSet.has(id));
+  return [...known, ...rest];
 }
 
 const initial = {
@@ -146,6 +191,9 @@ const initial = {
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
+  sessionNameOverrides: {} as Record<string, string>,
+  worktreeNameOverrides: {} as Record<string, string>,
+  sortOrders: {} as Record<string, string[]>,
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -349,11 +397,23 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             delete next[sessionId];
             return { sessionAttachState: next };
           }),
+        setSessionNameOverride: (sessionId, name) =>
+          set((s) => ({
+            sessionNameOverrides: { ...s.sessionNameOverrides, [sessionId]: name },
+          })),
+        setWorktreeNameOverride: (worktreeId, name) =>
+          set((s) => ({
+            worktreeNameOverrides: { ...s.worktreeNameOverrides, [worktreeId]: name },
+          })),
+        setSortOrder: (scopeKey, orderedIds) =>
+          set((s) => ({
+            sortOrders: { ...s.sortOrders, [scopeKey]: orderedIds },
+          })),
       };
     },
     {
       name: "vibestation:workspace",
-      version: 11,
+      version: 12,
       migrate: (persisted, version) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -492,6 +552,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         leftSidebarCollapsed: s.leftSidebarCollapsed,
         leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
+        sessionNameOverrides: s.sessionNameOverrides,
+        worktreeNameOverrides: s.worktreeNameOverrides,
+        sortOrders: s.sortOrders,
       }),
     },
   ),
