@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, GripVertical, Moon, MoreHorizontal, Pencil, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pencil, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -41,6 +41,15 @@ import { Logo } from "@/components/shared/Logo";
  * moves during a drag. LeftSidebar never renders TerminalPane/ChatPane, so
  * there's no remount risk here at all, but keying strictly by row id (never
  * index) is kept as the same discipline used in TabsStrip's SortableTab.
+ *
+ * No dedicated drag handle: `attributes`/`listeners` are meant to be spread
+ * onto the row itself (same approach as TabsStrip's SortableTab) so the whole
+ * row is the drag surface — dragging it reorders, a plain click still
+ * selects/navigates. dnd-kit's PointerSensor only starts a drag once the
+ * pointer moves past `activationConstraint.distance`, so a stationary click
+ * passes through untouched; interactive controls inside the row (the "…"
+ * menu trigger) additionally stop propagation on `pointerdown` so they never
+ * register as a drag start at all (mirrors TabsStrip's `tab__close`).
  */
 function SortableRow({
   id,
@@ -62,34 +71,9 @@ function SortableRow({
     transition,
     opacity: isDragging ? 0.6 : 1,
     zIndex: isDragging ? 1 : undefined,
+    cursor: isDragging ? "grabbing" : undefined,
   };
   return children({ setNodeRef, style, attributes, listeners });
-}
-
-/** Small drag handle — listeners/attributes attach only here, so the rest of
- *  the row (Link navigation, menu trigger) keeps its normal click behavior. */
-function DragHandle({
-  attributes,
-  listeners,
-  label,
-}: {
-  attributes: ReturnType<typeof useSortable>["attributes"];
-  listeners: ReturnType<typeof useSortable>["listeners"];
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="icon-btn wt-drag-handle"
-      aria-label={`Reorder ${label}`}
-      title="Drag to reorder"
-      style={{ cursor: "grab", touchAction: "none" }}
-      {...attributes}
-      {...listeners}
-    >
-      <GripVertical size={13} aria-hidden />
-    </button>
-  );
 }
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
@@ -663,7 +647,13 @@ export function LeftSidebar({
                   return (
                     <SortableRow key={`pinned-sess-${sess.id}`} id={sess.id}>
                       {({ setNodeRef, style, attributes, listeners }) => (
-                        <div ref={setNodeRef} style={style} className="wt-row-wrap">
+                        <div
+                          ref={setNodeRef}
+                          style={style}
+                          className="wt-row-wrap"
+                          {...attributes}
+                          {...listeners}
+                        >
                           <div
                             className="tree-row tree-row--direct-session pinned-row"
                             data-active={isActive}
@@ -690,7 +680,6 @@ export function LeftSidebar({
                             </div>
                             <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
                               <span className="direct-session__badge">direct</span>
-                              <DragHandle attributes={attributes} listeners={listeners} label={label} />
                               <button
                                 type="button"
                                 data-sess-menu-trigger
@@ -699,6 +688,7 @@ export function LeftSidebar({
                                 aria-expanded={sessMenu?.session.id === sess.id}
                                 aria-haspopup="menu"
                                 title="Session menu"
+                                onPointerDown={(e) => e.stopPropagation()}
                                 onClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
@@ -741,7 +731,13 @@ export function LeftSidebar({
                   return (
                     <SortableRow key={`pinned-${w.id}`} id={w.id}>
                       {({ setNodeRef, style, attributes, listeners }) => (
-                        <div ref={setNodeRef} style={style} className="wt-row-wrap">
+                        <div
+                          ref={setNodeRef}
+                          style={style}
+                          className="wt-row-wrap"
+                          {...attributes}
+                          {...listeners}
+                        >
                           <div
                             className="tree-row tree-row--worktree pinned-row"
                             data-active={isActive}
@@ -780,7 +776,6 @@ export function LeftSidebar({
                               <span className="wt-row__id" title={w.id}>
                                 {w.id}
                               </span>
-                              <DragHandle attributes={attributes} listeners={listeners} label={label} />
                               <button
                                 type="button"
                                 data-wt-menu-trigger
@@ -789,6 +784,7 @@ export function LeftSidebar({
                                 aria-expanded={wtMenu?.worktree.id === w.id}
                                 aria-haspopup="menu"
                                 title="Worktree menu"
+                                onPointerDown={(e) => e.stopPropagation()}
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const rect = e.currentTarget.getBoundingClientRect();
@@ -944,7 +940,13 @@ export function LeftSidebar({
                             return (
                               <SortableRow key={sess.id} id={sess.id}>
                                 {({ setNodeRef, style, attributes, listeners }) => (
-                                  <div ref={setNodeRef} style={style} className="wt-row-wrap">
+                                  <div
+                                    ref={setNodeRef}
+                                    style={style}
+                                    className="wt-row-wrap"
+                                    {...attributes}
+                                    {...listeners}
+                                  >
                                     <div
                                       className="tree-row tree-row--direct-session"
                                       data-active={location.pathname === `/session/${sess.id}`}
@@ -974,7 +976,6 @@ export function LeftSidebar({
                                       )}
                                       {!collapsed ? (
                                         <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                                          <DragHandle attributes={attributes} listeners={listeners} label={label} />
                                           <button
                                             type="button"
                                             data-sess-menu-trigger
@@ -983,6 +984,7 @@ export function LeftSidebar({
                                             aria-haspopup="menu"
                                             aria-expanded={sessMenu?.session.id === sess.id}
                                             title="Session menu"
+                                            onPointerDown={(e) => e.stopPropagation()}
                                             onClick={(e) => {
                                               e.preventDefault();
                                               e.stopPropagation();
@@ -1034,7 +1036,13 @@ export function LeftSidebar({
                           return (
                             <SortableRow key={w.id} id={w.id}>
                               {({ setNodeRef, style, attributes, listeners }) => (
-                                <div ref={setNodeRef} style={style} className="wt-row-wrap">
+                                <div
+                                  ref={setNodeRef}
+                                  style={style}
+                                  className="wt-row-wrap"
+                                  {...attributes}
+                                  {...listeners}
+                                >
                                   <div
                                     className="tree-row tree-row--worktree"
                                     data-active={activeWorktreeId === w.id && location.pathname.startsWith("/worktree/")}
@@ -1082,7 +1090,6 @@ export function LeftSidebar({
                                         <span className="wt-row__id" title={w.id}>
                                           {w.id}
                                         </span>
-                                        <DragHandle attributes={attributes} listeners={listeners} label={label} />
                                         <button
                                           type="button"
                                           data-wt-menu-trigger
@@ -1091,6 +1098,7 @@ export function LeftSidebar({
                                           aria-expanded={wtMenu?.worktree.id === w.id}
                                           aria-haspopup="menu"
                                           title="Worktree menu"
+                                          onPointerDown={(e) => e.stopPropagation()}
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             const rect = e.currentTarget.getBoundingClientRect();

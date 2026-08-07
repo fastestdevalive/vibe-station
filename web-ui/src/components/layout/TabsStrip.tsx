@@ -15,6 +15,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { applySortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
@@ -360,7 +361,12 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         {sessions.length === 0 && !isAgent ? (
           <span className="tabs-strip__empty">No terminals — open one with +</span>
         ) : null}
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+          modifiers={[restrictToHorizontalAxis]}
+        >
           <SortableContext
             items={orderedSessions.map((s) => s.id)}
             strategy={horizontalListSortingStrategy}
