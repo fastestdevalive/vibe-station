@@ -152,7 +152,7 @@ describe("ws protocol — JSON agent chat schemas (1.T2)", () => {
       snapshot: {
         id: "s1",
         worktreeId: "wt-1",
-        slot: "m",
+        isMain: true,
         type: "agent",
         modeId: null,
         label: "main",

@@ -90,7 +90,9 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
   if (worktree.sessions.length > 0) {
     l2Lines.push("", "**Sibling sessions in this worktree:**");
     for (const s of worktree.sessions) {
-      l2Lines.push(`- ${s.id} (slot=${s.slot}, type=${s.type}, state=${s.lifecycle.state})`);
+      l2Lines.push(
+        `- ${s.id} (${s.isMain ? "main" : s.type}, type=${s.type}, state=${s.lifecycle.state})`,
+      );
     }
   }
 

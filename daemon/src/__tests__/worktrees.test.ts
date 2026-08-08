@@ -21,6 +21,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir, "vibe-station.db"),
     cleanupSessionDataDir: () => {},
     sessionDataDir: (p: string, w: string, s: string) =>
       pathJoin(tempDir, "projects", p, "session-data", w, s),
@@ -112,6 +113,105 @@ describe("Worktree routes", () => {
     expect(wt.branch).toBe("fix-test-bug");
     expect(wt.id).toMatch(/^[a-z]+-\d+$/);
     expect(wt.baseSha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("3.T5 — POST /worktrees {prompt} (no name) derives the same slug for both worktree.name and the main session's name", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        branch: "naming-heuristic",
+        modeId: "bug-fix",
+        prompt: "Implement the login flow described in SPEC.md",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string; name: string | null; mainSessionId: string }>();
+    expect(wt.name).toBe("implement-login-flow");
+
+    const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
+    expect(sessRes.statusCode).toBe(200);
+    expect(sessRes.json<{ name: string | null }>().name).toBe("implement-login-flow");
+  });
+
+  // ── Branch-name-optional (F1 revisit) — resolution order ─────────────────
+
+  it("branch-optional: explicit branch wins even when a prompt is also given", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        branch: "explicit-branch-name",
+        modeId: "bug-fix",
+        prompt: "Implement the login flow described in SPEC.md",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ branch: string; branchIsPlaceholder?: boolean }>();
+    expect(wt.branch).toBe("explicit-branch-name");
+    expect(wt.branchIsPlaceholder).toBeFalsy();
+  });
+
+  it("branch-optional: omitted branch + prompt derives the slug via slugifyPrompt", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        modeId: "bug-fix",
+        prompt: "Implement the login flow described in SPEC.md",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ branch: string; branchIsPlaceholder?: boolean }>();
+    expect(wt.branch).toBe("implement-login-flow");
+    expect(wt.branchIsPlaceholder).toBeFalsy();
+  });
+
+  it("branch-optional: omitted branch + a colliding prompt-derived slug falls back to a numbered variant", async () => {
+    // Pre-create a branch matching the exact slug "Test the widget flow end to end" derives.
+    const first = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "test-widget-flow", modeId: "bug-fix" },
+    });
+    expect(first.statusCode).toBe(201);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, modeId: "bug-fix", prompt: "Test the widget flow end to end" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ branch: string; branchIsPlaceholder?: boolean }>();
+    expect(wt.branch).toBe("test-widget-flow-2");
+    expect(wt.branchIsPlaceholder).toBeFalsy();
+  });
+
+  it("branch-optional: omitted branch + no prompt auto-generates a wip/<wtId> placeholder", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string; branch: string; branchIsPlaceholder?: boolean }>();
+    expect(wt.branch).toBe(`wip/${wt.id}`);
+    expect(wt.branchIsPlaceholder).toBe(true);
+  });
+
+  it("branch-optional: an empty-string branch is treated as omitted (not a validation error)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "", modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ id: string; branch: string; branchIsPlaceholder?: boolean }>();
+    expect(wt.branch).toBe(`wip/${wt.id}`);
+    expect(wt.branchIsPlaceholder).toBe(true);
   });
 
   it("JSON gate — POST /worktrees channel:json with a claude (supported) mode → 201", async () => {
@@ -358,8 +458,8 @@ describe("Worktree routes", () => {
 
     // Wait for runMainSpawnJob to settle so it doesn't leak a mutateProject
     // call into the next test's cleared store.
-    const wt = (res as { json: <T>() => T }).json<{ id: string }>();
-    const expectedSessionId = `${wt.id}-m`;
+    const wt = (res as { json: <T>() => T }).json<{ id: string; mainSessionId: string }>();
+    const expectedSessionId = wt.mainSessionId;
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
       const found = spy.mock.calls
@@ -385,11 +485,11 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: `working-${Date.now()}`, modeId: "bug-fix" },
     });
     expect(res.statusCode).toBe(201);
-    const wt = res.json<{ id: string }>();
+    const wt = res.json<{ id: string; mainSessionId: string }>();
 
     // runMainSpawnJob is fire-and-forget; poll the spy until the expected
     // broadcast arrives or we time out.
-    const expectedSessionId = `${wt.id}-m`;
+    const expectedSessionId = wt.mainSessionId;
     const deadline = Date.now() + 2000;
     let working: { type: string; sessionId?: string; state?: string } | undefined;
     while (Date.now() < deadline) {
@@ -417,8 +517,8 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: `failure-${Date.now()}`, modeId: "bug-fix" },
     });
     expect(res.statusCode).toBe(201);
-    const wt = res.json<{ id: string }>();
-    const expectedSessionId = `${wt.id}-m`;
+    const wt = res.json<{ id: string; mainSessionId: string }>();
+    const expectedSessionId = wt.mainSessionId;
 
     const deadline = Date.now() + 2000;
     let exited: { type: string; sessionId?: string; state?: string; reason?: string } | undefined;
@@ -451,7 +551,7 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: `mark-done-${Date.now()}`, modeId: "bug-fix" },
     });
     expect(res.statusCode).toBe(201);
-    const wt = res.json<{ id: string }>();
+    const wt = res.json<{ id: string; mainSessionId: string }>();
 
     const doneRes = await app.inject({
       method: "POST",
@@ -464,7 +564,7 @@ describe("Worktree routes", () => {
 
     const sessRes = await app.inject({
       method: "GET",
-      url: `/sessions/${wt.id}-m`,
+      url: `/sessions/${wt.mainSessionId}`,
     });
     expect(sessRes.statusCode).toBe(200);
     const main = sessRes.json<{ state: string; tmuxName: string }>();

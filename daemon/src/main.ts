@@ -90,9 +90,16 @@ async function releaseLock(): Promise<void> {
 }
 
 async function main() {
+  // `acquireLock()` (pid-checked, `.daemon.lock`) already guarantees only one
+  // daemon process runs against `~/.vibe-station` at a time (Risk #4 /
+  // Phase 1.7) — since `vibe-station.db` lives inside that same directory,
+  // the existing single-daemon invariant covers the DB file too. No
+  // additional locking needed here.
   await acquireLock();
 
-  // Load all project manifests into memory before serving requests
+  // One-time migration of every project's manifest.json into vibe-station.db
+  // (idempotent — a no-op after the first successful boot), then every read
+  // below goes straight to SQLite (no in-memory project cache anymore).
   await loadAll();
 
   await recoverNotStartedSessions();

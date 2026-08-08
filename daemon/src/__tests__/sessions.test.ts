@@ -21,6 +21,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir, "vibe-station.db"),
     cleanupSessionDataDir: () => {},
     cleanupDirectSessionDataDir: () => {},
     sessionDataDir: (p: string, w: string, s: string) =>
@@ -126,7 +127,7 @@ describe("Session routes", () => {
     expect(res.statusCode).toBe(200);
     const sessions = res.json<SessionRecord[]>();
     expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.slot).toBe("m");
+    expect(sessions[0]?.isMain).toBe(true);
   });
 
   it("GET /sessions/:id returns session details", async () => {
@@ -149,7 +150,7 @@ describe("Session routes", () => {
     });
     expect(res.statusCode).toBe(201);
     const session = res.json<SessionRecord>();
-    expect(session.slot).toBe("a1");
+    expect(session.name).toBe("Agent 1");
     expect(session.type).toBe("agent");
   });
 
@@ -161,7 +162,7 @@ describe("Session routes", () => {
     });
     expect(res.statusCode).toBe(201);
     const session = res.json<SessionRecord>();
-    expect(session.slot).toBe("t1");
+    expect(session.name).toBe("Terminal 1");
     expect(session.type).toBe("terminal");
   });
 
@@ -174,7 +175,7 @@ describe("Session routes", () => {
     expect(res.statusCode).toBe(201);
     const session = res.json<SessionRecord>();
     expect(session.type).toBe("terminal");
-    expect(session.slot).toBe("t1");
+    expect(session.name).toBe("Terminal 1");
   });
 
   it("POST /sessions 400 when agent missing modeId", async () => {
@@ -219,6 +220,49 @@ describe("Session routes", () => {
     const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
     const sessions = listRes.json<SessionRecord[]>();
     expect(sessions.find((s) => s.id === sessionId)).toBeUndefined();
+  });
+
+  it("3.T6 — PATCH /sessions/:id/rename { name: \"\" } clears to null; label falls back", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+
+    const renameRes = await app.inject({
+      method: "PATCH",
+      url: `/sessions/${mainId}/rename`,
+      payload: { name: "custom-name" },
+    });
+    expect(renameRes.statusCode).toBe(200);
+    expect(renameRes.json<{ name: string | null }>().name).toBe("custom-name");
+
+    const clearRes = await app.inject({
+      method: "PATCH",
+      url: `/sessions/${mainId}/rename`,
+      payload: { name: "" },
+    });
+    expect(clearRes.statusCode).toBe(200);
+    expect(clearRes.json<{ name: string | null }>().name).toBeNull();
+
+    const getRes = await app.inject({ method: "GET", url: `/sessions/${mainId}` });
+    const session = getRes.json<{ name: string | null; label: string }>();
+    expect(session.name).toBeNull();
+    expect(session.label).toBe("main"); // UI-facing fallback for a cleared main session's name
+  });
+
+  it("Bug 4 fix: POST /sessions/:id/resume on an archived session returns 400 and does not spawn", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id as string;
+
+    const resetRes = await app.inject({ method: "POST", url: `/sessions/${mainId}/reset`, payload: {} });
+    expect(resetRes.statusCode).toBe(200);
+
+    const spawnModule = await import("../services/spawn.js");
+    vi.mocked(spawnModule.spawnSession).mockClear();
+    vi.mocked(spawnModule.spawnSessionFromArgv).mockClear();
+
+    const resumeRes = await app.inject({ method: "POST", url: `/sessions/${mainId}/resume` });
+    expect(resumeRes.statusCode).toBe(400);
+    expect(vi.mocked(spawnModule.spawnSession)).not.toHaveBeenCalled();
+    expect(vi.mocked(spawnModule.spawnSessionFromArgv)).not.toHaveBeenCalled();
   });
 
   it("POST /sessions/:id/resume changes state to working", async () => {
@@ -375,7 +419,7 @@ describe("Session routes", () => {
       });
       expect(created.statusCode).toBe(201);
       const direct = created.json<SessionRecord>();
-      expect(direct.slot).toMatch(/^d\d+$/);
+      expect(direct.name).toMatch(/^Direct \d+$/);
 
       vi.mocked(tmux.killSession).mockClear();
       const res = await app.inject({ method: "POST", url: `/sessions/${direct.id}/done` });
@@ -522,8 +566,8 @@ describe("Session routes", () => {
       url: "/sessions",
       payload: { worktreeId, type: "agent", modeId: "bugfix" },
     });
-    expect(r1.json<SessionRecord>().slot).toBe("a1");
-    expect(r2.json<SessionRecord>().slot).toBe("a2");
+    expect(r1.json<SessionRecord>().name).toBe("Agent 1");
+    expect(r2.json<SessionRecord>().name).toBe("Agent 2");
   });
 
   it("does not reuse an agent slot/id after delete (monotonic)", async () => {
@@ -535,17 +579,17 @@ describe("Session routes", () => {
       });
 
     const first = (await create()).json<SessionRecord>();
-    expect(first.slot).toBe("a1");
+    expect(first.name).toBe("Agent 1");
 
     const del = await app.inject({ method: "DELETE", url: `/sessions/${first.id}` });
     expect(del.statusCode).toBe(200);
 
     const second = (await create()).json<SessionRecord>();
-    expect(second.slot).toBe("a2");
+    expect(second.name).toBe("Agent 2");
     expect(second.id).not.toBe(first.id);
   });
 
-  it("legacy worktree: deleting ALL agents does not restart the next one at a1", async () => {
+  it("deleting ALL agents does not restart the next default label at 'Agent 1' (Decision 5)", async () => {
     const create = () =>
       app.inject({
         method: "POST",
@@ -553,27 +597,21 @@ describe("Session routes", () => {
         payload: { worktreeId, type: "agent", modeId: "bugfix" },
       });
 
-    // Create a1 and a2, then simulate a LEGACY worktree by stripping agentSeq —
-    // as if these agents predated the monotonic-slot counter.
+    // Create two agents — agentSeq is bumped at CREATE time only (Decision 5:
+    // no id/slot-derived high-water recompute needed anymore, since ids are
+    // independently generated and `agentSeq` alone is now the source of truth
+    // for the next default label).
     const a1 = (await create()).json<SessionRecord>();
     const a2 = (await create()).json<SessionRecord>();
-    expect([a1.slot, a2.slot]).toEqual(["a1", "a2"]);
-
-    const { mutateProject } = await import("../state/project-store.js");
-    await mutateProject(projectId, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktreeId ? { ...w, agentSeq: undefined } : w,
-      ),
-    }));
+    expect([a1.name, a2.name]).toEqual(["Agent 1", "Agent 2"]);
 
     // Delete every agent BEFORE creating a new one — the reported failure mode.
     expect((await app.inject({ method: "DELETE", url: `/sessions/${a1.id}` })).statusCode).toBe(200);
     expect((await app.inject({ method: "DELETE", url: `/sessions/${a2.id}` })).statusCode).toBe(200);
 
-    // The delete handler captured the high-water, so the next slot is a3 — not a1.
+    // The persisted counter alone carries the high-water — the next default
+    // label is "Agent 3", not "Agent 1".
     const next = (await create()).json<SessionRecord>();
-    expect(next.slot).toBe("a3");
-    expect(next.id).toBe(`${worktreeId}-a3`);
+    expect(next.name).toBe("Agent 3");
   });
 });

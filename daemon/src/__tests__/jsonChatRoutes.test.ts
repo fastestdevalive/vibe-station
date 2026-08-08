@@ -31,6 +31,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(base(), "config.json"),
     modesPath: () => pathJoin(base(), "modes.json"),
     daemonLogPath: () => pathJoin(base(), "logs", "daemon.log"),
+    dbPath: () => pathJoin(base(), "vibe-station.db"),
     sessionDataDir: wtDataDir,
     directSessionDataDir: directDataDir,
     systemPromptPath: (p: string, w: string, s: string) => pathJoin(wtDataDir(p, w, s), "system-prompt.md"),
@@ -544,6 +545,22 @@ describe("JSON chat REST + WS", () => {
       payload: { model: "opus" },
     });
     expect(patch.statusCode).toBe(409);
+    expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
+  });
+
+  it("Bug 4 fix — POST /chat on an archived session → 400, does not enqueue a turn", async () => {
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(PROJECT_ID, (p) => ({
+      ...p,
+      directSessions: p.directSessions.map((s) =>
+        s.id === SESSION_ID ? { ...s, archivedAt: new Date().toISOString() } : s,
+      ),
+    }));
+
+    const res = await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "hi" } });
+    expect(res.statusCode).toBe(400);
+
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
     expect(jsonAgentRegistry.get(SESSION_ID)).toBeUndefined();
   });
 

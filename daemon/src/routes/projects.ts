@@ -500,7 +500,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         // Create worktree + session. `branch` was resolved and validated
         // upfront (defaults to "feature"; rejected if "main").
         const { worktreeAdd } = await import("../services/git.js");
-        const { reserveNextWorktreeNum, buildTmuxName } = await import("../services/sessionId.js");
+        const { reserveNextWorktreeNum, generateSessionId, tmuxNameForSession } = await import("../services/sessionId.js");
+        const { slugifyPrompt } = await import("../services/naming.js");
         const { worktreePath: getWorktreePath } = await import("../services/paths.js");
         const { resolveUseTmux } = await import("../services/resolveUseTmux.js");
         const { spawnSession } = await import("../services/spawn.js");
@@ -523,12 +524,18 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         // Create worktree
         await worktreeAdd(projectPath, wtPath, branch, defaultBranch);
 
-        const mainTmuxName = useTmux ? buildTmuxName(freshProject.prefix, wtNum, "m") : `__direct__-${wtId}-m`;
+        const mainSessionId = generateSessionId(wtId, "agent");
+        const mainTmuxName = useTmux ? tmuxNameForSession(mainSessionId) : `__direct__-${mainSessionId}`;
+        const wtName = prompt ? slugifyPrompt(prompt) || undefined : undefined;
         const mainSession: SessionRecord = {
-          id: `${wtId}-m`,
-          slot: "m",
+          id: mainSessionId,
+          worktreeId: wtId,
+          projectId: id,
+          isMain: true,
+          sortOrder: 0,
           type: "agent",
           modeId: resolvedModeId,
+          ...(wtName ? { name: wtName, nameSource: "auto" as const } : {}),
           tmuxName: mainTmuxName,
           useTmux,
           lifecycle: {
@@ -540,6 +547,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
 
         const worktreeRecord = {
           id: wtId,
+          ...(wtName ? { name: wtName } : {}),
+          sortOrder: Date.now(),
           branch,
           baseBranch: defaultBranch,
           baseSha,
@@ -637,7 +646,8 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         response.session = serializeSession(wtId, id, mainSession);
       } else {
         // Create direct session
-        const { reserveNextDirectSlot, buildDirectTmuxName } = await import("../services/sessionId.js");
+        const { generateSessionId, tmuxNameForSession } = await import("../services/sessionId.js");
+        const { slugifyPrompt } = await import("../services/naming.js");
         const { resolveUseTmux } = await import("../services/resolveUseTmux.js");
         const { spawnDirectSession } = await import("../services/spawn.js");
         const { serializeSession } = await import("./sessions.js");
@@ -648,17 +658,21 @@ export function registerProjectRoutes(app: FastifyInstance): void {
 
         const freshProject = getProject(id)!;
         const useTmux = resolveUseTmux(undefined);
-        const slot = reserveNextDirectSlot(freshProject);
-        const tmuxName = useTmux
-          ? buildDirectTmuxName(freshProject.prefix, slot)
-          : `__direct__-${id}-${slot}`;
-        const sessionId = `${id}-${slot}`;
+        const sessionId = generateSessionId(id, "agent");
+        const tmuxName = useTmux ? tmuxNameForSession(sessionId) : `__direct__-${sessionId}`;
+        const nextDirectSeq = (freshProject.directSessionSeq ?? 0) + 1;
+        const heuristicName = prompt ? slugifyPrompt(prompt) : "";
+        const sessionName = heuristicName || `Direct ${nextDirectSeq}`;
 
         const sessionRecord: SessionRecord = {
           id: sessionId,
-          slot,
+          projectId: id,
+          isMain: false,
+          sortOrder: Date.now(),
           type: "agent",
           modeId: resolvedModeId,
+          name: sessionName,
+          nameSource: heuristicName ? "auto" : undefined,
           tmuxName,
           useTmux,
           lifecycle: {
@@ -671,6 +685,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         // Persist session
         await mutateProj(id, (p) => ({
           ...p,
+          directSessionSeq: nextDirectSeq,
           directSessions: [...p.directSessions, sessionRecord],
         }));
 

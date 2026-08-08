@@ -46,3 +46,33 @@ export function notifySession(sessionId: string, msg: ServerMessage): void {
     }
   }
 }
+
+/**
+ * Force-detach every connection's open WS stream on `sessionId` (Decision 9).
+ *
+ * `releaseSessionRuntime` (services/sessionRuntime.ts) kills the actual
+ * process/pane, but does nothing about a browser tab's already-open
+ * terminal-pane WS stream pointing at the now-archived session id — without
+ * this, that tab's pane silently stops receiving output with no error, and a
+ * stale entry lingers in `WSConnection.openStreams`. Used by
+ * `POST /sessions/:id/reset` right after `releaseSessionRuntime`.
+ *
+ * Mirrors `ws/handlers/sessionClose.ts`'s `closeSessionLocked` exactly, run
+ * under each connection's own `withSessionLock` (same invariant as
+ * session:open/session:close — see AGENTS.md).
+ */
+export async function forceCloseSessionStreams(sessionId: string): Promise<void> {
+  for (const conn of connections) {
+    await conn.withSessionLock(sessionId, async () => {
+      const entry = conn.openStreams.get(sessionId);
+      if (!entry) return;
+      try {
+        entry.stream.off("chunk", entry.onChunk);
+        await entry.stream.detach(entry.subscriberId);
+      } catch {
+        // Stream already gone — nothing to detach, matches closeSessionLocked's own tolerance.
+      }
+      if (conn.openStreams.get(sessionId) === entry) conn.unregisterOpenStream(sessionId);
+    });
+  }
+}
