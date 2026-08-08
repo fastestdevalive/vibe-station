@@ -41,7 +41,7 @@ function jsonSession(id: string): Session {
     modeId: "mode-1",
     type: "agent",
     label: "main",
-    slot: "m",
+    isMain: true,
     state: "working",
     lifecycleState: "working",
     tmuxName: id,
@@ -386,8 +386,8 @@ function TabStripScene() {
   const api = useMemo(() => {
     const a = createMockApi();
     a.listSessions = async () => ([
-      { id: "a-json", worktreeId: "wt-1", projectId: "proj-a", modeId: "mode-1", type: "agent", label: "main", slot: "m", state: "working", lifecycleState: "working", tmuxName: "a-json", channel: "json", createdAt: nowIso() },
-      { id: "a-term", worktreeId: "wt-1", projectId: "proj-a", modeId: "mode-1", type: "agent", label: "agent-2", slot: "a1", state: "idle", lifecycleState: "idle", tmuxName: "a-term", channel: "tmux", createdAt: nowIso() },
+      { id: "a-json", worktreeId: "wt-1", projectId: "proj-a", modeId: "mode-1", type: "agent", label: "main", isMain: true, state: "working", lifecycleState: "working", tmuxName: "a-json", channel: "json", createdAt: nowIso() },
+      { id: "a-term", worktreeId: "wt-1", projectId: "proj-a", modeId: "mode-1", type: "agent", label: "agent-2", isMain: false, state: "idle", lifecycleState: "idle", tmuxName: "a-term", channel: "tmux", createdAt: nowIso() },
     ] as Session[]);
     return a;
   }, []);

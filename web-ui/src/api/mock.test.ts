@@ -29,7 +29,7 @@ describe("mock api contract", () => {
     const api = createMockApi();
     for (const wt of await api.listWorktrees("proj-a")) {
       const ss = await api.listSessions(wt.id);
-      expect(ss.some((s) => s.slot === "m")).toBe(true);
+      expect(ss.some((s) => s.isMain)).toBe(true);
     }
   });
 
@@ -87,5 +87,130 @@ describe("mock api contract", () => {
     offOutput();
     offState();
     offAll();
+  });
+
+  // 1.T5 — new rename/reorder/reset/handoff methods must exist on the mock
+  // and behave consistently with client.ts's real ones (same success/shape
+  // contract), since component tests run against the mock.
+  it("renameWorktree updates name, clears on empty string, and emits worktree:updated", async () => {
+    const api = createMockApi();
+    const handler = vi.fn();
+    const off = api.on("worktree:updated", handler);
+
+    const res = await api.renameWorktree("wt-1", "New Name");
+    expect(res).toEqual({ ok: true, name: "New Name" });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "worktree:updated", worktree: expect.objectContaining({ name: "New Name" }) }),
+    );
+
+    const cleared = await api.renameWorktree("wt-1", "   ");
+    expect(cleared).toEqual({ ok: true, name: null });
+
+    const wts = await api.listWorktrees("proj-a");
+    expect(wts.find((w) => w.id === "wt-1")?.name).toBeNull();
+    off();
+  });
+
+  it("renameWorktree 404s for an unknown id", async () => {
+    const api = createMockApi();
+    await expect(api.renameWorktree("does-not-exist", "x")).rejects.toThrow();
+  });
+
+  it("reorderWorktree persists sortOrder and emits worktree:updated", async () => {
+    const api = createMockApi();
+    const handler = vi.fn();
+    const off = api.on("worktree:updated", handler);
+
+    const res = await api.reorderWorktree("wt-1", 7);
+    expect(res).toEqual({ ok: true, sortOrder: 7 });
+
+    const wts = await api.listWorktrees("proj-a");
+    expect(wts.find((w) => w.id === "wt-1")?.sortOrder).toBe(7);
+    expect(handler).toHaveBeenCalled();
+    off();
+  });
+
+  it("renameSession updates name/nameSource, clears on empty string, and emits session:updated", async () => {
+    const api = createMockApi();
+    const handler = vi.fn();
+    const off = api.on("session:updated", handler);
+
+    const res = await api.renameSession("sess-main", "Renamed");
+    expect(res).toEqual({ ok: true, name: "Renamed" });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session:updated", sessionId: "sess-main", name: "Renamed" }),
+    );
+
+    const cleared = await api.renameSession("sess-main", "");
+    expect(cleared).toEqual({ ok: true, name: null });
+
+    const sessions = await api.listSessions("wt-1");
+    const s = sessions.find((x) => x.id === "sess-main");
+    expect(s?.name).toBeNull();
+    expect(s?.nameSource).toBe("user");
+    off();
+  });
+
+  it("reorderSession persists sortOrder and emits session:updated", async () => {
+    const api = createMockApi();
+    const handler = vi.fn();
+    const off = api.on("session:updated", handler);
+
+    const res = await api.reorderSession("sess-main", -2.5);
+    expect(res).toEqual({ ok: true, sortOrder: -2.5 });
+
+    const sessions = await api.listSessions("wt-1");
+    expect(sessions.find((s) => s.id === "sess-main")?.sortOrder).toBe(-2.5);
+    expect(handler).toHaveBeenCalled();
+    off();
+  });
+
+  it("resetSession archives the old session and creates a new one in its place", async () => {
+    const api = createMockApi();
+    const updated = vi.fn();
+    const created = vi.fn();
+    const offUpdated = api.on("session:updated", updated);
+    const offCreated = api.on("session:created", created);
+
+    const res = await api.resetSession("sess-main");
+    expect(res.ok).toBe(true);
+    expect(res.archivedSessionId).toBe("sess-main");
+    expect(res.newSessionId).not.toBe("sess-main");
+
+    const sessions = await api.listSessions("wt-1");
+    const old = sessions.find((s) => s.id === "sess-main");
+    expect(old?.archivedAt).toBeTruthy();
+    const next = sessions.find((s) => s.id === res.newSessionId);
+    expect(next).toBeTruthy();
+    expect(next?.archivedAt).toBeNull();
+
+    expect(updated).toHaveBeenCalledWith(expect.objectContaining({ type: "session:updated", sessionId: "sess-main" }));
+    expect(created).toHaveBeenCalledWith(expect.objectContaining({ type: "session:created", sessionId: res.newSessionId }));
+    offUpdated();
+    offCreated();
+  });
+
+  it("resetSession rejects an already-archived session", async () => {
+    const api = createMockApi();
+    const first = await api.resetSession("sess-main");
+    expect(first.ok).toBe(true);
+    await expect(api.resetSession("sess-main")).rejects.toThrow();
+  });
+
+  it("resetSession rejects a non-agent (terminal) session", async () => {
+    const api = createMockApi();
+    await expect(api.resetSession("sess-term1")).rejects.toThrow();
+  });
+
+  it("handoffSession returns a summary for an agent session", async () => {
+    const api = createMockApi();
+    const res = await api.handoffSession("sess-main");
+    expect(res.ok).toBe(true);
+    expect(typeof res.handoffSummary).toBe("string");
+  });
+
+  it("handoffSession rejects a non-agent (terminal) session", async () => {
+    const api = createMockApi();
+    await expect(api.handoffSession("sess-term1")).rejects.toThrow();
   });
 });

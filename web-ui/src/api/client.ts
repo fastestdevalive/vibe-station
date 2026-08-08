@@ -346,6 +346,28 @@ export function createClientApi() {
       return parseJson<{ ok: true; worktree: Worktree }>(res);
     },
 
+    /** Cosmetic rename (F2). Empty string clears back to the default (falls back to `branch`). */
+    async renameWorktree(id: string, name: string): Promise<{ ok: true; name: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/rename`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      return parseJson<{ ok: true; name: string | null }>(res);
+    },
+
+    /** Persist a new fractional display-order rank (F9). */
+    async reorderWorktree(id: string, sortOrder: number): Promise<{ ok: true; sortOrder: number }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/reorder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sortOrder }),
+      });
+      return parseJson<{ ok: true; sortOrder: number }>(res);
+    },
+
     async listSessions(worktreeId?: string): Promise<Session[]> {
       const root = baseUrl();
       const url = worktreeId
@@ -393,6 +415,51 @@ export function createClientApi() {
         body: JSON.stringify({ pinned }),
       });
       return parseJson<{ ok: true; pinnedAt: string | null }>(res);
+    },
+
+    /** Cosmetic rename. Empty string clears back to the computed default label. */
+    async renameSession(id: string, name: string): Promise<{ ok: true; name: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/rename`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      return parseJson<{ ok: true; name: string | null }>(res);
+    },
+
+    /** Persist a new fractional display-order rank within the session's scope. */
+    async reorderSession(id: string, sortOrder: number): Promise<{ ok: true; sortOrder: number }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reorder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sortOrder }),
+      });
+      return parseJson<{ ok: true; sortOrder: number }>(res);
+    },
+
+    /** Archive the current session and spawn a fresh one in its place. */
+    async resetSession(
+      id: string,
+      body?: { handoff?: boolean; prompt?: string },
+    ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+      return parseJson<{ ok: true; archivedSessionId: string; newSessionId: string }>(res);
+    },
+
+    /** Run a standalone handoff turn without archiving/respawning the session. */
+    async handoffSession(id: string): Promise<{ ok: true; handoffSummary: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/handoff`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true; handoffSummary: string | null }>(res);
     },
 
     /**

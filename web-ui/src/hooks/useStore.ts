@@ -121,50 +121,45 @@ export interface WorkspaceState {
   markSessionAttached: (sessionId: string) => void;
   clearSessionAttach: (sessionId: string) => void;
 
-  // --- Frontend-only prototype state (sqlite_agent_naming_plan.md skeleton) ---
-  // These are NOT persisted to the daemon — no rename/reorder endpoints exist
-  // yet. Local-only + localStorage (via zustand persist below) so the
-  // interactions are demoable and survive a page reload, but never pretend to
-  // be real server state. Field naming (nameOverride / sortOrder-by-scope)
-  // mirrors the future SQLite columns (`name`, `nameSource`, `sortOrder`)
-  // described in .feature-plans/sqlite_agent_naming_plan.md so wiring in the
-  // real backend later is a drop-in swap, not a redesign.
-  /** Session id -> user-set display name override (rename UI, optimistic/local only). */
-  sessionNameOverrides: Record<string, string>;
-  /** Worktree id -> user-set cosmetic display name override (mirrors future `worktrees.name`). */
-  worktreeNameOverrides: Record<string, string>;
-  setSessionNameOverride: (sessionId: string, name: string) => void;
-  setWorktreeNameOverride: (worktreeId: string, name: string) => void;
   /**
-   * Drag-reorder state: scopeKey -> ordered list of item ids. Scopes used:
-   *   - `tabs:agent:${worktreeId}` / `tabs:terminal:${worktreeId}` — tab strip order
-   *   - `worktrees:${projectId}` — unpinned worktrees within a project
-   *   - `direct:${projectId}` — unpinned direct agent sessions within a project
+   * Drag-reorder state: scopeKey -> ordered list of item ids.
+   *
+   * As of Part 03 Phase 2, regular (unpinned) per-worktree/per-project scopes
+   * (`tabs:*`, `worktrees:${projectId}`, `direct:${projectId}`) are ordered by
+   * the server's real numeric `sortOrder` column instead — see
+   * `computeNewSortOrder` below. This map now ONLY holds the pinned sub-lists,
+   * which stay on the old local-only mechanism because the server's
+   * `sortOrder` column is scoped per-worktree/per-project and cannot express a
+   * cross-project pinned order (see plan Decision 1 exception):
    *   - `pinned-worktrees` / `pinned-direct` — the pinned sub-lists (their own
    *     reorderable scope, independent of pin recency — see LeftSidebar).
-   * Missing/unknown ids are just appended in their natural order by the
-   * `applySortOrder` helper below — this map only needs to hold the ids the
-   * user has actually dragged.
+   * Missing/unknown ids (id not yet dragged) are appended in their natural
+   * order by callers — this map only needs to hold the ids the user has
+   * actually dragged. The merge helper for this (formerly `applySortOrder`,
+   * exported from here) now lives privately in `LeftSidebar.tsx`, the only
+   * remaining consumer, since it's scoped to the pinned sub-lists only.
    */
   sortOrders: Record<string, string[]>;
   setSortOrder: (scopeKey: string, orderedIds: string[]) => void;
 }
 
 /**
- * Merge a persisted drag order with the current live id list: known ids are
- * placed per the stored order, anything not yet in the stored order (new
- * session/worktree) is appended at the end in its natural (server) order, and
- * stale ids no longer present are dropped. Never reorders by mutating the
- * live objects — callers re-sort their `.map()` input by this id list only,
- * keeping every item keyed by its own stable id (no index-keying, no remounts).
+ * Compute the moved item's new fractional `sortOrder` value from the real
+ * `sortOrder` of its new neighbors (server-backed drag-reorder — Decision 1).
+ *
+ *  - No neighbors at all (only item in the scope) -> 0
+ *  - No previous neighbor (now first) -> next - 1
+ *  - No next neighbor (now last) -> prev + 1
+ *  - Between two neighbors -> their midpoint
  */
-export function applySortOrder(order: string[] | undefined, liveIds: string[]): string[] {
-  if (!order || order.length === 0) return liveIds;
-  const liveSet = new Set(liveIds);
-  const known = order.filter((id) => liveSet.has(id));
-  const knownSet = new Set(known);
-  const rest = liveIds.filter((id) => !knownSet.has(id));
-  return [...known, ...rest];
+export function computeNewSortOrder(
+  prevSortOrder: number | undefined,
+  nextSortOrder: number | undefined,
+): number {
+  if (prevSortOrder == null && nextSortOrder == null) return 0; // only item in the scope
+  if (prevSortOrder == null) return nextSortOrder! - 1; // now first
+  if (nextSortOrder == null) return prevSortOrder + 1; // now last
+  return (prevSortOrder + nextSortOrder) / 2; // between two neighbors
 }
 
 const initial = {
@@ -191,8 +186,6 @@ const initial = {
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
-  sessionNameOverrides: {} as Record<string, string>,
-  worktreeNameOverrides: {} as Record<string, string>,
   sortOrders: {} as Record<string, string[]>,
 };
 
@@ -272,7 +265,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (lastInWorktree && agents?.some((ss) => ss.id === lastInWorktree)) {
               defaultSessionId = lastInWorktree;
             } else if (agents) {
-              const mainSlot = agents.find((ss) => ss.slot === "m");
+              const mainSlot = agents.find((ss) => ss.isMain);
               defaultSessionId = mainSlot?.id ?? agents[0]?.id ?? null;
             }
 
@@ -397,14 +390,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             delete next[sessionId];
             return { sessionAttachState: next };
           }),
-        setSessionNameOverride: (sessionId, name) =>
-          set((s) => ({
-            sessionNameOverrides: { ...s.sessionNameOverrides, [sessionId]: name },
-          })),
-        setWorktreeNameOverride: (worktreeId, name) =>
-          set((s) => ({
-            worktreeNameOverrides: { ...s.worktreeNameOverrides, [worktreeId]: name },
-          })),
         setSortOrder: (scopeKey, orderedIds) =>
           set((s) => ({
             sortOrders: { ...s.sortOrders, [scopeKey]: orderedIds },
@@ -552,8 +537,6 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         leftSidebarCollapsed: s.leftSidebarCollapsed,
         leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
-        sessionNameOverrides: s.sessionNameOverrides,
-        worktreeNameOverrides: s.worktreeNameOverrides,
         sortOrders: s.sortOrders,
       }),
     },

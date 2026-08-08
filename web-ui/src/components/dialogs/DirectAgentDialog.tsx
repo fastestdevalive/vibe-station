@@ -190,6 +190,7 @@ export function DirectAgentDialog({
             <label htmlFor="direct-prompt">Initial Prompt (optional)</label>
             <textarea
               id="direct-prompt"
+              data-autofocus
               className="input"
               rows={4}
               placeholder="What would you like the agent to work on?"

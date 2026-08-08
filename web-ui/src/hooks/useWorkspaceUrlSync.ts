@@ -59,7 +59,7 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
         if (!pickedSessionId) {
           pickedSessionId =
             (lastSessionId && wtSessions.some((s) => s.id === lastSessionId) ? lastSessionId : null) ??
-            wtSessions.find((s) => s.slot === "m")?.id ??
+            wtSessions.find((s) => s.isMain)?.id ??
             wtSessions[0]?.id ??
             null;
         }
@@ -86,7 +86,7 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
       if (activeSessionId) {
         const activeSession = sessions.find((s) => s.id === activeSessionId);
         // Only append sessionId if it's not the main slot
-        if (activeSession?.slot !== "m") {
+        if (!activeSession?.isMain) {
           targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
         }
       }

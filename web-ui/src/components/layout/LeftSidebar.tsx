@@ -19,9 +19,10 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
-import { applySortOrder, useWorkspaceStore } from "@/hooks/useStore";
+import { computeNewSortOrder, useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useLayout } from "@/hooks/useLayout";
+import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
@@ -50,6 +51,19 @@ import { Logo } from "@/components/shared/Logo";
  * passes through untouched; interactive controls inside the row (the "…"
  * menu trigger) additionally stop propagation on `pointerdown` so they never
  * register as a drag start at all (mirrors TabsStrip's `tab__close`).
+ *
+ * IMPORTANT: that activation-distance check only gates whether a *drag*
+ * starts — it does NOT stop the browser from firing a `click` when the
+ * pointer is released, no matter how far it moved in between. Because these
+ * rows are `<a href>` elements (React Router `<Link>`s), that trailing click
+ * makes the browser NAVIGATE to the dragged row's URL, selecting it as a
+ * side effect of a pure reorder. It cannot be fixed from the row's own
+ * `onClick`: dnd-kit stops the click's propagation at `document` capture
+ * before React ever sees it, while leaving the anchor's default action
+ * intact. `useDragClickGuard` (wired into every `DndContext` here via
+ * `markDrag`) handles it from a `window`-capture listener instead — see that
+ * hook for the full mechanism. The rows are additionally `draggable={false}`
+ * so the browser's own link-drag never competes with dnd-kit's pointer drag.
  */
 function SortableRow({
   id,
@@ -74,6 +88,29 @@ function SortableRow({
     cursor: isDragging ? "grabbing" : undefined,
   };
   return children({ setNodeRef, style, attributes, listeners });
+}
+
+/**
+ * Merge a persisted drag order with the current live id list: known ids are
+ * placed per the stored order, anything not yet in the stored order (new
+ * session/worktree) is appended at the end in its natural (server) order, and
+ * stale ids no longer present are dropped. Never reorders by mutating the
+ * live objects — callers re-sort their `.map()` input by this id list only,
+ * keeping every item keyed by its own stable id (no index-keying, no remounts).
+ *
+ * Used ONLY by the pinned sub-lists (`pinned-worktrees`/`pinned-direct`),
+ * which stay on this local-only mechanism — the server's per-worktree/
+ * per-project `sortOrder` column can't express a cross-project pinned order
+ * (Part 03 Decision 1 exception). Formerly exported from `useStore.ts` as
+ * `applySortOrder`; moved here since this is now its only consumer.
+ */
+function applyLocalSortOrder(order: string[] | undefined, liveIds: string[]): string[] {
+  if (!order || order.length === 0) return liveIds;
+  const liveSet = new Set(liveIds);
+  const known = order.filter((id) => liveSet.has(id));
+  const knownSet = new Set(known);
+  const rest = liveIds.filter((id) => !knownSet.has(id));
+  return [...known, ...rest];
 }
 
 /** First 3 characters for collapsed rail labels (trimmed, min 1 char). */
@@ -241,46 +278,57 @@ export function LeftSidebar({
   );
   const hasPinned = pinnedWorktrees.length > 0 || pinnedDirectSessions.length > 0;
 
-  // --- Prototype-only rename + drag-reorder state (no daemon persistence yet;
-  // see .feature-plans/sqlite_agent_naming_plan.md F1-F3/F8-F10). Order and
-  // name overrides live in useWorkspaceStore (persisted to localStorage) so
-  // they survive a reload but are never sent to the server. ---
+  // --- Rename + drag-reorder (Part 03 Phase 2): real daemon endpoints for
+  // regular (unpinned) worktree/direct-session scopes. Pinned sub-lists keep
+  // the old local-only `sortOrders` mechanism (see `applyLocalSortOrder`
+  // above) — the server's per-worktree/per-project `sortOrder` column can't
+  // express a cross-project pinned order (Decision 1 exception). ---
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
-  const worktreeNameOverrides = useWorkspaceStore((s) => s.worktreeNameOverrides);
-  const setWorktreeNameOverride = useWorkspaceStore((s) => s.setWorktreeNameOverride);
-  const sessionNameOverrides = useWorkspaceStore((s) => s.sessionNameOverrides);
-  const setSessionNameOverride = useWorkspaceStore((s) => s.setSessionNameOverride);
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  /**
+   * Suppresses the browser's trailing `click` after a drag-to-reorder, which
+   * would otherwise navigate these `<a href>` rows to the dragged worktree/
+   * session — i.e. select it as a side effect of a pure reorder. `markDrag`
+   * is wired into EVERY `DndContext` below (onDragStart/onDragEnd/
+   * onDragCancel). See `useDragClickGuard` for why a React `onClick` handler
+   * cannot fix this on its own.
+   */
+  const markDrag = useDragClickGuard();
   const [renameTarget, setRenameTarget] = useState<
     { kind: "worktree"; worktree: Worktree } | { kind: "session"; session: Session } | null
   >(null);
 
   function worktreeLabel(w: Worktree): string {
-    return worktreeNameOverrides[w.id] ?? w.branch;
+    return w.name ?? w.branch;
   }
   function sessionLabel(s: Session): string {
-    return sessionNameOverrides[s.id] ?? s.label;
+    return s.label;
   }
 
   /** Reorder scope: pinned worktrees float in their own drag-order list,
    *  independent of pin recency once the user has dragged them (documented
-   *  choice — see task write-up: pin recency is only the *default* order). */
+   *  choice — see task write-up: pin recency is only the *default* order).
+   *  Pinned lists keep the OLD local-only mechanism (Decision 1 exception). */
   const orderedPinnedWorktrees = useMemo(() => {
     const ids = pinnedWorktrees.map((w) => w.id);
-    const order = applySortOrder(sortOrders["pinned-worktrees"], ids);
+    const order = applyLocalSortOrder(sortOrders["pinned-worktrees"], ids);
     const byId = new Map(pinnedWorktrees.map((w) => [w.id, w]));
     return order.map((id) => byId.get(id)!).filter(Boolean);
   }, [pinnedWorktrees, sortOrders]);
 
   const orderedPinnedDirectSessions = useMemo(() => {
     const ids = pinnedDirectSessions.map((s) => s.id);
-    const order = applySortOrder(sortOrders["pinned-direct"], ids);
+    const order = applyLocalSortOrder(sortOrders["pinned-direct"], ids);
     const byId = new Map(pinnedDirectSessions.map((s) => [s.id, s]));
     return order.map((id) => byId.get(id)!).filter(Boolean);
   }, [pinnedDirectSessions, sortOrders]);
 
+  /** Pinned-scope reorder handler — unchanged local-only mechanism. */
   function handleReorder(scopeKey: string, currentIds: string[], e: DragEndEvent) {
+    // Mark BEFORE the early return: a drag that ends where it started still
+    // produces the trailing click that would navigate the row's <a href>.
+    markDrag();
     const { active, over } = e;
     if (!over || active.id === over.id) return;
     const from = currentIds.indexOf(String(active.id));
@@ -290,6 +338,50 @@ export function LeftSidebar({
     next.splice(from, 1);
     next.splice(to, 0, String(active.id));
     setSortOrder(scopeKey, next);
+  }
+
+  /** Non-pinned worktree/direct-session reorder — real server `sortOrder`
+   *  (Part 03 Decision 1). `orderedList` is the current (real-sortOrder)
+   *  order; `kind` selects which reorder endpoint to call. */
+  function handleServerReorder(
+    orderedList: (Worktree | Session)[],
+    kindArg: "worktree" | "session",
+    e: DragEndEvent,
+  ) {
+    // Mark BEFORE the early return — see handleReorder.
+    markDrag();
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = orderedList.findIndex((x) => x.id === String(active.id));
+    const to = orderedList.findIndex((x) => x.id === String(over.id));
+    if (from === -1 || to === -1) return;
+    const moved = orderedList[from]!;
+    const prevSortOrder = moved.sortOrder;
+
+    const reordered = orderedList.slice();
+    reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const newIndex = reordered.indexOf(moved);
+    const prevNeighbor = reordered[newIndex - 1];
+    const nextNeighbor = reordered[newIndex + 1];
+    const newSortOrder = computeNewSortOrder(prevNeighbor?.sortOrder, nextNeighbor?.sortOrder);
+
+    const patch = (sortOrder: number | undefined) => {
+      if (kindArg === "worktree") {
+        useServerStore.getState().applyWorktreeUpdated({ ...(moved as Worktree), sortOrder });
+      } else {
+        useServerStore.getState().applySessionUpdated(moved.id, { sortOrder });
+      }
+    };
+
+    patch(newSortOrder);
+    const call =
+      kindArg === "worktree"
+        ? api.reorderWorktree(moved.id, newSortOrder)
+        : api.reorderSession(moved.id, newSortOrder);
+    void call.catch(() => {
+      patch(prevSortOrder);
+    });
   }
   const [openProj, setOpenProj] = useState<Set<string>>(() => {
     try {
@@ -628,6 +720,8 @@ export function LeftSidebar({
             <DndContext
               sensors={dndSensors}
               collisionDetection={closestCenter}
+              onDragStart={markDrag}
+              onDragCancel={markDrag}
               onDragEnd={(e) =>
                 handleReorder(
                   "pinned-direct",
@@ -657,12 +751,14 @@ export function LeftSidebar({
                           <div
                             className="tree-row tree-row--direct-session pinned-row"
                             data-active={isActive}
+                            data-archived={sess.archivedAt != null ? "true" : undefined}
                             style={{ position: "relative" }}
                             title={`${label} — direct session`}
                           >
                             <Link
                               to={`/session/${sess.id}`}
                               className="wt-row__stretch-link"
+                              draggable={false}
                               aria-label={`Open pinned direct session ${label}`}
                               onClick={() => {
                                 if (isMobile) setMobileSidebarOpen(false);
@@ -679,6 +775,9 @@ export function LeftSidebar({
                               </span>
                             </div>
                             <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                              {sess.archivedAt != null ? (
+                                <span className="direct-session__badge">archived</span>
+                              ) : null}
                               <span className="direct-session__badge">direct</span>
                               <button
                                 type="button"
@@ -712,6 +811,8 @@ export function LeftSidebar({
             <DndContext
               sensors={dndSensors}
               collisionDetection={closestCenter}
+              onDragStart={markDrag}
+              onDragCancel={markDrag}
               onDragEnd={(e) =>
                 handleReorder(
                   "pinned-worktrees",
@@ -754,6 +855,7 @@ export function LeftSidebar({
                             <Link
                               to={`/worktree/${w.id}`}
                               className="wt-row__stretch-link"
+                              draggable={false}
                               aria-label={`Open pinned worktree ${label}`}
                               onClick={(e) => {
                                 if (isModifiedClick(e)) return;
@@ -922,17 +1024,25 @@ export function LeftSidebar({
                 worktrees list below. */}
             {openProj.has(p.id) && (directSessionMap[p.id] ?? []).length > 0
               ? (() => {
-                  const directScope = `direct:${p.id}`;
-                  const rawIds = (directSessionMap[p.id] ?? []).map((s) => s.id);
-                  const orderedIds = applySortOrder(sortOrders[directScope], rawIds);
-                  const byId = new Map((directSessionMap[p.id] ?? []).map((s) => [s.id, s]));
-                  const orderedDirect = orderedIds.map((id) => byId.get(id)!).filter(Boolean);
+                  // Real server `sortOrder` (Part 03 Decision 1) — no more
+                  // local drag-order array for this (non-pinned) scope.
+                  const orderedDirect = (directSessionMap[p.id] ?? [])
+                    .slice()
+                    .sort((a, b) => {
+                      const ao = a.sortOrder ?? 0;
+                      const bo = b.sortOrder ?? 0;
+                      if (ao !== bo) return ao - bo;
+                      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                    });
+                  const orderedIds = orderedDirect.map((s) => s.id);
                   return (
                     <div className="direct-sessions-group">
                       <DndContext
                         sensors={dndSensors}
                         collisionDetection={closestCenter}
-                        onDragEnd={(e) => handleReorder(directScope, orderedIds, e)}
+                        onDragStart={markDrag}
+                        onDragCancel={markDrag}
+                        onDragEnd={(e) => handleServerReorder(orderedDirect, "session", e)}
                       >
                         <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
                           {orderedDirect.map((sess) => {
@@ -950,12 +1060,14 @@ export function LeftSidebar({
                                     <div
                                       className="tree-row tree-row--direct-session"
                                       data-active={location.pathname === `/session/${sess.id}`}
+                                      data-archived={sess.archivedAt != null ? "true" : undefined}
                                       style={{ position: "relative" }}
                                       title={collapsed ? `${label} — direct session` : "Direct session (no worktree)"}
                                     >
                                       <Link
                                         to={`/session/${sess.id}`}
                                         className="wt-row__stretch-link"
+                                        draggable={false}
                                         aria-label={`Open direct session ${label}`}
                                         onClick={() => {
                                           if (isMobile) setMobileSidebarOpen(false);
@@ -966,10 +1078,15 @@ export function LeftSidebar({
                                         <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
                                       </span>
                                       <span className="direct-session__label">
-                                        {collapsed ? sess.slot : label}
+                                        {/* `slot` is gone (Decision 1) — collapsed view now shows a
+                                            truncated label instead of a stable short code. */}
+                                        {collapsed ? label.slice(0, 3) : label}
                                       </span>
                                       {!collapsed && sess.pinnedAt ? (
                                         <Pin size={10} fill="currentColor" aria-label="Pinned" style={{ flexShrink: 0, opacity: 0.7 }} />
+                                      ) : null}
+                                      {!collapsed && sess.archivedAt != null ? (
+                                        <span className="direct-session__badge">archived</span>
                                       ) : null}
                                       {!collapsed && (
                                         <span className="direct-session__badge">direct</span>
@@ -1019,16 +1136,22 @@ export function LeftSidebar({
                     const ss = sessionMap[w.id] ?? [];
                     return !worktreeIsInactive(ss, sessionStates);
                   });
-                  const wtScope = `worktrees:${p.id}`;
-                  const rawIds = wtList.map((w) => w.id);
-                  const orderedIds = applySortOrder(sortOrders[wtScope], rawIds);
-                  const byId = new Map(wtList.map((w) => [w.id, w]));
-                  const orderedWtList = orderedIds.map((id) => byId.get(id)!).filter(Boolean);
+                  // Real server `sortOrder` (Part 03 Decision 1) — no more
+                  // local drag-order array for this (non-pinned) scope.
+                  const orderedWtList = wtList.slice().sort((a, b) => {
+                    const ao = a.sortOrder ?? 0;
+                    const bo = b.sortOrder ?? 0;
+                    if (ao !== bo) return ao - bo;
+                    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                  });
+                  const orderedIds = orderedWtList.map((w) => w.id);
                   return (
                     <DndContext
                       sensors={dndSensors}
                       collisionDetection={closestCenter}
-                      onDragEnd={(e) => handleReorder(wtScope, orderedIds, e)}
+                      onDragStart={markDrag}
+                      onDragCancel={markDrag}
+                      onDragEnd={(e) => handleServerReorder(orderedWtList, "worktree", e)}
                     >
                       <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
                         {orderedWtList.map((w) => {
@@ -1060,6 +1183,7 @@ export function LeftSidebar({
                                     <Link
                                       to={`/worktree/${w.id}`}
                                       className="wt-row__stretch-link"
+                                      draggable={false}
                                       aria-label={`Open worktree ${label}`}
                                       onClick={(e) => {
                                         if (isModifiedClick(e)) return;
@@ -1254,10 +1378,10 @@ export function LeftSidebar({
         onCancel={() => setPendingDismissSession(null)}
       />
 
-      {/* Prototype rename dialog — local/optimistic only, see
-          .feature-plans/sqlite_agent_naming_plan.md F1-F3. No daemon rename
-          endpoint exists yet, so this just writes a client-side name
-          override; the displayed label updates immediately. */}
+      {/* Rename dialog — calls the real rename endpoint (Part 03 Phase 2).
+          Empty input clears back to the server's computed default name. The
+          store stays current via the `worktree:updated`/`session:updated` WS
+          events (already reconciled, see useServerSync.ts). */}
       <RenameDialog
         open={renameTarget !== null}
         title={renameTarget?.kind === "worktree" ? "Rename worktree" : "Rename session"}
@@ -1270,12 +1394,17 @@ export function LeftSidebar({
         }
         onCancel={() => setRenameTarget(null)}
         onSubmit={(name) => {
-          if (renameTarget?.kind === "worktree") {
-            setWorktreeNameOverride(renameTarget.worktree.id, name);
-          } else if (renameTarget?.kind === "session") {
-            setSessionNameOverride(renameTarget.session.id, name);
-          }
+          const target = renameTarget;
           setRenameTarget(null);
+          if (target?.kind === "worktree") {
+            void api.renameWorktree(target.worktree.id, name).catch(() => {
+              /* surface errors later */
+            });
+          } else if (target?.kind === "session") {
+            void api.renameSession(target.session.id, name).catch(() => {
+              /* surface errors later */
+            });
+          }
         }}
       />
 

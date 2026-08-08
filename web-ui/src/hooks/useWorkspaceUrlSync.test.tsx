@@ -4,7 +4,7 @@ import type { Session } from "@/api/types";
 const P1 = "project-1";
 const W1 = "wt-1";
 
-const mockSession = (id: string, slot: "m" | "a" = "m"): Session => ({
+const mockSession = (id: string, isMain = true): Session => ({
   id,
   worktreeId: W1,
   projectId: P1,
@@ -12,69 +12,69 @@ const mockSession = (id: string, slot: "m" | "a" = "m"): Session => ({
   type: "terminal",
   state: "working",
   lifecycleState: "working",
-  label: slot === "m" ? "main" : "alt",
-  slot,
+  label: isMain ? "main" : "alt",
+  isMain,
   tmuxName: id,
   createdAt: new Date().toISOString(),
 });
 
-describe("useWorkspaceUrlSync - URL omission for main slot logic", () => {
-  it("identifies main slot session correctly", () => {
-    const mainSession = mockSession("s-main", "m");
-    const altSession = mockSession("s-alt", "a");
+describe("useWorkspaceUrlSync - URL omission for main session logic", () => {
+  it("identifies main session correctly", () => {
+    const mainSession = mockSession("s-main", true);
+    const altSession = mockSession("s-alt", false);
 
-    expect(mainSession.slot).toBe("m");
-    expect(altSession.slot).toBe("a");
+    expect(mainSession.isMain).toBe(true);
+    expect(altSession.isMain).toBe(false);
   });
 
-  it("main slot sessions are distinguishable from others", () => {
-    const sessions = [mockSession("s-main", "m"), mockSession("s-alt", "a")];
-    const mainSlot = sessions.find((s) => s.slot === "m");
-    expect(mainSlot?.id).toBe("s-main");
+  it("main sessions are distinguishable from others", () => {
+    const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
+    const main = sessions.find((s) => s.isMain);
+    expect(main?.id).toBe("s-main");
   });
 
   it("session not in list returns undefined", () => {
-    const sessions = [mockSession("s-main", "m")];
+    const sessions = [mockSession("s-main", true)];
     const notFound = sessions.find((s) => s.id === "nonexistent");
     expect(notFound).toBeUndefined();
   });
 
-  it("multiple sessions can be filtered by worktreeId and slot", () => {
+  it("multiple sessions can be filtered by worktreeId and isMain", () => {
     const sessions = [
-      mockSession("s-main-1", "m"),
-      mockSession("s-alt-1", "a"),
-      mockSession("s-alt-2", "a"),
+      mockSession("s-main-1", true),
+      mockSession("s-alt-1", false),
+      mockSession("s-alt-2", false),
     ];
-    const mainSessions = sessions.filter((s) => s.slot === "m");
+    const mainSessions = sessions.filter((s) => s.isMain);
     expect(mainSessions).toHaveLength(1);
     expect(mainSessions[0]!.id).toBe("s-main-1");
   });
 
   describe("URL param logic", () => {
-    it("should omit session param when active session is main slot", () => {
-      const sessions = [mockSession("s-main", "m")];
+    it("should omit session param when active session is main", () => {
+      const sessions = [mockSession("s-main", true)];
       const activeSessionId = "s-main";
       const activeSession = sessions.find((s) => s.id === activeSessionId)!;
 
       // This mimics the logic in useWorkspaceUrlSync write effect
-      const shouldOmitSessionParam = activeSession.slot === "m";
+      const shouldOmitSessionParam = activeSession.isMain;
       expect(shouldOmitSessionParam).toBe(true);
     });
 
-    it("should include session param when active session is non-main slot", () => {
-      const sessions = [mockSession("s-main", "m"), mockSession("s-alt", "a")];
+    it("should include session param when active session is non-main", () => {
+      const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
       const activeSessionId = "s-alt";
       const activeSession = sessions.find((s) => s.id === activeSessionId)!;
 
-      const shouldOmitSessionParam = activeSession.slot === "m";
+      const shouldOmitSessionParam = activeSession.isMain;
       expect(shouldOmitSessionParam).toBe(false);
     });
   });
 
   describe("Path-param routing logic", () => {
-    it("write effect produces /worktree/:wtId path for main-slot session", () => {
+    it("write effect produces /worktree/:wtId path for the main session", () => {
       const activeWorktreeId = W1;
-      const sessions = [mockSession("s-main", "m")];
+      const sessions = [mockSession("s-main", true)];
       const activeSessionId = "s-main";
       const activeSession = sessions.find((s) => s.id === activeSessionId)!;
 
@@ -82,7 +82,7 @@ describe("useWorkspaceUrlSync - URL omission for main slot logic", () => {
       let targetPath = "/worktree";
       if (activeWorktreeId) {
         targetPath = `/worktree/${activeWorktreeId}`;
-        if (activeSessionId && activeSession.slot !== "m") {
+        if (activeSessionId && !activeSession.isMain) {
           targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
         }
       }
@@ -92,7 +92,7 @@ describe("useWorkspaceUrlSync - URL omission for main slot logic", () => {
 
     it("write effect produces /worktree/:wtId/:sessionId path for non-main session", () => {
       const activeWorktreeId = W1;
-      const sessions = [mockSession("s-main", "m"), mockSession("s-alt", "a")];
+      const sessions = [mockSession("s-main", true), mockSession("s-alt", false)];
       const activeSessionId = "s-alt";
       const activeSession = sessions.find((s) => s.id === activeSessionId)!;
 
@@ -100,7 +100,7 @@ describe("useWorkspaceUrlSync - URL omission for main slot logic", () => {
       let targetPath = "/worktree";
       if (activeWorktreeId) {
         targetPath = `/worktree/${activeWorktreeId}`;
-        if (activeSessionId && activeSession.slot !== "m") {
+        if (activeSessionId && !activeSession.isMain) {
           targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
         }
       }

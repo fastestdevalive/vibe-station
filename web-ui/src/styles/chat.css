@@ -752,6 +752,14 @@
   outline-offset: -4px;
   background: var(--bg-hover);
 }
+.chat-composer--archived {
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+  font-style: italic;
+  text-align: center;
+  padding-top: var(--space-3);
+  padding-bottom: var(--space-3);
+}
 .chat-composer__chips {
   display: flex;
   flex-wrap: wrap;

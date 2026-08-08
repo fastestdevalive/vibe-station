@@ -13,7 +13,7 @@ function sess(
     modeId: null,
     type: "agent",
     label: id,
-    slot: "m",
+    isMain: true,
     state,
     lifecycleState: state,
     tmuxName: `t-${id}`,

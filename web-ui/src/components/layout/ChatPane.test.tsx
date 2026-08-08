@@ -26,7 +26,7 @@ function jsonSession(id: string): Session {
     modeId: "mode-1",
     type: "agent",
     label: "main",
-    slot: "m",
+    isMain: true,
     state: "idle",
     lifecycleState: "idle",
     tmuxName: "",
@@ -93,5 +93,28 @@ describe("ChatPane (4.T2)", () => {
     expect(within(tray).getByText("queued msg")).toBeTruthy();
     expect(within(tray).getByLabelText("Send now")).toBeTruthy();
     expect(within(screen.getByRole("log")).queryByText("queued msg")).toBeNull();
+  });
+
+  it("3.T2 — an archived session's composer renders disabled with the exact expected copy", async () => {
+    const api = createMockApi();
+    const archived: Session = { ...jsonSession("js-archived"), archivedAt: new Date().toISOString() };
+    render(<ChatPane api={api} session={archived} visible />);
+
+    // Exact copy from the original F5 mockup (Decision 4 / CUJ 3) — no
+    // paraphrasing, and no live textarea/send control in its place.
+    expect(
+      await screen.findByText("This session has been archived. Start a new agent to continue."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /send message/i })).toBeNull();
+  });
+
+  it("a non-archived session still renders the live composer", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("js-live")} visible />);
+    expect(await screen.findByRole("textbox", { name: /message/i })).toBeTruthy();
+    expect(
+      screen.queryByText("This session has been archived. Start a new agent to continue."),
+    ).toBeNull();
   });
 });

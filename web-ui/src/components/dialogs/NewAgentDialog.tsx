@@ -96,9 +96,14 @@ function validateProjectName(trimmed: string): string | null {
  * selected base), a new branch equal to it is rejected as a collision. In
  * add-path mode the base isn't known until the server responds, so `baseBranch`
  * is omitted and the daemon does the collision check.
+ *
+ * The branch name itself is optional (branch-name-optional) — an empty
+ * `trimmed` is valid and means "let the daemon derive one from the prompt, or
+ * auto-generate a placeholder." Callers should only invoke this when `trimmed`
+ * is non-empty; format/collision rules below only make sense against real input.
  */
 function validateBranchName(trimmed: string, baseBranch?: string): string | null {
-  if (!trimmed) return "Branch name is required.";
+  if (!trimmed) return null;
   if (trimmed.length > 200) return "Branch name exceeds 200 character limit.";
   if (trimmed.includes("..")) return 'Branch name cannot contain ".."';
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(trimmed)) {
@@ -150,6 +155,9 @@ export function NewAgentDialog({
   const [popupOpen, setPopupOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const projectWrapperRef = useRef<HTMLDivElement>(null);
+  // Autofocus target for the agent/worktree/prompt section — see the
+  // `showConfig`-keyed effect below.
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const pathSuggs = useDirSuggestions(api);
   const [dirChooserOpen, setDirChooserOpen] = useState(false);
 
@@ -174,7 +182,9 @@ export function NewAgentDialog({
 
   // ── Agent section — always visible once a project source is chosen ─────
   const [useWorktree, setUseWorktree] = useState(false);
-  const [branch, setBranch] = useState("feature");
+  // Blank by default (branch-name-optional) — the daemon derives a name from
+  // the prompt, or auto-generates a placeholder, when this is left empty.
+  const [branch, setBranch] = useState("");
   // Base branch for the "use existing (git)" case — populated from
   // GET /projects/:id/branches, or free-typed if that fetch fails.
   const [baseBranch, setBaseBranch] = useState("");
@@ -324,7 +334,7 @@ export function NewAgentDialog({
     setDirPopupOpen(false);
     setDirActiveIndex(0);
     setUseWorktree(false);
-    setBranch("feature");
+    setBranch("");
     setBaseBranch("");
     setBranches([]);
     setBranchesError(null);
@@ -488,7 +498,7 @@ export function NewAgentDialog({
    */
   function adoptPath(rawPath: string) {
     setError(null);
-    setBranch("feature");
+    setBranch("");
     setPopupOpen(false);
     setActiveIndex(0);
 
@@ -524,7 +534,7 @@ export function NewAgentDialog({
     setMode("existing");
     setSelectedProject(existing);
     setUseWorktree(existing.isGit === true);
-    setBranch("feature");
+    setBranch("");
     setError(null);
   }, [mode, trimmedQuery, findRegisteredProject]);
 
@@ -538,7 +548,7 @@ export function NewAgentDialog({
     }
 
     setError(null);
-    setBranch("feature");
+    setBranch("");
     // Default worktree OFF; only an existing git repo flips it on below. Setting
     // it explicitly here stops a `true` from a previously-picked git project
     // leaking into a create/add-path selection.
@@ -678,6 +688,46 @@ export function NewAgentDialog({
     mode === "existing" ||
     (mode === "create" && createNameValid);
 
+  // Autofocus, case 1 — dialog OPENS with a project already selected/locked
+  // in (e.g. the project-specific "+ new agent" affordance): handled purely
+  // declaratively via `data-autofocus` on the prompt textarea below (only
+  // rendered inside the `showConfig` block). `Dialog.tsx` runs its own
+  // generic auto-focus pass exactly once per `open` transition
+  // (`card.querySelector("[data-autofocus]")`, falling back to the first
+  // `input/select/textarea` in DOM order otherwise) via a `setTimeout(0)`.
+  // Since `showConfig` is already true at that first firing in this case,
+  // the prompt textarea (carrying `data-autofocus`) already exists in the
+  // DOM and Dialog.tsx finds and focuses it directly — no effect needed here
+  // at all for this case.
+  //
+  // Autofocus, case 2 — dialog opens on the blank project-PICKER (no project
+  // selected yet), then the user selects one INTERACTIVELY while the dialog
+  // stays open. `Dialog.tsx`'s auto-focus effect is keyed only on `[open]`,
+  // so it already fired once (correctly focusing the picker, since the
+  // prompt textarea didn't exist yet) and will NOT fire again just because
+  // `showConfig` flips true later — nothing else re-focuses the
+  // newly-mounted prompt field on its own. This effect exists ONLY for that
+  // transition; it can no longer race with Dialog.tsx the way an earlier
+  // version of this fix did, because Dialog.tsx's own pass is long finished
+  // by the time `showConfig` changes. Still guards against yanking focus
+  // away from a field the user has already started interacting with (e.g.
+  // clicked into Branch immediately after picking the project).
+  useEffect(() => {
+    if (!open || !showConfig) return;
+    const id = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const userAlreadyFocusedSomethingElse =
+        active instanceof HTMLElement &&
+        active !== promptRef.current &&
+        active !== document.body &&
+        ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
+      if (!userAlreadyFocusedSomethingElse) {
+        promptRef.current?.focus();
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [open, showConfig]);
+
   const worktreeDisabled = mode === "existing" && !!selectedProject && selectedProject.isGit === false;
   let worktreeHint: string | null = null;
   if (mode === "create") {
@@ -705,7 +755,7 @@ export function NewAgentDialog({
       return;
     }
     const trimmedBranch = branch.trim();
-    if (useWorktree) {
+    if (useWorktree && trimmedBranch) {
       // Base is always `main` for a freshly-created project.
       const branchErr = validateBranchName(trimmedBranch, "main");
       if (branchErr) {
@@ -730,7 +780,7 @@ export function NewAgentDialog({
           modeId,
           prompt: prompt.trim() || undefined,
           useWorktree,
-          branch: useWorktree ? trimmedBranch : undefined,
+          branch: useWorktree ? trimmedBranch || undefined : undefined,
         };
       }
 
@@ -766,13 +816,20 @@ export function NewAgentDialog({
         if (useWorktree && result.project.isGit) {
           const wt = await api.createWorktree({
             projectId: result.project.id,
-            branch: trimmedBranch,
+            branch: trimmedBranch || undefined,
             baseBranch: result.project.defaultBranch,
             modeId,
             channel: "json",
           });
           worktreeId = wt.id;
-          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+          if (wt.mainSessionId) {
+            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
+          } else {
+            // No main session id came back (unexpected) — never guess one
+            // (ids are independently generated, Decision 1); the worktree
+            // still exists and is usable, just without a first turn queued.
+            console.error(`[NewAgentDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
+          }
         } else {
           const sess = await api.createDirectSession({
             target: "direct",
@@ -821,7 +878,7 @@ export function NewAgentDialog({
       return;
     }
     const trimmedBranch = branch.trim();
-    if (useWorktree) {
+    if (useWorktree && trimmedBranch) {
       // The base branch isn't known until the server registers + sets up the
       // project (could be the repo's existing default), so skip the collision
       // check here and let the daemon reject a real collision.
@@ -860,7 +917,7 @@ export function NewAgentDialog({
         // auto-enqueue), then upload staged files + send the prompt as turn 1.
         const wt = await api.createWorktree({
           projectId: project.id,
-          branch: trimmedBranch,
+          branch: trimmedBranch || undefined,
           baseBranch: project.defaultBranch,
           modeId,
           ...(isJson
@@ -869,7 +926,14 @@ export function NewAgentDialog({
         });
         worktreeId = wt.id;
         if (isJson) {
-          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+          if (wt.mainSessionId) {
+            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
+          } else {
+            // No main session id came back (unexpected) — never guess one
+            // (ids are independently generated, Decision 1); the worktree
+            // still exists and is usable, just without a first turn queued.
+            console.error(`[NewAgentDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
+          }
         } else if (files.length > 0 && wt.mainSessionId) {
           // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(wt.mainSessionId, files);
@@ -911,7 +975,7 @@ export function NewAgentDialog({
     setError(null);
     if (!selectedProject) return;
     const trimmedBranch = branch.trim();
-    if (useWorktree && !worktreeDisabled) {
+    if (useWorktree && !worktreeDisabled && trimmedBranch) {
       // Collision is against the actually-selected base (e.g. "develop"), not a
       // hardcoded "main" — fall back to the project's default branch.
       const effectiveBase = baseBranch.trim() || selectedProject.defaultBranch || undefined;
@@ -933,7 +997,7 @@ export function NewAgentDialog({
         // against the returned worktree's main agent.
         const wt = await api.createWorktree({
           projectId: selectedProject.id,
-          branch: trimmedBranch,
+          branch: trimmedBranch || undefined,
           baseBranch: baseBranch.trim() || undefined,
           modeId,
           ...(isJson
@@ -942,7 +1006,14 @@ export function NewAgentDialog({
         });
         worktreeId = wt.id;
         if (isJson) {
-          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, prompt, files);
+          if (wt.mainSessionId) {
+            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
+          } else {
+            // No main session id came back (unexpected) — never guess one
+            // (ids are independently generated, Decision 1); the worktree
+            // still exists and is usable, just without a first turn queued.
+            console.error(`[NewAgentDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
+          }
         } else if (files.length > 0 && wt.mainSessionId) {
           // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(wt.mainSessionId, files);
@@ -1342,11 +1413,13 @@ export function NewAgentDialog({
             {showBranchFields ? (
               <>
                 <div className="form-field">
-                  <label htmlFor="agent-branch">Branch</label>
+                  <label htmlFor="agent-branch">
+                    Branch <span className="form-optional">(optional)</span>
+                  </label>
                   <Input
                     id="agent-branch"
                     type="text"
-                    placeholder="feature"
+                    placeholder="auto-generated from your prompt if left blank"
                     value={branch}
                     onChange={(e) => setBranch(e.target.value)}
                   />
@@ -1422,6 +1495,8 @@ export function NewAgentDialog({
               </label>
               <textarea
                 id="agent-prompt"
+                ref={promptRef}
+                data-autofocus
                 className="input"
                 rows={3}
                 placeholder="What should the agent work on?"

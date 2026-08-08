@@ -119,10 +119,6 @@ export function NewSessionDialog({
 
   async function submit() {
     setError(null);
-    if (wtChoice === "new" && !newWtBranch.trim()) {
-      setError("New worktree requires branch.");
-      return;
-    }
     if (wtChoice === "existing" && !existingWtId) {
       setError("Select a worktree.");
       return;
@@ -138,12 +134,19 @@ export function NewSessionDialog({
           // the prompt as turn 1 against the main agent.
           const wt = await api.createWorktree({
             projectId,
-            branch: newWtBranch.trim(),
+            branch: newWtBranch.trim() || undefined,
             modeId: modeId || "mode-1",
             baseBranch: baseBranch.trim() || undefined,
             channel: "json",
           });
-          await sendJsonFirstTurn(api, wt.mainSessionId ?? `${wt.id}-m`, initialPrompt, files);
+          if (wt.mainSessionId) {
+            await sendJsonFirstTurn(api, wt.mainSessionId, initialPrompt, files);
+          } else {
+            // No main session id came back (unexpected) — never guess one
+            // (ids are independently generated, Decision 1); the worktree
+            // still exists and is usable, just without a first turn queued.
+            console.error(`[NewSessionDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
+          }
         } else {
           // KNOWN RACE (unlike the JSON path above, which creates idle and
           // only sends turn 1 — with attachment ids — once the upload
@@ -161,7 +164,7 @@ export function NewSessionDialog({
           // /sessions/:id/input 409s if the CLI process isn't registered yet.
           const wt = await api.createWorktree({
             projectId,
-            branch: newWtBranch.trim(),
+            branch: newWtBranch.trim() || undefined,
             modeId: modeId || "mode-1",
             baseBranch: baseBranch.trim() || undefined,
             prompt: initialPrompt.trim() || undefined,
@@ -257,10 +260,12 @@ export function NewSessionDialog({
       />
       {wtChoice === "new" ? (
         <>
-          <div className="field-label">Branch</div>
+          <div className="field-label">
+            Branch <span className="form-optional">(optional)</span>
+          </div>
           <Input
-            data-autofocus
             aria-label="New worktree branch"
+            placeholder="auto-generated from your prompt if left blank"
             value={newWtBranch}
             onChange={(e) => setNewWtBranch(e.target.value)}
           />
@@ -311,6 +316,7 @@ export function NewSessionDialog({
       </button>
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Initial prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
       <textarea
+        data-autofocus
         className="field-textarea"
         aria-label="Initial prompt"
         placeholder="Describe what you want the agent to do…"

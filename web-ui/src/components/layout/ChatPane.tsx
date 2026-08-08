@@ -146,6 +146,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   }, [lastUserText, send]);
 
   const isEmpty = !loading && events.length === 0 && pending.length === 0;
+  const archived = session?.archivedAt != null;
 
   // Keep the pane mounted even when hidden (Decision 14) — the terminal beside it
   // must never remount. `hidden` also stops the offscreen list from scrolling.
@@ -206,7 +207,13 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             focusComposer={() => composerRef.current?.focus()}
           />
         ) : null}
-        {sessionId ? (
+        {sessionId && archived ? (
+          // Decision 4 / CUJ 3: an archived session is read-only in place — no
+          // new turns can be sent. Exact copy from the original F5 mockup.
+          <div className="chat-composer chat-composer--archived" role="status">
+            This session has been archived. Start a new agent to continue.
+          </div>
+        ) : sessionId ? (
           <Composer
             key={`${sessionId}:${composerKey}`}
             api={api}
