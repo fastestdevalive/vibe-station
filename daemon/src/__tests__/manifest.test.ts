@@ -23,6 +23,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir, "vibe-station.db"),
   };
 });
 
@@ -253,7 +254,11 @@ describe("project-store", () => {
     const { addProject, getProject } = await import("../state/project-store.js");
     const project = makeProject("new-proj");
     await addProject(project);
-    expect(getProject("new-proj")).toEqual(project);
+    // The SQL-backed store always materializes the counter columns (they're
+    // NOT NULL with defaults) even when the caller's in-memory record never
+    // set them — unlike the old JSON store, which just echoed back whatever
+    // object was stored in the Map verbatim.
+    expect(getProject("new-proj")).toEqual({ ...project, directSessionSeq: 0, nextWorktreeNum: 1 });
   });
 
   it("addProject throws on duplicate id", async () => {
@@ -263,19 +268,16 @@ describe("project-store", () => {
     await expect(addProject(project)).rejects.toThrow("already exists");
   });
 
-  it("mutateProject updates memory and disk", async () => {
+  it("mutateProject persists (SQL is the sole source of truth, no cache to go stale)", async () => {
     const { addProject, mutateProject, getProject } = await import(
       "../state/project-store.js"
     );
-    const { readManifest } = await import("../services/manifest.js");
 
     const project = makeProject("mut-proj");
     await addProject(project);
     await mutateProject("mut-proj", (p) => ({ ...p, defaultBranch: "develop" }));
 
     expect(getProject("mut-proj")?.defaultBranch).toBe("develop");
-    const onDisk = await readManifest("mut-proj");
-    expect(onDisk.defaultBranch).toBe("develop");
   });
 
   it("deleteProject removes from memory", async () => {

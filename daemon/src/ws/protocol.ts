@@ -194,7 +194,8 @@ const SessionCreatedSnapshot = z.object({
   id: z.string(),
   worktreeId: z.string().nullable(),
   projectId: z.string().optional(),
-  slot: z.string(),
+  /** Replaces `slot === "m"` (Decision 1) — true for a worktree's single main agent session. */
+  isMain: z.boolean(),
   type: z.enum(["agent", "terminal"]),
   modeId: z.string().nullable(),
   label: z.string(),
@@ -204,6 +205,9 @@ const SessionCreatedSnapshot = z.object({
   state: z.enum(["not_started", "working", "idle", "done", "exited"]),
   lifecycleState: z.enum(["not_started", "working", "idle", "done", "exited"]),
   createdAt: z.string(),
+  pinnedAt: z.string().nullable().optional(),
+  /** Set for a session archived by a reset (Decision 2/9); null otherwise. */
+  archivedAt: z.string().nullable().optional(),
 });
 
 const SessionCreatedEvent = z.object({
@@ -259,6 +263,12 @@ const SessionUpdatedEvent = z.object({
   pinnedAt: z.string().nullable().optional(),
   /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
   channel: z.enum(["tmux", "pty", "json"]).optional(),
+  /** After a rename (PATCH .../rename) — `null` means cleared back to the default label. */
+  name: z.string().nullable().optional(),
+  /** Set once a reset (POST .../reset) archives this session (Decision 2/9). */
+  archivedAt: z.string().optional(),
+  /** After a reorder (PATCH .../reorder) — the session's new fractional display-order rank. */
+  sortOrder: z.number().optional(),
 });
 
 /**

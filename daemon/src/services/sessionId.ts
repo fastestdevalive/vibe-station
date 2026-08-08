@@ -1,9 +1,16 @@
 /**
- * Session and worktree identity reservation.
- * Mirrors AO's reserveNextSessionIdentity (ao:packages/core/src/session-manager.ts:790-828).
+ * Session and worktree identity.
+ *
+ * `slot` is deliberately NOT a concept here anymore (see the sqlite-agent-naming
+ * data-layer plan, Decision 1): a session `id` is generated independently of
+ * any position/type-count, so a respawned session (e.g. a reset) can never
+ * collide with the row it replaced — the root cause of the old tmux-collision
+ * risk (`id = \`${worktreeId}-${slot}\`` reused a slot string across a
+ * delete+recreate cycle).
  */
 import { existsSync } from "node:fs";
-import type { ProjectRecord, SessionSlot, WorktreeRecord } from "../types.js";
+import { randomBytes } from "node:crypto";
+import type { ProjectRecord, WorktreeRecord } from "../types.js";
 import { worktreePath } from "./paths.js";
 
 /** Extract the trailing "-<num>" from a worktree id (e.g. "vs-3" -> 3). May be NaN. */
@@ -41,88 +48,19 @@ export function reserveNextWorktreeNum(project: ProjectRecord): number {
 }
 
 /**
- * Highest agent slot number ever assigned in a worktree — the monotonic
- * high-water mark for `a{n}` slots.
- *
- * Returns `max(worktree.agentSeq ?? 0, ...current agent slot numbers)`. Taking
- * the max of BOTH the persisted counter and the live slots (rather than trusting
- * `agentSeq` alone) matters for two cases:
- *   - Legacy worktrees whose agents predate `agentSeq`: the counter is unset, so
- *     the live slots supply the mark.
- *   - A stale/hand-edited counter lower than a live slot: the live slots win, so
- *     we never hand out a colliding, already-in-use number.
- * The `Number.isFinite` filter is REQUIRED so a non-numeric slot can't poison
- * the result to NaN.
- *
- * Callers persist this (or `+1`) back to `agentSeq` so the mark survives even
- * after every agent is deleted.
+ * Generate an independently-unique session id (Decision 1). `scopeId` is the
+ * worktree id for a worktree-scoped session, or the project id for a direct
+ * session — kept as a prefix purely so ids stay greppable/debuggable, NOT for
+ * uniqueness (the random suffix alone guarantees that). Every call produces a
+ * fresh id, so a session created to replace another (e.g. `POST
+ * /sessions/:id/reset`) never collides with the row it replaces.
  */
-export function agentHighWaterMark(worktree: WorktreeRecord): number {
-  const existing = worktree.sessions
-    .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("a"))
-    .map((s) => parseInt((s.slot as string).slice(1), 10))
-    .filter(Number.isFinite);
-  return Math.max(worktree.agentSeq ?? 0, 0, ...existing);
+export function generateSessionId(scopeId: string, type: "agent" | "terminal"): string {
+  const suffix = randomBytes(4).toString("hex"); // 8 hex chars — plenty for per-scope uniqueness
+  return `${scopeId}-${type[0]}-${suffix}`;
 }
 
-/**
- * Reserve the next agent slot (a{n}) for a worktree — monotonic, never reused.
- * Returns one past the high-water mark; a deleted agent's number is never
- * recycled.
- *
- * Pure: the caller MUST persist the returned number as `agentSeq` in the same
- * `mutateProject` update that appends the session record.
- */
-export function reserveNextAgentSlot(worktree: WorktreeRecord): `a${number}` {
-  const n = agentHighWaterMark(worktree) + 1;
-  return `a${n}`;
-}
-
-/**
- * Reserve the next free terminal slot number (t{n}) for a worktree.
- */
-export function reserveNextTerminalSlot(worktree: WorktreeRecord): `t${number}` {
-  const usedNums = new Set(
-    worktree.sessions
-      .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("t"))
-      .map((s) => parseInt((s.slot as string).slice(1), 10)),
-  );
-  for (let n = 1; n < 100_000; n++) {
-    if (!usedNums.has(n)) return `t${n}`;
-  }
-  throw new Error(`Could not reserve terminal slot for worktree ${worktree.id}`);
-}
-
-/**
- * Reserve the next free direct session slot number (d{n}) for a project.
- * Direct sessions run in the project directory without worktree isolation.
- */
-export function reserveNextDirectSlot(project: ProjectRecord): `d${number}` {
-  const usedNums = new Set(
-    project.directSessions
-      .filter((s) => typeof s.slot === "string" && (s.slot as string).startsWith("d"))
-      .map((s) => parseInt((s.slot as string).slice(1), 10)),
-  );
-  for (let n = 1; n < 100_000; n++) {
-    if (!usedNums.has(n)) return `d${n}`;
-  }
-  throw new Error(`Could not reserve direct slot for project ${project.id}`);
-}
-
-/**
- * Build the canonical tmux session name.
- * Format: vr-{prefix}-{worktreeNum}-{slot}
- * e.g. vr-vibe-1-m
- */
-export function buildTmuxName(prefix: string, worktreeNum: number, slot: SessionSlot): string {
-  return `vr-${prefix}-${worktreeNum}-${slot}`;
-}
-
-/**
- * Build tmux session name for direct sessions (no worktree).
- * Format: vr-{prefix}-d{n}
- * e.g. vr-vibe-d1
- */
-export function buildDirectTmuxName(prefix: string, slot: `d${number}`): string {
-  return `vr-${prefix}-${slot}`;
+/** Canonical tmux session name for a NEW session — derived from its id, not a slot. */
+export function tmuxNameForSession(id: string): string {
+  return `vst-${id}`;
 }

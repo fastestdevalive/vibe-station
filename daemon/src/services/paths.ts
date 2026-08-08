@@ -74,6 +74,11 @@ export function modesPath(): string {
   return join(vstHome(), "modes.json");
 }
 
+/** ~/.vibe-station/vibe-station.db — sole source of truth for projects/worktrees/sessions metadata. */
+export function dbPath(): string {
+  return join(vstHome(), "vibe-station.db");
+}
+
 /** ~/.vibe-station/logs/daemon.log */
 export function daemonLogPath(): string {
   return join(vstHome(), "logs", "daemon.log");

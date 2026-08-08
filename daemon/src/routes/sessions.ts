@@ -1,14 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";
-import {
-  reserveNextAgentSlot,
-  agentHighWaterMark,
-  reserveNextTerminalSlot,
-  reserveNextDirectSlot,
-  buildTmuxName,
-  buildDirectTmuxName,
-} from "../services/sessionId.js";
+import { generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
+import { slugifyPrompt } from "../services/naming.js";
+import { forceCloseSessionStreams } from "../broadcaster.js";
 import { killSession, newSession, pasteBuffer, capturePane, hasSession, sendKeys } from "../services/tmux.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
@@ -75,6 +70,11 @@ const DirectSessionBody = z.object({
 });
 
 const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
+
+const ResetBody = z.object({
+  handoff: z.boolean().optional(),
+  prompt: z.string().optional(),
+});
 
 const InputBody = z.object({
   data: z.string().min(1),
@@ -286,20 +286,63 @@ async function runDirectAgentSpawnJob(opts: {
   }
 }
 
-function labelForSlot(slot: SessionRecord["slot"], type: SessionRecord["type"]): string {
-  if (slot === "m") return "main";
-  // Direct sessions use d-prefix slots
-  if (String(slot).startsWith("d")) {
-    if (type === "agent") return `direct ${String(slot).slice(1)}`;
-    return `term ${String(slot).slice(1)}`;
+/**
+ * Spawn a freshly-created (or reset) agent session's runtime, branching on
+ * channel exactly the way session creation does (Bug 1/2 fix). JSON-channel
+ * sessions never spawn a raw PTY — the process only starts once a turn is
+ * enqueued via `startJsonCreateTurn`; tmux/pty-channel sessions go through the
+ * guarded spawn jobs above (`runAgentSpawnJob` / `runDirectAgentSpawnJob`),
+ * which already catch spawn failures, persist `agentChatId`, flip lifecycle to
+ * working/exited, and broadcast `session:state` — never a raw, unguarded
+ * `spawnSession`/`spawnDirectSession` call (which has none of that, and — with
+ * no global `unhandledRejection` handler anywhere in this codebase — can crash
+ * the entire daemon process on a spawn failure).
+ *
+ * Shared by both session-creation routes and `/sessions/:id/reset` so reset's
+ * spawn logic can never silently drift from creation's again.
+ */
+async function spawnNewSessionForChannel(opts: {
+  project: ProjectRecord;
+  worktree?: WorktreeRecord;
+  session: SessionRecord;
+  modeId: string;
+  prompt: string | undefined;
+  daemonPort: number;
+}): Promise<void> {
+  const { project, worktree, session, modeId, prompt, daemonPort } = opts;
+  if (sessionChannel(session) === "json") {
+    try {
+      await startJsonCreateTurn({ sessionId: session.id, prompt, daemonPort });
+    } catch (err) {
+      // Called fire-and-forget (`void spawnNewSessionForChannel(...)`) by every
+      // caller, and there is no global unhandledRejection handler in this
+      // process — a bare throw here would crash the whole daemon.
+      console.warn(`[spawn] json turn-1 start failed for session ${session.id}: ${String(err)}`);
+    }
+    return;
   }
-  if (type === "agent") return `agent ${String(slot).slice(1)}`;
-  return `term ${String(slot).slice(1)}`;
+  if (worktree) {
+    await runAgentSpawnJob({ project, worktree, session, modeId, prompt, daemonPort });
+  } else {
+    await runDirectAgentSpawnJob({ project, session, modeId, prompt, daemonPort });
+  }
 }
 
-/** Display label: the stored custom/default name when set, else slot-derived. */
+/**
+ * Fallback default label for a session with no stored `name` (Decision 5).
+ * Every session created going forward always gets an explicit `name` at
+ * creation (a slugified prompt, an explicit `--name`, or a counter-based
+ * default like "Agent 3"/"Terminal 2"/"Direct 1") — this fallback exists for
+ * legacy/migrated rows that predate that guarantee.
+ */
+function defaultLabel(s: SessionRecord): string {
+  if (s.isMain) return "main";
+  return s.type === "agent" ? "Agent" : "Terminal";
+}
+
+/** Display label: the stored custom/default name when set, else a generic fallback. */
 function labelForSession(s: SessionRecord): string {
-  return s.name && s.name.length > 0 ? s.name : labelForSlot(s.slot, s.type);
+  return s.name && s.name.length > 0 ? s.name : defaultLabel(s);
 }
 
 /** Flatten SessionRecord's nested lifecycle and add UI-required fields (REST + WS snapshot). */
@@ -308,10 +351,11 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     id: s.id,
     worktreeId,
     projectId,
-    slot: s.slot,
+    isMain: s.isMain,
     type: s.type,
     modeId: s.modeId ?? null,
     name: s.name ?? null,
+    nameSource: s.nameSource ?? null,
     label: labelForSession(s),
     tmuxName: s.tmuxName,
     useTmux: s.useTmux,
@@ -320,6 +364,9 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     lifecycleState: s.lifecycle.state,
     createdAt: s.lifecycle.lastTransitionAt,
     pinnedAt: s.pinnedAt ?? null,
+    archivedAt: s.archivedAt ?? null,
+    sortOrder: s.sortOrder,
+    handoffSummary: s.handoffSummary ?? null,
   };
 }
 
@@ -451,28 +498,42 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         return reply.status(404).send({ error: `Project '${projectId}' not found` });
       }
 
-      // Reserve direct slot
-      const slot = reserveNextDirectSlot(project);
-      const tmuxName = useTmux
-        ? buildDirectTmuxName(project.prefix, slot)
-        : `__direct__-${projectId}-${slot}`;
-      const sessionId = `${projectId}-${slot}`;
+      // Session id is independently generated (Decision 1) — no longer
+      // slot-derived, so a later reset's replacement id can never collide
+      // with this one.
+      const sessionId = generateSessionId(projectId, type);
+      const tmuxName = useTmux ? tmuxNameForSession(sessionId) : `__direct__-${sessionId}`;
 
-      // Terminal naming for direct sessions
-      let nextDirectSeq: number | undefined;
-      let terminalName: string | undefined;
-      if (type === "terminal") {
-        nextDirectSeq = (project.directSessionSeq ?? 0) + 1;
-        const provided = data.name;
-        terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextDirectSeq}`;
+      // Default naming (Decision 5): `directSessionSeq` now numbers EVERY
+      // direct session (agent or terminal), not just terminals — it's the
+      // only place left that can hand out a stable "N" once slot is gone.
+      const nextDirectSeq = (project.directSessionSeq ?? 0) + 1;
+      const provided = data.name;
+      let sessionName: string | undefined;
+      let nameSource: SessionRecord["nameSource"];
+      if (provided && provided.length > 0) {
+        sessionName = provided;
+        nameSource = "user";
+      } else if (type === "agent" && prompt) {
+        const slug = slugifyPrompt(prompt);
+        if (slug) {
+          sessionName = slug;
+          nameSource = "auto";
+        }
+      }
+      if (!sessionName) {
+        sessionName = type === "terminal" ? `Terminal ${nextDirectSeq}` : `Direct ${nextDirectSeq}`;
       }
 
       const sessionRecord: SessionRecord = {
         id: sessionId,
-        slot,
+        projectId: project.id,
+        isMain: false,
+        sortOrder: Date.now(),
         type,
         modeId: type === "agent" ? (modeId ?? undefined) : undefined,
-        name: terminalName,
+        name: sessionName,
+        ...(nameSource ? { nameSource } : {}),
         tmuxName,
         useTmux,
         channel,
@@ -522,7 +583,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // Persist direct session
       await mutateProject(project.id, (p) => ({
         ...p,
-        ...(nextDirectSeq != null ? { directSessionSeq: nextDirectSeq } : {}),
+        directSessionSeq: nextDirectSeq,
         directSessions: [...p.directSessions, sessionRecord],
       }));
 
@@ -542,11 +603,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // the create-dialog prompt via the JSON turn queue.
       if (type === "agent" && modeId) {
         const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-        if (isJson) {
-          void startJsonCreateTurn({ sessionId, prompt, daemonPort });
-        } else {
-          void runDirectAgentSpawnJob({ project, session: sessionRecord, modeId, prompt, daemonPort });
-        }
+        void spawnNewSessionForChannel({ project, session: sessionRecord, modeId, prompt, daemonPort });
       }
 
       return reply.status(201).send(serializeSession(null, project.id, sessionRecord));
@@ -563,36 +620,51 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const { project, worktree } = ctx;
 
-    // Reserve slot
-    const slot = type === "agent"
-      ? reserveNextAgentSlot(worktree)
-      : reserveNextTerminalSlot(worktree);
-
-    const wtNum = parseInt(worktree.id.split("-").at(-1) ?? "1", 10);
-    const tmuxName = useTmux ? buildTmuxName(project.prefix, wtNum, slot) : `__direct__-${`${worktreeId}-${slot}`}`;
-    const sessionId = `${worktreeId}-${slot}`;
+    // Session id is independently generated (Decision 1) — not slot-derived.
+    const sessionId = generateSessionId(worktreeId, type);
+    const tmuxName = useTmux ? tmuxNameForSession(sessionId) : `__direct__-${sessionId}`;
 
     // Terminal naming: monotonic per-worktree counter (never reused).
     let nextTerminalSeq: number | undefined;
-    let terminalName: string | undefined;
-    if (type === "terminal") {
-      nextTerminalSeq = (worktree.terminalSeq ?? 0) + 1;
-      const provided = data.name;
-      terminalName = provided && provided.length > 0 ? provided : `Terminal ${nextTerminalSeq}`;
-    }
-
-    // Agent slots are monotonic (never reused). Persist the high-water number.
+    // Agent naming: monotonic per-worktree counter (never reused), used only
+    // as the fallback default label when no prompt-derived name applies
+    // (Decision 5).
     let nextAgentSeq: number | undefined;
-    if (type === "agent") {
-      nextAgentSeq = parseInt(slot.slice(1), 10);
+    let sessionName: string | undefined;
+    let nameSource: SessionRecord["nameSource"];
+    const provided = data.name;
+    if (provided && provided.length > 0) {
+      sessionName = provided;
+      nameSource = "user";
+    } else if (type === "agent" && prompt) {
+      const slug = slugifyPrompt(prompt);
+      if (slug) {
+        sessionName = slug;
+        nameSource = "auto";
+      }
+    }
+    if (!sessionName) {
+      if (type === "terminal") {
+        nextTerminalSeq = (worktree.terminalSeq ?? 0) + 1;
+        sessionName = `Terminal ${nextTerminalSeq}`;
+      } else {
+        nextAgentSeq = (worktree.agentSeq ?? 0) + 1;
+        sessionName = `Agent ${nextAgentSeq}`;
+      }
+    } else if (type === "agent") {
+      nextAgentSeq = (worktree.agentSeq ?? 0) + 1;
     }
 
     const sessionRecord: SessionRecord = {
       id: sessionId,
-      slot,
+      worktreeId,
+      projectId: project.id,
+      isMain: false,
+      sortOrder: Date.now(),
       type,
       modeId: type === "agent" ? (modeId ?? undefined) : undefined,
-      name: terminalName,
+      name: sessionName,
+      ...(nameSource ? { nameSource } : {}),
       tmuxName,
       useTmux,
       channel,
@@ -671,11 +743,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // process starts on turn 1, auto-enqueued from the create-dialog prompt.
     if (type === "agent" && modeId) {
       const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-      if (isJson) {
-        void startJsonCreateTurn({ sessionId, prompt, daemonPort });
-      } else {
-        void runAgentSpawnJob({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
-      }
+      void spawnNewSessionForChannel({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
     }
 
     return reply.status(201).send(serializeSession(worktreeId, project.id, sessionRecord));
@@ -690,7 +758,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { project, session } = ctx;
 
     // Main session cannot be killed (worktree sessions only)
-    if (session.slot === "m") {
+    if (session.isMain) {
       return reply.status(400).send({
         error: "Cannot delete the main session. Use DELETE /worktrees/:id instead.",
       });
@@ -705,23 +773,16 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (ctx.kind === "worktree") {
       // Worktree session: cleanup worktree-scoped data dir
       cleanupSessionDataDir(project.id, ctx.worktree.id, id);
-      // Remove from worktree's sessions array, preserving the monotonic agent
-      // high-water. `agentSeq` is otherwise only written on agent CREATE, so a
-      // legacy worktree (agents created before agentSeq existed) that has all
-      // its agents deleted would lose the high-water and restart at a1. Capture
-      // it here — max over every current agent slot number (including the one
-      // being removed) — so a deleted slot is never reused.
+      // Remove from worktree's sessions array. `agentSeq` no longer needs any
+      // recomputation here (Decision 5): now that ids are independently
+      // generated (not slot-derived), the counter only ever needs to
+      // monotonically increase for the NEXT default "Agent N" label — it's
+      // bumped once at agent creation and never touched again, so a deleted
+      // agent's number is naturally never reused without any high-water scan.
       await mutateProject(project.id, (p) => ({
         ...p,
         worktrees: p.worktrees.map((w) =>
-          w.id === ctx.worktree.id
-            ? {
-                ...w,
-                // Capture the high-water BEFORE filtering out the session.
-                agentSeq: agentHighWaterMark(w),
-                sessions: w.sessions.filter((s) => s.id !== id),
-              }
-            : w,
+          w.id === ctx.worktree.id ? { ...w, sessions: w.sessions.filter((s) => s.id !== id) } : w,
         ),
       }));
     } else {
@@ -789,6 +850,77 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, pinnedAt: nextPinnedAt ?? null });
   });
 
+  // PATCH /sessions/:id/rename   { name: string }
+  // Cosmetic-only (Requirement 4/Decision 4). Empty string clears the override
+  // back to NULL (falls back to the computed default label), same as never
+  // having set a name. Works for both worktree and direct sessions.
+  app.patch("/sessions/:id/rename", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ name: z.string().max(60) }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    const value = parsed.data.name.trim() === "" ? null : parsed.data.name.trim().slice(0, 60);
+    const patchSession = (s: SessionRecord): SessionRecord => {
+      if (s.id !== id) return s;
+      const next = { ...s, nameSource: "user" as const };
+      if (value == null) {
+        delete next.name;
+      } else {
+        next.name = value;
+      }
+      return next;
+    };
+
+    await mutateProject(ctx.project.id, (p) =>
+      ctx.kind === "worktree"
+        ? {
+            ...p,
+            worktrees: p.worktrees.map((w) =>
+              w.id === ctx.worktree.id ? { ...w, sessions: w.sessions.map(patchSession) } : w,
+            ),
+          }
+        : { ...p, directSessions: p.directSessions.map(patchSession) },
+    );
+
+    broadcastAll({ type: "session:updated", sessionId: id, name: value });
+    return reply.send({ ok: true, name: value });
+  });
+
+  // PATCH /sessions/:id/reorder   { sortOrder: number }
+  // Cosmetic-only display-order rank within the session's scope (worktree, or
+  // project's direct sessions). Client computes the fractional value (Part
+  // 03 Decision 1) — this endpoint just persists whatever it's given.
+  app.patch("/sessions/:id/reorder", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z.object({ sortOrder: z.number() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    const value = parsed.data.sortOrder;
+    const patchSession = (s: SessionRecord): SessionRecord => (s.id !== id ? s : { ...s, sortOrder: value });
+
+    await mutateProject(ctx.project.id, (p) =>
+      ctx.kind === "worktree"
+        ? {
+            ...p,
+            worktrees: p.worktrees.map((w) =>
+              w.id === ctx.worktree.id ? { ...w, sessions: w.sessions.map(patchSession) } : w,
+            ),
+          }
+        : { ...p, directSessions: p.directSessions.map(patchSession) },
+    );
+
+    broadcastAll({ type: "session:updated", sessionId: id, sortOrder: value });
+    return reply.send({ ok: true, sortOrder: value });
+  });
+
   // POST /sessions/:id/done — retire an agent session: RELEASE its runtime
   // resources (tmux pane / direct-pty child / JsonAgentSession + SQLite handle)
   // and mark it `done`. Everything needed for a later `POST /:id/resume`
@@ -849,6 +981,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+
+    // Bug 4 fix: an archived session is displayed read-only by the UI — never
+    // let a live agent process spawn/run against a row that's supposed to be
+    // retired history.
+    if (ctx.session.archivedAt) {
+      return reply.status(400).send({ error: "Session is archived — start a new session instead" });
+    }
 
     const { project, session } = ctx;
     const isWorktreeSession = ctx.kind === "worktree";
@@ -1081,6 +1220,197 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     ));
   });
 
+  // POST /sessions/:id/reset   { handoff?: boolean, prompt?: string }
+  // Archive the current session and spawn a fresh one in its place — same tab
+  // position (isMain/sortOrder/worktreeId inherited), same name unless a new
+  // prompt re-derives it (Decision 2/4/5/6/7).
+  app.post("/sessions/:id/reset", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = ResetBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { handoff, prompt } = parsed.data;
+
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const { session, project } = ctx;
+    if (session.type !== "agent") {
+      return reply.status(400).send({ error: "Reset only applies to agent sessions" });
+    }
+    if (session.archivedAt) {
+      return reply.status(400).send({ error: "Session already archived" });
+    }
+
+    // Bug fix: a session whose mode was deleted must fail loudly here, not
+    // silently archive the old session with no replacement ever spawned (the
+    // old behavior — the spawn block further down was gated on `if (mode)`
+    // with no error path). Validate BEFORE archiving/spawning anything, and
+    // before wasting up to 60s on a handoff turn we'd throw away anyway.
+    if (!session.modeId) {
+      return reply.status(400).send({ error: "Session has no mode; cannot reset" });
+    }
+    const modes = await (await import("../routes/modes.js")).loadModes();
+    const mode = modes.find((m) => m.id === session.modeId);
+    if (!mode) {
+      return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
+    }
+
+    const cwd = ctx.kind === "worktree" ? worktreePath(ctx.project.id, ctx.worktree.id) : ctx.project.absolutePath;
+
+    const { runHandoffTurn, readHandoffFileOrNull, readFreshHandoffFileOrNull, HANDOFF_FRESHNESS_MS } = await import(
+      "../services/handoff.js"
+    );
+    const handoffPath = join(cwd, ".vibe-station", "HANDOFF.md");
+
+    // Opportunistic fast path (Bug 6 fix): `/vst reset --handoff` runs from
+    // WITHIN the very session being reset, so the paste+poll mechanism below
+    // can never work there — the agent is blocked inside the shell command
+    // that made this request and can't see anything pasted into its own pane.
+    // The updated `/vst` command templates now have the agent write
+    // `.vibe-station/HANDOFF.md` itself, as a normal file write, BEFORE
+    // invoking `vst session reset` at all. If that file is already sitting
+    // there and looks fresh, use it directly and skip paste+poll entirely —
+    // this also covers a plain `vst session reset --handoff` invoked from a
+    // separate, non-blocked terminal after writing its own file.
+    //
+    // The UI-driven "Reset with handoff" button still goes through paste+poll
+    // below (no fresh file will exist yet in that case), since its target
+    // pane genuinely is free to receive the pasted instruction.
+    let handoffText: string | null = await readFreshHandoffFileOrNull(handoffPath, HANDOFF_FRESHNESS_MS);
+    if (handoffText == null && handoff) {
+      const ok = await runHandoffTurn(session, { timeoutMs: 60_000, handoffPath });
+      handoffText = ok ? await readHandoffFileOrNull(handoffPath) : null;
+    }
+
+    // Kill the process/pane BEFORE detaching WS streams — order doesn't
+    // matter for correctness here (both are idempotent/best-effort against an
+    // already-dead runtime), but this mirrors DELETE's existing teardown order.
+    await releaseSessionRuntime(session, { clearAttachments: false });
+    await forceCloseSessionStreams(session.id);
+
+    // Name: keep the old name UNLESS an explicit new prompt was given.
+    const newName = prompt ? slugifyPrompt(prompt) || session.name : session.name;
+    // Prompt: never the ORIGINAL creation prompt. handoff summary + explicit
+    // prompt combine when both are given (Decision 7 — least information-losing
+    // default for an explicitly open question).
+    const newInitialPrompt = [handoffText, prompt].filter(Boolean).join("\n\n---\n\n") || undefined;
+
+    const scopeId = ctx.kind === "worktree" ? ctx.worktree.id : ctx.project.id;
+    const newId = generateSessionId(scopeId, "agent");
+    const isJsonChannel = session.channel === "json";
+    const newSession: SessionRecord = {
+      id: newId,
+      worktreeId: session.worktreeId,
+      projectId: session.projectId,
+      isMain: session.isMain,
+      sortOrder: session.sortOrder,
+      type: "agent",
+      modeId: session.modeId,
+      name: newName,
+      ...(prompt ? { nameSource: "auto" as const } : session.nameSource ? { nameSource: session.nameSource } : {}),
+      tmuxName: tmuxNameForSession(newId),
+      useTmux: session.useTmux,
+      channel: session.channel,
+      lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+      ...(newInitialPrompt ? { initialPrompt: newInitialPrompt } : {}),
+      ...(isJsonChannel
+        ? {
+            transcriptRef: {
+              kind: "vst-json" as const,
+              path: join(
+                ctx.kind === "worktree" ? sessionDataDir(project.id, ctx.worktree.id, newId) : directSessionDataDir(project.id, newId),
+                "messages.jsonl",
+              ),
+            },
+          }
+        : {}),
+    };
+
+    // Risk #2 (Phase 4.4): archiving the old row and appending the
+    // replacement happen in this SAME mutateProject call, so a worktree never
+    // actually has zero live main sessions in persisted state — there's no
+    // window where a concurrent reader could observe the worktree with no
+    // main session at all. Every `.find(s => s.isMain)` call site in the
+    // codebase (routes/worktrees.ts's serializeWorktree, web-ui's
+    // TabsStrip/useWorkspaceUrlSync) already uses optional chaining / treats
+    // "not found" as a valid state (falls back to null / disables the
+    // affected action), so even a hypothetical transient gap would be safe.
+    const archivedAt = new Date().toISOString();
+    await mutateProject(project.id, (p) => {
+      // Bug 3 fix: the archived row's `isMain` must be explicitly cleared, not
+      // just left as-is — the NEW row already inherits `isMain` above, and with
+      // no unique/partial index preventing two `isMain=1` rows per worktree,
+      // leaving the old row's flag set makes `w.sessions.find(s => s.isMain)`
+      // (mainSessionId, TabsStrip's `closeable`, DELETE's "cannot delete main"
+      // guard) resolve to the dead archived row instead of the live new one —
+      // a permanent unclosable dead "main" tab.
+      const archiveSession = (s: SessionRecord): SessionRecord =>
+        s.id === session.id ? { ...s, archivedAt, handoffSummary: handoffText, isMain: false } : s;
+      if (ctx.kind === "worktree") {
+        return {
+          ...p,
+          worktrees: p.worktrees.map((w) =>
+            w.id === ctx.worktree.id
+              ? { ...w, sessions: [...w.sessions.map(archiveSession), newSession] }
+              : w,
+          ),
+        };
+      }
+      return { ...p, directSessions: [...p.directSessions.map(archiveSession), newSession] };
+    });
+
+    const wtIdForSerialize = ctx.kind === "worktree" ? ctx.worktree.id : null;
+    broadcastAll({ type: "session:updated", sessionId: session.id, archivedAt });
+    broadcastAll({
+      type: "session:created",
+      sessionId: newId,
+      projectId: project.id,
+      worktreeId: wtIdForSerialize,
+      sessionType: "agent",
+      mode: newSession.modeId,
+      snapshot: serializeSession(wtIdForSerialize, project.id, newSession),
+    });
+
+    // Spawn the replacement session's runtime through the SAME channel-aware,
+    // guarded helper session creation uses (Bug 1/2 fix) — never a raw
+    // unguarded spawnSession/spawnDirectSession call. `mode` was already
+    // resolved and validated to exist above, so `session.modeId` is guaranteed
+    // defined here.
+    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    void spawnNewSessionForChannel({
+      project,
+      worktree: ctx.kind === "worktree" ? ctx.worktree : undefined,
+      session: newSession,
+      modeId: session.modeId,
+      prompt: newInitialPrompt,
+      daemonPort,
+    });
+
+    return reply.send({ ok: true, archivedSessionId: session.id, newSessionId: newId });
+  });
+
+  // POST /sessions/:id/handoff — write-only: runs the handoff turn (Decision 1)
+  // but does NOT archive or respawn, unlike reset's --handoff option above.
+  app.post("/sessions/:id/handoff", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.session.type !== "agent") {
+      return reply.status(400).send({ error: "Handoff only applies to agent sessions" });
+    }
+
+    // No archivedAt guard here (unlike reset) — a standalone handoff summary is
+    // still meaningful to request even after a session is archived (read-only history).
+    const cwd = ctx.kind === "worktree" ? worktreePath(ctx.project.id, ctx.worktree.id) : ctx.project.absolutePath;
+    const { runHandoffTurn, readHandoffFileOrNull } = await import("../services/handoff.js"); // matches reset's cycle-avoidance import
+    const handoffPath = join(cwd, ".vibe-station", "HANDOFF.md");
+    const ok = await runHandoffTurn(ctx.session, { timeoutMs: 60_000, handoffPath });
+    const handoffSummary = ok ? await readHandoffFileOrNull(handoffPath) : null;
+
+    return reply.send({ ok: true, handoffSummary });
+  });
+
   // POST /sessions/:id/input
   app.post("/sessions/:id/input", async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -1134,6 +1464,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     }
     const { message, attachmentIds } = parsed.data;
+
+    // Bug 4 fix: an archived session is displayed read-only by the UI — never
+    // let a chat turn spawn/run a live agent process against it.
+    const preChatCtx = findSessionContext(id);
+    if (!preChatCtx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (preChatCtx.session.archivedAt) {
+      return reply.status(400).send({ error: "Session is archived — start a new session instead" });
+    }
 
     // Resolve attachment ids to Attachment records (Decision 5).
     const attachments: Attachment[] = [];
@@ -1502,11 +1840,10 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // stale JSON placeholder.
     const { channel: newChannel, useTmux: newUseTmux } = channelTransition(target);
     // JSON sessions keep the `__direct__-<id>` placeholder tmux name; a terminal
-    // needs a REAL window name allocated exactly like session-create does
-    // (sessions.ts:539 — `buildTmuxName(prefix, wtNum, slot)`).
-    const wtNum = parseInt(worktree.id.split("-").at(-1) ?? "1", 10);
+    // needs a REAL window name — derived from the session's own id (Decision 1),
+    // same as at session-create.
     const jsonTmuxName = `__direct__-${session.id}`;
-    const ttyTmuxName = newUseTmux ? buildTmuxName(project.prefix, wtNum, session.slot) : jsonTmuxName;
+    const ttyTmuxName = newUseTmux ? tmuxNameForSession(session.id) : jsonTmuxName;
 
     try {
       if (fromJson) {

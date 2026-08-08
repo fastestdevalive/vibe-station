@@ -18,6 +18,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir, "vibe-station.db"),
   };
 });
 
@@ -27,6 +28,7 @@ const makeWorktree = (id: string): WorktreeRecord => ({
   baseBranch: "main",
   baseSha: "0".repeat(40),
   createdAt: new Date().toISOString(),
+  sortOrder: 0,
   sessions: [],
 });
 
@@ -34,8 +36,10 @@ const makeProject = (overrides: Partial<ProjectRecord> = {}): ProjectRecord => (
   id: "proj-1",
   absolutePath: "/fake/proj-1",
   prefix: "vs",
+  isGit: true,
   defaultBranch: "main",
   createdAt: new Date().toISOString(),
+  directSessions: [],
   worktrees: [],
   ...overrides,
 });
@@ -151,89 +155,28 @@ describe("reserveNextWorktreeNum", () => {
   });
 });
 
-describe("reserveNextAgentSlot", () => {
-  const wtWith = (agentSeq: number | undefined, aNums: number[]): WorktreeRecord => ({
-    ...makeWorktree("vs-1"),
-    ...(agentSeq != null ? { agentSeq } : {}),
-    sessions: aNums.map((n) => ({
-      id: `vs-1-a${n}`,
-      slot: `a${n}` as const,
-      type: "agent" as const,
-      tmuxName: `vr-vs-1-a${n}`,
-      useTmux: true,
-      lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
-    })),
+describe("generateSessionId / tmuxNameForSession", () => {
+  it("produces distinct ids across calls, even for the same scope+type", async () => {
+    const { generateSessionId } = await import("../services/sessionId.js");
+    const ids = new Set(Array.from({ length: 50 }, () => generateSessionId("vs-1", "agent")));
+    expect(ids.size).toBe(50);
   });
 
-  it("uses agentSeq high-water: freed number is not reused", async () => {
-    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
-    // 7 agents created (agentSeq=7), a1 deleted → sessions a2..a7
-    expect(reserveNextAgentSlot(wtWith(7, [2, 3, 4, 5, 6, 7]))).toBe("a8");
+  it("prefixes the id with scopeId and a type-letter marker", async () => {
+    const { generateSessionId } = await import("../services/sessionId.js");
+    expect(generateSessionId("vs-1", "agent")).toMatch(/^vs-1-a-[0-9a-f]{8}$/);
+    expect(generateSessionId("proj-1", "terminal")).toMatch(/^proj-1-t-[0-9a-f]{8}$/);
   });
 
-  it("legacy worktree (no agentSeq) seeds from max existing slot", async () => {
-    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
-    expect(reserveNextAgentSlot(wtWith(undefined, [1, 2, 3]))).toBe("a4");
+  it("tmuxNameForSession derives deterministically from the id", async () => {
+    const { tmuxNameForSession } = await import("../services/sessionId.js");
+    expect(tmuxNameForSession("vs-1-a-deadbeef")).toBe("vst-vs-1-a-deadbeef");
   });
 
-  it("fresh worktree yields a1", async () => {
-    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
-    expect(reserveNextAgentSlot(wtWith(undefined, []))).toBe("a1");
-  });
-
-  it("high-water dominates a stale/low agentSeq (no colliding slot)", async () => {
-    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
-    // agentSeq (2) is lower than the max live slot (a5) — must not reuse a3..a5.
-    expect(reserveNextAgentSlot(wtWith(2, [3, 4, 5]))).toBe("a6");
-  });
-
-  it("non-numeric agent slot does not poison the counter to NaN", async () => {
-    const { reserveNextAgentSlot } = await import("../services/sessionId.js");
-    const wt = wtWith(undefined, []);
-    wt.sessions.push({
-      id: "vs-1-ax",
-      slot: "ax" as unknown as `a${number}`,
-      type: "agent",
-      tmuxName: "vr-vs-1-ax",
-      useTmux: true,
-      lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
-    });
-    expect(reserveNextAgentSlot(wt)).toBe("a1");
-  });
-});
-
-describe("agentHighWaterMark", () => {
-  const wtWith = (agentSeq: number | undefined, aNums: number[]): WorktreeRecord => ({
-    ...makeWorktree("vs-1"),
-    ...(agentSeq != null ? { agentSeq } : {}),
-    sessions: aNums.map((n) => ({
-      id: `vs-1-a${n}`,
-      slot: `a${n}` as const,
-      type: "agent" as const,
-      tmuxName: `vr-vs-1-a${n}`,
-      useTmux: true,
-      lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
-    })),
-  });
-
-  it("is 0 for a fresh worktree", async () => {
-    const { agentHighWaterMark } = await import("../services/sessionId.js");
-    expect(agentHighWaterMark(wtWith(undefined, []))).toBe(0);
-  });
-
-  it("falls back to live slots when agentSeq is unset (legacy worktree)", async () => {
-    const { agentHighWaterMark } = await import("../services/sessionId.js");
-    expect(agentHighWaterMark(wtWith(undefined, [1, 2, 3]))).toBe(3);
-  });
-
-  it("prefers the persisted counter when it is higher than live slots", async () => {
-    const { agentHighWaterMark } = await import("../services/sessionId.js");
-    // agentSeq=5 survives after a1/a2 were the only ones left, then deleted.
-    expect(agentHighWaterMark(wtWith(5, [1, 2]))).toBe(5);
-  });
-
-  it("prefers live slots when the counter is stale/lower", async () => {
-    const { agentHighWaterMark } = await import("../services/sessionId.js");
-    expect(agentHighWaterMark(wtWith(2, [3, 4, 5]))).toBe(5);
+  it("a reset-style replacement id never collides with the id it replaces", async () => {
+    const { generateSessionId } = await import("../services/sessionId.js");
+    const original = generateSessionId("vs-1", "agent");
+    const replacement = generateSessionId("vs-1", "agent");
+    expect(replacement).not.toBe(original);
   });
 });
