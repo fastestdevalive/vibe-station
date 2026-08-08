@@ -179,6 +179,22 @@ export function parseOpencodeStreamLine(
   return events;
 }
 
+/** Bug 7 fix: mirrors `claude.ts`'s `ensureGitignoreEntry` exactly. */
+async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promise<void> {
+  let content = "";
+  try {
+    content = await fs.readFile(gitignorePath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  if (content.split("\n").some((line) => line.trim() === entry)) return;
+  const newContent =
+    content === "" || content.endsWith("\n")
+      ? content + entry + "\n"
+      : content + "\n" + entry + "\n";
+  await fs.writeFile(gitignorePath, newContent, "utf8");
+}
+
 export function createOpencodePlugin(): AgentPlugin {
   return {
     name: "opencode",
@@ -365,12 +381,89 @@ export function createOpencodePlugin(): AgentPlugin {
       // Idempotent: skip write if content is unchanged
       try {
         const existing = await fs.readFile(pluginPath, "utf8");
-        if (existing === content) return;
+        if (existing !== content) await fs.writeFile(pluginPath, content, "utf8");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+        await fs.writeFile(pluginPath, content, "utf8");
+      }
+
+      // OpenCode has a real custom-slash-command mechanism (verified via
+      // fable-model research, sqlite-agent-naming Part 02 Phase 3, Decision 3),
+      // entirely separate from the plugin API above: a markdown file at
+      // `.opencode/commands/<name>.md` becomes `/<name>`, with `$ARGUMENTS`
+      // (full trailing text) substitution — a near-exact analog of Claude
+      // Code's mechanism.
+      const commandsDir = join(worktreePath, ".opencode", "commands");
+      const vstCommandPath = join(commandsDir, "vst.md");
+      await fs.mkdir(commandsDir, { recursive: true });
+
+      const vstCommand =
+        [
+          "---",
+          "description: Reset, hand off, or rename this vibe-station session/worktree",
+          "---",
+          "",
+          "The user invoked `/vst $ARGUMENTS` — map it to exactly one `vst` CLI",
+          "command below and run it as a shell command. Do not run more than one, and",
+          "do not improvise flags beyond what's listed here.",
+          "",
+          "Argument patterns (`$ARGUMENTS` is everything typed after `/vst`):",
+          "",
+          "- `reset` -> `vst session reset $VST_SESSION`",
+          "- `reset --handoff` -> see \"Important — `reset --handoff` writes its own file\" below",
+          '- `reset <text>` (any other text after `reset`) -> `vst session reset $VST_SESSION --prompt "<text>"`',
+          '- `reset --handoff <text>` -> see below, then `vst session reset $VST_SESSION --prompt "<text>"`',
+          "- `handoff` -> `vst session handoff $VST_SESSION`",
+          '- `rename <name>` -> `vst session rename $VST_SESSION "<name>"`',
+          '- `rename --worktree <name>` -> `vst worktree rename $VST_WORKTREE "<name>"`',
+          "",
+          "Important — `reset --handoff` writes its own file:",
+          "Do NOT pass `--handoff` to the `vst session reset` command. This command is",
+          "running from inside the very session being reset, so the daemon has no way",
+          "to paste an instruction back into your own pane and wait for a reply — you",
+          "are blocked on this shell command, so you'd never see it. Instead: BEFORE",
+          "running `vst session reset`, write a concise handoff summary of the current",
+          "state, remaining work, and anything the next session should know directly to",
+          "`.vibe-station/HANDOFF.md` in the working directory, using a normal file-write",
+          "tool call (not a shell command). Then run `vst session reset $VST_SESSION`",
+          "(with `--prompt \"<text>\"` if other text followed `--handoff`, but never",
+          "`--handoff` itself) — the daemon will pick up the file you just wrote.",
+          "",
+          "Important — `--worktree` requires a worktree session:",
+          "`$VST_WORKTREE` is only set when this session belongs to a worktree; direct",
+          "(non-worktree) sessions never have it. Before running the `rename --worktree`",
+          "command, check whether `$VST_WORKTREE` is actually set and non-empty. If it",
+          "is NOT set, do not run the command — instead tell the user: \"This session",
+          "isn't part of a worktree, so there's no worktree to rename.\"",
+          "",
+          "Important — `reset` ends this session:",
+          "Any `reset` variant tears down the CURRENT session process as part of",
+          "running the command — this turn effectively never completes from the",
+          "user's point of view. Before running a `reset` command, tell the user",
+          "something like \"Resetting this session now — you'll see a fresh session",
+          "appear.\" Then run the command as your last action. Do not continue the",
+          "conversation afterward as if nothing happened.",
+          "",
+          "`handoff` and `rename` do not end the session — after running those, report",
+          "the CLI's output back to the user normally.",
+        ].join("\n") + "\n";
+
+      let existingVstCommand: string | null = null;
+      try {
+        existingVstCommand = await fs.readFile(vstCommandPath, "utf8");
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       }
+      if (existingVstCommand !== vstCommand) {
+        await fs.writeFile(vstCommandPath, vstCommand, "utf8");
+      }
 
-      await fs.writeFile(pluginPath, content, "utf8");
+      // Bug 7 fix: `.opencode/` was never added to .gitignore, unlike
+      // `.claude/` in claude.ts — an agent running `git add -A` would commit
+      // it (including the plugin file written above). Matters even more for
+      // DIRECT sessions (no worktree isolation): `worktreePath` here is the
+      // project's real `absolutePath`, not a throwaway checkout.
+      await ensureGitignoreEntry(join(worktreePath, ".gitignore"), ".opencode/").catch(() => {});
     },
 
     async captureChatId(args: {

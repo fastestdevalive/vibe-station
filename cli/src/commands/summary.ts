@@ -14,7 +14,7 @@ interface DaemonWorktree {
 interface DaemonSession {
   id: string;
   worktreeId: string;
-  slot: string;
+  isMain: boolean;
   type: string;
   state: string;
   createdAt?: string;
@@ -25,7 +25,7 @@ export interface SummaryJsonWorktree {
   branch: string;
   sessions: Array<{
     id: string;
-    slot: string;
+    isMain: boolean;
     state: string;
     type: string;
     lastTransitionAt?: string;
@@ -101,7 +101,7 @@ export function registerSummary(program: Command): void {
           branch: w.branch,
           sessions: (grouped.get(w.id) ?? []).map((s) => ({
             id: s.id,
-            slot: s.slot,
+            isMain: s.isMain,
             state: s.state,
             type: s.type,
             lastTransitionAt: s.createdAt,
