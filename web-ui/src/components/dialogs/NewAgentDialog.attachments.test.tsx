@@ -51,7 +51,9 @@ describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
     expect("prompt" in body).toBe(false);
 
     const wt = await wtSpy.mock.results[0]!.value;
-    expect(wt.mainSessionId).toBe(`${wt.id}-m`);
+    // Session ids are independently generated (Decision 1) — no longer
+    // derivable from the worktree id. Just assert one came back.
+    expect(wt.mainSessionId).toBeTruthy();
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledWith(wt.mainSessionId, [file]));
     const { attachments } = await uploadSpy.mock.results[0]!.value;
     await waitFor(() =>

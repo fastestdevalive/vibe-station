@@ -161,7 +161,7 @@ describe("TerminalPane", () => {
       modeId: "mode-1",
       type: "agent",
       label: "main",
-      slot: "m",
+      isMain: true,
       state: "working",
       lifecycleState: "working",
       tmuxName: "sess-main",

@@ -1,5 +1,6 @@
-import { Plus } from "lucide-react";
+import { MoreHorizontal, Plus } from "lucide-react";
 import { motion } from "framer-motion";
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   DndContext,
@@ -18,8 +19,9 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
-import { applySortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
+import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -67,6 +69,14 @@ interface SortableTabProps {
  * button here cannot tear down a terminal stream — but we still key strictly
  * by session id and avoid index-based keys/positions, matching the invariant
  * for future callers that copy this pattern into a pane-bearing list.
+ *
+ * IMPORTANT: dnd-kit's `activationConstraint.distance` only gates whether a
+ * *drag* starts — it does NOT stop the browser from firing a `click` on the
+ * tab when the pointer is released, no matter how far it moved in between.
+ * Left unhandled, that trailing click would ALSO activate the dragged tab.
+ * `useDragClickGuard` (wired into the `DndContext` below via `markDrag`)
+ * cancels it from a `window`-capture listener — see that hook for why this
+ * cannot be done from the tab's own `onClick`.
  */
 function SortableTab({ id, children }: SortableTabProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -117,15 +127,46 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const [newOpen, setNewOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<Session | null>(null);
 
-  // --- Prototype-only tab reordering + rename (no daemon persistence yet) ---
-  const sortScopeKey = `tabs:${kind}:${scope}:${worktreeId ?? "none"}`;
-  const sortOrders = useWorkspaceStore((s) => s.sortOrders);
-  const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
-  const sessionNameOverrides = useWorkspaceStore((s) => s.sessionNameOverrides);
-  const setSessionNameOverride = useWorkspaceStore((s) => s.setSessionNameOverride);
+  // --- Reset (+handoff) with confirmation (Part 03 Phase 3) ---
+  // Mirrors `closeTarget`'s existing pattern exactly: a "pending destructive
+  // action" target that gates a shared `ConfirmDialog`, only firing the real
+  // API call on confirm, never on the initial click/menu-item selection.
+  const [resetMenu, setResetMenu] = useState<{ session: Session; rect: DOMRect } | null>(null);
+  const [resetTarget, setResetTarget] = useState<Session | null>(null);
+  const [resetHandoff, setResetHandoff] = useState(false);
+
+  useEffect(() => {
+    if (!resetMenu) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-tab-menu-panel]") || t.closest("[data-tab-menu-trigger]")) return;
+        setResetMenu(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setResetMenu(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [resetMenu]);
+
+  // --- Tab reordering + rename: real daemon endpoints (Part 03 Phase 2) ---
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
+  /** Cancels the browser's trailing `click` after a drag-to-reorder, which
+   *  would otherwise activate the dragged tab. Same guard LeftSidebar uses. */
+  const markDrag = useDragClickGuard();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -134,8 +175,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (renamingId) renameInputRef.current?.select();
   }, [renamingId]);
 
+  /** `label` is the server-computed display label (custom name when set, else a computed default) — no client override needed. */
   function labelFor(s: Session): string {
-    return sessionNameOverrides[s.id] ?? s.label;
+    return s.label;
   }
 
   function startRename(s: Session) {
@@ -144,11 +186,19 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   }
 
   function commitRename() {
-    if (renamingId) {
-      const trimmed = renameValue.trim();
-      if (trimmed) setSessionNameOverride(renamingId, trimmed.slice(0, 60));
-    }
+    const id = renamingId;
     setRenamingId(null);
+    if (!id) return;
+    // Unconditional: an empty submission is a valid request to clear the
+    // name back to the server's computed default (name -> null), not a
+    // silent no-op — matches the rename endpoint's contract.
+    const trimmed = renameValue.trim().slice(0, 60);
+    void api
+      .renameSession(id, trimmed)
+      .catch(() => {
+        /* surface errors later */
+      })
+      .then(() => refreshTabs());
   }
 
   // Project scope: direct-session terminals live in the global server store
@@ -164,28 +214,56 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     [isProject, worktreeId, serverSessions, kind],
   );
   const sessions = isProject ? projectSessions : localSessions;
-  // Reorder purely by re-sorting this array before render — sessions stay
-  // keyed by `s.id` in the .map() below, so this never causes a remount of
-  // anything (and TabsStrip doesn't render TerminalPane/ChatPane itself
-  // anyway — see SortableTab's doc comment).
+  // Reorder purely by re-sorting this array before render, by each session's
+  // REAL server `sortOrder` — sessions stay keyed by `s.id` in the .map()
+  // below, so this never causes a remount of anything (and TabsStrip doesn't
+  // render TerminalPane/ChatPane itself anyway — see SortableTab's doc comment).
   const orderedSessions = useMemo(() => {
-    const ids = sessions.map((s) => s.id);
-    const ordered = applySortOrder(sortOrders[sortScopeKey], ids);
-    const byId = new Map(sessions.map((s) => [s.id, s]));
-    return ordered.map((id) => byId.get(id)!).filter(Boolean);
-  }, [sessions, sortOrders, sortScopeKey]);
+    return sessions.slice().sort((a, b) => {
+      const ao = a.sortOrder ?? 0;
+      const bo = b.sortOrder ?? 0;
+      if (ao !== bo) return ao - bo;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+  }, [sessions]);
+
+  /** Optimistically patch a session's `sortOrder` in whichever local store
+   *  backs this scope, so the reorder is reflected immediately (before the
+   *  server call resolves) without waiting on a WS round-trip. */
+  function patchLocalSortOrder(sessionId: string, sortOrder: number | undefined) {
+    if (isProject) {
+      useServerStore.getState().applySessionUpdated(sessionId, { sortOrder });
+    } else {
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, sortOrder } : s)));
+    }
+  }
 
   function handleDragEnd(e: DragEndEvent) {
+    // Mark BEFORE the early return: a drag that ends where it started still
+    // produces the trailing click that would activate the dragged tab.
+    markDrag();
     const { active, over } = e;
     if (!over || active.id === over.id) return;
-    const ids = orderedSessions.map((s) => s.id);
-    const from = ids.indexOf(String(active.id));
-    const to = ids.indexOf(String(over.id));
+    const from = orderedSessions.findIndex((s) => s.id === String(active.id));
+    const to = orderedSessions.findIndex((s) => s.id === String(over.id));
     if (from === -1 || to === -1) return;
-    const next = ids.slice();
-    next.splice(from, 1);
-    next.splice(to, 0, String(active.id));
-    setSortOrder(sortScopeKey, next);
+    const moved = orderedSessions[from]!;
+    const prevSortOrder = moved.sortOrder;
+
+    // Simulate the drop to find the moved item's new neighbors, then compute
+    // its new fractional sortOrder from their REAL sortOrder values (Decision 1).
+    const reordered = orderedSessions.slice();
+    reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const newIndex = reordered.indexOf(moved);
+    const prevNeighbor = reordered[newIndex - 1];
+    const nextNeighbor = reordered[newIndex + 1];
+    const newSortOrder = computeNewSortOrder(prevNeighbor?.sortOrder, nextNeighbor?.sortOrder);
+
+    patchLocalSortOrder(moved.id, newSortOrder);
+    void api.reorderSession(moved.id, newSortOrder).catch(() => {
+      patchLocalSortOrder(moved.id, prevSortOrder);
+    });
   }
 
   // Project scope: keep the active terminal selection valid as direct sessions
@@ -222,7 +300,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       const last = isAgent
         ? store.lastSessionByWorktree[worktreeId]
         : store.lastTerminalByWorktree[worktreeId];
-      const main = isAgent ? ss.find((s) => s.slot === "m") : undefined;
+      const main = isAgent ? ss.find((s) => s.isMain) : undefined;
       const pick =
         (last && ss.some((s) => s.id === last) ? last : null) ??
         main?.id ??
@@ -269,9 +347,34 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       });
     });
 
+    // Live reconciliation for fields the daemon broadcasts on `session:updated`
+    // (name, archivedAt, sortOrder, pinnedAt, channel) — project scope already
+    // gets this via the global `useServerSync`/`useServerStore` path; this
+    // worktree-scoped `localSessions` list needs its own patch so e.g. a
+    // reset's `archivedAt` shows up here without a manual refresh (3.T3).
+    const offUpdated = api.on("session:updated", (ev) => {
+      if (ev.type !== "session:updated") return;
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id !== ev.sessionId) return s;
+          const patch: Partial<Session> = {};
+          if (ev.name !== undefined) patch.name = ev.name ?? null;
+          if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
+          if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
+          if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
+          if (ev.channel !== undefined) {
+            patch.channel = ev.channel;
+            patch.useTmux = ev.channel === "tmux";
+          }
+          return { ...s, ...patch };
+        }),
+      );
+    });
+
     return () => {
       offCreated();
       offDeleted();
+      offUpdated();
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 
@@ -364,6 +467,8 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
+          onDragStart={markDrag}
+          onDragCancel={markDrag}
           onDragEnd={handleDragEnd}
           modifiers={[restrictToHorizontalAxis]}
         >
@@ -373,9 +478,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           >
             {orderedSessions.map((s) => {
               const active = s.id === activeSessionId;
-              const closeable = s.slot !== "m";
+              const closeable = !s.isMain;
               const label = labelFor(s);
               const isRenaming = renamingId === s.id;
+              const archived = s.archivedAt != null;
               return (
                 <SortableTab key={s.id} id={s.id}>
                   {({ setNodeRef, style, attributes, listeners }) => (
@@ -388,9 +494,22 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       aria-selected={active}
                       data-active={active}
                       data-closeable={closeable ? "true" : undefined}
+                      data-archived={archived ? "true" : undefined}
                       className="tab"
-                      onClick={() => { if (!isRenaming) setActiveSession(s.id); }}
+                      onClick={() => {
+                        if (!isRenaming) setActiveSession(s.id);
+                      }}
                       onDoubleClick={(e) => { e.stopPropagation(); startRename(s); }}
+                      onContextMenu={(e) => {
+                        if (!isAgent) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setResetMenu((prev) =>
+                          prev?.session.id === s.id
+                            ? null
+                            : { session: s, rect: e.currentTarget.getBoundingClientRect() },
+                        );
+                      }}
                       style={{ position: "relative", flexShrink: 0, ...style }}
                     >
                       {active ? (
@@ -437,7 +556,45 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                             {s.channel === "json" ? "💬" : "⌨"}
                           </span>
                         ) : null}
+                        {archived ? (
+                          <span className="tab__archived-badge" title="This session has been archived">
+                            Archived
+                          </span>
+                        ) : null}
                       </span>
+                      {isAgent ? (
+                        <span
+                          role="button"
+                          aria-label={`Session actions for ${label}`}
+                          aria-haspopup="menu"
+                          aria-expanded={resetMenu?.session.id === s.id}
+                          data-tab-menu-trigger
+                          className="tab__menu-trigger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setResetMenu((prev) =>
+                              prev?.session.id === s.id
+                                ? null
+                                : { session: s, rect: e.currentTarget.getBoundingClientRect() },
+                            );
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.stopPropagation();
+                              setResetMenu((prev) =>
+                                prev?.session.id === s.id
+                                  ? null
+                                  : { session: s, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() },
+                              );
+                            }
+                          }}
+                          tabIndex={-1}
+                          style={{ position: "relative", zIndex: 1 }}
+                        >
+                          <MoreHorizontal size={12} />
+                        </span>
+                      ) : null}
                       {closeable ? (
                         <span
                           role="button"
@@ -498,6 +655,82 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         onConfirm={() => {
           if (closeTarget) void api.deleteSession(closeTarget.id).then(() => void refreshTabs());
           setCloseTarget(null);
+        }}
+      />
+
+      {resetMenu
+        ? createPortal(
+            <div
+              className="menu-pop"
+              data-tab-menu-panel
+              role="menu"
+              aria-label="Session actions"
+              style={{
+                position: "fixed",
+                top: resetMenu.rect.bottom + 6,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    resetMenu.rect.right - 170,
+                    typeof window !== "undefined" ? window.innerWidth - 178 : 8,
+                  ),
+                ),
+                minWidth: 150,
+                zIndex: 4000,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setResetTarget(resetMenu.session);
+                  setResetHandoff(false);
+                  setResetMenu(null);
+                }}
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setResetTarget(resetMenu.session);
+                  setResetHandoff(true);
+                  setResetMenu(null);
+                }}
+              >
+                Reset with handoff
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {/* Mirrors `closeTarget`'s ConfirmDialog above (Decision 3) — same
+          shared component, reset-specific copy. `resetSession` is only ever
+          called from `onConfirm`, never from the menu-item click above. */}
+      <ConfirmDialog
+        open={!!resetTarget}
+        title={resetHandoff ? "Reset with handoff" : "Reset session"}
+        message="Resetting ends the current chat and starts a fresh session in its place. This can't be undone."
+        confirmLabel="Reset"
+        onCancel={() => setResetTarget(null)}
+        onConfirm={() => {
+          const target = resetTarget;
+          const handoff = resetHandoff;
+          setResetTarget(null);
+          if (target) {
+            void api
+              .resetSession(target.id, { handoff })
+              .catch(() => {
+                /* surface errors later */
+              })
+              .then(() => refreshTabs());
+          }
         }}
       />
     </div>
