@@ -1,14 +1,37 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { createElement } from "react";
+import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ReactNode } from "react";
+import type { DragEndEvent } from "@dnd-kit/core";
 import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
 import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
+
+/**
+ * Capture the LAST `DndContext`'s `onDragStart`/`onDragEnd` LeftSidebar hands
+ * to dnd-kit (same non-stubbing approach as TabsStrip.test.tsx — the real
+ * component still renders). With no pinned worktrees/sessions and no direct
+ * sessions in the `proj-a` fixture, the worktree list under `proj-a` is the
+ * only `DndContext` rendered, so "last" is unambiguous here.
+ */
+let capturedOnDragStart: (() => void) | null = null;
+let capturedOnDragEnd: ((e: DragEndEvent) => void) | null = null;
+vi.mock("@dnd-kit/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dnd-kit/core")>();
+  return {
+    ...actual,
+    DndContext: (props: Parameters<typeof actual.DndContext>[0]) => {
+      capturedOnDragStart = (props.onDragStart as (() => void) | undefined) ?? null;
+      capturedOnDragEnd = props.onDragEnd ?? null;
+      return createElement(actual.DndContext, props);
+    },
+  };
+});
 
 /** In production `useServerSync` is mounted by `Workspace`. Tests render
  *  LeftSidebar in isolation, so this harness wires the same hook above it so
@@ -22,6 +45,8 @@ describe("LeftSidebar", () => {
   const api = createMockApi();
 
   beforeEach(() => {
+    capturedOnDragStart = null;
+    capturedOnDragEnd = null;
     localStorage.clear();
     useWorkspaceStore.persist.clearStorage?.();
     useWorkspaceStore.setState({
@@ -107,6 +132,106 @@ describe("LeftSidebar", () => {
     expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
   });
 
+  // Regression: dragging a non-active worktree to reorder it ALSO selected it.
+  //
+  // The sortable rows are React Router <Link>s, i.e. real <a href> elements.
+  // When a drag ends with the pointer still inside the dragged row's bounds,
+  // the browser dispatches a trailing `click` on that anchor — and dnd-kit's
+  // PointerSensor kills it only with `stopPropagation()` at DOCUMENT capture.
+  // That stops React (and therefore any row onClick guard) from ever seeing
+  // it, but leaves the anchor's DEFAULT ACTION intact, so the browser
+  // navigated to the dragged row's URL. Reproducing that requires replaying
+  // dnd-kit's suppressor too — a bare `fireEvent.click` would let the click
+  // reach React and be handled there, which is exactly the blind spot the
+  // previous fix had.
+  it("dragging a non-active worktree to reorder it does not also select it", async () => {
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+    // Active worktree starts at wt-1 (set in beforeEach); wt-2 is the one we drag.
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+    expect(capturedOnDragStart).toBeTypeOf("function");
+    expect(capturedOnDragEnd).toBeTypeOf("function");
+
+    // Stand-in for dnd-kit's PointerSensor click suppression.
+    const dndSuppressor = (e: Event) => e.stopPropagation();
+    document.addEventListener("click", dndSuppressor, true);
+    try {
+      act(() => {
+        capturedOnDragStart!();
+        capturedOnDragEnd!({
+          active: { id: "wt-2" },
+          over: { id: "wt-1" },
+        } as unknown as DragEndEvent);
+      });
+      const trailingClick = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+      });
+      link.dispatchEvent(trailingClick);
+
+      // The anchor's default navigation — the thing that actually selected the
+      // dragged worktree — must be cancelled.
+      expect(trailingClick.defaultPrevented).toBe(true);
+    } finally {
+      document.removeEventListener("click", dndSuppressor, true);
+    }
+
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  // Regression: the previous fix used a "drag occurred" boolean consumed by the
+  // row's onClick. Because that onClick never runs (see above), the flag was
+  // never reset and swallowed the NEXT genuine click on any row.
+  it("a click after a drag whose trailing click never arrived still selects", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    try {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+      act(() => {
+        capturedOnDragStart!();
+        capturedOnDragEnd!({
+          active: { id: "wt-2" },
+          over: { id: "wt-2" },
+        } as unknown as DragEndEvent);
+      });
+      // No trailing click reaches the app (dnd-kit ate it / the pointer landed
+      // on a neighbour). Later the user deliberately clicks a row.
+      now += 2_000;
+      fireEvent.click(link);
+
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-2");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("a plain click (no preceding drag) still selects the worktree", async () => {
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+    fireEvent.click(link);
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-2");
+  });
+
   it("worktree row exposes overflow menu control", async () => {
     render(
       <MemoryRouter>
@@ -158,7 +283,7 @@ describe("LeftSidebar", () => {
         modeId: "mode-1",
         type: "agent",
         label: "extra",
-        slot: "a9",
+        isMain: false,
         state: "not_started",
         lifecycleState: "not_started",
         tmuxName: "tm-x",
@@ -510,7 +635,7 @@ describe("LeftSidebar", () => {
           modeId: type === "agent" ? "mode-1" : null,
           type,
           label,
-          slot: type === "agent" ? "d1" : "d2",
+          isMain: false,
           state: "idle",
           lifecycleState: "idle",
           tmuxName: `tm-${sessionId}`,
@@ -539,6 +664,81 @@ describe("LeftSidebar", () => {
         screen.queryByRole("link", { name: /Open direct session Terminal 1/i }),
       ).toBeNull();
       expect(screen.queryByText("Terminal 1")).toBeNull();
+    });
+
+    it("3.3 — an archived direct session row is visually dimmed with an 'archived' badge", async () => {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "proj-a-d3",
+        worktreeId: null,
+        projectId: "proj-a",
+        sessionType: "agent",
+        snapshot: {
+          id: "proj-a-d3",
+          worktreeId: null,
+          projectId: "proj-a",
+          modeId: "mode-1",
+          type: "agent",
+          label: "old direct",
+          isMain: false,
+          state: "idle",
+          lifecycleState: "idle",
+          tmuxName: "tm-proj-a-d3",
+          createdAt: new Date().toISOString(),
+          archivedAt: new Date().toISOString(),
+        },
+      });
+
+      const link = await screen.findByRole("link", { name: /Open direct session old direct/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      expect(row).toHaveAttribute("data-archived", "true");
+      expect(within(row).getByText(/archived/i)).toBeInTheDocument();
+    });
+  });
+
+  // ─── Rename (Part 03 Phase 2 — real endpoint, not local override) ───────
+  describe("rename dialog", () => {
+    it("2.T2 — renaming a worktree via the dialog calls the real renameWorktree endpoint", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
+      const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(trigger);
+      const renameItem = await screen.findByRole("menuitem", { name: /rename/i });
+      await user.click(renameItem);
+
+      const input = await screen.findByLabelText("New name");
+      await user.clear(input);
+      await user.type(input, "renamed-worktree");
+      await user.click(screen.getByRole("button", { name: /^rename$/i }));
+
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledWith("wt-1", "renamed-worktree");
+      });
+      // Store reconciles via the `worktree:updated` WS event the mock emits —
+      // the new name shows up without a manual refresh.
+      await waitFor(() => {
+        expect(screen.getByRole("link", { name: /Open worktree renamed-worktree/i })).toBeInTheDocument();
+      });
     });
   });
 });

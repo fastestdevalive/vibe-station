@@ -64,7 +64,7 @@ function session(id: string, channel: "tmux" | "pty" | "json"): Session {
     modeId: "mode-1",
     type: "agent",
     label: "main",
-    slot: "m",
+    isMain: true,
     state: "idle",
     lifecycleState: "idle",
     tmuxName: "",
@@ -143,5 +143,24 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="channel-toggle"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="attachment-upload"]')).toBeNull();
+  });
+
+  it("2.T3 — a tab-strip drag-reorder (sortOrder-only change) does not remount the pane", () => {
+    // TabsStrip/LeftSidebar never render TerminalPane/ChatPane themselves —
+    // AgentPaneSlot only cares about `sessionId`/`session`, driven by
+    // `activeSessionId` (Workspace.tsx), never by tab/row order. Reordering
+    // changes a session's `sortOrder` (Part 03 Phase 2) and re-sorts the tab
+    // strip's own list, but must never touch AgentPaneSlot's identity/props
+    // in a way that remounts it.
+    const s = session("tty1", "tmux");
+    const { container, rerender } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={s} />,
+    );
+    expect(terminalMounts).toBe(1);
+
+    rerender(<AgentPaneSlot api={api} sessionId="tty1" session={{ ...s, sortOrder: 42 }} />);
+    expect(terminalMounts).toBe(1);
+    expect(terminalUnmounts).toBe(0);
+    expect(container.querySelector('[data-testid="terminal"]')?.getAttribute("data-session")).toBe("tty1");
   });
 });

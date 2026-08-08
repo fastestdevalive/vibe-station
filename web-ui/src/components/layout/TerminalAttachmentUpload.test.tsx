@@ -14,7 +14,7 @@ function session(extra: Partial<Session> = {}): Session {
     modeId: "mode-1",
     type: "agent",
     label: "main",
-    slot: "m",
+    isMain: true,
     state: "idle",
     lifecycleState: "idle",
     tmuxName: "sess-main",

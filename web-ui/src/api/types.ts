@@ -24,6 +24,8 @@ export interface Project {
 export interface Worktree {
   id: string;
   projectId: string;
+  /** Cosmetic display name (F2). Falls back to `branch` when null/absent. */
+  name?: string | null;
   branch: string;
   baseBranch: string;
   baseSha?: string;
@@ -34,10 +36,12 @@ export interface Worktree {
    * default sort order (newest first).
    */
   pinnedAt: string | null;
+  /** Fractional display-order rank among a project's worktrees (F9). Optional for legacy/test fixtures predating this field. */
+  sortOrder?: number;
   /**
-   * Id of the worktree's main (slot `m`) agent session. Present on create so the
-   * JSON create flow can upload + send its first turn to the main agent. Null for
-   * legacy/edge records with no main session.
+   * Id of the worktree's main (isMain === true) agent session. Present on
+   * create so the JSON create flow can upload + send its first turn to the
+   * main agent. Null for legacy/edge records with no main session.
    */
   mainSessionId?: string | null;
 }
@@ -67,12 +71,12 @@ export interface Session {
   projectId: string;
   modeId: string | null;
   type: SessionType;
-  /** Display label in tabs / sidebar (custom name when set, else slot-derived) */
+  /** Display label in tabs / sidebar (custom name when set, else a computed default) */
   label: string;
-  /** User-set/default display name (terminals). null when slot-derived. */
+  /** User-set/default display name. null when using the computed default label. */
   name?: string | null;
-  /** Stable slot: `m` = main (non-closable), `a{n}`, `t{n}`, `d{n}` (direct) */
-  slot: string;
+  /** True for a worktree's single main agent session (non-closable). Replaces the old `slot === "m"` check. */
+  isMain: boolean;
   state: SessionState;
   lifecycleState: SessionState;
   tmuxName: string;
@@ -82,6 +86,14 @@ export interface Session {
   createdAt: string;
   /** When set, the session is pinned to the top of its sidebar group. */
   pinnedAt?: string | null;
+  /** Fractional display-order rank within its scope (worktree, or project's direct sessions). Optional for legacy/test fixtures predating this field. */
+  sortOrder?: number;
+  /** How `name` was set — "auto" (heuristic) vs. "user" (explicit rename). Informational/UI only. */
+  nameSource?: "auto" | "user" | null;
+  /** Set once a reset (POST .../reset) archives this session; null/absent ≡ live/normal session. */
+  archivedAt?: string | null;
+  /** Handoff summary written during a `reset --handoff`. Only ever set on an archived row. */
+  handoffSummary?: string | null;
 }
 
 /** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
@@ -283,6 +295,12 @@ export type WSEvent =
       pinnedAt?: string | null;
       /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
       channel?: Channel;
+      /** After a rename (PATCH .../rename) — `null` means cleared back to the default label. */
+      name?: string | null;
+      /** Set once a reset (POST .../reset) archives this session. */
+      archivedAt?: string | null;
+      /** After a reorder (PATCH .../reorder) — the session's new fractional display-order rank. */
+      sortOrder?: number;
     }
   | {
       type: "session:error";
@@ -417,7 +435,12 @@ export interface ProjectBranchesResponse {
 
 export interface CreateWorktreeBody {
   projectId: string;
-  branch: string;
+  /**
+   * Optional (branch-name-optional). Omitted → the daemon derives a name
+   * from `prompt`, or auto-generates a `wip/<worktree-id>` placeholder when
+   * there's no prompt either.
+   */
+  branch?: string;
   modeId: string;
   baseBranch?: string;
   prompt?: string;

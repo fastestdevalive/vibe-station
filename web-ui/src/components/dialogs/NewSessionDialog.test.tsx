@@ -5,7 +5,7 @@ import { createMockApi } from "@/api/mock";
 import { NewSessionDialog } from "./NewSessionDialog";
 
 describe("NewSessionDialog", () => {
-  it("new worktree requires branch then calls create APIs", async () => {
+  it("new worktree with an explicit branch calls create APIs", async () => {
     const user = userEvent.setup();
     const api = createMockApi();
     const cw = vi.spyOn(api, "createWorktree");
@@ -20,9 +20,6 @@ describe("NewSessionDialog", () => {
       />,
     );
     await user.click(screen.getByRole("radio", { name: /New worktree/i }));
-    await user.click(screen.getByRole("button", { name: /Create/i }));
-    expect(screen.getByText(/requires branch/i)).toBeInTheDocument();
-
     await user.type(screen.getByRole("textbox", { name: /New worktree branch/i }), "wt-new");
     await user.click(screen.getByRole("button", { name: /Create/i }));
     await waitFor(() => {
@@ -37,6 +34,33 @@ describe("NewSessionDialog", () => {
     });
     // New worktree: POST /worktrees spawns the main session — no separate createSession.
     expect(cs).not.toHaveBeenCalled();
+  });
+
+  it("new worktree with a BLANK branch still submits — branch is optional (daemon derives one)", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const cw = vi.spyOn(api, "createWorktree");
+    render(
+      <NewSessionDialog
+        open
+        api={api}
+        projectId="proj-a"
+        projectName="Proj A"
+        onClose={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("radio", { name: /New worktree/i }));
+    // Leave the branch field blank entirely.
+    await user.click(screen.getByRole("button", { name: /Create/i }));
+    await waitFor(() => {
+      expect(cw).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: "proj-a",
+          branch: undefined,
+          baseBranch: "main",
+        }),
+      );
+    });
   });
 
   it("populates the base-branch dropdown from listProjectBranches and submits the selection", async () => {
@@ -92,5 +116,21 @@ describe("NewSessionDialog", () => {
         expect.objectContaining({ branch: "wt-y", baseBranch: "release-1" }),
       );
     });
+  });
+
+  it("focuses the initial-prompt textarea on open, not the Branch field", async () => {
+    const api = createMockApi();
+    render(
+      <NewSessionDialog
+        open
+        api={api}
+        projectId="proj-a"
+        projectName="Proj A"
+        onClose={() => {}}
+      />,
+    );
+
+    const prompt = await screen.findByLabelText(/Initial prompt/i);
+    await waitFor(() => expect(prompt).toHaveFocus());
   });
 });

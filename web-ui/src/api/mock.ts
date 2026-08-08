@@ -40,6 +40,14 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/** Mirrors the daemon's `defaultLabel`/`labelForSession` (sessions.ts) so the
+ *  mock's rename endpoint keeps `label` consistent with `name`, matching the
+ *  real endpoint's contract instead of just satisfying its return shape. */
+function defaultLabelFor(s: Pick<Session, "isMain" | "type">): string {
+  if (s.isMain) return "main";
+  return s.type === "agent" ? "Agent" : "Terminal";
+}
+
 const PRESET_BUG_FIX =
   "You are fixing a bug. Open a PR when done. Run tests before committing.";
 const PRESET_PLANNING = "You are planning. Do not commit or open a PR. Output a written plan.";
@@ -86,6 +94,7 @@ export function createMockApi() {
       baseSha: "abc123",
       createdAt: nowIso(),
       pinnedAt: null,
+      sortOrder: 1,
     },
     {
       id: "wt-2",
@@ -95,6 +104,7 @@ export function createMockApi() {
       baseSha: "def456",
       createdAt: nowIso(),
       pinnedAt: null,
+      sortOrder: 2,
     },
     {
       id: "wt-3",
@@ -104,6 +114,7 @@ export function createMockApi() {
       baseSha: "fed789",
       createdAt: nowIso(),
       pinnedAt: null,
+      sortOrder: 1,
     },
   ];
 
@@ -132,11 +143,12 @@ export function createMockApi() {
       modeId: "mode-1",
       type: "agent",
       label: "main",
-      slot: "m",
+      isMain: true,
       state: "working",
       lifecycleState: "working",
       tmuxName: "sess-main",
       createdAt: nowIso(),
+      sortOrder: 1,
     },
     {
       id: "sess-agent2",
@@ -145,11 +157,12 @@ export function createMockApi() {
       modeId: "mode-2",
       type: "agent",
       label: "agent-2",
-      slot: "a1",
+      isMain: false,
       state: "idle",
       lifecycleState: "idle",
       tmuxName: "sess-agent2",
       createdAt: nowIso(),
+      sortOrder: 2,
     },
     {
       id: "sess-term1",
@@ -158,11 +171,12 @@ export function createMockApi() {
       modeId: null,
       type: "terminal",
       label: "term-1",
-      slot: "t1",
+      isMain: false,
       state: "working",
       lifecycleState: "working",
       tmuxName: "sess-term1",
       createdAt: nowIso(),
+      sortOrder: 3,
     },
     {
       id: "sess-wt2-main",
@@ -171,11 +185,12 @@ export function createMockApi() {
       modeId: "mode-1",
       type: "agent",
       label: "main",
-      slot: "m",
+      isMain: true,
       state: "done",
       lifecycleState: "done",
       tmuxName: "sess-wt2-main",
       createdAt: nowIso(),
+      sortOrder: 1,
     },
     {
       id: "sess-wt3-main",
@@ -184,11 +199,12 @@ export function createMockApi() {
       modeId: "mode-1",
       type: "agent",
       label: "main",
-      slot: "m",
+      isMain: true,
       state: "idle",
       lifecycleState: "idle",
       tmuxName: "sess-wt3-main",
       createdAt: nowIso(),
+      sortOrder: 1,
     },
   ];
 
@@ -367,7 +383,11 @@ export function createMockApi() {
       const wt: Worktree = {
         id: wtId,
         projectId: body.projectId,
-        branch: body.branch,
+        // Mirrors the daemon's branch-name-optional fallback for a blank
+        // branch input (a real slug-from-prompt derivation isn't worth
+        // reimplementing in the mock — the placeholder form is enough to
+        // exercise the UI path).
+        branch: body.branch?.trim() || `wip/${wtId}`,
         baseBranch: body.baseBranch ?? "main",
         baseSha: "mock-base-sha",
         createdAt: nowIso(),
@@ -452,6 +472,23 @@ export function createMockApi() {
       return { ok: true, worktree: structuredClone(wt) };
     },
 
+    async renameWorktree(id: string, name: string): Promise<{ ok: true; name: string | null }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      const value = name.trim() === "" ? null : name.trim().slice(0, 60);
+      wt.name = value;
+      emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      return { ok: true, name: value };
+    },
+
+    async reorderWorktree(id: string, sortOrder: number): Promise<{ ok: true; sortOrder: number }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      wt.sortOrder = sortOrder;
+      emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      return { ok: true, sortOrder };
+    },
+
     async listSessions(worktreeId?: string): Promise<Session[]> {
       return structuredClone(worktreeId ? sessions.filter((s) => s.worktreeId === worktreeId) : sessions);
     },
@@ -459,10 +496,8 @@ export function createMockApi() {
     async createSession(body: CreateSessionBody): Promise<Session> {
       const wt = worktrees.find((w) => w.id === body.worktreeId);
       const wtSessions = sessions.filter((s) => s.worktreeId === body.worktreeId);
-      const nextAgent = wtSessions.filter((s) => s.slot.startsWith("a")).length + 1;
-      const nextTerm = wtSessions.filter((s) => s.slot.startsWith("t")).length + 1;
-      const slot =
-        body.type === "terminal" ? `t${nextTerm}` : `a${nextAgent}`;
+      const nextAgent = wtSessions.filter((s) => s.type === "agent" && !s.isMain).length + 1;
+      const nextTerm = wtSessions.filter((s) => s.type === "terminal").length + 1;
       const termName =
         body.type === "terminal"
           ? (body.name?.trim() || `Terminal ${nextTerm}`)
@@ -475,11 +510,12 @@ export function createMockApi() {
         type: body.type,
         label: termName ?? `agent-${nextAgent}`,
         name: termName ?? null,
-        slot,
+        isMain: false,
         state: "working",
         lifecycleState: "working",
         tmuxName: `tmux-${Date.now()}`,
         createdAt: nowIso(),
+        sortOrder: Date.now(),
       };
       sessions.push(sess);
       emit({
@@ -497,7 +533,6 @@ export function createMockApi() {
     async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
       const projSessions = sessions.filter((s) => s.projectId === body.projectId && s.worktreeId === null);
       const nextDirect = projSessions.length + 1;
-      const slot = `d${nextDirect}`;
       const sess: Session = {
         id: `sess-direct-${Date.now()}`,
         worktreeId: null,
@@ -506,11 +541,12 @@ export function createMockApi() {
         type: body.type,
         label: body.type === "terminal" ? `Terminal ${nextDirect}` : `direct ${nextDirect}`,
         name: body.name ?? null,
-        slot,
+        isMain: false,
         state: "working",
         lifecycleState: "working",
         tmuxName: `tmux-direct-${Date.now()}`,
         createdAt: nowIso(),
+        sortOrder: Date.now(),
       };
       sessions.push(sess);
       emit({
@@ -526,7 +562,7 @@ export function createMockApi() {
     },
 
     async nextTerminalName(worktreeId: string): Promise<string> {
-      const n = sessions.filter((s) => s.worktreeId === worktreeId && s.slot.startsWith("t")).length + 1;
+      const n = sessions.filter((s) => s.worktreeId === worktreeId && s.type === "terminal").length + 1;
       return `Terminal ${n}`;
     },
 
@@ -535,7 +571,7 @@ export function createMockApi() {
       if (idx === -1) throw new ApiError("not found", 404);
       const victim = sessions[idx];
       if (!victim) throw new ApiError("not found", 404);
-      if (victim.slot === "m") throw new ApiError("cannot delete main", 400);
+      if (victim.isMain) throw new ApiError("cannot delete main", 400);
       sessions.splice(idx, 1);
       return { ok: true };
     },
@@ -545,6 +581,73 @@ export function createMockApi() {
       if (!s) throw new ApiError("not found", 404);
       s.pinnedAt = pinned ? new Date(0).toISOString() : null;
       return { ok: true, pinnedAt: s.pinnedAt };
+    },
+
+    async renameSession(id: string, name: string): Promise<{ ok: true; name: string | null }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      const value = name.trim() === "" ? null : name.trim().slice(0, 60);
+      s.name = value;
+      s.nameSource = "user";
+      s.label = value && value.length > 0 ? value : defaultLabelFor(s);
+      emit({ type: "session:updated", sessionId: id, name: value });
+      return { ok: true, name: value };
+    },
+
+    async reorderSession(id: string, sortOrder: number): Promise<{ ok: true; sortOrder: number }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      s.sortOrder = sortOrder;
+      emit({ type: "session:updated", sessionId: id, sortOrder });
+      return { ok: true, sortOrder };
+    },
+
+    async resetSession(
+      id: string,
+      body?: { handoff?: boolean; prompt?: string },
+    ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      if (s.type !== "agent") throw new ApiError("reset only applies to agent sessions", 400);
+      if (s.archivedAt) throw new ApiError("session already archived", 400);
+
+      const archivedAt = nowIso();
+      const handoffSummary = body?.handoff ? "Mock handoff summary." : null;
+      s.archivedAt = archivedAt;
+      s.handoffSummary = handoffSummary;
+      emit({ type: "session:updated", sessionId: id, archivedAt });
+
+      const newId = `sess-${Date.now()}`;
+      const newSession: Session = {
+        ...structuredClone(s),
+        id: newId,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: `tmux-${Date.now()}`,
+        createdAt: nowIso(),
+        archivedAt: null,
+        handoffSummary: null,
+        pinnedAt: null,
+      };
+      sessions.push(newSession);
+      emit({
+        type: "session:created",
+        sessionId: newId,
+        worktreeId: newSession.worktreeId,
+        projectId: newSession.projectId,
+        sessionType: newSession.type,
+        mode: typeof newSession.modeId === "string" ? newSession.modeId : undefined,
+        snapshot: newSession,
+      });
+
+      return { ok: true, archivedSessionId: id, newSessionId: newId };
+    },
+
+    async handoffSession(id: string): Promise<{ ok: true; handoffSummary: string | null }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      if (s.type !== "agent") throw new ApiError("handoff only applies to agent sessions", 400);
+      return { ok: true, handoffSummary: "Mock handoff summary." };
     },
 
     async markSessionDone(id: string): Promise<{ ok: true }> {
@@ -811,24 +914,29 @@ export function createMockApi() {
             baseSha: "mock-base-sha",
             createdAt: nowIso(),
             pinnedAt: null,
+            sortOrder: Date.now(),
           };
           worktrees.push(wt);
           treeStore[wt.id] = { "": [] };
           emit({ type: "worktree:created", worktree: wt });
 
           const sess: Session = {
-            id: `${wt.id}-m`,
+            // Independently generated (Decision 1) — never derived from the
+            // worktree id, so mock-mode doesn't quietly keep the stale
+            // `${wt.id}-m` id-shape assumption alive.
+            id: `sess-main-${Date.now()}`,
             worktreeId: wt.id,
             projectId: id,
             modeId: modeId ?? null,
             type: "agent",
             label: "main",
             name: null,
-            slot: "m",
+            isMain: true,
             state: "working",
             lifecycleState: "working",
             tmuxName: `tmux-${Date.now()}`,
             createdAt: nowIso(),
+            sortOrder: Date.now(),
           };
           sessions.push(sess);
           emit({
@@ -851,11 +959,12 @@ export function createMockApi() {
             type: "agent",
             label: "direct 1",
             name: null,
-            slot: "d1",
+            isMain: false,
             state: "working",
             lifecycleState: "working",
             tmuxName: `tmux-direct-${Date.now()}`,
             createdAt: nowIso(),
+            sortOrder: Date.now(),
           };
           sessions.push(sess);
           emit({

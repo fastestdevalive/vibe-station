@@ -140,6 +140,9 @@ export function useServerSync(api: ApiInstance): void {
           patch.useTmux = ev.channel === "tmux";
         }
         if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
+        if (ev.name !== undefined) patch.name = ev.name ?? null;
+        if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
+        if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
         applySessionUpdated(ev.sessionId, patch);
       }
     });

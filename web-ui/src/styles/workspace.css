@@ -840,6 +840,11 @@
   font-weight: var(--font-weight-normal);
 }
 
+/* Archived session row (Part 03 Decision 4) — same position, dimmed + badge. */
+.tree-row[data-archived="true"] {
+  opacity: 0.55;
+}
+
 .direct-session__badge {
   flex-shrink: 0;
   font-size: var(--font-size-xs);
@@ -1683,6 +1688,45 @@
 .tab--new {
   padding: var(--space-1) var(--space-2);
   color: var(--fg-muted);
+}
+
+/* Archived session: greyed-out tab + small "Archived" badge (Part 03
+ * Decision 4). Position/order in the tab strip is unchanged — same
+ * `sortOrder`, just visually distinct in place. */
+.tab[data-archived="true"] {
+  opacity: 0.55;
+}
+
+.tab__archived-badge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-default);
+  padding: 0 6px;
+  margin-left: var(--space-1);
+  border-radius: var(--radius-full);
+}
+
+.tab__menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  padding: 0 2px;
+  border-radius: 2px;
+  transition: opacity var(--transition-fast);
+}
+
+.tab:hover .tab__menu-trigger,
+.tab[data-active="true"] .tab__menu-trigger {
+  opacity: 0.6;
+}
+
+.tab:hover .tab__menu-trigger:hover {
+  opacity: 1;
+  background: var(--bg-hover);
 }
 
 /* Prototype: inline tab rename input (double-click a tab to trigger). */
