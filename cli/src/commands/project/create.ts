@@ -29,7 +29,7 @@ interface CreateProjectResponse {
     id: string;
     worktreeId: string | null;
     projectId: string;
-    slot: string;
+    isMain: boolean;
     type: "agent" | "terminal";
     modeId: string | null;
     label: string;

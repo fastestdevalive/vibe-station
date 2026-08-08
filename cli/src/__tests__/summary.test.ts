@@ -8,10 +8,10 @@ describe("groupSessionsByWorktree", () => {
   ];
 
   const sessions = [
-    { id: "s1", worktreeId: "wt-a", slot: "m", type: "agent", state: "working", createdAt: "t0" },
-    { id: "s2", worktreeId: "wt-a", slot: "a1", type: "agent", state: "idle", createdAt: "t1" },
-    { id: "s3", worktreeId: "wt-b", slot: "m", type: "agent", state: "exited", createdAt: "t2" },
-    { id: "orphan", worktreeId: "missing", slot: "m", type: "agent", state: "working", createdAt: "t3" },
+    { id: "s1", worktreeId: "wt-a", isMain: true, type: "agent", state: "working", createdAt: "t0" },
+    { id: "s2", worktreeId: "wt-a", isMain: false, type: "agent", state: "idle", createdAt: "t1" },
+    { id: "s3", worktreeId: "wt-b", isMain: true, type: "agent", state: "exited", createdAt: "t2" },
+    { id: "orphan", worktreeId: "missing", isMain: true, type: "agent", state: "working", createdAt: "t3" },
   ];
 
   it("groups sessions by worktree id", () => {

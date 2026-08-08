@@ -18,7 +18,10 @@ export function registerWorktreeCreate(worktree: Command): void {
     .option("--mode <id>", "Mode ID (required)", "")
     .option("--name <name>", "Worktree name")
     .option("--base <branch>", "Base branch")
-    .option("--branch <name>", "New branch name")
+    .option(
+      "--branch <name>",
+      "New branch name (optional — derived from --prompt, or auto-generated as wip/<worktree-id>, when omitted)",
+    )
     .option("--prompt <text>", "Initial prompt")
     .addOption(
       new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
