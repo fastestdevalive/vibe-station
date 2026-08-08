@@ -49,6 +49,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir || "/tmp/vst-test", "config.json"),
     modesPath: () => pathJoin(tempDir || "/tmp/vst-test", "modes.json"),
     daemonLogPath: () => pathJoin(tempDir || "/tmp/vst-test", "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir || "/tmp/vst-test", "vibe-station.db"),
     cleanupSessionDataDir: () => {},
     sessionDataDir: (p: string, w: string, s: string) =>
       pathJoin(tempDir || "/tmp/vst-test", "projects", p, "session-data", w, s),
@@ -508,6 +509,40 @@ describe("Claude plugin — chat-id capture", () => {
     expect(ourEntries).toHaveLength(1);
   });
 
+  it("3.T2 — setupWorkspaceHooks writes .claude/commands/vst.md with the expected content", async () => {
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
+    const plugin = createClaudePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const vstCommandPath = join(wtDir, ".claude", "commands", "vst.md");
+    const content = await readFile(vstCommandPath, "utf8");
+
+    expect(content).toContain("vst session reset $VST_SESSION");
+    // Bug 6 fix: `reset --handoff` no longer maps straight to `--handoff` on the
+    // CLI invocation — the agent must write .vibe-station/HANDOFF.md itself
+    // first, then reset WITHOUT --handoff (paste+poll can't work when the
+    // instruction targets the very session that's blocked running this command).
+    expect(content).not.toContain("vst session reset $VST_SESSION --handoff");
+    expect(content).toContain("Do NOT pass `--handoff`");
+    expect(content).toContain(".vibe-station/HANDOFF.md");
+    expect(content).toContain("vst session handoff $VST_SESSION");
+    expect(content).toContain('vst session rename $VST_SESSION "<name>"');
+    expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
+    expect(content).toContain("$VST_WORKTREE");
+    expect(content).toContain("isn't part of a worktree");
+    expect(content).toContain("$ARGUMENTS");
+  });
+
+  it("3.T2b — setupWorkspaceHooks .claude/commands/vst.md is idempotent across two calls", async () => {
+    const { createClaudePlugin } = await import("../agent-plugins/claude.js");
+    const plugin = createClaudePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const first = await readFile(join(wtDir, ".claude", "commands", "vst.md"), "utf8");
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const second = await readFile(join(wtDir, ".claude", "commands", "vst.md"), "utf8");
+    expect(second).toBe(first);
+  });
+
   it("2.T6 — getRestoreCommand with session.agentChatId set → uses it without filesystem call", async () => {
     const { createClaudePlugin } = await import("../agent-plugins/claude.js");
     const plugin = createClaudePlugin();
@@ -591,6 +626,62 @@ describe("Cursor plugin — chat-id capture", () => {
   });
 });
 
+describe("Cursor plugin — setupWorkspaceHooks", () => {
+  let wtDir: string;
+
+  beforeEach(async () => {
+    wtDir = await mkdtemp(join(tmpdir(), "vst-cursor-hooktest-"));
+  });
+
+  afterEach(async () => {
+    await rm(wtDir, { recursive: true, force: true });
+  });
+
+  it("3.T2 — setupWorkspaceHooks writes .cursor/commands/vst.md (no $ARGUMENTS placeholder)", async () => {
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const content = await readFile(join(wtDir, ".cursor", "commands", "vst.md"), "utf8");
+    expect(content).toContain("vst session reset $VST_SESSION");
+    expect(content).toContain("vst session handoff $VST_SESSION");
+    expect(content).toContain('vst session rename $VST_SESSION "<name>"');
+    expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
+    expect(content).toContain("isn't part of a worktree");
+    expect(content).not.toContain("$ARGUMENTS");
+  });
+
+  it("3.T2b — setupWorkspaceHooks .cursor/commands/vst.md is idempotent across two calls", async () => {
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const first = await readFile(join(wtDir, ".cursor", "commands", "vst.md"), "utf8");
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const second = await readFile(join(wtDir, ".cursor", "commands", "vst.md"), "utf8");
+    expect(second).toBe(first);
+  });
+
+  it("Bug 7 fix — setupWorkspaceHooks adds .cursor/ to .gitignore", async () => {
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const gitignore = await readFile(join(wtDir, ".gitignore"), "utf8");
+    expect(gitignore.split("\n").some((line) => line.trim() === ".cursor/")).toBe(true);
+  });
+
+  it("Bug 7 fix — .gitignore entry for .cursor/ is not duplicated across two calls", async () => {
+    const { createCursorPlugin } = await import("../agent-plugins/cursor.js");
+    const plugin = createCursorPlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const gitignore = await readFile(join(wtDir, ".gitignore"), "utf8");
+    const occurrences = gitignore.split("\n").filter((line) => line.trim() === ".cursor/").length;
+    expect(occurrences).toBe(1);
+  });
+});
+
 describe("OpenCode plugin — chat-id capture", () => {
   let wtDir: string;
 
@@ -638,6 +729,50 @@ describe("OpenCode plugin — chat-id capture", () => {
       cwd: "/repos/p1",
     });
     expect(result).toEqual(["opencode", "--session", "ses_abc"]);
+  });
+
+  it("3.T2 — setupWorkspaceHooks writes .opencode/commands/vst.md with $ARGUMENTS substitution", async () => {
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const content = await readFile(join(wtDir, ".opencode", "commands", "vst.md"), "utf8");
+    expect(content).toContain("$ARGUMENTS");
+    expect(content).toContain("vst session reset $VST_SESSION");
+    expect(content).toContain("vst session handoff $VST_SESSION");
+    expect(content).toContain('vst session rename $VST_SESSION "<name>"');
+    expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
+    expect(content).toContain("isn't part of a worktree");
+  });
+
+  it("3.T2b — setupWorkspaceHooks .opencode/commands/vst.md is idempotent across two calls", async () => {
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const first = await readFile(join(wtDir, ".opencode", "commands", "vst.md"), "utf8");
+    await plugin.setupWorkspaceHooks!(wtDir);
+    const second = await readFile(join(wtDir, ".opencode", "commands", "vst.md"), "utf8");
+    expect(second).toBe(first);
+  });
+
+  it("Bug 7 fix — setupWorkspaceHooks adds .opencode/ to .gitignore", async () => {
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const gitignore = await readFile(join(wtDir, ".gitignore"), "utf8");
+    expect(gitignore.split("\n").some((line) => line.trim() === ".opencode/")).toBe(true);
+  });
+
+  it("Bug 7 fix — .gitignore entry for .opencode/ is not duplicated across two calls", async () => {
+    const { createOpencodePlugin } = await import("../agent-plugins/opencode.js");
+    const plugin = createOpencodePlugin();
+    await plugin.setupWorkspaceHooks!(wtDir);
+    await plugin.setupWorkspaceHooks!(wtDir);
+
+    const gitignore = await readFile(join(wtDir, ".gitignore"), "utf8");
+    const occurrences = gitignore.split("\n").filter((line) => line.trim() === ".opencode/").length;
+    expect(occurrences).toBe(1);
   });
 });
 

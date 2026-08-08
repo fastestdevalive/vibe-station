@@ -74,6 +74,13 @@ export async function daemonPut<T>(
   return daemonRequest<T>("PUT", path, body);
 }
 
+export async function daemonPatch<T>(
+  path: string,
+  body?: unknown
+): Promise<DaemonResult<T>> {
+  return daemonRequest<T>("PATCH", path, body);
+}
+
 export async function daemonDelete<T>(path: string): Promise<DaemonResult<T>> {
   return daemonRequest<T>("DELETE", path);
 }

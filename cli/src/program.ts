@@ -16,6 +16,7 @@ import { registerWorktreeRm } from "./commands/worktree/rm.js";
 import { registerWorktreeDone } from "./commands/worktree/done.js";
 import { registerWorktreeLs } from "./commands/worktree/ls.js";
 import { registerWorktreeInfo } from "./commands/worktree/info.js";
+import { registerWorktreeRename } from "./commands/worktree/rename.js";
 import { registerSessionCreate } from "./commands/session/create.js";
 import { registerSessionLs } from "./commands/session/ls.js";
 import { registerSessionInfo } from "./commands/session/info.js";
@@ -25,6 +26,9 @@ import { registerSessionKill } from "./commands/session/kill.js";
 import { registerSessionAttach } from "./commands/session/attach.js";
 import { registerSessionRestore } from "./commands/session/restore.js";
 import { registerSessionOutput } from "./commands/session/output.js";
+import { registerSessionReset } from "./commands/session/reset.js";
+import { registerSessionHandoff } from "./commands/session/handoff.js";
+import { registerSessionRename } from "./commands/session/rename.js";
 import { registerSend } from "./commands/send.js";
 import { registerChat } from "./commands/chat.js";
 import { registerModeLs } from "./commands/mode/ls.js";
@@ -85,6 +89,7 @@ export function buildProgram(): Command {
   registerWorktreeDone(worktree);
   registerWorktreeLs(worktree);
   registerWorktreeInfo(worktree);
+  registerWorktreeRename(worktree);
 
   // Session commands
   const session = program
@@ -99,6 +104,9 @@ export function buildProgram(): Command {
   registerSessionOutput(session);
   registerSessionTranscript(session);
   registerSessionMeta(session);
+  registerSessionReset(session);
+  registerSessionHandoff(session);
+  registerSessionRename(session);
 
   // Send command
   registerSend(program);
