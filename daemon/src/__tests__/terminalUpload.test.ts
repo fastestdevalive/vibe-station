@@ -35,6 +35,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(base(), "config.json"),
     modesPath: () => pathJoin(base(), "modes.json"),
     daemonLogPath: () => pathJoin(base(), "logs", "daemon.log"),
+    dbPath: () => pathJoin(base(), "vibe-station.db"),
     sessionDataDir: wtDataDir,
     directSessionDataDir: directDataDir,
     systemPromptPath: (p: string, w: string, s: string) => pathJoin(wtDataDir(p, w, s), "system-prompt.md"),

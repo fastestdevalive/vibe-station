@@ -13,8 +13,10 @@ export interface SessionLifecycle {
   lastTransitionAt: string; // ISO8601
 }
 
-export type SessionSlot = "m" | `a${number}` | `t${number}` | `d${number}`;
 export type SessionType = "agent" | "terminal";
+
+/** How a session's `name` was set — informational/UI only (F1). */
+export type SessionNameSource = "auto" | "user";
 
 export interface TranscriptRef {
   kind: "claude-jsonl" | "opencode-session" | "vst-json" | "none";
@@ -167,16 +169,32 @@ export interface SessionMeta {
 
 export interface SessionRecord {
   id: string;
-  slot: SessionSlot;
+  /**
+   * Worktree this session belongs to. `undefined`/absent for a direct
+   * (project-scoped, no-worktree) session. Replaces one of `slot`'s three
+   * former jobs (identity is now `id`; scope is now this field).
+   */
+  worktreeId?: string;
+  /** Owning project — always present, mirrors the project this session's worktree (if any) belongs to. */
+  projectId: string;
+  /**
+   * True for the single main agent session of a worktree. Replaces
+   * `slot === "m"`. Always false for direct sessions and for terminals.
+   */
+  isMain: boolean;
+  /** Fractional display-order rank within its scope (worktree, or project's direct sessions). Reordering UI is Part 03 — this part only ever assigns a monotonically increasing value at creation. */
+  sortOrder: number;
   type: SessionType;
   modeId?: string;
   /**
-   * User-facing display name. Currently set for terminals (defaults to
-   * "Terminal N" from the worktree's monotonic counter, or a custom name).
-   * Mutable — a rename endpoint can update it. When absent the UI falls back
-   * to a slot-derived label.
+   * User-facing display name. Set at creation (heuristic slug from the
+   * prompt, or a default like "Terminal N"/"Agent N"). Mutable via the
+   * rename endpoint. When absent the UI falls back to a computed default
+   * label (see `defaultLabel()` in routes/sessions.ts).
    */
   name?: string;
+  /** How `name` was set — heuristic at creation vs. an explicit user rename. Informational/UI only. */
+  nameSource?: SessionNameSource;
   tmuxName: string;
   useTmux: boolean;
   /**
@@ -211,11 +229,37 @@ export interface SessionRecord {
    * done, so a session that DID run never silently replays its first prompt.
    */
   initialPrompt?: string;
+  /**
+   * Set when this session was retired by `POST /sessions/:id/reset` (Decision
+   * 2/9). An archived session is read-only history — its runtime is released
+   * and it is never resumed; the reset always creates a NEW session row to
+   * continue in. Absent ≡ live/normal session.
+   */
+  archivedAt?: string; // ISO8601
+  /**
+   * Handoff summary written by the outgoing agent during a `reset --handoff`
+   * (Decision 2/6), read from `.vibe-station/HANDOFF.md` after a bounded
+   * turn. Only ever set on an archived row. `null`/absent when no handoff was
+   * requested or it timed out.
+   */
+  handoffSummary?: string | null;
 }
 
 export interface WorktreeRecord {
   id: string;
+  /** Cosmetic display name (F2). `NULL`/absent falls back to `branch`. Never touches the git branch or on-disk directory. */
+  name?: string;
   branch: string;
+  /**
+   * True when `branch` was auto-generated as a `wip/<wtId>` placeholder
+   * because creation supplied neither an explicit branch nor a prompt to
+   * derive one from (or the prompt-derived slug was empty/collided). There is
+   * deliberately no mechanism to rename this later short of the user running
+   * `git branch -m` themselves — see the branch-name-optional design notes.
+   * Absent/false for every worktree whose branch came from explicit input or
+   * a successful prompt-derived slug.
+   */
+  branchIsPlaceholder?: boolean;
   baseBranch: string;
   baseSha: string;
   createdAt: string; // ISO8601
@@ -225,6 +269,8 @@ export interface WorktreeRecord {
    * (newest pinned first), so we don't need a separate sort field.
    */
   pinnedAt?: string; // ISO8601
+  /** Fractional display-order rank among a project's worktrees (F9 — reordering itself is Part 03). */
+  sortOrder: number;
   /**
    * Monotonic counter for default terminal names ("Terminal N"). Only ever
    * increments — numbers are never reused even after a terminal is deleted, so

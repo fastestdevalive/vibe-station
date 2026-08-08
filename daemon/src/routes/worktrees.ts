@@ -6,7 +6,8 @@ import { join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { getProject, getAllProjects, mutateProject } from "../state/project-store.js";
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
-import { reserveNextWorktreeNum, buildTmuxName } from "../services/sessionId.js";
+import { reserveNextWorktreeNum, generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
+import { slugifyPrompt } from "../services/naming.js";
 import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists } from "../services/git.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
@@ -119,28 +120,40 @@ function serializeWorktree(projectId: string, w: WorktreeRecord) {
   return {
     id: w.id,
     projectId,
+    name: w.name ?? null,
     branch: w.branch,
+    branchIsPlaceholder: w.branchIsPlaceholder ?? false,
     baseBranch: w.baseBranch,
     baseSha: w.baseSha,
     createdAt: w.createdAt,
     // Always emit pinnedAt so the client doesn't have to special-case undefined.
     pinnedAt: w.pinnedAt ?? null,
-    // Id of the worktree's main (slot `m`) agent session. Lets the create-dialog
-    // JSON path address the main agent for its first turn (upload + POST /chat)
-    // without a follow-up session list fetch.
-    mainSessionId: w.sessions.find((s) => s.slot === "m")?.id ?? null,
+    sortOrder: w.sortOrder,
+    // Id of the worktree's main agent session (isMain === true — replaces the
+    // old slot==="m" check, Decision 1). Lets the create-dialog JSON path
+    // address the main agent for its first turn (upload + POST /chat) without
+    // a follow-up session list fetch.
+    mainSessionId: w.sessions.find((s) => s.isMain)?.id ?? null,
   };
 }
 
 const CreateWorktreeBody = z.object({
   projectId: z.string().min(1),
   modeId: z.string().min(1),
-  branch: z.string().min(1),
+  // Optional (branch-name-optional): omitted OR blank, the daemon derives a
+  // name from `prompt` (via `slugifyPrompt`) or, failing that, auto-generates
+  // a `wip/<wtId>` placeholder — see `resolveBranchForCreate` below. No
+  // `.min(1)` here (unlike other branch-name fields) precisely so an
+  // explicitly empty string is accepted and normalized to "omitted" by
+  // `branchInput`'s `.trim() || undefined` below, rather than 400ing.
+  branch: z.string().optional(),
   baseBranch: z.string().min(1).optional(),
   prompt: z.string().optional(),
   useTmux: z.boolean().optional(),
   // Execution channel for the main agent (Decision 1). `json` pins useTmux=false.
   channel: z.enum(["tmux", "pty", "json"]).optional(),
+  // Explicit cosmetic name (F1/F2) — always wins over the heuristic slug.
+  name: z.string().trim().max(60).optional(),
 });
 
 async function runMainSpawnJob(opts: {
@@ -222,6 +235,57 @@ async function runMainSpawnJob(opts: {
   }
 }
 
+/**
+ * Resolve the branch name for a worktree whose creation request omitted an
+ * explicit `branch` (branch-name-optional). Called only after `wtId` has
+ * been reserved, since the placeholder fallback is keyed off it.
+ *
+ * Order:
+ * 1. Prompt given → try the `slugifyPrompt` slug, then numbered variants
+ *    (`slug-2`, `slug-3`, ...) if it collides with an existing branch.
+ * 2. No prompt, or the slug came back empty / every numbered variant also
+ *    collided → auto-generate a `wip/<wtId>` placeholder, numbered on
+ *    collision the same way. `wtId` is already unique per project, so this
+ *    is only defensive (e.g. a branch literally named `wip/proj-3` already
+ *    existing from a prior manual `git branch`).
+ *
+ * Never throws — always returns a usable branch name (falls all the way
+ * back to a timestamp-suffixed placeholder in the pathological case where
+ * 1000 numbered placeholders are all taken).
+ */
+async function resolveBranchForCreate(opts: {
+  repoPath: string;
+  prompt?: string;
+  wtId: string;
+}): Promise<{ branch: string; isPlaceholder: boolean }> {
+  const { repoPath, prompt, wtId } = opts;
+
+  if (prompt) {
+    const slug = slugifyPrompt(prompt);
+    if (slug) {
+      const candidates = [slug, ...Array.from({ length: 20 }, (_, i) => `${slug}-${i + 2}`)];
+      for (const candidate of candidates) {
+        if (!validateBranch(candidate).ok) continue;
+        if (!(await branchExistsInRepo(repoPath, candidate))) {
+          return { branch: candidate, isPlaceholder: false };
+        }
+      }
+    }
+  }
+
+  const placeholder = `wip/${wtId}`;
+  if (!(await branchExistsInRepo(repoPath, placeholder))) {
+    return { branch: placeholder, isPlaceholder: true };
+  }
+  for (let n = 2; n < 1000; n++) {
+    const candidate = `${placeholder}-${n}`;
+    if (!(await branchExistsInRepo(repoPath, candidate))) {
+      return { branch: candidate, isPlaceholder: true };
+    }
+  }
+  return { branch: `${placeholder}-${Date.now()}`, isPlaceholder: true };
+}
+
 export function registerWorktreeRoutes(app: FastifyInstance): void {
   // GET /worktrees?project=:id
   app.get("/worktrees", async (req, reply) => {
@@ -242,7 +306,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { projectId, branch, baseBranch: baseBranchInput, useTmux: rawUseTmux } = result.data;
+    const { projectId, baseBranch: baseBranchInput, useTmux: rawUseTmux } = result.data;
+    // Trimmed to `undefined` when blank so an explicitly empty-string branch
+    // from a client is treated the same as an omitted one (branch-name-optional).
+    const branchInput = result.data.branch?.trim() || undefined;
     let { modeId } = result.data;
     // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false.
     const isJson = result.data.channel === "json";
@@ -277,18 +344,23 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       });
     }
 
-    // 1. Validate branch name
-    const branchValid = validateBranch(branch);
-    if (!branchValid.ok) {
-      return reply.status(400).send({ error: branchValid.reason });
-    }
+    // 1. Validate branch name — only when explicitly given. When omitted, the
+    // actual name is resolved after the worktree id is reserved below (the
+    // placeholder fallback needs it), so validation/collision-checking for
+    // that case happens inside `resolveBranchForCreate` instead.
+    if (branchInput) {
+      const branchValid = validateBranch(branchInput);
+      if (!branchValid.ok) {
+        return reply.status(400).send({ error: branchValid.reason });
+      }
 
-    // Check branch doesn't already exist in the repo
-    if (await branchExistsInRepo(project.absolutePath, branch)) {
-      return reply.status(409).send({
-        error: `Branch '${branch}' already exists. Pick a different name.`,
-        conflictWith: branch,
-      });
+      // Check branch doesn't already exist in the repo
+      if (await branchExistsInRepo(project.absolutePath, branchInput)) {
+        return reply.status(409).send({
+          error: `Branch '${branchInput}' already exists. Pick a different name.`,
+          conflictWith: branchInput,
+        });
+      }
     }
 
     // 2. Resolve baseBranch (defaultBranch is guaranteed for git projects)
@@ -321,6 +393,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const wtId = `${freshProject.prefix}-${wtNum}`;
       const wtPath = getWorktreePath(projectId, wtId);
 
+      // Resolve the branch name now that `wtId` exists (branch-name-optional):
+      // explicit input always wins (already validated above); otherwise derive
+      // from the prompt or fall back to a `wip/<wtId>` placeholder.
+      const { branch, isPlaceholder: branchIsPlaceholder } = branchInput
+        ? { branch: branchInput, isPlaceholder: false }
+        : await resolveBranchForCreate({ repoPath: project.absolutePath, prompt: result.data.prompt, wtId });
+
       // Capture baseSha before creating worktree
       const baseSha = await revParse(project.absolutePath, baseBranch);
 
@@ -328,13 +407,25 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       await worktreeAdd(project.absolutePath, wtPath, branch, baseBranch);
       worktreeAdded = true;
 
-      // Build the main session record
-      const mainTmuxName = useTmux ? buildTmuxName(freshProject.prefix, wtNum, "m") : `__direct__-${wtId}-m`;
+      // Build the main session record. Id is independently generated
+      // (Decision 1) — no longer slot-derived.
+      const mainSessionId = generateSessionId(wtId, "agent");
+      const mainTmuxName = useTmux ? tmuxNameForSession(mainSessionId) : `__direct__-${mainSessionId}`;
+      // Naming (F1): explicit `name` wins; else the heuristic slug from the
+      // creation prompt; else no name at all (falls back to the default label
+      // forever — no later revisit).
+      const explicitName = result.data.name;
+      const heuristicName = !explicitName && result.data.prompt ? slugifyPrompt(result.data.prompt) : "";
+      const wtName = explicitName || heuristicName || undefined;
       const mainSession: SessionRecord = {
-        id: `${wtId}-m`,
-        slot: "m",
+        id: mainSessionId,
+        worktreeId: wtId,
+        projectId,
+        isMain: true,
+        sortOrder: 0,
         type: "agent",
         modeId,
+        ...(wtName ? { name: wtName, nameSource: explicitName ? "user" : "auto" } : {}),
         tmuxName: mainTmuxName,
         useTmux,
         channel,
@@ -342,7 +433,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           ? {
               transcriptRef: {
                 kind: "vst-json" as const,
-                path: join(sessionDataDir(projectId, wtId, `${wtId}-m`), "messages.jsonl"),
+                path: join(sessionDataDir(projectId, wtId, mainSessionId), "messages.jsonl"),
               },
             }
           : {}),
@@ -355,10 +446,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
       const worktreeRecord: WorktreeRecord = {
         id: wtId,
+        ...(wtName ? { name: wtName } : {}),
         branch,
+        ...(branchIsPlaceholder ? { branchIsPlaceholder: true } : {}),
         baseBranch,
         baseSha,
         createdAt: new Date().toISOString(),
+        sortOrder: Date.now(),
         sessions: [mainSession],
       };
 
@@ -534,6 +628,80 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       broadcastAll({ type: "worktree:updated", worktree: apiWorktree });
     }
     return reply.send({ ok: true, worktree: apiWorktree });
+  });
+
+  // PATCH /worktrees/:id/rename   { name: string }
+  // Cosmetic-only (F2/Decision 4) — never touches the git branch or the
+  // on-disk checkout directory. Empty string clears back to NULL (falls back
+  // to `branch`).
+  app.patch("/worktrees/:id/rename", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const parsed = z.object({ name: z.string().max(60) }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const value = parsed.data.name.trim() === "" ? null : parsed.data.name.trim().slice(0, 60);
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) => {
+        if (w.id !== wtId) return w;
+        if (value == null) {
+          const { name: _drop, ...rest } = w;
+          void _drop;
+          return rest;
+        }
+        return { ...w, name: value };
+      }),
+    }));
+
+    // Broadcast the FULL serialized worktree, not a `{ id, name }` sliver —
+    // the client's `applyWorktreeUpdated` does a full-object replace (unlike
+    // `applySessionUpdated`, which merges a partial patch), so a partial
+    // payload here would wipe every other field (projectId, branch, ...) off
+    // the client's copy. That previously made the renamed/reordered worktree
+    // vanish from its project's list, since `worktreeMap` groups by
+    // `w.projectId` and a clobbered entry has `projectId: undefined`.
+    const updated = getAllProjects()
+      .find((p) => p.id === project.id)
+      ?.worktrees.find((w) => w.id === wtId);
+    if (updated) {
+      broadcastAll({ type: "worktree:updated", worktree: serializeWorktree(project.id, updated) });
+    }
+    return reply.send({ ok: true, name: value });
+  });
+
+  // PATCH /worktrees/:id/reorder   { sortOrder: number }
+  // Cosmetic-only display-order rank among a project's worktrees (F9). Client
+  // computes the fractional value (Part 03 Decision 1) — this endpoint just
+  // persists whatever it's given.
+  app.patch("/worktrees/:id/reorder", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const parsed = z.object({ sortOrder: z.number() }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const value = parsed.data.sortOrder;
+    await mutateProject(project.id, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) => (w.id === wtId ? { ...w, sortOrder: value } : w)),
+    }));
+
+    // Broadcast the FULL serialized worktree — see the identical comment in
+    // `/rename` above for why a `{ id, sortOrder }` sliver corrupts the
+    // client's copy (this was the reorder-drag-makes-the-row-vanish bug).
+    const updated = getAllProjects()
+      .find((p) => p.id === project.id)
+      ?.worktrees.find((w) => w.id === wtId);
+    if (updated) {
+      broadcastAll({ type: "worktree:updated", worktree: serializeWorktree(project.id, updated) });
+    }
+    return reply.send({ ok: true, sortOrder: value });
   });
 
   // POST /worktrees/:id/done — put the whole worktree to rest: every agent

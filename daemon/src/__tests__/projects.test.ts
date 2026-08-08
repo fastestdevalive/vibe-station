@@ -23,6 +23,7 @@ vi.mock("../services/paths.js", async () => {
     configPath: () => pathJoin(tempDir, "config.json"),
     modesPath: () => pathJoin(tempDir, "modes.json"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
+    dbPath: () => pathJoin(tempDir, "vibe-station.db"),
     // Faithful guard against the mocked home so the delete path still exercises
     // the "never escape the data dir" check.
     assertSafeToDelete: (target: string) => {
@@ -222,7 +223,7 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     expect(res.json<{ hidden: boolean }>().hidden).toBe(false);
   });
 
-  it("PATCH /projects/:id { hidden:true } hides the project and persists across reload", async () => {
+  it("PATCH /projects/:id { hidden:true } hides the project and persists (SQL is the sole source of truth)", async () => {
     const created = await app.inject({ method: "POST", url: "/projects", payload: { path: repoDir } });
     const project = created.json<ProjectRecord>();
 
@@ -238,10 +239,8 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     const list = await app.inject({ method: "GET", url: "/projects" });
     expect(list.json<{ id: string; hidden: boolean }[]>().find((p) => p.id === project.id)?.hidden).toBe(true);
 
-    // Persisted on disk: reload manifest from a fresh store.
-    const { _clearStoreForTest, loadAll, getProject } = await import("../state/project-store.js");
-    _clearStoreForTest();
-    await loadAll();
+    // No in-memory cache to go stale — a direct read hits SQL straight away.
+    const { getProject } = await import("../state/project-store.js");
     expect(getProject(project.id)?.hidden).toBe(true);
   });
 
@@ -258,9 +257,7 @@ describe("GET /projects + POST /projects + DELETE /projects/:id", () => {
     expect(unhide.statusCode).toBe(200);
     expect(unhide.json<{ project: { hidden: boolean } }>().project.hidden).toBe(false);
 
-    const { _clearStoreForTest, loadAll, getProject } = await import("../state/project-store.js");
-    _clearStoreForTest();
-    await loadAll();
+    const { getProject } = await import("../state/project-store.js");
     const reloaded = getProject(project.id);
     expect(reloaded?.hidden).toBeUndefined();
   });

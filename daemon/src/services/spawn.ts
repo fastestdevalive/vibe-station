@@ -109,6 +109,23 @@ export interface AgentPlugin {
     systemPromptFile: string;
     launchCfg: LaunchConfig;
   }): { launchArgs?: string[]; postLaunchInput?: string; postLaunchSubmit?: boolean; useShell?: boolean; shellLine?: string };
+  /**
+   * One-time-per-worktree setup of CLI-specific workspace files (hook scripts,
+   * settings, plugin files). Idempotent — called on every spawn/restore, must
+   * be safe to re-run.
+   *
+   * `/vst` in-chat slash command (sqlite-agent-naming Part 02, Phase 3): all
+   * three plugins additionally write a `/vst` custom-slash-command file here,
+   * each mapping `/vst reset|handoff|rename ...` to the matching
+   * `vst session reset|handoff|rename` / `vst worktree rename` CLI invocation
+   * (verified per-CLI via research, not assumed):
+   *   - claude.ts   -> `.claude/commands/vst.md`   (`$ARGUMENTS` substitution)
+   *   - opencode.ts -> `.opencode/commands/vst.md` (`$ARGUMENTS` substitution,
+   *     near-exact analog of Claude Code's mechanism)
+   *   - cursor.ts   -> `.cursor/commands/vst.md`   (NO `$ARGUMENTS` placeholder —
+   *     Cursor appends trailing user text after the file's content rather than
+   *     substituting it in, so that template is phrased to read naturally either way)
+   */
   setupWorkspaceHooks?(workspacePath: string): Promise<void>;
   /**
    * Pre-spawn: obtain a chat id before launching (e.g. cursor-agent create-chat).
