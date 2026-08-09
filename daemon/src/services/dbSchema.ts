@@ -76,6 +76,19 @@ export function ensureSchema(db: Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_worktreeId ON sessions(worktreeId);
     CREATE INDEX IF NOT EXISTS idx_sessions_projectId ON sessions(projectId);
+
+    -- Per-project record of whether a legacy manifest.json has been
+    -- migrated in (see dbMigration.ts). Replaces a global PRAGMA
+    -- user_version gate, which could only ever say "has a pass run",
+    -- not "did THIS project's migration succeed" — a project that failed
+    -- (or that appears on disk after the first boot) needs its own
+    -- retry-until-success state, not a one-shot global flag.
+    CREATE TABLE IF NOT EXISTS manifest_migrations (
+      projectId TEXT PRIMARY KEY,
+      migratedAt TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('ok', 'failed')),
+      error TEXT
+    );
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above is a no-op against a `worktrees` table
