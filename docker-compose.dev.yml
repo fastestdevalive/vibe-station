@@ -10,6 +10,15 @@
 # GET /cli-models works inside the container. gemini is installed directly in the image;
 # ~/.gemini is bind-mounted so OAuth credentials are available inside the container.
 # Override paths with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN, AGY_BIN if yours differ.
+#
+# To inspect a running sandbox interactively, use
+# `docker compose exec -u vst vst-dev bash` (or `docker exec -u vst
+# <container> sh`) — NOT a plain `docker exec`/`docker compose exec`. The
+# container's own process runs as root (so its startup script can chown
+# volumes before dropping to "vst"), so a plain exec lands as uid 0, whose
+# tmux socket dir (`/tmp/tmux-0/`) differs from the daemon's
+# (`/tmp/tmux-1000/`), so `tmux attach`/`tmux ls` won't see the daemon's
+# actual sessions without `-u vst`.
 
 services:
   vst-dev:
@@ -60,43 +69,27 @@ services:
       # files reference `.git/worktrees/<id>` metadata that no longer exists).
       - vst-dev-projects:/home/vst/projects
 
-    # Overrides the image CMD to first seed a WRITABLE ~/.gemini from the
-    # read-only /seed/gemini mount (skipping the huge browser profile), then
-    # runs the daemon + Vite exactly like dev.Dockerfile's CMD.
-    command:
-      - sh
-      - -c
-      - |
-        # Docker named volumes are created root-owned by default and won't
-        # automatically match the non-root "vst" user's uid/gid, so chown
-        # the mount points before the daemon (running as vst) touches them.
-        mkdir -p /home/vst/.vibe-station /home/vst/projects
-        chown -R vst:vst /home/vst/.vibe-station /home/vst/projects
-
-        if [ ! -f /home/vst/.gemini/.seeded ]; then
-          echo 'Seeding writable ~/.gemini from /seed/gemini (excluding browser profile)...'
-          mkdir -p /home/vst/.gemini
-          for item in /seed/gemini/*; do
-            case "$$(basename "$$item")" in
-              antigravity|antigravity-browser-profile) continue ;;
-            esac
-            cp -a "$$item" /home/vst/.gemini/ 2>/dev/null || true
-          done
-          touch /home/vst/.gemini/.seeded
-          chown -R vst:vst /home/vst/.gemini
-          echo 'Seed complete.'
-        fi
-        rm -f /home/vst/.vibe-station/.daemon.lock
-        su vst -c 'node cli/dist/daemon/main.js' &
-        echo 'Waiting for daemon...'
-        until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
-        echo 'Daemon ready.'
-        su vst -c 'bash /app/scripts/seed-file-search-demo.sh' || echo '[seed] non-fatal seed error — continuing'
-        su vst -c 'pnpm --filter @vibestation/web dev'
+    # Just invokes the same shared startup script the image's own CMD uses
+    # (scripts/dev-entrypoint.sh) — kept as an explicit override (rather
+    # than relying on the image default) so it's obvious this compose file
+    # intentionally runs it, and so a future divergence has to be made
+    # explicitly here instead of silently falling out of sync.
+    command: ["/app/scripts/dev-entrypoint.sh"]
     stdin_open: true
     tty: true
 
 volumes:
+  # Explicit global `name:` — every worktree sandbox that uses this base
+  # compose file unmodified mounts these SAME two volumes (see the
+  # "dev-sandbox-volumes-are-shared" memory note: parallel worktree
+  # sandboxes clobber each other's daemon state this way). Known,
+  # intentionally-not-fixed-here limitation: this also means a colleague
+  # still running an OLDER (pre-non-root-daemon) image against these same
+  # volumes will write root-owned files here; the new non-root daemon then
+  # can't read them until this container's next start re-runs the
+  # unconditional chown in scripts/dev-entrypoint.sh. Re-scoping these to
+  # be per-worktree by default is a separate, bigger decision — see
+  # docker-compose.dev.<worktree>.yml for the current workaround.
   vst-dev-data:
     name: vst-dev-data
   vst-dev-projects:
