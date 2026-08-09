@@ -67,6 +67,12 @@ services:
       - sh
       - -c
       - |
+        # Docker named volumes are created root-owned by default and won't
+        # automatically match the non-root "vst" user's uid/gid, so chown
+        # the mount points before the daemon (running as vst) touches them.
+        mkdir -p /home/vst/.vibe-station /home/vst/projects
+        chown -R vst:vst /home/vst/.vibe-station /home/vst/projects
+
         if [ ! -f /home/vst/.gemini/.seeded ]; then
           echo 'Seeding writable ~/.gemini from /seed/gemini (excluding browser profile)...'
           mkdir -p /home/vst/.gemini
@@ -77,15 +83,16 @@ services:
             cp -a "$$item" /home/vst/.gemini/ 2>/dev/null || true
           done
           touch /home/vst/.gemini/.seeded
+          chown -R vst:vst /home/vst/.gemini
           echo 'Seed complete.'
         fi
         rm -f /home/vst/.vibe-station/.daemon.lock
-        node cli/dist/daemon/main.js &
+        su vst -c 'node cli/dist/daemon/main.js' &
         echo 'Waiting for daemon...'
         until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
         echo 'Daemon ready.'
-        bash /app/scripts/seed-file-search-demo.sh || echo '[seed] non-fatal seed error — continuing'
-        pnpm --filter @vibestation/web dev
+        su vst -c 'bash /app/scripts/seed-file-search-demo.sh' || echo '[seed] non-fatal seed error — continuing'
+        su vst -c 'pnpm --filter @vibestation/web dev'
     stdin_open: true
     tty: true
 
