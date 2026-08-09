@@ -24,10 +24,8 @@ export async function readManifest(projectId: string): Promise<ProjectRecord> {
   }
   // Bug fix: a manifest missing/null `worktrees` (legacy or corrupt write)
   // would otherwise make `dbMigration.ts`'s `for (const worktree of
-  // record.worktrees)` throw on `undefined` — and since migration quarantines
-  // per-project on error (permanently; `user_version` still bumps), that
-  // entire project's worktrees/sessions would silently vanish from the UI
-  // forever. Backfill to an empty array, same as `directSessions` above.
+  // record.worktrees)` throw on `undefined`, quarantining that project's
+  // migration. Backfill to an empty array, same as `directSessions` above.
   if (!record.worktrees) {
     record.worktrees = [];
   }

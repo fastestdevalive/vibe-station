@@ -1,21 +1,30 @@
 /**
- * One-time boot migration: `manifest.json` (per project) -> `vibe-station.db`
+ * Boot migration: `manifest.json` (per project) -> `vibe-station.db`
  * (Decision 3). Additive and non-destructive — `manifest.json` is never
  * deleted, and one corrupt project's migration failure never blocks boot for
  * the others (per-project try/catch).
  *
- * Gated by `PRAGMA user_version`: once a full pass has run, later boots skip
- * migration entirely (1.T3). A project that failed and was quarantined during
- * that pass is NOT automatically retried on a later boot — per the plan, the
- * untouched `manifest.json` lets it be fixed and re-migrated manually (e.g. by
- * resetting `user_version`), not silently retried forever.
+ * Gated PER-PROJECT via the `manifest_migrations` table, not a global
+ * `PRAGMA user_version` flag. Every boot re-scans `~/.vibe-station/projects`
+ * (`listMigratableProjectIds`), but a project with a `status: 'ok'` row is
+ * skipped outright — its manifest.json is not re-read, so a live DB value
+ * that has since diverged from that stale JSON snapshot (e.g. a rename after
+ * migration) is never clobbered. A project with no row, or a `status:
+ * 'failed'` row, is (re-)attempted, so:
+ *   - a project that failed on a previous boot is automatically retried on
+ *     the next one once its manifest.json is fixed (no more silent,
+ *     permanent quarantine), and
+ *   - a manifest.json that appears after earlier boots (restored backup,
+ *     copied project dir) is picked up on the next boot.
+ * Forcing a re-migration of one project is just deleting/resetting its
+ * `manifest_migrations` row — no other project is affected.
  */
 import { readdir, access } from "node:fs/promises";
 import { join } from "node:path";
 import type { Database } from "better-sqlite3";
 import { readManifest } from "./manifest.js";
 import { vstHome, manifestPath } from "./paths.js";
-import { CURRENT_SCHEMA_VERSION, ensureSchema } from "./dbSchema.js";
+import { ensureSchema } from "./dbSchema.js";
 import type { Channel, SessionLifecycle, TranscriptRef } from "../types.js";
 
 /**
@@ -112,9 +121,18 @@ function insertLegacySession(
     const m = /^a(\d+)$/.exec(s.slot);
     if (m) name = `Agent ${m[1]}`;
   }
+  // ON CONFLICT DO NOTHING, not DO UPDATE: this only ever fires when
+  // retrying a project whose `manifest_migrations` row is 'failed' (an
+  // 'ok' project is skipped before we get here — see
+  // migrateManifestsToSqlite). A failed attempt may have partially
+  // inserted some rows before it threw; DO NOTHING lets the retry
+  // re-insert the rows that never made it in without erroring on the ones
+  // that already did, while never overwriting anything with the (possibly
+  // stale) manifest.json snapshot being replayed.
   db.prepare(
     `INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary)
-     VALUES (@id, @worktreeId, @projectId, @isMain, @sortOrder, @type, @modeId, @name, @nameSource, @tmuxName, @useTmux, @channel, @state, @reason, @lastTransitionAt, @transcriptKind, @transcriptPath, @agentChatId, @modelOverride, @pinnedAt, @initialPrompt, @archivedAt, @handoffSummary)`,
+     VALUES (@id, @worktreeId, @projectId, @isMain, @sortOrder, @type, @modeId, @name, @nameSource, @tmuxName, @useTmux, @channel, @state, @reason, @lastTransitionAt, @transcriptKind, @transcriptPath, @agentChatId, @modelOverride, @pinnedAt, @initialPrompt, @archivedAt, @handoffSummary)
+     ON CONFLICT(id) DO NOTHING`,
   ).run({
     id: s.id,
     worktreeId: opts.worktreeId,
@@ -163,7 +181,8 @@ function insertLegacyProject(db: Database, p: LegacyProjectRecord): void {
     legacy.worktrees.forEach((w, wi) => {
       db.prepare(
         `INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
-         VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)`,
+         VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)
+         ON CONFLICT(id) DO NOTHING`,
       ).run({
         id: w.id,
         projectId: legacy.id,
@@ -192,30 +211,60 @@ function insertLegacyProject(db: Database, p: LegacyProjectRecord): void {
   txn(p);
 }
 
+/** The current `manifest_migrations` row for a project, if any. */
+function getMigrationStatus(db: Database, projectId: string): { status: "ok" | "failed" } | undefined {
+  return db.prepare(`SELECT status FROM manifest_migrations WHERE projectId = ?`).get(projectId) as
+    | { status: "ok" | "failed" }
+    | undefined;
+}
+
+/** Record the outcome of a migration attempt for one project (upsert). */
+function recordMigrationOutcome(
+  db: Database,
+  projectId: string,
+  outcome: { status: "ok" } | { status: "failed"; error: string },
+): void {
+  db.prepare(
+    `INSERT INTO manifest_migrations (projectId, migratedAt, status, error)
+     VALUES (@projectId, @migratedAt, @status, @error)
+     ON CONFLICT(projectId) DO UPDATE SET migratedAt = excluded.migratedAt, status = excluded.status, error = excluded.error`,
+  ).run({
+    projectId,
+    migratedAt: new Date().toISOString(),
+    status: outcome.status,
+    error: outcome.status === "failed" ? outcome.error : null,
+  });
+}
+
 /**
- * Migrate every `manifest.json` project into `vibe-station.db`, once. Safe to
- * call on every boot — after the first successful pass it's a fast no-op
- * (single PRAGMA read).
+ * Migrate every not-yet-successfully-migrated `manifest.json` project into
+ * `vibe-station.db`. Safe (and intended) to call on every boot: a project
+ * already recorded `status: 'ok'` in `manifest_migrations` is skipped without
+ * touching its manifest.json or re-inserting anything, so this never
+ * overwrites live DB state with a stale JSON snapshot. Only new projects and
+ * previously failed ones do any work.
  */
 export async function migrateManifestsToSqlite(db: Database): Promise<void> {
-  const version = db.pragma("user_version", { simple: true }) as number;
-  if (version >= CURRENT_SCHEMA_VERSION) return;
-
+  // Idempotent and cheap — always run, not just on a "first boot" branch, so
+  // this doesn't rely on `getDb()` having already called it separately.
   ensureSchema(db);
 
   const projectIds = await listMigratableProjectIds();
   for (const projectId of projectIds) {
+    const existing = getMigrationStatus(db, projectId);
+    if (existing?.status === "ok") continue; // already migrated — never re-attempt.
+
     try {
       const legacy = (await readManifest(projectId)) as unknown as LegacyProjectRecord;
       insertLegacyProject(db, legacy);
+      recordMigrationOutcome(db, projectId, { status: "ok" });
     } catch (err) {
       console.error(
-        `[dbMigration] project '${projectId}' migration failed — quarantined, manifest.json left on disk:`,
+        `[dbMigration] project '${projectId}' migration failed — quarantined, manifest.json left on disk, will retry next boot:`,
         err,
       );
+      recordMigrationOutcome(db, projectId, { status: "failed", error: err instanceof Error ? err.message : String(err) });
       // Deliberately continue the loop — one bad project must not abort boot.
     }
   }
-
-  db.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
 }

@@ -152,7 +152,7 @@ describe("migrateManifestsToSqlite", () => {
     expect(ids).toEqual([id]);
   });
 
-  it("1.T3 running migration twice is a no-op the second time (idempotent via user_version)", async () => {
+  it("1.T3 running migration twice with no changes is a no-op the second time (per-project tracking)", async () => {
     await writeLegacyManifest("proj-a");
 
     const { getDb } = await import("../state/db.js");
@@ -161,11 +161,72 @@ describe("migrateManifestsToSqlite", () => {
     await migrateManifestsToSqlite(db);
     expect((db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n).toBe(1);
 
-    // A new project appears on disk after the first pass — a second call must
-    // NOT pick it up (global user_version gate, not a per-project scan).
-    await writeLegacyManifest("proj-b");
     await migrateManifestsToSqlite(db);
     expect((db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n).toBe(1);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n).toBe(2);
+  });
+
+  it("a project that fails to migrate on boot 1 is retried on boot 2 and succeeds once its manifest is fixed", async () => {
+    const id = "proj-retry";
+    await writeLegacyManifest(id, "{ not valid json");
+
+    const { getDb } = await import("../state/db.js");
+    const { migrateManifestsToSqlite } = await import("../services/dbMigration.js");
+    const db = getDb();
+
+    await migrateManifestsToSqlite(db);
+    expect((db.prepare("SELECT id FROM projects WHERE id = ?").get(id) as { id: string } | undefined)).toBeUndefined();
+    const failedRow = db.prepare("SELECT status FROM manifest_migrations WHERE projectId = ?").get(id) as
+      | { status: string }
+      | undefined;
+    expect(failedRow?.status).toBe("failed");
+
+    // Fix the manifest in between boots.
+    await writeLegacyManifest(id);
+    await migrateManifestsToSqlite(db);
+
+    const row = db.prepare("SELECT id FROM projects WHERE id = ?").get(id) as { id: string } | undefined;
+    expect(row?.id).toBe(id);
+    const okRow = db.prepare("SELECT status FROM manifest_migrations WHERE projectId = ?").get(id) as {
+      status: string;
+    };
+    expect(okRow.status).toBe("ok");
+  });
+
+  it("a project that succeeds on boot 1 is not re-processed on boot 2 (live DB rename survives a re-scan)", async () => {
+    const id = "proj-norereprocess";
+    await writeLegacyManifest(id);
+
+    const { getDb } = await import("../state/db.js");
+    const { migrateManifestsToSqlite } = await import("../services/dbMigration.js");
+    const db = getDb();
+    await migrateManifestsToSqlite(db);
+
+    // Simulate a live rename that happened to the DB row after migration —
+    // manifest.json on disk still has the OLD absolutePath.
+    db.prepare("UPDATE projects SET absolutePath = ? WHERE id = ?").run("/renamed/elsewhere", id);
+
+    await migrateManifestsToSqlite(db);
+
+    const row = db.prepare("SELECT absolutePath FROM projects WHERE id = ?").get(id) as { absolutePath: string };
+    expect(row.absolutePath).toBe("/renamed/elsewhere");
+  });
+
+  it("a brand new project's manifest.json that appears between boot 1 and boot 2 is picked up on boot 2", async () => {
+    await writeLegacyManifest("proj-a");
+
+    const { getDb } = await import("../state/db.js");
+    const { migrateManifestsToSqlite } = await import("../services/dbMigration.js");
+    const db = getDb();
+    await migrateManifestsToSqlite(db);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM projects").get() as { n: number }).n).toBe(1);
+
+    // A new project appears on disk after the first pass (e.g. restored backup).
+    await writeLegacyManifest("proj-b");
+    await migrateManifestsToSqlite(db);
+
+    const ids = (db.prepare("SELECT id FROM projects").all() as { id: string }[]).map((r) => r.id).sort();
+    expect(ids).toEqual(["proj-a", "proj-b"]);
   });
 
   it("1.T4 GET /projects returns both existing manifest-based projects post-migration", async () => {
@@ -243,7 +304,7 @@ describe("migrateManifestsToSqlite", () => {
     expect(row1.id).toBe(distinctiveId);
     expect(row1.tmuxName).toBe(distinctiveTmuxName);
 
-    // Re-running migration (idempotent no-op via user_version) must not alter it.
+    // Re-running migration (skipped — already recorded 'ok') must not alter it.
     await migrateManifestsToSqlite(db);
     const row2 = db.prepare("SELECT id, tmuxName FROM sessions WHERE id = ?").get(distinctiveId) as {
       id: string;
