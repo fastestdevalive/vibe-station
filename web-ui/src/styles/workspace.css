@@ -258,6 +258,22 @@
   background: var(--border-strong);
 }
 
+.pane-left-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  z-index: 3;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.pane-left-resize-handle:hover,
+.pane-left-resize-handle[data-dragging="true"] {
+  background: var(--border-strong);
+}
+
 .sidebar-backdrop {
   position: absolute;
   inset: 0;
