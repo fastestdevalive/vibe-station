@@ -38,6 +38,14 @@ export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
 /** IDE viewport fullscreen for the agent pane, tool panel, or terminal dock (not persisted). */
 export type WorkspacePaneFullscreen = "agent" | "tools" | "terminal";
 
+/** Draggable-resize bounds for the desktop left sidebar (px). */
+export const LEFT_SIDEBAR_MIN_WIDTH = 180;
+export const LEFT_SIDEBAR_MAX_WIDTH = 480;
+
+function clampLeftSidebarWidth(px: number): number {
+  return Math.min(LEFT_SIDEBAR_MAX_WIDTH, Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(px)));
+}
+
 export interface WorkspaceState {
   /** Per-worktree layout state. Falls back to DEFAULT_WORKTREE_LAYOUT. */
   layoutByWorktree: Record<string, WorktreeLayout>;
@@ -71,6 +79,8 @@ export interface WorkspaceState {
   fileTreeVisible: boolean;
   terminalFontScale: number;
   leftSidebarCollapsed: boolean;
+  /** Desktop left sidebar width in px when expanded (persisted, drag-resizable). */
+  leftSidebarWidthPx: number;
   /** Hide worktrees whose agent sessions are all explicitly marked done (not exited) */
   hideInactiveWorktrees: boolean;
   mobileSidebarOpen: boolean;
@@ -100,6 +110,7 @@ export interface WorkspaceState {
   toggleFileTree: () => void;
   bumpTerminalFont: (delta: number) => void;
   toggleLeftSidebarCollapsed: () => void;
+  setLeftSidebarWidthPx: (px: number) => void;
   setMobileSidebarOpen: (open: boolean) => void;
   toggleInactiveWorktreesFilter: () => void;
   clearWorkspaceSelection: () => void;
@@ -130,6 +141,7 @@ const initial = {
   fileTreeVisible: true,
   terminalFontScale: 1,
   leftSidebarCollapsed: false,
+  leftSidebarWidthPx: 220,
   hideInactiveWorktrees: true,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
@@ -295,6 +307,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           })),
         toggleLeftSidebarCollapsed: () =>
           set((s) => ({ leftSidebarCollapsed: !s.leftSidebarCollapsed })),
+        setLeftSidebarWidthPx: (px) => set({ leftSidebarWidthPx: clampLeftSidebarWidth(px) }),
         setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
         toggleInactiveWorktreesFilter: () =>
           set((s) => ({ hideInactiveWorktrees: !s.hideInactiveWorktrees })),
@@ -477,6 +490,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         fileTreeVisible: s.fileTreeVisible,
         terminalFontScale: s.terminalFontScale,
         leftSidebarCollapsed: s.leftSidebarCollapsed,
+        leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
       }),
     },
