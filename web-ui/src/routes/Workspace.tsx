@@ -42,6 +42,8 @@ export function Workspace() {
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const leftSidebarCollapsed = useWorkspaceStore((s) => s.leftSidebarCollapsed);
   const toggleLeftSidebarCollapsed = useWorkspaceStore((s) => s.toggleLeftSidebarCollapsed);
+  const leftSidebarWidthPx = useWorkspaceStore((s) => s.leftSidebarWidthPx);
+  const setLeftSidebarWidthPx = useWorkspaceStore((s) => s.setLeftSidebarWidthPx);
   const mobileSidebarOpen = useWorkspaceStore((s) => s.mobileSidebarOpen);
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
 
@@ -168,7 +170,7 @@ export function Workspace() {
     }
   }, [isMobile, mobileSidebarOpen, setMobileSidebarOpen]);
 
-  const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : 220;
+  const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : leftSidebarWidthPx;
 
   const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
   const activeSession = activeSessionId
@@ -283,6 +285,8 @@ export function Workspace() {
           ) : isSettings ? <SettingsPanel api={api} /> : undefined
         }
         leftColumnPx={leftColumnPx}
+        leftSidebarCollapsed={leftSidebarCollapsed}
+        onLeftSidebarResize={setLeftSidebarWidthPx}
         isMobile={isMobile}
         mobileSidebarOpen={mobileSidebarOpen}
         onMobileSidebarClose={() => setMobileSidebarOpen(false)}

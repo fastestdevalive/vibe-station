@@ -1,8 +1,8 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
 import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } from "@/hooks/useStore";
 
 interface LayoutProps {
   topBar: ReactNode;
@@ -18,6 +18,10 @@ interface LayoutProps {
   /** Bottom region — terminal dock. Pass `null` when unavailable. */
   terminalDock?: ReactNode;
   leftColumnPx: number;
+  /** Whether the desktop sidebar is collapsed to its icon rail (hides the drag handle). */
+  leftSidebarCollapsed?: boolean;
+  /** Commits a new desktop sidebar width (px) once a drag ends. Omit to disable dragging. */
+  onLeftSidebarResize?: (px: number) => void;
   isMobile: boolean;
   mobileSidebarOpen: boolean;
   onMobileSidebarClose: () => void;
@@ -31,6 +35,8 @@ export function Layout({
   toolPanel,
   terminalDock,
   leftColumnPx,
+  leftSidebarCollapsed,
+  onLeftSidebarResize,
   isMobile,
   mobileSidebarOpen,
   onMobileSidebarClose,
@@ -38,6 +44,39 @@ export function Layout({
   const { toolPanelVisible, terminalDockVisible, toolSplitOrientation, activeWorktreeId, activeDirectContextId } = useLayout();
 
   const mainContentRef = useRef<HTMLDivElement>(null);
+
+  // Live width while dragging the sidebar's right-edge handle; null when not dragging.
+  // Kept local (not round-tripped through the store) so drag motion is jank-free —
+  // the store (and its localStorage write) is only updated once, on mouseup.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+
+  function startSidebarResize(e: React.MouseEvent) {
+    if (!onLeftSidebarResize) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftColumnPx;
+    const prevUserSelect = document.body.style.userSelect;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    function clamp(px: number) {
+      return Math.min(LEFT_SIDEBAR_MAX_WIDTH, Math.max(LEFT_SIDEBAR_MIN_WIDTH, px));
+    }
+    function onMove(ev: MouseEvent) {
+      setDragWidth(clamp(startWidth + (ev.clientX - startX)));
+    }
+    function onUp(ev: MouseEvent) {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = prevUserSelect;
+      document.body.style.cursor = prevCursor;
+      onLeftSidebarResize?.(clamp(startWidth + (ev.clientX - startX)));
+      setDragWidth(null);
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
 
   // Must be called unconditionally — before any early returns — to satisfy Rules of Hooks.
   const paneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
@@ -75,13 +114,24 @@ export function Layout({
     <div
       className="pane-left"
       style={{
-        width: leftColumnPx,
+        width: dragWidth ?? leftColumnPx,
         flexShrink: 0,
         borderRight: "var(--border-width) solid var(--border-default)",
         overflow: "hidden",
+        position: "relative",
       }}
     >
       {sidebarInner}
+      {onLeftSidebarResize && !leftSidebarCollapsed ? (
+        <div
+          className="pane-left-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize sidebar"
+          data-dragging={dragWidth !== null}
+          onMouseDown={startSidebarResize}
+        />
+      ) : null}
     </div>
   );
 
