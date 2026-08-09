@@ -7,6 +7,14 @@
 #   docker compose -f docker-compose.dev.yml up --build
 #
 # Then open http://localhost:5174 in your browser.
+#
+# To inspect a running sandbox interactively, use
+# `docker compose exec -u vst <service> bash` (or `docker exec -u vst
+# <container> sh`) — NOT a plain `docker exec`. The container runs as root
+# only so its CMD can chown volumes at startup before dropping to the "vst"
+# user; a plain `docker exec` lands as root (uid 0), whose tmux socket dir
+# (`/tmp/tmux-0/`) is different from the daemon's (`/tmp/tmux-1000/` for
+# vst), so `tmux attach`/`tmux ls` won't see the daemon's actual sessions.
 
 FROM node:24-slim
 
@@ -17,43 +25,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g pnpm@9.0.0 @google/gemini-cli
 
-WORKDIR /app
-
-# Copy everything — simpler and correct for a dev sandbox
-COPY . .
-
-# Install deps + build daemon
-RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @vibestation/cli build
-
-# Daemon data dir — isolated from the host
-ENV HOME=/home/vst
-
 # Runtime user: Claude Code hard-refuses to run with
 # --dangerously-skip-permissions (which this codebase always passes when
 # launching claude sessions) as root, so the daemon — and every agent CLI
 # it spawns — MUST run as a non-root user at runtime. Reuse the "node" user
 # already present in the base image (uid/gid 1000) rather than creating a
 # new one, renaming it to "vst" and moving its home to /home/vst to match
-# the paths used throughout this Dockerfile and the compose files.
+# the paths used throughout this Dockerfile and the compose files. This
+# happens BEFORE `COPY . .` below so the copy can be owned by vst directly
+# (via --chown) instead of a separate `chown -R` afterward, which would
+# otherwise force a full overlayfs copy-up of every file under /app
+# (breaking pnpm's build-time hardlinks and roughly doubling node_modules'
+# on-disk size in the image).
 RUN groupmod -n vst node && usermod -l vst -d /home/vst -m node
 
-# chown the checkout and home dir so the vst user can read/write everything
-# it needs at runtime (node_modules, build output, dotfiles). Build steps
-# above (apt-get, npm/pnpm install, pnpm build) still run as root — that's
-# normal; only the runtime process below needs to not be root.
-RUN mkdir -p /home/vst && chown -R vst:vst /home/vst /app
+# Daemon data dir — isolated from the host
+ENV HOME=/home/vst
+
+WORKDIR /app
+
+# WORKDIR creates /app as root before the COPY below runs, and
+# `COPY --chown` only chowns what it copies IN, not the pre-existing
+# directory entry itself — so without this, pnpm (running as vst) can't
+# write its own temp files directly into /app. This is a single directory
+# inode, not a recursive walk, so it doesn't reintroduce the copy-up cost
+# a `chown -R /app` has.
+RUN chown vst:vst /app
+
+# Copy everything, owned by vst — simpler and correct for a dev sandbox.
+COPY --chown=vst:vst . .
+RUN chmod +x /app/scripts/dev-entrypoint.sh
+
+# Install deps + build daemon as the vst user (matches how the daemon and
+# its build output will actually run/be owned at runtime). apt-get/npm -g
+# above still ran as root — that's normal, they install system packages.
+USER vst
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @vibestation/cli build
+USER root
 
 EXPOSE 5173
 
-CMD ["sh", "-c", "\
-  mkdir -p /home/vst/.vibe-station && \
-  chown -R vst:vst /home/vst/.vibe-station && \
-  rm -f /home/vst/.vibe-station/.daemon.lock && \
-  su vst -c 'node cli/dist/daemon/main.js' & \
-  echo 'Waiting for daemon...' && \
-  until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done && \
-  echo 'Daemon ready.' && \
-  su vst -c 'bash /app/scripts/seed-file-search-demo.sh' || echo '[seed] non-fatal seed error — continuing' ; \
-  su vst -c 'pnpm --filter @vibestation/web dev' \
-"]
+# Runs as root (PID 1) so it can chown volume mount points before dropping
+# to vst — see scripts/dev-entrypoint.sh, shared with
+# docker-compose.dev.yml's `command:` override so the two can't drift.
+CMD ["/app/scripts/dev-entrypoint.sh"]
