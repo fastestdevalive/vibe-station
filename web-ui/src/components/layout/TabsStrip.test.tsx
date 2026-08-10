@@ -1,5 +1,5 @@
-import { createElement } from "react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { createElement, StrictMode } from "react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -16,6 +16,35 @@ import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
  * drag, without needing to simulate pointer events / layout in jsdom (dnd-kit's
  * collision detection depends on real element rects, which jsdom doesn't lay out).
  */
+/**
+ * jsdom in this project's test environment has no native `PointerEvent`
+ * constructor (verified: `typeof globalThis.PointerEvent === "undefined"`),
+ * so `fireEvent.pointerDown/Move/Up` fall back to a bare `Event` with none of
+ * `clientX`/`clientY`/`pointerType` set — useless for exercising the
+ * long-press handlers. Dispatch a real `MouseEvent` (jsdom supports its
+ * `clientX`/`clientY` natively) under the `pointerdown`/`pointermove`/etc.
+ * type instead, with `pointerType` patched on as a plain property — React's
+ * event delegation matches purely on `event.type`, so this reaches the same
+ * `onPointerDown`/`onPointerMove` handlers a real PointerEvent would.
+ */
+function firePointer(
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  node: Element,
+  opts: { clientX: number; clientY: number; pointerType?: string },
+) {
+  const event = new MouseEvent(type, {
+    clientX: opts.clientX,
+    clientY: opts.clientY,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(event, "pointerType", {
+    value: opts.pointerType ?? "touch",
+    configurable: true,
+  });
+  fireEvent(node, event);
+}
+
 let capturedOnDragEnd: ((e: DragEndEvent) => void) | null = null;
 let capturedOnDragStart: (() => void) | null = null;
 vi.mock("@dnd-kit/core", async (importOriginal) => {
@@ -397,6 +426,197 @@ describe("TabsStrip", () => {
     expect(agent2Index).toBeLessThan(mainIndex);
   });
 
+  // ─── Tab menu: right-click + long-press, no 3-dot trigger (Phase 2) ─────
+
+  it("2.T1 — no 3-dot trigger element and no 'Session actions for' button exist", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /^main$/i });
+    expect(document.querySelector("[data-tab-menu-trigger]")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Session actions for/i })).toBeNull();
+  });
+
+  it("2.T2 — the tab button contains no descendant role=button other than the close control", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    const nestedButtons = within(tab).queryAllByRole("button");
+    expect(nestedButtons).toHaveLength(1);
+    expect(nestedButtons[0]).toHaveAttribute("aria-label", "Close agent-2");
+  });
+
+  it("2.T2b — right-clicking the SAME tab twice in a row throws no error (impure-updater crash regression)", async () => {
+    const localApi = createMockApi();
+    const onError = vi.fn();
+    window.addEventListener("error", onError);
+    try {
+      // StrictMode is essential here, not decorative: React intentionally
+      // invokes a `setState(prev => ...)` updater function TWICE in dev
+      // StrictMode to surface impure updaters — this is exactly the
+      // mechanism behind the real crash's stack trace (`basicStateReducer` /
+      // `updateReducerImpl` inside a render pass, not the click handler
+      // itself). Verified locally: with the OLD buggy code (computing
+      // `e.currentTarget.getBoundingClientRect()` inside the updater), this
+      // exact test throws "Cannot read properties of null (reading
+      // 'getBoundingClientRect')" from inside `basicStateReducer` on a
+      // SINGLE contextmenu event once wrapped in StrictMode — without
+      // StrictMode, RTL's synchronous flush never replays the updater, so
+      // the bug is invisible. Right-clicking twice (open, then toggle
+      // closed) additionally exercises the toggle-closed branch of the
+      // updater on a second, independent event.
+      render(
+        <StrictMode>
+          <MemoryRouter>
+            <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+          </MemoryRouter>
+        </StrictMode>,
+      );
+      const tab = await screen.findByRole("tab", { name: /agent-2/i });
+
+      expect(() => {
+        fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
+      }).not.toThrow();
+      expect(await screen.findByRole("menu", { name: /session actions/i })).toBeInTheDocument();
+
+      expect(() => {
+        fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
+      }).not.toThrow();
+      await waitFor(() => {
+        expect(screen.queryByRole("menu", { name: /session actions/i })).not.toBeInTheDocument();
+      });
+
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("error", onError);
+    }
+  });
+
+  it("2.T5 — long-press (touch pointerdown held 500ms) opens the reset menu", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    vi.useFakeTimers();
+    try {
+      firePointer("pointerdown", tab, { clientX: 50, clientY: 20 });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("2.T6 — long-press cancelled by pointer movement past the slop does not open the menu", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    vi.useFakeTimers();
+    try {
+      firePointer("pointerdown", tab, { clientX: 50, clientY: 20 });
+      firePointer("pointermove", tab, { clientX: 90, clientY: 20 });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.queryByRole("menuitem", { name: /^Reset$/i })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("2.T7 — a long-press-opened menu survives the trailing pointerup + click (regression: menu no longer self-closes)", async () => {
+    // Reproduces the reported bug exactly: on a real touch device, the finger
+    // lifting right after the long-press timer fires dispatches a `pointerup`
+    // then a trailing `click` on the tab. The outside-click-to-close effect
+    // (installed via its own `setTimeout(..., 0)` once the menu opens) sees
+    // that click's target is not inside `[data-tab-menu-panel]` and used to
+    // call `setResetMenu(null)` — closing the menu the SAME gesture just
+    // opened, before the user could ever use it. `markDrag()` (called from
+    // the long-press timer's callback, not from `onPointerUp`) now suppresses
+    // that trailing click.
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    vi.useFakeTimers();
+    try {
+      firePointer("pointerdown", tab, { clientX: 50, clientY: 20 });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      // Flush the outside-click effect's own `setTimeout(..., 0)` so its
+      // document-level `click` listener is actually installed — matching the
+      // reviewer's jsdom probe ("advance timers past the effect's 0ms
+      // setTimeout") before the trailing click is dispatched.
+      act(() => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+
+      firePointer("pointerup", tab, { clientX: 50, clientY: 20 });
+      fireEvent.click(tab);
+
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("2.T8 — a native contextmenu event arriving just after a long-press-opened menu does not close it (Android echo variant)", async () => {
+    // Some Android/Chrome builds fire their OWN native `contextmenu` at their
+    // own long-press threshold, independent of our pointerdown timer. If that
+    // lands shortly after our timer already opened the menu via
+    // `setResetMenu`, the naive toggle in `onContextMenu` (`prev?.session.id
+    // === s.id ? null : ...`) would see the menu already open for this
+    // session and close it — same symptom as 2.T7, different trigger. Guarded
+    // by `lastMenuOpenedAt` + `MENU_REOPEN_GUARD_MS`.
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    vi.useFakeTimers();
+    try {
+      firePointer("pointerdown", tab, { clientX: 50, clientY: 20 });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+
+      // The browser's own long-press detector fires its native `contextmenu`
+      // a short moment later — well within the guard window.
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
+
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ─── Reset (+handoff) + archived styling (Part 03 Phase 3) ──────────────
 
   it("3.T1 — clicking Reset opens the ConfirmDialog and only calls resetSession after confirming", async () => {
@@ -409,8 +629,7 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
-    const trigger = within(tab).getByRole("button", { name: /Session actions for agent-2/i });
-    await user.click(trigger);
+    fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
 
     const resetItem = await screen.findByRole("menuitem", { name: /^Reset$/i });
     // Selecting the menu item stages the target but must NOT call the API yet.
@@ -436,8 +655,7 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
-    const trigger = within(tab).getByRole("button", { name: /Session actions for agent-2/i });
-    await user.click(trigger);
+    fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
 
     const resetItem = await screen.findByRole("menuitem", { name: /reset with handoff/i });
     await user.click(resetItem);
@@ -460,8 +678,7 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
-    const trigger = within(tab).getByRole("button", { name: /Session actions for agent-2/i });
-    await user.click(trigger);
+    fireEvent.contextMenu(tab, { clientX: 120, clientY: 40 });
     await user.click(await screen.findByRole("menuitem", { name: /^Reset$/i }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(resetSpy).not.toHaveBeenCalled();

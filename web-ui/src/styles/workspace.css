@@ -1709,26 +1709,6 @@
   border-radius: var(--radius-full);
 }
 
-.tab__menu-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  padding: 0 2px;
-  border-radius: 2px;
-  transition: opacity var(--transition-fast);
-}
-
-.tab:hover .tab__menu-trigger,
-.tab[data-active="true"] .tab__menu-trigger {
-  opacity: 0.6;
-}
-
-.tab:hover .tab__menu-trigger:hover {
-  opacity: 1;
-  background: var(--bg-hover);
-}
-
 /* Prototype: inline tab rename input (double-click a tab to trigger). */
 .tab__rename-input {
   background: var(--bg-tertiary);
