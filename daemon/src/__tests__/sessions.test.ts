@@ -222,7 +222,7 @@ describe("Session routes", () => {
     expect(sessions.find((s) => s.id === sessionId)).toBeUndefined();
   });
 
-  it("3.T6 — PATCH /sessions/:id/rename { name: \"\" } clears to null; label falls back", async () => {
+  it("3.T6 — PATCH /sessions/:id/rename { name: \"\" } clears to null", async () => {
     const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
     const mainId = listRes.json<SessionRecord[]>()[0]?.id;
 
@@ -243,9 +243,12 @@ describe("Session routes", () => {
     expect(clearRes.json<{ name: string | null }>().name).toBeNull();
 
     const getRes = await app.inject({ method: "GET", url: `/sessions/${mainId}` });
-    const session = getRes.json<{ name: string | null; label: string }>();
+    const session = getRes.json<{ name: string | null }>();
+    // The UI-facing fallback ("main" for a cleared main session's name) is
+    // computed client-side (`sessionLabel()` in web-ui/src/lib/sessionLabel.ts)
+    // from `name`/`isMain`/`type` — the daemon only needs to confirm `name`
+    // itself is correctly cleared.
     expect(session.name).toBeNull();
-    expect(session.label).toBe("main"); // UI-facing fallback for a cleared main session's name
   });
 
   it("Bug 4 fix: POST /sessions/:id/resume on an archived session returns 400 and does not spawn", async () => {

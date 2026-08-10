@@ -40,14 +40,6 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-/** Mirrors the daemon's `defaultLabel`/`labelForSession` (sessions.ts) so the
- *  mock's rename endpoint keeps `label` consistent with `name`, matching the
- *  real endpoint's contract instead of just satisfying its return shape. */
-function defaultLabelFor(s: Pick<Session, "isMain" | "type">): string {
-  if (s.isMain) return "main";
-  return s.type === "agent" ? "Agent" : "Terminal";
-}
-
 const PRESET_BUG_FIX =
   "You are fixing a bug. Open a PR when done. Run tests before committing.";
 const PRESET_PLANNING = "You are planning. Do not commit or open a PR. Output a written plan.";
@@ -142,7 +134,6 @@ export function createMockApi() {
       projectId: "proj-a",
       modeId: "mode-1",
       type: "agent",
-      label: "main",
       isMain: true,
       state: "working",
       lifecycleState: "working",
@@ -156,7 +147,7 @@ export function createMockApi() {
       projectId: "proj-a",
       modeId: "mode-2",
       type: "agent",
-      label: "agent-2",
+      name: "agent-2",
       isMain: false,
       state: "idle",
       lifecycleState: "idle",
@@ -170,7 +161,7 @@ export function createMockApi() {
       projectId: "proj-a",
       modeId: null,
       type: "terminal",
-      label: "term-1",
+      name: "term-1",
       isMain: false,
       state: "working",
       lifecycleState: "working",
@@ -184,7 +175,6 @@ export function createMockApi() {
       projectId: "proj-a",
       modeId: "mode-1",
       type: "agent",
-      label: "main",
       isMain: true,
       state: "done",
       lifecycleState: "done",
@@ -198,7 +188,6 @@ export function createMockApi() {
       projectId: "proj-b",
       modeId: "mode-1",
       type: "agent",
-      label: "main",
       isMain: true,
       state: "idle",
       lifecycleState: "idle",
@@ -508,8 +497,7 @@ export function createMockApi() {
         projectId: wt?.projectId ?? "proj-a",
         modeId: body.modeId,
         type: body.type,
-        label: termName ?? `agent-${nextAgent}`,
-        name: termName ?? null,
+        name: termName ?? `agent-${nextAgent}`,
         isMain: false,
         state: "working",
         lifecycleState: "working",
@@ -539,8 +527,7 @@ export function createMockApi() {
         projectId: body.projectId,
         modeId: body.modeId ?? null,
         type: body.type,
-        label: body.type === "terminal" ? `Terminal ${nextDirect}` : `direct ${nextDirect}`,
-        name: body.name ?? null,
+        name: body.name ?? (body.type === "terminal" ? `Terminal ${nextDirect}` : `direct ${nextDirect}`),
         isMain: false,
         state: "working",
         lifecycleState: "working",
@@ -589,7 +576,6 @@ export function createMockApi() {
       const value = name.trim() === "" ? null : name.trim().slice(0, 60);
       s.name = value;
       s.nameSource = "user";
-      s.label = value && value.length > 0 ? value : defaultLabelFor(s);
       emit({ type: "session:updated", sessionId: id, name: value });
       return { ok: true, name: value };
     },
@@ -929,7 +915,6 @@ export function createMockApi() {
             projectId: id,
             modeId: modeId ?? null,
             type: "agent",
-            label: "main",
             name: null,
             isMain: true,
             state: "working",
@@ -957,8 +942,7 @@ export function createMockApi() {
             projectId: id,
             modeId: modeId ?? null,
             type: "agent",
-            label: "direct 1",
-            name: null,
+            name: "direct 1",
             isMain: false,
             state: "working",
             lifecycleState: "working",

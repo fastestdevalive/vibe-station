@@ -17,6 +17,7 @@ import { useServerSync } from "@/hooks/useServerSync";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
+import { sessionLabel } from "@/lib/sessionLabel";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
 
 export function Workspace() {
@@ -104,7 +105,7 @@ export function Workspace() {
       document.title = "Settings — Vibe Station";
     } else if (isDirectSession && directSession) {
       const projectName = directSessionProject?.name ?? "Direct";
-      document.title = `${directSession.label} — ${projectName} — Vibe Station`;
+      document.title = `${sessionLabel(directSession)} — ${projectName} — Vibe Station`;
     } else if (isDashboard || !activeWorktreeId) {
       document.title = "Vibe Station";
     } else {
