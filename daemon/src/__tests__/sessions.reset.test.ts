@@ -75,6 +75,18 @@ describe("POST /sessions/:id/reset", () => {
       join(tempDir, "modes.json"),
       JSON.stringify([
         { id: "bug-fix", name: "Bug Fix", cli: "claude", context: "fix bugs", createdAt: new Date().toISOString() },
+        // Second mode for reset-with-mode-switch tests — deliberately a
+        // DIFFERENT `cli`, not just a different model, so 1.T4 actually
+        // exercises the motivating scenario (switching CLIs on reset, e.g.
+        // "agy main" -> "claude sonnet"), not just a same-CLI model change.
+        {
+          id: "plan-mode",
+          name: "Plan Mode",
+          cli: "cursor",
+          model: "opus",
+          context: "plan only",
+          createdAt: new Date().toISOString(),
+        },
       ]),
     );
     const modesModule = await import("../routes/modes.js");
@@ -255,6 +267,155 @@ describe("POST /sessions/:id/reset", () => {
     // "also" and "this" are stopwords (naming.ts) — only "rename" survives.
     expect(newRow.name).toBe("rename");
     expect(newRow.initialPrompt).toBe("Handoff: mid-refactor.\n\n---\n\nalso rename this");
+  });
+
+  // --- reset-with-mode-switch ---
+
+  it("1.T1 reset with { modeId: <other id> }: new session's modeId is the requested one, not the old session's", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { modeId: "plan-mode" },
+    });
+    expect(res.statusCode).toBe(200);
+    const { newSessionId } = res.json<{ newSessionId: string }>();
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.worktrees.find((w) => w.id === worktreeId)!.sessions.find((s) => s.id === newSessionId)!;
+    expect(newRow.modeId).toBe("plan-mode");
+  });
+
+  it("1.T2 reset with { modeId: <name> } resolves by name, same as by id", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { modeId: "Plan Mode" },
+    });
+    expect(res.statusCode).toBe(200);
+    const { newSessionId } = res.json<{ newSessionId: string }>();
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.worktrees.find((w) => w.id === worktreeId)!.sessions.find((s) => s.id === newSessionId)!;
+    expect(newRow.modeId).toBe("plan-mode");
+  });
+
+  it("1.T3 reset with an unknown modeId returns 400 and does not archive the old session", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { modeId: "does-not-exist" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toContain("does-not-exist");
+
+    const stillLive = await app.inject({ method: "GET", url: `/sessions/${mainSessionId}` });
+    expect(stillLive.json<{ archivedAt: string | null }>().archivedAt).toBeFalsy();
+  });
+
+  it("1.T4 the spawned process uses the NEW mode's CLI plugin and model, not the outgoing session's", async () => {
+    const spawnModule = await import("../services/spawn.js");
+    vi.mocked(spawnModule.spawnSession).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { modeId: "plan-mode" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Fire-and-forget spawn — give it a tick to land (same pattern as the
+    // "Bug 2 fix — spawnSession failure" test above).
+    await new Promise((r) => setTimeout(r, 100));
+
+    // `mainSessionId`'s mode is "bug-fix" (cli: claude); "plan-mode" is a
+    // genuinely different CLI (cursor) — asserting on `plugin.name` (not
+    // just `model`) proves this exercises an actual CLI switch, the
+    // motivating scenario for this feature, not just a same-CLI model change.
+    expect(spawnModule.spawnSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "opus",
+        plugin: expect.objectContaining({ name: "cursor" }),
+      }),
+    );
+  });
+
+  it("1.T5 reset with no modeId at all: mode unchanged, identical to pre-existing behavior", async () => {
+    const res = await app.inject({ method: "POST", url: `/sessions/${mainSessionId}/reset`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    const { newSessionId } = res.json<{ newSessionId: string }>();
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.worktrees.find((w) => w.id === worktreeId)!.sessions.find((s) => s.id === newSessionId)!;
+    expect(newRow.modeId).toBe("bug-fix");
+  });
+
+  it("1.T6 switching to a mode whose CLI does not support JSON downgrades channel json -> tmux", async () => {
+    // Seed a json-channel session to reset. Direct sessions are simplest here
+    // since they don't need a worktree main-session dance. Uses the REAL
+    // jsonUnsupportedCli (claude genuinely supports json) so creation itself
+    // isn't rejected by the same create-time gate.
+    const directRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { target: "direct", projectId, type: "agent", modeId: "bug-fix", channel: "json" },
+    });
+    const directId = directRes.json<{ id: string }>().id;
+
+    // No real CLI in this codebase currently lacks JSON support (all four
+    // plugins return true from supportsJson()) — exercise the downgrade logic
+    // itself by spying on jsonUnsupportedCli for just the reset call below,
+    // the same seam the route calls.
+    const modesModule = await import("../routes/modes.js");
+    const unsupportedSpy = vi
+      .spyOn(modesModule, "jsonUnsupportedCli")
+      .mockResolvedValueOnce("claude");
+
+    // Restore in `finally` — if the assertions below ever fail, the spy must
+    // not leak into later tests in this file (vi.clearAllMocks() in
+    // beforeEach clears mock state but does NOT restore a vi.spyOn override).
+    let newSessionId: string;
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/sessions/${directId}/reset`,
+        payload: { modeId: "plan-mode" },
+      });
+      expect(res.statusCode).toBe(200);
+      newSessionId = res.json<{ newSessionId: string }>().newSessionId;
+    } finally {
+      unsupportedSpy.mockRestore();
+    }
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.directSessions.find((s) => s.id === newSessionId)!;
+    expect(newRow.channel).toBe("tmux");
+    expect(newRow.useTmux).toBe(true);
+  });
+
+  it("1.T7 switching to a mode whose CLI DOES support JSON keeps channel json (regression)", async () => {
+    const directRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { target: "direct", projectId, type: "agent", modeId: "bug-fix", channel: "json" },
+    });
+    const directId = directRes.json<{ id: string }>().id;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${directId}/reset`,
+      payload: { modeId: "plan-mode" },
+    });
+    expect(res.statusCode).toBe(200);
+    const { newSessionId } = res.json<{ newSessionId: string }>();
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.directSessions.find((s) => s.id === newSessionId)!;
+    expect(newRow.channel).toBe("json");
   });
 
   it("4.T7 the old session's tmux pane is actually released (releaseSessionRuntime called)", async () => {

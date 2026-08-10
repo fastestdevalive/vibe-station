@@ -319,6 +319,7 @@ export function createClaudePlugin(): AgentPlugin {
           "- `reset --handoff` -> see \"Important — `reset --handoff` writes its own file\" below",
           '- `reset <text>` (any other text after `reset`) -> `vst session reset $VST_SESSION --prompt "<text>"`',
           '- `reset --handoff <text>` -> see "Important — `reset --handoff` writes its own file" below (final command includes both `--handoff-file <path>` and `--prompt "<text>"`)',
+          '- `reset --mode <name>` -> `vst session reset $VST_SESSION --mode "<name>"` (switches mode/CLI on reset — combine with other reset flags, e.g. `--mode "<name>" --prompt "<text>"`)',
           "- `handoff` -> `vst session handoff $VST_SESSION`",
           '- `rename <name>` -> `vst session rename $VST_SESSION "<name>"`',
           '- `rename --worktree <name>` -> `vst worktree rename $VST_WORKTREE "<name>"`',

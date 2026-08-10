@@ -77,6 +77,11 @@ const ResetBody = z.object({
   handoff: z.boolean().optional(),
   prompt: z.string().optional(),
   handoffText: z.string().optional(),
+  // Accepts either a mode id or a mode name — resolved the same way
+  // session-create's `--mode` already is (see resolveModeId in routes/modes.ts).
+  // Absent means "keep the outgoing session's mode", unchanged from before
+  // this field existed.
+  modeId: z.string().min(1).optional(),
 });
 
 const InputBody = z.object({
@@ -1219,17 +1224,19 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     ));
   });
 
-  // POST /sessions/:id/reset   { handoff?: boolean, prompt?: string }
+  // POST /sessions/:id/reset   { handoff?: boolean, prompt?: string, modeId?: string }
   // Archive the current session and spawn a fresh one in its place — same tab
   // position (isMain/sortOrder/worktreeId inherited), same name unless a new
-  // prompt re-derives it (Decision 2/4/5/6/7).
+  // prompt re-derives it (Decision 2/4/5/6/7). Optionally switches mode/CLI
+  // (reset-with-mode-switch Decision 1) — absent `modeId` keeps today's
+  // behavior exactly (reuse the outgoing session's mode).
   app.post("/sessions/:id/reset", async (req, reply) => {
     const { id } = req.params as { id: string };
     const parsed = ResetBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     }
-    const { handoff, prompt, handoffText: handoffTextFromBody } = parsed.data;
+    const { handoff, prompt, handoffText: handoffTextFromBody, modeId: requestedModeId } = parsed.data;
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
@@ -1249,10 +1256,31 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!session.modeId) {
       return reply.status(400).send({ error: "Session has no mode; cannot reset" });
     }
-    const modes = await (await import("../routes/modes.js")).loadModes();
+    const { resolveModeId, jsonUnsupportedCli, loadModes } = await import("../routes/modes.js");
+    const modes = await loadModes();
     const mode = modes.find((m) => m.id === session.modeId);
     if (!mode) {
       return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
+    }
+
+    // reset-with-mode-switch, Decision 1: resolve + validate the REQUESTED
+    // mode (id or name, same convention as session-create's --mode) before
+    // any teardown — a typo'd/unknown mode must not archive the old session
+    // with nothing to replace it. Falls back to the outgoing session's own
+    // (already-validated) mode when no override was given.
+    let effectiveModeId = session.modeId;
+    if (requestedModeId) {
+      let resolvedId: string;
+      try {
+        resolvedId = await resolveModeId(requestedModeId);
+      } catch {
+        return reply.status(400).send({ error: `Mode '${requestedModeId}' not found` });
+      }
+      const requestedMode = modes.find((m) => m.id === resolvedId);
+      if (!requestedMode) {
+        return reply.status(400).send({ error: `Mode '${requestedModeId}' not found` });
+      }
+      effectiveModeId = resolvedId;
     }
 
     // Direct delivery (Decision 1): `--handoff-file` reads the summary locally via the CLI and
@@ -1281,7 +1309,21 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const scopeId = ctx.kind === "worktree" ? ctx.worktree.id : ctx.project.id;
     const newId = generateSessionId(scopeId, "agent");
-    const isJsonChannel = session.channel === "json";
+
+    // reset-with-mode-switch, Decision 2: a session switching INTO a mode
+    // whose CLI can't do JSON can't keep a "json" channel — silently
+    // downgrade to a normal tmux terminal rather than erroring, since
+    // "give me this CLI" implies "in whatever channel it can actually run".
+    // Every other combination (channel already non-json, or the new CLI
+    // also supports json) keeps today's behavior unchanged. Only checks
+    // `jsonUnsupportedCli` when the channel is actually json — no point
+    // paying for that lookup on the (much more common) non-json reset path.
+    const wantsJson = session.channel === "json";
+    const downgradeToTmux = wantsJson && (await jsonUnsupportedCli(effectiveModeId)) !== null;
+    const isJsonChannel = wantsJson && !downgradeToTmux;
+    const newChannel = downgradeToTmux ? "tmux" : session.channel;
+    const newUseTmux = downgradeToTmux ? true : session.useTmux;
+
     const newSession: SessionRecord = {
       id: newId,
       worktreeId: session.worktreeId,
@@ -1289,12 +1331,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       isMain: session.isMain,
       sortOrder: session.sortOrder,
       type: "agent",
-      modeId: session.modeId,
+      modeId: effectiveModeId,
       name: newName,
       ...(prompt ? { nameSource: "auto" as const } : session.nameSource ? { nameSource: session.nameSource } : {}),
       tmuxName: tmuxNameForSession(newId),
-      useTmux: session.useTmux,
-      channel: session.channel,
+      useTmux: newUseTmux,
+      channel: newChannel,
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
       ...(newInitialPrompt ? { initialPrompt: newInitialPrompt } : {}),
       ...(isJsonChannel
@@ -1357,15 +1399,18 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     // Spawn the replacement session's runtime through the SAME channel-aware,
     // guarded helper session creation uses (Bug 1/2 fix) — never a raw
-    // unguarded spawnSession/spawnDirectSession call. `mode` was already
-    // resolved and validated to exist above, so `session.modeId` is guaranteed
-    // defined here.
+    // unguarded spawnSession/spawnDirectSession call. `effectiveModeId` was
+    // already resolved and validated to exist above (either the requested
+    // override or the outgoing session's own mode). Using `session.modeId`
+    // here instead would be the exact bug reset-with-mode-switch exists to
+    // avoid: the stored record would show the new mode while the spawned
+    // process still ran the old CLI.
     const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
     void spawnNewSessionForChannel({
       project,
       worktree: ctx.kind === "worktree" ? ctx.worktree : undefined,
       session: newSession,
-      modeId: session.modeId,
+      modeId: effectiveModeId,
       prompt: newInitialPrompt,
       daemonPort,
     });
