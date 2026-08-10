@@ -498,6 +498,41 @@ describe("TabsStrip", () => {
     expect(within(archivedTab!).getByText(/archived/i)).toBeInTheDocument();
   });
 
+  it("reflects a rename in real time from session:updated's name field, without a refetch", async () => {
+    // Regression: renaming a session via PATCH .../rename (e.g. through the
+    // `/vst session rename` CLI/skill command, not just the inline UI editor)
+    // was not reflected in the tab bar until a manual page refresh. At the
+    // time, the tab rendered a separate server-computed `label` field, and
+    // the `session:updated` broadcast only ever carried `name` — so the
+    // client patched a field nothing read for display. `label` has since
+    // been removed entirely: every renderer computes the display string from
+    // `name` via `sessionLabel()`, so patching `name` alone is now always
+    // sufficient. This asserts the tab text updates from the WS event ALONE,
+    // with no `listSessions` call in between.
+    const localApi = createMockApi();
+    const listSpy = vi.spyOn(localApi, "listSessions");
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    listSpy.mockClear();
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-agent2",
+        name: "renamed-elsewhere",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /renamed-elsewhere/i })).toBeInTheDocument();
+    });
+    expect(listSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps a session announced by session:created while the initial fetch was still in flight", async () => {
     // Regression: "sometimes a second agent session doesn't show up in the tab
     // bar". The mount effect fetched `listSessions` and REPLACED state with the
@@ -532,12 +567,17 @@ describe("TabsStrip", () => {
       ...staleSnapshot.find((s) => s.type === "agent")!,
       id: "sess-raced",
       name: "Raced Agent",
-      label: "Raced Agent",
       isMain: false,
       sortOrder: Date.now(),
     };
     await act(async () => {
-      localApi.__test.emit({ type: "session:created", sessionId: newSession.id, snapshot: newSession });
+      localApi.__test.emit({
+        type: "session:created",
+        sessionId: newSession.id,
+        worktreeId: newSession.worktreeId,
+        sessionType: newSession.type,
+        snapshot: newSession,
+      });
     });
 
     // Now the older snapshot lands. It must not erase the raced-in session.

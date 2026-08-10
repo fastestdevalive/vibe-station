@@ -189,8 +189,8 @@ export interface SessionRecord {
   /**
    * User-facing display name. Set at creation (heuristic slug from the
    * prompt, or a default like "Terminal N"/"Agent N"). Mutable via the
-   * rename endpoint. When absent the UI falls back to a computed default
-   * label (see `defaultLabel()` in routes/sessions.ts).
+   * rename endpoint. When absent the UI computes a default display label
+   * itself (see `sessionLabel()` in web-ui/src/lib/sessionLabel.ts).
    */
   name?: string;
   /** How `name` was set — heuristic at creation vs. an explicit user rename. Informational/UI only. */

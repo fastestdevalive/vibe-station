@@ -329,23 +329,20 @@ async function spawnNewSessionForChannel(opts: {
 }
 
 /**
- * Fallback default label for a session with no stored `name` (Decision 5).
- * Every session created going forward always gets an explicit `name` at
- * creation (a slugified prompt, an explicit `--name`, or a counter-based
- * default like "Agent 3"/"Terminal 2"/"Direct 1") — this fallback exists for
- * legacy/migrated rows that predate that guarantee.
+ * Flatten SessionRecord's nested lifecycle and add UI-required fields (REST +
+ * WS snapshot).
+ *
+ * Deliberately does NOT include a computed `label`/display-name field — the
+ * client derives that itself from `name`/`isMain`/`type` via `sessionLabel()`
+ * in `web-ui/src/lib/sessionLabel.ts` (mirror any change to the fallback rule
+ * there — "no name -> 'main' for the main session, else 'Agent'/'Terminal'"
+ * — in both places). A previous version of this endpoint computed and sent a
+ * separate `label` field; that meant two values could represent one
+ * displayed string, and a rename broadcast that patched `name` but forgot to
+ * also patch `label` left the UI showing stale text until an unrelated
+ * refetch recomputed it. Sending only `name` removes the second value
+ * entirely, so there's nothing left to go stale independently.
  */
-function defaultLabel(s: SessionRecord): string {
-  if (s.isMain) return "main";
-  return s.type === "agent" ? "Agent" : "Terminal";
-}
-
-/** Display label: the stored custom/default name when set, else a generic fallback. */
-function labelForSession(s: SessionRecord): string {
-  return s.name && s.name.length > 0 ? s.name : defaultLabel(s);
-}
-
-/** Flatten SessionRecord's nested lifecycle and add UI-required fields (REST + WS snapshot). */
 export function serializeSession(worktreeId: string | null, projectId: string, s: SessionRecord) {
   return {
     id: s.id,
@@ -356,7 +353,6 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     modeId: s.modeId ?? null,
     name: s.name ?? null,
     nameSource: s.nameSource ?? null,
-    label: labelForSession(s),
     tmuxName: s.tmuxName,
     useTmux: s.useTmux,
     channel: sessionChannel(s),

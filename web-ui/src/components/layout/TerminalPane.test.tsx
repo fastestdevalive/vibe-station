@@ -160,7 +160,6 @@ describe("TerminalPane", () => {
       projectId: "proj-1",
       modeId: "mode-1",
       type: "agent",
-      label: "main",
       isMain: true,
       state: "working",
       lifecycleState: "working",

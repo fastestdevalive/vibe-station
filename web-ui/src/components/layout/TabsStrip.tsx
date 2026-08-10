@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
+import { sessionLabel } from "@/lib/sessionLabel";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
@@ -175,14 +176,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (renamingId) renameInputRef.current?.select();
   }, [renamingId]);
 
-  /** `label` is the server-computed display label (custom name when set, else a computed default) — no client override needed. */
-  function labelFor(s: Session): string {
-    return s.label;
-  }
-
   function startRename(s: Session) {
     setRenamingId(s.id);
-    setRenameValue(labelFor(s));
+    setRenameValue(sessionLabel(s));
   }
 
   function commitRename() {
@@ -505,7 +501,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
             {orderedSessions.map((s) => {
               const active = s.id === activeSessionId;
               const closeable = !s.isMain;
-              const label = labelFor(s);
+              const label = sessionLabel(s);
               const isRenaming = renamingId === s.id;
               const archived = s.archivedAt != null;
               return (

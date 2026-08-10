@@ -13,6 +13,7 @@ import {
 import { useLayout } from "@/hooks/useLayout";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import type { Project, Session, Worktree } from "@/api/types";
+import { sessionLabel } from "@/lib/sessionLabel";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { Logo } from "@/components/shared/Logo";
 
@@ -107,11 +108,11 @@ export function TopBar({
     crumbParts.push({ label: "Settings" });
   } else if (layoutMode === "direct-session") {
     if (directSessionProject) crumbParts.push({ label: directSessionProject.name });
-    if (directSession) crumbParts.push({ label: directSession.label, highlight: true });
+    if (directSession) crumbParts.push({ label: sessionLabel(directSession), highlight: true });
   } else {
     if (project) crumbParts.push({ label: project.name });
     if (wt) crumbParts.push({ label: wt.branch, highlight: true });
-    if (session) crumbParts.push({ label: session.label });
+    if (session) crumbParts.push({ label: sessionLabel(session) });
   }
 
   const crumbTitle = crumbParts.map((p) => p.label).join(" › ") || undefined;
@@ -122,7 +123,7 @@ export function TopBar({
       : layoutMode === "settings"
         ? "Settings"
         : layoutMode === "direct-session"
-          ? [directSessionProject?.name, directSession?.label].filter(Boolean).join(" · ") || "Direct Session"
+          ? [directSessionProject?.name, directSession ? sessionLabel(directSession) : null].filter(Boolean).join(" · ") || "Direct Session"
           : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
