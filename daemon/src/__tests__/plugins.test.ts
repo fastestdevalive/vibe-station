@@ -526,6 +526,8 @@ describe("Claude plugin — chat-id capture", () => {
     expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
     expect(content).toContain("Do NOT pass `--handoff`");
     expect(content).not.toContain(".vibe-station/HANDOFF.md");
+    // reset-with-mode-switch: `reset --mode <name>` maps to a real --mode flag.
+    expect(content).toContain('vst session reset $VST_SESSION --mode "<name>"');
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
@@ -651,6 +653,7 @@ describe("Cursor plugin — setupWorkspaceHooks", () => {
     expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
     expect(content).toContain("Do NOT pass `--handoff`");
     expect(content).not.toContain(".vibe-station/HANDOFF.md");
+    expect(content).toContain('vst session reset $VST_SESSION --mode "<name>"');
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
@@ -752,6 +755,7 @@ describe("OpenCode plugin — chat-id capture", () => {
     expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
     expect(content).toContain("Do NOT pass `--handoff`");
     expect(content).not.toContain(".vibe-station/HANDOFF.md");
+    expect(content).toContain('vst session reset $VST_SESSION --mode "<name>"');
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');

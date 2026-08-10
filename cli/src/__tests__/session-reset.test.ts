@@ -120,6 +120,42 @@ describe("session reset command registration", () => {
     expect(optionNames).toContain("handoff");
     expect(optionNames).toContain("prompt");
     expect(optionNames).toContain("handoff-file");
+    expect(optionNames).toContain("mode");
+  });
+});
+
+describe("1.T8 --mode sends modeId in the reset body (reset-with-mode-switch)", () => {
+  it("sends the raw --mode value as modeId, unresolved (the daemon resolves id-or-name)", async () => {
+    await run(["session", "reset", "sess-1", "--mode", "claude-sonnet"]);
+
+    const post = captured.find((c) => c.url.endsWith("/sessions/sess-1/reset"));
+    expect(post, "expected a POST to /sessions/sess-1/reset").toBeDefined();
+    expect(post!.body.modeId).toBe("claude-sonnet");
+  });
+
+  it("omits modeId entirely when --mode is not given (unchanged behavior)", async () => {
+    await run(["session", "reset", "sess-1"]);
+
+    const post = captured.find((c) => c.url.endsWith("/sessions/sess-1/reset"));
+    expect(post, "expected a POST to /sessions/sess-1/reset").toBeDefined();
+    expect(post!.body.modeId).toBeUndefined();
+  });
+
+  it("combines with --prompt and --handoff-file in the same call", async () => {
+    const file = writeHandoff("summary before switching modes");
+    await run([
+      "session", "reset", "sess-1",
+      "--mode", "claude-sonnet",
+      "--prompt", "focus on tests now",
+      `--handoff-file=${file}`,
+    ]);
+
+    const post = captured.find((c) => c.url.endsWith("/sessions/sess-1/reset"));
+    expect(post!.body).toMatchObject({
+      modeId: "claude-sonnet",
+      prompt: "focus on tests now",
+      handoffText: "summary before switching modes",
+    });
   });
 });
 
