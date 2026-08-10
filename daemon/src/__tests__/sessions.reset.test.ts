@@ -37,6 +37,21 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
   };
 });
 
+// Mock tmux so no real tmux server is needed — without this, `POST /sessions
+// {type: "terminal"}` in 4.T1 calls the route's own direct `newSession` call
+// (routes/sessions.ts bypasses the mocked spawn.js for terminal sessions),
+// leaking a real orphaned tmux session on every test run.
+vi.mock("../services/tmux.js", () => ({
+  newSession: vi.fn().mockResolvedValue(undefined),
+  hasSession: vi.fn().mockResolvedValue(true),
+  killSession: vi.fn().mockResolvedValue(undefined),
+  capturePane: vi.fn().mockResolvedValue(""),
+  pasteBuffer: vi.fn().mockResolvedValue(undefined),
+  sendKeys: vi.fn().mockResolvedValue(undefined),
+  listSessionNames: vi.fn().mockResolvedValue(new Set()),
+  listSessions: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("../services/handoff.js", () => ({
   runHandoffTurn: vi.fn(async () => false),
   readHandoffFileOrNull: vi.fn(async () => null),

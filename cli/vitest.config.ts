@@ -8,5 +8,6 @@ export default defineConfig({
     environment: "node",
     globals: true,
     include: ["src/**/*.{test,spec}.ts", "src/**/__tests__/**/*.{test,spec}.ts"],
+    globalSetup: ["./vitest.global-setup.ts"],
   },
 });
