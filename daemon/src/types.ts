@@ -237,10 +237,12 @@ export interface SessionRecord {
    */
   archivedAt?: string; // ISO8601
   /**
-   * Handoff summary written by the outgoing agent during a `reset --handoff`
-   * (Decision 2/6), read from `.vibe-station/HANDOFF.md` after a bounded
-   * turn. Only ever set on an archived row. `null`/absent when no handoff was
-   * requested or it timed out.
+   * Handoff summary for a retired session — either delivered directly via
+   * `--handoff-file` (the CLI reads the agent's own file and sends its
+   * contents as `handoffText`, no daemon-side file lookup) or, for the
+   * UI-driven "Reset with handoff" case, produced by a bounded paste+poll
+   * turn against a one-off `/tmp` path. Only ever set on an archived row.
+   * `null`/absent when no handoff was requested or it timed out.
    */
   handoffSummary?: string | null;
 }
