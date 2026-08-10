@@ -70,6 +70,107 @@ describe("project-store (SQL-backed)", () => {
     expect(getProject("conc-proj")?.nextWorktreeNum).toBe(before + 20);
   });
 
+  // --- Regressions: read caching (PR #39 fallout) ---
+
+  it("serves repeat reads from memory instead of re-querying SQLite every call", async () => {
+    // The first SQLite cut re-assembled the whole object graph on EVERY read.
+    // These functions run on genuinely hot paths — `findSessionRecord` is
+    // called once per WS frame, i.e. once per keystroke — so that was ~3.5 ms
+    // of synchronous, event-loop-blocking work per keypress on a real install,
+    // plus native prepared-statement churn that drove RSS (and therefore the
+    // cost of every fork()) through the roof.
+    const { addProject, getAllProjects } = await import("../state/project-store.js");
+    const { getDb } = await import("../state/db.js");
+    await addProject(makeProject("cache-proj"));
+
+    getAllProjects(); // warm
+    const db = getDb();
+    const spy = vi.spyOn(db, "prepare");
+    try {
+      for (let i = 0; i < 25; i++) getAllProjects();
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a write is visible to the very next read (cache invalidation)", async () => {
+    const { addProject, mutateProject, getProject, deleteProject } = await import(
+      "../state/project-store.js"
+    );
+    await addProject(makeProject("inval-proj"));
+    expect(getProject("inval-proj")?.nextWorktreeNum).toBe(1);
+
+    await mutateProject("inval-proj", (p) => ({ ...p, nextWorktreeNum: 42 }));
+    expect(getProject("inval-proj")?.nextWorktreeNum).toBe(42);
+
+    await deleteProject("inval-proj");
+    expect(getProject("inval-proj")).toBeUndefined();
+  });
+
+  it("a mutation that throws leaves neither the DB nor the cache changed", async () => {
+    // `fn` gets a CLONE and the result is installed only after the transaction
+    // commits, so a failed write can never leave the cache holding a value the
+    // DB never got.
+    const { addProject, mutateProject, getProject } = await import("../state/project-store.js");
+    await addProject(makeProject("rollback-proj"));
+
+    await expect(
+      mutateProject("rollback-proj", (p) => {
+        // Mutating the argument in place must not touch the cached record.
+        p.nextWorktreeNum = 999;
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+
+    expect(getProject("rollback-proj")?.nextWorktreeNum).toBe(1);
+  });
+
+  it("updateSessionLifecycle writes one row and is reflected in the cached graph", async () => {
+    // The lifecycle fast path: `mutateProject` would DELETE and re-INSERT every
+    // worktree + session row of the project just to flip one session's state.
+    const { addProject, updateSessionLifecycle, getProject } = await import(
+      "../state/project-store.js"
+    );
+    const project = makeProject("lc-proj");
+    project.worktrees = [
+      {
+        id: "lc-wt",
+        branch: "b",
+        baseBranch: "main",
+        baseSha: "a".repeat(40),
+        createdAt: new Date().toISOString(),
+        sessions: [
+          {
+            id: "lc-sess",
+            type: "agent",
+            modeId: "m",
+            tmuxName: "lc-pane",
+            isMain: true,
+            sortOrder: 0,
+            lifecycle: { state: "working", lastTransitionAt: new Date().toISOString() },
+          },
+        ],
+      },
+    ];
+    await addProject(project);
+
+    const ok = await updateSessionLifecycle("lc-proj", "lc-sess", {
+      state: "idle",
+      lastTransitionAt: new Date().toISOString(),
+    });
+
+    expect(ok).toBe(true);
+    expect(getProject("lc-proj")!.worktrees[0]!.sessions[0]!.lifecycle.state).toBe("idle");
+    // Unknown session id is a no-op, not a throw.
+    expect(
+      await updateSessionLifecycle("lc-proj", "nope", {
+        state: "idle",
+        lastTransitionAt: new Date().toISOString(),
+      }),
+    ).toBe(false);
+  });
+
   it("2.T3 POST /worktrees -> GET /worktrees round-trips correctly through the SQL-backed store", async () => {
     const { buildServer } = await import("../server.js");
     const repoDir = join(tempDir, "repo");

@@ -35,6 +35,9 @@ vi.mock("../services/paths.js", async () => {
 
 vi.mock("../services/tmux.js", () => ({
   hasSession: vi.fn(),
+  // The poller takes ONE `list-sessions` snapshot per tick instead of a
+  // `tmux has-session` subprocess per session — see `listSessionNames`.
+  listSessionNames: vi.fn(),
   capturePane: vi.fn(),
 }));
 
@@ -120,10 +123,12 @@ describe("lifecycle polling behavior", () => {
     await mkdir(join(tempDir, "repo"), { recursive: true });
     _resetIdleTrackingForTest();
     tmux.hasSession.mockReset();
+    tmux.listSessionNames.mockReset();
     tmux.capturePane.mockReset();
     broadcaster.notifySession.mockClear();
     broadcaster.broadcastAll.mockClear();
-    tmux.hasSession.mockResolvedValue(true);
+    // "pane-l" is the seeded session's tmuxName — present == alive.
+    tmux.listSessionNames.mockResolvedValue(new Set(["pane-l"]));
   });
 
   afterEach(async () => {
@@ -202,7 +207,7 @@ describe("lifecycle polling behavior", () => {
 
     // Now the tmux pane disappears. The poller should broadcast session:exited
     // and clean up the tracking entry.
-    tmux.hasSession.mockResolvedValue(false);
+    tmux.listSessionNames.mockResolvedValue(new Set());
     await runLifecyclePollOnce();
 
     expect(await getCurrentState()).toBe("exited");
@@ -214,7 +219,7 @@ describe("lifecycle polling behavior", () => {
     // Indirect check that the tracking map was cleaned: if we revive the pane
     // and call again, idle hash tracking restarts cleanly without throwing
     // and the session stays exited (poller skips non-working/idle states).
-    tmux.hasSession.mockResolvedValue(true);
+    tmux.listSessionNames.mockResolvedValue(new Set(["pane-l"]));
     tmux.capturePane.mockResolvedValue("second");
     await expect(runLifecyclePollOnce()).resolves.toBeUndefined();
   });
@@ -289,5 +294,66 @@ describe("lifecycle polling behavior", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // --- Regressions: the poller's tmux subprocess storm (PR #39 fallout) ---
+
+  it("takes ONE tmux liveness snapshot per tick, not one subprocess per session", async () => {
+    // This is the regression that made the whole daemon unusable: `pollSession`
+    // ran `tmux has-session` per session per second (230 subprocesses/second on
+    // the reporting user's install). fork() cost scales with the daemon's RSS,
+    // so that consumed >50% of the event loop and every keystroke, tab switch
+    // and tab-bar fetch queued behind it.
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("output");
+
+    await runLifecyclePollOnce();
+
+    expect(tmux.listSessionNames).toHaveBeenCalledTimes(1);
+    expect(tmux.hasSession).not.toHaveBeenCalled();
+  });
+
+  it("never probes liveness for done/exited sessions", async () => {
+    // 175 of the user's 237 sessions were done/exited. The old code spawned
+    // `has-session` for each of them every tick and then did nothing with the
+    // answer — every branch below the check excludes those two states.
+    for (const state of ["done", "exited"] as const) {
+      await seedProject(state);
+      tmux.capturePane.mockReset();
+      await runLifecyclePollOnce();
+      expect(await getCurrentState()).toBe(state);
+      // No pane capture either — a terminal-state session is fully skipped.
+      expect(tmux.capturePane).not.toHaveBeenCalled();
+    }
+  });
+
+  it("skips the tick when tmux fails unexpectedly, instead of mass-marking every session exited", async () => {
+    // `listSessionNames` returns null for a failure it cannot interpret. If a
+    // transient tmux error collapsed to "no sessions", one hiccup would mark
+    // every session exited — hundreds of broadcasts and DB writes — and blank
+    // the user's whole workspace.
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("output");
+    tmux.listSessionNames.mockResolvedValue(null);
+
+    await runLifecyclePollOnce();
+
+    expect(await getCurrentState()).toBe("working");
+    const exitCalls = broadcaster.broadcastAll.mock.calls.filter(
+      ([msg]) => (msg as { type?: string }).type === "session:exited",
+    );
+    expect(exitCalls).toHaveLength(0);
+  });
+
+  it("still marks sessions exited when tmux reports no server running (empty set)", async () => {
+    // The counterpart to the above: an EMPTY set is authoritative ("no server
+    // running" really does mean everything is gone) and must still be acted on.
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("output");
+    tmux.listSessionNames.mockResolvedValue(new Set());
+
+    await runLifecyclePollOnce();
+
+    expect(await getCurrentState()).toBe("exited");
   });
 });

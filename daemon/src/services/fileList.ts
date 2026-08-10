@@ -128,6 +128,17 @@ function listFilesWithRipgrep(wtPath: string): Promise<FileListResult> {
       resolve({ files, truncated, source: "ripgrep" });
     };
 
+    // `child.on("error")` does NOT cover stream errors on the child's stdio
+    // pipes. Without this listener an ECONNRESET/EPIPE while reading rg's
+    // stdout (very reachable: `killChild` SIGKILLs it on timeout or on hitting
+    // the entry cap, with data still in flight) is an unhandled 'error' event,
+    // which takes the WHOLE DAEMON DOWN — every browser terminal with it.
+    child.stdout?.on("error", () => {
+      // Treat a broken pipe as end-of-output: keep whatever we collected.
+      truncated = true;
+      finish();
+    });
+
     child.stdout?.on("data", (chunk: Buffer) => {
       if (truncated) return;
       buffer += chunk.toString("utf8");

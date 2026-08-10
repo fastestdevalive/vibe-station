@@ -9,6 +9,7 @@
  */
 
 import { execFile, spawn } from "node:child_process";
+import { guardChildStdio } from "../services/childStreams.js";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -310,6 +311,7 @@ export function createOpencodePlugin(): AgentPlugin {
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, OPENCODE_CONFIG: configPath },
       });
+      guardChildStdio(child, "opencode");
       if (child.pid) ctx.onSpawn?.(child.pid);
 
       let stderr = "";
