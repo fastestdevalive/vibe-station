@@ -33,6 +33,31 @@ vi.mock("../services/handoff.js", () => ({
   readHandoffFileOrNull: vi.fn(async () => null),
 }));
 
+// Without this, every worktree created in beforeEach spawns a REAL agent
+// process via spawnSession (which shells out through tmux.js), and 1.T3
+// creates a real terminal session via routes/sessions.ts's own direct
+// `newSession` call (it bypasses spawn.js entirely) — both leak real,
+// never-killed tmux sessions on every test run.
+vi.mock("../services/spawn.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../services/spawn.js")>();
+  return {
+    ...original,
+    spawnSession: vi.fn(async () => {}),
+    spawnDirectSession: vi.fn(async () => {}),
+  };
+});
+
+vi.mock("../services/tmux.js", () => ({
+  newSession: vi.fn().mockResolvedValue(undefined),
+  hasSession: vi.fn().mockResolvedValue(true),
+  killSession: vi.fn().mockResolvedValue(undefined),
+  capturePane: vi.fn().mockResolvedValue(""),
+  pasteBuffer: vi.fn().mockResolvedValue(undefined),
+  sendKeys: vi.fn().mockResolvedValue(undefined),
+  listSessionNames: vi.fn().mockResolvedValue(new Set()),
+  listSessions: vi.fn().mockResolvedValue([]),
+}));
+
 describe("POST /sessions/:id/handoff", () => {
   let app: FastifyInstance;
   let repoDir: string;
