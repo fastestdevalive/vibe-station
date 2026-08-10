@@ -17,6 +17,8 @@ import {
   directSessionDataDir,
 } from "../services/paths.js";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
@@ -74,6 +76,7 @@ const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
 const ResetBody = z.object({
   handoff: z.boolean().optional(),
   prompt: z.string().optional(),
+  handoffText: z.string().optional(),
 });
 
 const InputBody = z.object({
@@ -1226,7 +1229,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     }
-    const { handoff, prompt } = parsed.data;
+    const { handoff, prompt, handoffText: handoffTextFromBody } = parsed.data;
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
@@ -1252,29 +1255,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       return reply.status(400).send({ error: `Mode '${session.modeId}' not found` });
     }
 
-    const cwd = ctx.kind === "worktree" ? worktreePath(ctx.project.id, ctx.worktree.id) : ctx.project.absolutePath;
-
-    const { runHandoffTurn, readHandoffFileOrNull, readFreshHandoffFileOrNull, HANDOFF_FRESHNESS_MS } = await import(
-      "../services/handoff.js"
-    );
-    const handoffPath = join(cwd, ".vibe-station", "HANDOFF.md");
-
-    // Opportunistic fast path (Bug 6 fix): `/vst reset --handoff` runs from
-    // WITHIN the very session being reset, so the paste+poll mechanism below
-    // can never work there — the agent is blocked inside the shell command
-    // that made this request and can't see anything pasted into its own pane.
-    // The updated `/vst` command templates now have the agent write
-    // `.vibe-station/HANDOFF.md` itself, as a normal file write, BEFORE
-    // invoking `vst session reset` at all. If that file is already sitting
-    // there and looks fresh, use it directly and skip paste+poll entirely —
-    // this also covers a plain `vst session reset --handoff` invoked from a
-    // separate, non-blocked terminal after writing its own file.
-    //
-    // The UI-driven "Reset with handoff" button still goes through paste+poll
-    // below (no fresh file will exist yet in that case), since its target
-    // pane genuinely is free to receive the pasted instruction.
-    let handoffText: string | null = await readFreshHandoffFileOrNull(handoffPath, HANDOFF_FRESHNESS_MS);
+    // Direct delivery (Decision 1): `--handoff-file` reads the summary locally via the CLI and
+    // sends it here as `handoffText`, bypassing paste+poll (and any filesystem lookup) entirely.
+    // Only fall back to the live paste+poll turn when no direct text was given.
+    let handoffText: string | null = handoffTextFromBody ?? null;
     if (handoffText == null && handoff) {
+      const { runHandoffTurn, readHandoffFileOrNull } = await import("../services/handoff.js");
+      const handoffPath = join(tmpdir(), `vst-handoff-${randomBytes(6).toString("hex")}.md`);
       const ok = await runHandoffTurn(session, { timeoutMs: 60_000, handoffPath });
       handoffText = ok ? await readHandoffFileOrNull(handoffPath) : null;
     }
@@ -1398,9 +1385,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     // No archivedAt guard here (unlike reset) — a standalone handoff summary is
     // still meaningful to request even after a session is archived (read-only history).
-    const cwd = ctx.kind === "worktree" ? worktreePath(ctx.project.id, ctx.worktree.id) : ctx.project.absolutePath;
     const { runHandoffTurn, readHandoffFileOrNull } = await import("../services/handoff.js"); // matches reset's cycle-avoidance import
-    const handoffPath = join(cwd, ".vibe-station", "HANDOFF.md");
+    const handoffPath = join(tmpdir(), `vst-handoff-${randomBytes(6).toString("hex")}.md`);
     const ok = await runHandoffTurn(ctx.session, { timeoutMs: 60_000, handoffPath });
     const handoffSummary = ok ? await readHandoffFileOrNull(handoffPath) : null;
 

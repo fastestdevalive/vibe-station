@@ -1,10 +1,15 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { existsSync, utimesSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runHandoffTurn, readFreshHandoffFileOrNull } from "../services/handoff.js";
+import { runHandoffTurn } from "../services/handoff.js";
+import * as tmux from "../services/tmux.js";
 import type { SessionRecord } from "../types.js";
+
+vi.mock("../services/tmux.js", () => ({
+  pasteBuffer: vi.fn(async () => {}),
+}));
 
 function makeSession(overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -63,47 +68,22 @@ describe("runHandoffTurn", () => {
   });
 });
 
-describe("readFreshHandoffFileOrNull (Bug 6 fix)", () => {
-  let tempDir: string | undefined;
-
-  afterEach(async () => {
-    if (tempDir) {
-      await rm(tempDir, { recursive: true, force: true });
-      tempDir = undefined;
-    }
+describe("runHandoffTurn — instruction/poll path consistency (Decision 3/4)", () => {
+  afterEach(() => {
+    vi.mocked(tmux.pasteBuffer).mockClear();
   });
 
-  it("returns the file's content when it was modified within maxAgeMs", async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vst-handoff-fresh-test-"));
-    const handoffPath = join(tempDir, "HANDOFF.md");
-    await writeFile(handoffPath, "self-written handoff summary");
+  it("1.T7 pastes an instruction that contains the SAME freshly-generated path it polls", async () => {
+    const handoffPath = join(tmpdir(), `vst-handoff-${Date.now()}.md`);
+    const session = makeSession({ useTmux: true, channel: "pty" });
 
-    const result = await readFreshHandoffFileOrNull(handoffPath, 30_000);
-    expect(result).toBe("self-written handoff summary");
-  });
+    // File never appears — we only care that delivery happened and named the right path;
+    // a short timeout keeps this test fast.
+    const result = await runHandoffTurn(session, { timeoutMs: 50, handoffPath, pollMs: 10 });
+    expect(result).toBe(false);
 
-  it("returns null when the file is older than maxAgeMs", async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vst-handoff-fresh-test-"));
-    const handoffPath = join(tempDir, "HANDOFF.md");
-    await writeFile(handoffPath, "stale summary from a much earlier run");
-    const old = new Date(Date.now() - 60_000);
-    utimesSync(handoffPath, old, old);
-
-    const result = await readFreshHandoffFileOrNull(handoffPath, 30_000);
-    expect(result).toBeNull();
-  });
-
-  it("returns null when the file does not exist", async () => {
-    const result = await readFreshHandoffFileOrNull("/nonexistent/HANDOFF.md", 30_000);
-    expect(result).toBeNull();
-  });
-
-  it("returns null for a fresh but empty/whitespace-only file", async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "vst-handoff-fresh-test-"));
-    const handoffPath = join(tempDir, "HANDOFF.md");
-    await writeFile(handoffPath, "   \n  ");
-
-    const result = await readFreshHandoffFileOrNull(handoffPath, 30_000);
-    expect(result).toBeNull();
+    expect(tmux.pasteBuffer).toHaveBeenCalledTimes(1);
+    const [, , pastedText] = vi.mocked(tmux.pasteBuffer).mock.calls[0];
+    expect(pastedText).toContain(handoffPath);
   });
 });
