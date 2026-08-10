@@ -55,8 +55,6 @@ vi.mock("../services/tmux.js", () => ({
 vi.mock("../services/handoff.js", () => ({
   runHandoffTurn: vi.fn(async () => false),
   readHandoffFileOrNull: vi.fn(async () => null),
-  readFreshHandoffFileOrNull: vi.fn(async () => null),
-  HANDOFF_FRESHNESS_MS: 30_000,
 }));
 
 describe("POST /sessions/:id/reset", () => {
@@ -209,17 +207,19 @@ describe("POST /sessions/:id/reset", () => {
     expect(archived.handoffSummary).toBeFalsy();
   });
 
-  it("Bug 6 fix — a fresh self-written HANDOFF.md is picked up WITHOUT the handoff flag and without running paste+poll", async () => {
-    // Simulates the fixed `/vst reset --handoff` flow: the agent writes
-    // .vibe-station/HANDOFF.md itself, then invokes `vst session reset`
-    // WITHOUT --handoff. The daemon should opportunistically pick up that
-    // fresh file and skip runHandoffTurn (paste+poll) entirely.
+  it("1.T3 handoffText in the body is used directly (--handoff-file delivery), skipping runHandoffTurn entirely", async () => {
+    // Simulates the `--handoff-file` flow: the CLI already read the agent's own
+    // file locally and sends its contents directly as `handoffText` — no
+    // `handoff` flag, no file lookup, no paste+poll.
     const handoffModule = await import("../services/handoff.js");
-    vi.mocked(handoffModule.readFreshHandoffFileOrNull).mockResolvedValueOnce(
-      "Self-written handoff: refactor done, tests still red.",
-    );
+    const beforeRes = await app.inject({ method: "GET", url: `/sessions/${mainSessionId}` });
+    const before = beforeRes.json<{ name: string | null }>();
 
-    const res = await app.inject({ method: "POST", url: `/sessions/${mainSessionId}/reset`, payload: {} });
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { handoffText: "Self-written handoff: refactor done, tests still red." },
+    });
     expect(res.statusCode).toBe(200);
     const { archivedSessionId, newSessionId } = res.json<{ archivedSessionId: string; newSessionId: string }>();
 
@@ -232,6 +232,29 @@ describe("POST /sessions/:id/reset", () => {
     expect(archived.handoffSummary).toBe("Self-written handoff: refactor done, tests still red.");
     const newRow = wt.sessions.find((s) => s.id === newSessionId)!;
     expect(newRow.initialPrompt).toBe("Self-written handoff: refactor done, tests still red.");
+    // Naming distinction (Decision 1): handoffText must never feed slugifyPrompt.
+    expect(newRow.name).toBe(before.name);
+  });
+
+  it("1.T4 { handoffText, prompt } together: name derives from prompt only, initialPrompt joins both", async () => {
+    const handoffModule = await import("../services/handoff.js");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${mainSessionId}/reset`,
+      payload: { handoffText: "Handoff: mid-refactor.", prompt: "also rename this" },
+    });
+    expect(res.statusCode).toBe(200);
+    const { newSessionId } = res.json<{ newSessionId: string }>();
+
+    expect(vi.mocked(handoffModule.runHandoffTurn)).not.toHaveBeenCalled();
+
+    const { getProject } = await import("../state/project-store.js");
+    const project = getProject(projectId)!;
+    const newRow = project.worktrees.find((w) => w.id === worktreeId)!.sessions.find((s) => s.id === newSessionId)!;
+    // "also" and "this" are stopwords (naming.ts) — only "rename" survives.
+    expect(newRow.name).toBe("rename");
+    expect(newRow.initialPrompt).toBe("Handoff: mid-refactor.\n\n---\n\nalso rename this");
   });
 
   it("4.T7 the old session's tmux pane is actually released (releaseSessionRuntime called)", async () => {

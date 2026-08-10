@@ -518,13 +518,14 @@ describe("Claude plugin — chat-id capture", () => {
     const content = await readFile(vstCommandPath, "utf8");
 
     expect(content).toContain("vst session reset $VST_SESSION");
-    // Bug 6 fix: `reset --handoff` no longer maps straight to `--handoff` on the
-    // CLI invocation — the agent must write .vibe-station/HANDOFF.md itself
-    // first, then reset WITHOUT --handoff (paste+poll can't work when the
-    // instruction targets the very session that's blocked running this command).
-    expect(content).not.toContain("vst session reset $VST_SESSION --handoff");
+    // Bug 6 fix / --handoff-file redesign: `reset --handoff` no longer maps
+    // straight to `--handoff` on the CLI invocation — the agent must write a
+    // summary to any file itself, then reset via `--handoff-file <path>`
+    // (paste+poll can't work when the instruction targets the very session
+    // that's blocked running this command).
+    expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
     expect(content).toContain("Do NOT pass `--handoff`");
-    expect(content).toContain(".vibe-station/HANDOFF.md");
+    expect(content).not.toContain(".vibe-station/HANDOFF.md");
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
@@ -644,6 +645,12 @@ describe("Cursor plugin — setupWorkspaceHooks", () => {
 
     const content = await readFile(join(wtDir, ".cursor", "commands", "vst.md"), "utf8");
     expect(content).toContain("vst session reset $VST_SESSION");
+    // --handoff-file redesign (see the claude.ts test above for the full
+    // rationale): the self-write path must point at --handoff-file, never
+    // the old fixed worktree path.
+    expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
+    expect(content).toContain("Do NOT pass `--handoff`");
+    expect(content).not.toContain(".vibe-station/HANDOFF.md");
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
@@ -739,6 +746,12 @@ describe("OpenCode plugin — chat-id capture", () => {
     const content = await readFile(join(wtDir, ".opencode", "commands", "vst.md"), "utf8");
     expect(content).toContain("$ARGUMENTS");
     expect(content).toContain("vst session reset $VST_SESSION");
+    // --handoff-file redesign (see the claude.ts test above for the full
+    // rationale): the self-write path must point at --handoff-file, never
+    // the old fixed worktree path.
+    expect(content).toContain("vst session reset $VST_SESSION --handoff-file <path>");
+    expect(content).toContain("Do NOT pass `--handoff`");
+    expect(content).not.toContain(".vibe-station/HANDOFF.md");
     expect(content).toContain("vst session handoff $VST_SESSION");
     expect(content).toContain('vst session rename $VST_SESSION "<name>"');
     expect(content).toContain('vst worktree rename $VST_WORKTREE "<name>"');
