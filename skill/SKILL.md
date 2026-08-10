@@ -1,5 +1,5 @@
 ---
-name: vibestation
+name: vst
 description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vst daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
 ---
 
@@ -9,7 +9,7 @@ description: Spawn isolated git-worktree coding sessions (claude, cursor, openco
 
 `vst` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes. The daemon exposes a REST API and a WebSocket endpoint for real-time pane streaming.
 
-**This skill is for agents OUTSIDE vst.** If you are an agent spawned BY vst, your system prompt is `daemon/src/assets/agent-system-prompt.md` — do not load this skill. This file describes how external agents (Claude Code, Cursor users in their own project, OpenClaw bots, GitHub Action runners, MCP consumers, etc.) drive vst from the outside.
+This skill is used by agents that interact with vst — both agents running **inside** vst sessions and **external** integrations (OpenClaw, GitHub Actions, CI bots). If you are an agent spawned BY vst, your primary instructions come from `daemon/src/assets/agent-system-prompt.md`; this skill supplements that with rename, teardown, and integration patterns not covered there.
 
 ---
 
@@ -344,7 +344,58 @@ jobs:
 
 ---
 
-## 10. Tear down
+## 10. Rename a worktree or session
+
+```bash
+vst worktree rename <id> <newName>   # rename a worktree
+vst session rename  <id> <newName>   # rename a session
+```
+
+**Argument order is always: existing ID first, new name second.**
+
+### When running inside a vst session
+
+Your environment already contains `$VST_WORKTREE` (your worktree id) and `$VST_SESSION` (your session id). **When a user says "rename to X" or "vst rename X" with a single argument, X is the new name.** Resolve the current id from the environment and construct the full command yourself:
+
+```bash
+# User says: "vst rename direct-2" or "rename this worktree to direct-2"
+vst worktree rename "$VST_WORKTREE" direct-2
+
+# User says: "rename my session to direct-2"
+vst session rename "$VST_SESSION" direct-2
+```
+
+Do not ask the user for the current id — you already have it. Do not ask whether the argument is the target or the new name — a single bare argument is always the new name.
+
+### When running outside a vst session (no env vars)
+
+Both arguments are required. The first is the existing id, the second is the new name:
+
+```bash
+vst worktree rename vs-19 my-feature   # rename worktree vs-19 → my-feature
+vst session rename vs-19-m my-session  # rename session vs-19-m → my-session
+```
+
+**ID patterns** (to distinguish existing ids from new names):
+- **Worktree IDs** — `<prefix>-<number>`, e.g. `direct-2`, `myap-1`, `vs-19`
+- **Session IDs** — `<worktreeId>-<slot>`, e.g. `direct-2-m`, `vs-19-a2`, `vs-19-t3`
+
+**Via HTTP:**
+```bash
+# Rename worktree
+curl -X PATCH http://127.0.0.1:7421/worktrees/<id>/rename \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "new-name" }'
+
+# Rename session
+curl -X PATCH http://127.0.0.1:7421/sessions/<id>/rename \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "new-name" }'
+```
+
+---
+
+## 11. Tear down
 
 ```bash
 # Kill a specific session (non-main only)
@@ -368,7 +419,7 @@ When to use each:
 
 ---
 
-## 11. Conventions to honour
+## 12. Conventions to honour
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
 - **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
@@ -378,4 +429,4 @@ When to use each:
 
 ---
 
-*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `daemon/src/assets/agent-system-prompt.md`. That file is for vst's own workers. This file (`skill/SKILL.md`) is for external agents and bots that drive vst from outside.*
+*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `daemon/src/assets/agent-system-prompt.md`. That file is the primary instruction set for vst's own workers; this skill supplements it with rename, teardown, and external integration patterns.*
