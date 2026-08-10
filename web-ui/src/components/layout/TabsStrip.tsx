@@ -1,4 +1,4 @@
-import { MoreHorizontal, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -47,6 +47,14 @@ interface TabsStripProps {
  *  window — see the release comment below. Module-scoped so it survives a
  *  remount (StrictMode's double-effect is covered by the per-instance ref). */
 const autoCreateInFlight = new Set<string>();
+
+/** How long after a long-press OPENS the reset menu a subsequent `contextmenu`
+ *  event (fired independently by the browser's own long-press detector on
+ *  some touch devices) is treated as a direct consequence of the same
+ *  press-and-release gesture, rather than a genuine second interaction —
+ *  see `lastMenuOpenedAt` in `TabsStrip` for the trailing-`click` half of
+ *  this same problem. */
+const MENU_REOPEN_GUARD_MS = 400;
 
 interface SortableTabProps {
   id: string;
@@ -132,7 +140,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   // Mirrors `closeTarget`'s existing pattern exactly: a "pending destructive
   // action" target that gates a shared `ConfirmDialog`, only firing the real
   // API call on confirm, never on the initial click/menu-item selection.
-  const [resetMenu, setResetMenu] = useState<{ session: Session; rect: DOMRect } | null>(null);
+  const [resetMenu, setResetMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [resetTarget, setResetTarget] = useState<Session | null>(null);
   const [resetHandoff, setResetHandoff] = useState(false);
 
@@ -142,7 +150,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     const timer = window.setTimeout(() => {
       function onDocClick(ev: MouseEvent) {
         const t = ev.target as HTMLElement;
-        if (t.closest("[data-tab-menu-panel]") || t.closest("[data-tab-menu-trigger]")) return;
+        if (t.closest("[data-tab-menu-panel]")) return;
         setResetMenu(null);
       }
       function onKey(ev: KeyboardEvent) {
@@ -176,7 +184,35 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (renamingId) renameInputRef.current?.select();
   }, [renamingId]);
 
+  // --- Long-press (touch) opens the same reset menu as right-click ---
+  // (Decision 6). The timer MUST be cleared on pointerup, pointercancel,
+  // pointermove-past-slop AND dnd-kit's onDragStart — missing any one of
+  // them would fire the menu mid-drag.
+  const pressTimer = useRef<number | null>(null);
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  /** Timestamp (performance.now()) of the most recent time the LONG-PRESS
+   *  TIMER opened the menu. Deliberately NOT stamped by `onContextMenu`'s own
+   *  open branch — a real mouse right-click/right-click toggle (2.T2b) must
+   *  still be able to close a menu it just opened itself; only a long-press
+   *  open needs protecting. A long-press that opens the menu is immediately
+   *  followed by two physical consequences of the very same gesture: the
+   *  browser's trailing `click` when the finger lifts (suppressed below via
+   *  `markDrag`, since that's exactly the "trailing click after a pointer
+   *  interaction" case it already exists for), and on some Android/Chrome
+   *  builds, a native `contextmenu` event fired by the browser's own
+   *  long-press detector. The latter isn't a `click`, so `markDrag`'s
+   *  click-only guard can't catch it; `onContextMenu` below instead checks
+   *  this timestamp and refuses to undo a just-opened menu within
+   *  `MENU_REOPEN_GUARD_MS`. */
+  const lastMenuOpenedAt = useRef(0);
+  function cancelPress() {
+    if (pressTimer.current != null) window.clearTimeout(pressTimer.current);
+    pressTimer.current = null;
+    pressOrigin.current = null;
+  }
+
   function startRename(s: Session) {
+    cancelPress();
     setRenamingId(s.id);
     setRenameValue(sessionLabel(s));
   }
@@ -489,7 +525,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          onDragStart={markDrag}
+          onDragStart={() => {
+            markDrag();
+            cancelPress();
+          }}
           onDragCancel={markDrag}
           onDragEnd={handleDragEnd}
           modifiers={[restrictToHorizontalAxis]}
@@ -526,11 +565,66 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                         if (!isAgent) return;
                         e.preventDefault();
                         e.stopPropagation();
-                        setResetMenu((prev) =>
-                          prev?.session.id === s.id
-                            ? null
-                            : { session: s, rect: e.currentTarget.getBoundingClientRect() },
-                        );
+                        // Read from the event in the handler body — the updater
+                        // below only ever sees a plain captured value, so it's
+                        // safe for React to invoke it more than once (Decision 7).
+                        const point = { x: e.clientX, y: e.clientY };
+                        setResetMenu((prev) => {
+                          if (prev?.session.id === s.id) {
+                            // A native `contextmenu` fired by the browser's own
+                            // long-press detector shortly after OUR long-press
+                            // TIMER already opened this same session's menu is
+                            // a physical echo of the same gesture, not a request
+                            // to close it. `lastMenuOpenedAt` is only stamped by
+                            // the long-press timer (below), never here, so a
+                            // deliberate right-click-right-click toggle (2.T2b)
+                            // is never guarded against itself.
+                            if (performance.now() - lastMenuOpenedAt.current < MENU_REOPEN_GUARD_MS) {
+                              return prev;
+                            }
+                            return null;
+                          }
+                          return { session: s, ...point };
+                        });
+                      }}
+                      onPointerDown={(e) => {
+                        // dnd-kit's own listener still needs to run so drag
+                        // activation keeps working — {...listeners} above is
+                        // overridden by this explicit prop, so it must be
+                        // invoked manually here.
+                        listeners?.onPointerDown?.(e);
+                        if (e.pointerType === "mouse" || !isAgent) return;
+                        pressOrigin.current = { x: e.clientX, y: e.clientY };
+                        const point = { x: e.clientX, y: e.clientY };
+                        pressTimer.current = window.setTimeout(() => {
+                          // The finger lifting right after this fires dispatches
+                          // a trailing `click` on the tab — mark it now (not from
+                          // onPointerUp) so the guard window comfortably covers
+                          // the near-instant gap between "timer fires" and
+                          // "finger lifts + click dispatches", regardless of
+                          // exactly when the pointerup itself lands. Without
+                          // this, that trailing click hits the outside-click
+                          // handler below and immediately closes the menu we
+                          // just opened.
+                          markDrag();
+                          lastMenuOpenedAt.current = performance.now();
+                          setResetMenu({ session: s, ...point });
+                        }, 500);
+                      }}
+                      onPointerMove={(e) => {
+                        listeners?.onPointerMove?.(e);
+                        if (!pressOrigin.current) return;
+                        const dx = e.clientX - pressOrigin.current.x;
+                        const dy = e.clientY - pressOrigin.current.y;
+                        if (Math.hypot(dx, dy) > 10) cancelPress();
+                      }}
+                      onPointerUp={(e) => {
+                        listeners?.onPointerUp?.(e);
+                        cancelPress();
+                      }}
+                      onPointerCancel={(e) => {
+                        listeners?.onPointerCancel?.(e);
+                        cancelPress();
                       }}
                       style={{ position: "relative", flexShrink: 0, ...style }}
                     >
@@ -584,39 +678,6 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                           </span>
                         ) : null}
                       </span>
-                      {isAgent ? (
-                        <span
-                          role="button"
-                          aria-label={`Session actions for ${label}`}
-                          aria-haspopup="menu"
-                          aria-expanded={resetMenu?.session.id === s.id}
-                          data-tab-menu-trigger
-                          className="tab__menu-trigger"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setResetMenu((prev) =>
-                              prev?.session.id === s.id
-                                ? null
-                                : { session: s, rect: e.currentTarget.getBoundingClientRect() },
-                            );
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.stopPropagation();
-                              setResetMenu((prev) =>
-                                prev?.session.id === s.id
-                                  ? null
-                                  : { session: s, rect: (e.currentTarget as HTMLElement).getBoundingClientRect() },
-                              );
-                            }
-                          }}
-                          tabIndex={-1}
-                          style={{ position: "relative", zIndex: 1 }}
-                        >
-                          <MoreHorizontal size={12} />
-                        </span>
-                      ) : null}
                       {closeable ? (
                         <span
                           role="button"
@@ -689,11 +750,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
               aria-label="Session actions"
               style={{
                 position: "fixed",
-                top: resetMenu.rect.bottom + 6,
+                top: resetMenu.y + 6,
                 left: Math.max(
                   8,
                   Math.min(
-                    resetMenu.rect.right - 170,
+                    resetMenu.x,
                     typeof window !== "undefined" ? window.innerWidth - 178 : 8,
                   ),
                 ),
