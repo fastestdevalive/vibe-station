@@ -277,6 +277,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     if (pick) setActiveSession(pick);
   }, [isProject, projectSessions, isAgent, setActiveSession]);
 
+  /** Sessions announced by `session:created` while a `listSessions` fetch was
+   *  in flight. See `mergeArrivedDuringFetch` below — without this, the fetch's
+   *  older snapshot overwrites them and the tab never appears. */
+  const arrivedDuringFetch = useRef<Session[]>([]);
+
   useEffect(() => {
     if (isProject) return; // project scope derives from the server store above
     if (!worktreeId) {
@@ -286,9 +291,23 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     }
     setSessionsLoaded(false);
     const matches = (s: Session) => s.type === kind;
+    arrivedDuringFetch.current = [];
     void (async () => {
       const all = await api.listSessions(worktreeId);
-      const ss = all.filter(matches);
+      // Union, never blind-replace. `session:created` can fire while this GET
+      // is in flight, and the server snapshot it returns may predate the new
+      // session — so `setSessions(ss)` alone silently drops a tab that was
+      // already announced, and nothing ever invalidates it. That is the
+      // "second agent session sometimes doesn't show up in the tab bar" bug;
+      // it is a lost update, not slowness, so it survives any latency fix (a
+      // slow daemon just widens the window from microseconds to seconds).
+      const ss = [
+        ...all.filter(matches),
+        ...arrivedDuringFetch.current.filter(
+          (s) => matches(s) && !all.some((a) => a.id === s.id),
+        ),
+      ];
+      arrivedDuringFetch.current = [];
       setSessions(ss);
       setSessionsLoaded(true);
       const store = useWorkspaceStore.getState();
@@ -313,6 +332,13 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       if (ev.type !== "session:created" || !ev.snapshot) return;
       if (ev.snapshot.worktreeId !== worktreeId) return;
       if (!matches(ev.snapshot)) return;
+      // Also record it for the in-flight fetch to merge in — appending to
+      // state alone is not enough, because a `listSessions` response that is
+      // still in flight will replace this array wholesale when it lands.
+      arrivedDuringFetch.current = [
+        ...arrivedDuringFetch.current.filter((s) => s.id !== ev.snapshot!.id),
+        ev.snapshot,
+      ];
       setSessions((prev) => {
         const exists = prev.some((s) => s.id === ev.snapshot!.id);
         return exists ? prev : [...prev, ev.snapshot!];

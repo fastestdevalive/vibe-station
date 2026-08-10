@@ -89,7 +89,51 @@ async function releaseLock(): Promise<void> {
   }
 }
 
+/**
+ * Last-resort process guards.
+ *
+ * The daemon owns every browser terminal, every attached agent stream and
+ * every file watcher, so dying takes all of them down at once — a real
+ * production failure mode here was an unhandled `read ECONNRESET` on a child
+ * process's stdio pipe killing the whole daemon, which the user experiences as
+ * "the web terminal accepts no input at all" (no keys, no touch, no scroll —
+ * every one of those is a WS round-trip).
+ *
+ * The individual pipes are guarded at the source (`services/childStreams.ts`,
+ * `services/fileList.ts`). This is the backstop for one we missed, and it is
+ * deliberately NOT a blanket "log and carry on": after an arbitrary uncaught
+ * exception the process state is undefined and continuing is unsafe. Only the
+ * broken-pipe family — which is always benign and always about a child that is
+ * already gone — is swallowed. Anything else is logged with its stack and then
+ * rethrown so the process still dies loudly rather than limping on corrupted
+ * state.
+ */
+function installProcessGuards(): void {
+  process.on("uncaughtException", (err: NodeJS.ErrnoException) => {
+    if (err?.code === "EPIPE" || err?.code === "ECONNRESET") {
+      console.warn(
+        `[daemon] survived an unhandled ${err.code} on a pipe — a child's stdio went away. ` +
+          `Guard its stream at the source (services/childStreams.ts).\n${err.stack ?? ""}`,
+      );
+      return;
+    }
+    console.error("[daemon] uncaught exception — exiting:", err?.stack ?? err);
+    throw err;
+  });
+
+  // The process had no rejection handler at all, so an unawaited rejection
+  // vanished silently (or killed the daemon, depending on Node's mode).
+  process.on("unhandledRejection", (reason) => {
+    console.error(
+      "[daemon] unhandled promise rejection:",
+      reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+    );
+  });
+}
+
 async function main() {
+  installProcessGuards();
+
   // `acquireLock()` (pid-checked, `.daemon.lock`) already guarantees only one
   // daemon process runs against `~/.vibe-station` at a time (Risk #4 /
   // Phase 1.7) — since `vibe-station.db` lives inside that same directory,
@@ -98,8 +142,8 @@ async function main() {
   await acquireLock();
 
   // One-time migration of every project's manifest.json into vibe-station.db
-  // (idempotent — a no-op after the first successful boot), then every read
-  // below goes straight to SQLite (no in-memory project cache anymore).
+  // (idempotent — a no-op after the first successful boot). Reads then go
+  // through project-store's in-memory cache in front of SQLite.
   await loadAll();
 
   await recoverNotStartedSessions();
