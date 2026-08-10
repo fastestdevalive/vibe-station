@@ -1,0 +1,19 @@
+feature: pwa-install
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-36
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "3.4"
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/wip/pwa-install/plan-pwa-install.md
+    phase_chain: [plan, implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
