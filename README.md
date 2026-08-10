@@ -276,6 +276,26 @@ To view a diff of changes an agent made:
 
 The UI collapses to a single-column layout on phones — the kanban becomes a stacked list, and the workspace stacks the markdown preview above the agent terminal so you can read a plan and watch the agent execute it without switching tabs.
 
+### Installing as an app
+
+The web UI is installable as a PWA — "Install Vibe Station…" in Chrome's omnibox / 3-dot menu on desktop, or "Add to Home screen" / "Install app" in Chrome on Android — giving a standalone window/icon instead of a browser tab.
+
+**Works out of the box on:**
+- `http://localhost:5173` (or whatever port `vite dev` is running on) — desktop Chrome
+- Any `https://` origin
+
+**Does NOT work on a raw Tailscale/LAN IP** (e.g. `http://100.x.x.x:5173`): Chrome only shows the install option on a *secure context* — `https:`, or `localhost`/`127.0.0.1`. A plain HTTP LAN/Tailscale address is neither, so no install icon will appear there, silently — this is expected, not a bug.
+
+**To install from another device (e.g. your phone) over Tailscale:**
+
+```bash
+# On the machine running the daemon/web UI:
+tailscale cert <machine>.<tailnet>.ts.net
+tailscale serve --https=443 http://127.0.0.1:5173
+```
+
+Then open `https://<machine>.<tailnet>.ts.net` from the other device's Chrome — the real TLS cert makes it a secure context, so the install option appears normally.
+
 ---
 
 ## Project-specific agent rules
