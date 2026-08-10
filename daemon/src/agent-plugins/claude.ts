@@ -9,6 +9,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { guardChildStdio } from "../services/childStreams.js";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
@@ -501,6 +502,9 @@ export function createClaudePlugin(): AgentPlugin {
         detached: true, // own process group for group-kill on abort
         stdio: ["pipe", "pipe", "pipe"],
       });
+      // `claude` also gets its prompt on stdin below, so an EPIPE on a child
+      // that died during spawn is directly reachable here.
+      guardChildStdio(child, "claude");
       if (child.pid) ctx.onSpawn?.(child.pid);
 
       let stderr = "";

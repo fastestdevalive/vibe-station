@@ -497,4 +497,57 @@ describe("TabsStrip", () => {
     expect(archivedTab).toBeTruthy();
     expect(within(archivedTab!).getByText(/archived/i)).toBeInTheDocument();
   });
+
+  it("keeps a session announced by session:created while the initial fetch was still in flight", async () => {
+    // Regression: "sometimes a second agent session doesn't show up in the tab
+    // bar". The mount effect fetched `listSessions` and REPLACED state with the
+    // result. If `session:created` landed while that GET was in flight — and
+    // the server snapshot it returns predates the insert — the resolve dropped
+    // the new session, and nothing ever invalidated it, so the tab stayed
+    // missing until an unrelated refetch.
+    //
+    // This is a lost update, not slowness: a slow daemon only widens the window
+    // from microseconds to seconds, so no amount of latency work fixes it.
+    const localApi = createMockApi();
+    const staleSnapshot = await localApi.listSessions("wt-1");
+
+    let releaseFetch: (() => void) | null = null;
+    vi.spyOn(localApi, "listSessions").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseFetch = () => resolve(structuredClone(staleSnapshot));
+        }),
+    );
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(releaseFetch).not.toBeNull());
+
+    // The daemon announces a new agent BEFORE our in-flight GET resolves.
+    const newSession = {
+      ...staleSnapshot.find((s) => s.type === "agent")!,
+      id: "sess-raced",
+      name: "Raced Agent",
+      label: "Raced Agent",
+      isMain: false,
+      sortOrder: Date.now(),
+    };
+    await act(async () => {
+      localApi.__test.emit({ type: "session:created", sessionId: newSession.id, snapshot: newSession });
+    });
+
+    // Now the older snapshot lands. It must not erase the raced-in session.
+    await act(async () => {
+      releaseFetch!();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /raced agent/i })).toBeInTheDocument();
+    });
+  });
 });

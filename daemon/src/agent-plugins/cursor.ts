@@ -14,6 +14,7 @@
  */
 
 import { execFile as execFileCb, spawn } from "node:child_process";
+import { guardChildStdio } from "../services/childStreams.js";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -345,6 +346,7 @@ export function createCursorPlugin(): AgentPlugin {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      guardChildStdio(child, "cursor-agent");
       if (child.pid) ctx.onSpawn?.(child.pid);
 
       let stderr = "";

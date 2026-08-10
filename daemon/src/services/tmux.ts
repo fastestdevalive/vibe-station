@@ -78,13 +78,36 @@ export async function capturePane(
   return run(args);
 }
 
-/** List all tmux sessions, returning their names. */
+/** List all tmux sessions, returning their names. Errors collapse to `[]`. */
 export async function listSessions(): Promise<string[]> {
+  return [...((await listSessionNames()) ?? [])];
+}
+
+/**
+ * Names of every live tmux session, as a set — or `null` if tmux failed for a
+ * reason we cannot interpret.
+ *
+ * The null case matters. The lifecycle poller uses this snapshot to decide
+ * which sessions are still alive, so an error silently collapsing to "empty"
+ * would mark EVERY session exited in one tick — hundreds of `session:exited`
+ * broadcasts and DB writes from a single transient tmux hiccup. "No server
+ * running" is the one failure that genuinely does mean "nothing is alive", so
+ * it maps to an empty set; anything else maps to `null` and the caller skips.
+ */
+export async function listSessionNames(): Promise<Set<string> | null> {
   try {
     const output = await run(["list-sessions", "-F", "#{session_name}"]);
-    return output.split("\n").filter(Boolean);
-  } catch {
-    return [];
+    return new Set(output.split("\n").filter(Boolean));
+  } catch (err) {
+    // tmux prints "no server running on /tmp/tmux-1000/default" (and exits 1)
+    // when nothing is up at all — authoritative, and the common case on a
+    // fresh machine.
+    const text = `${(err as { stderr?: string })?.stderr ?? ""}${(err as Error)?.message ?? ""}`;
+    if (/no server running|error connecting to|No such file or directory/i.test(text)) {
+      return new Set();
+    }
+    console.warn(`[tmux] list-sessions failed, skipping liveness check: ${text.trim()}`);
+    return null;
   }
 }
 

@@ -51,6 +51,7 @@ import { promises as fs, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
+import { guardChildStdio } from "../services/childStreams.js";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
@@ -445,6 +446,7 @@ export function createAgyPlugin(): AgentPlugin {
         detached: true, // own process group for group-kill on abort
         stdio: ["ignore", "pipe", "pipe"],
       });
+      guardChildStdio(child, "agy");
       if (child.pid) ctx.onSpawn?.(child.pid);
 
       let stderr = "";

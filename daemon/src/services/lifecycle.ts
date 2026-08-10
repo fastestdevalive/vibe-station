@@ -17,8 +17,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { hasSession, capturePane } from "./tmux.js";
-import { getAllProjects, mutateProject } from "../state/project-store.js";
+import { listSessionNames, capturePane } from "./tmux.js";
+import { getAllProjects, updateSessionLifecycle } from "../state/project-store.js";
 import { broadcastAll } from "../broadcaster.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { sessionChannel } from "./channel.js";
@@ -65,9 +65,13 @@ function hashPane(output: string): string {
   return createHash("sha1").update(output, "utf8").digest("hex");
 }
 
+/**
+ * @param _worktreeId Retained for call-site compatibility only — the row is now
+ * located by the DB-wide-unique session id, so the worktree is not needed.
+ */
 export async function persistLifecycleState(
   projectId: string,
-  worktreeId: string | undefined,
+  _worktreeId: string | undefined,
   sessionId: string,
   newState: LifecycleState,
 ): Promise<void> {
@@ -79,46 +83,17 @@ export async function persistLifecycleState(
     state: newState,
   });
 
-  if (worktreeId) {
-    // Worktree session
-    await mutateProject(projectId, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktreeId
-          ? {
-              ...w,
-              sessions: w.sessions.map((s) =>
-                s.id === sessionId
-                  ? {
-                      ...s,
-                      lifecycle: {
-                        state: newState,
-                        lastTransitionAt: new Date().toISOString(),
-                      },
-                    }
-                  : s,
-              ),
-            }
-          : w,
-      ),
-    }));
-  } else {
-    // Direct session
-    await mutateProject(projectId, (p) => ({
-      ...p,
-      directSessions: p.directSessions.map((s) =>
-        s.id === sessionId
-          ? {
-              ...s,
-              lifecycle: {
-                state: newState,
-                lastTransitionAt: new Date().toISOString(),
-              },
-            }
-          : s,
-      ),
-    }));
-  }
+  // Single-row UPDATE, not a `mutateProject` read-modify-write. The latter
+  // routes through `writeProjectFull`, which DELETEs and re-INSERTs every
+  // worktree + session row of the project (~290 statements plus an fsync on a
+  // real install) just to change one session's `state`. Lifecycle transitions
+  // fire continuously as agents flip working<->idle, so that write
+  // amplification was a standing tax on the event loop. `worktreeId` is no
+  // longer needed to locate the row — session ids are unique DB-wide.
+  await updateSessionLifecycle(projectId, sessionId, {
+    state: newState,
+    lastTransitionAt: new Date().toISOString(),
+  });
 }
 
 /** Lines of ring buffer used for idle hashing in direct-pty mode. */
@@ -128,8 +103,17 @@ async function pollSession(
   projectId: string,
   worktreeId: string | undefined,
   session: SessionRecord,
+  /** Names of every tmux session alive right now — see `pollAll`. */
+  aliveTmuxNames: ReadonlySet<string>,
 ): Promise<void> {
   if (session.lifecycle.state === "not_started") return;
+
+  // `done` and `exited` are terminal: whatever the liveness check says, every
+  // branch below is a no-op for them (traced: the `!alive` branch excludes
+  // both, and the idle/working hash branch requires `working`/`idle`). Bailing
+  // here is behaviour-neutral and skips the majority of the work — on a real
+  // install 175 of 237 sessions are in one of these two states.
+  if (session.lifecycle.state === "done" || session.lifecycle.state === "exited") return;
 
   // JSON channel (Decision 11): turn/queue state is authoritative — there is no
   // tmux pane or direct-pty stream to poll. `JsonAgentSession` drives lifecycle,
@@ -141,8 +125,8 @@ async function pollSession(
   // session.useTmux is coerced to boolean at loadAll time, but guard against undefined
   // from tests that construct records directly — treat undefined as true (tmux default).
   if (session.useTmux === false) {
-    if (session.lifecycle.state === "exited") return;
-
+    // (An `exited` check used to live here; the terminal-state early return
+    // above already covers it.)
     const stream = directPtyRegistry.get(session.id);
     if (!stream) {
       // Stream gone but state not yet exited — event-driven path will handle it.
@@ -182,10 +166,16 @@ async function pollSession(
     return;
   }
 
-  // Tmux path (existing behavior).
-  const alive = await hasSession(session.tmuxName);
+  // Tmux path. Membership in the single per-tick `list-sessions` snapshot,
+  // NOT a `tmux has-session` subprocess per session — that was one fork() per
+  // session per second (230/s on a real install), and fork() cost scales with
+  // the daemon's RSS, so it was consuming over half the event loop.
+  const alive = aliveTmuxNames.has(session.tmuxName);
 
-  if (!alive && session.lifecycle.state !== "exited" && session.lifecycle.state !== "done") {
+  // The `state !== "exited" && state !== "done"` guard that used to be here is
+  // now redundant — the terminal-state early return at the top of this
+  // function already excludes both.
+  if (!alive) {
     idleTracking.delete(session.id);
     broadcastAll({
       type: "session:exited",
@@ -194,8 +184,6 @@ async function pollSession(
     await persistLifecycleState(projectId, worktreeId, session.id, "exited");
     return;
   }
-
-  if (!alive) return;
 
   // Terminal sessions don't have user-meaningful idle/working states — skip
   // the hash-based detection. They stay "working" until exited (handled above).
@@ -279,20 +267,28 @@ export async function runLifecyclePollOnce(): Promise<void> {
 }
 
 async function pollAll(): Promise<void> {
+  // ONE tmux round-trip for the whole tick. `listSessionNames` returns null
+  // when tmux failed for a reason OTHER than "no server running" — a transient
+  // failure must not be read as "every session died", or a single hiccup would
+  // mass-mark hundreds of sessions exited and fire a broadcast + a DB write for
+  // each. Skip the tick and try again in a second.
+  const aliveTmuxNames = await listSessionNames();
+  if (aliveTmuxNames === null) return;
+
   const projects = getAllProjects();
   await Promise.all(
     projects.flatMap((project) => [
       // Poll worktree sessions
       ...project.worktrees.flatMap((worktree) =>
         worktree.sessions.map((session) =>
-          pollSession(project.id, worktree.id, session).catch((err) => {
+          pollSession(project.id, worktree.id, session, aliveTmuxNames).catch((err) => {
             console.error(`[lifecycle] Poll error for ${session.id}:`, err);
           }),
         ),
       ),
       // Poll direct sessions
       ...project.directSessions.map((session) =>
-        pollSession(project.id, undefined, session).catch((err) => {
+        pollSession(project.id, undefined, session, aliveTmuxNames).catch((err) => {
           console.error(`[lifecycle] Poll error for ${session.id}:`, err);
         }),
       ),
@@ -302,8 +298,18 @@ async function pollAll(): Promise<void> {
 
 export function startLifecyclePoller(): void {
   if (pollerHandle) return;
+  // Overlap guard: `pollAll` is async but `setInterval` fires regardless of
+  // whether the previous tick finished. Without this, a tick that runs long
+  // (many sessions, a slow tmux) stacks on the next one and the in-flight work
+  // compounds without bound — which is how a merely-expensive tick turns into
+  // multi-second event-loop stalls.
+  let inFlight = false;
   pollerHandle = setInterval(() => {
-    void pollAll();
+    if (inFlight) return;
+    inFlight = true;
+    void pollAll().finally(() => {
+      inFlight = false;
+    });
   }, POLL_INTERVAL_MS);
   if (typeof pollerHandle === "object" && "unref" in pollerHandle) {
     (pollerHandle as { unref(): void }).unref();
