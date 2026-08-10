@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pencil, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -28,7 +28,6 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
-import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
 import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
@@ -296,9 +295,73 @@ export function LeftSidebar({
    * cannot fix this on its own.
    */
   const markDrag = useDragClickGuard();
-  const [renameTarget, setRenameTarget] = useState<
-    { kind: "worktree"; worktree: Worktree } | { kind: "session"; session: Session } | null
+
+  // --- Inline double-click rename (Part 03 Phase 3) — mirrors TabsStrip.tsx's
+  // startRename/commitRename/renamingId/renameValue/renameInputRef pattern
+  // exactly, replacing the old modal RenameDialog entirely (Decision 8, 9). ---
+  // `site` distinguishes the "Pinned" section copy of a row from its regular
+  // project-tree copy: pinned worktrees/direct-sessions are MIRRORED, not
+  // moved, so the same `id` can render simultaneously in both places. Keying
+  // solely by `{kind, id}` made double-clicking either copy flip BOTH into
+  // edit mode at once — two autoFocus inputs fighting for focus, where the
+  // loser's onBlur fires immediately and commits a rename with the unedited
+  // value. Including `site` ensures only the row actually double-clicked
+  // ever renders an input.
+  const [inlineRename, setInlineRename] = useState<
+    { kind: "worktree" | "session"; id: string; site: "pinned" | "tree" } | null
   >(null);
+  const [inlineValue, setInlineValue] = useState("");
+  const inlineInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (inlineRename) inlineInputRef.current?.select();
+  }, [inlineRename]);
+
+  function startInlineRename(
+    kind: "worktree" | "session",
+    id: string,
+    currentLabel: string,
+    site: "pinned" | "tree",
+  ) {
+    setInlineRename({ kind, id, site });
+    setInlineValue(currentLabel);
+  }
+
+  /**
+   * A double-click dispatches `click` (detail 1), `click` (detail 2), THEN
+   * `dblclick` — the row's full-bleed `<Link>` overlay already acts on the
+   * first `click` before `dblclick` ever fires, so `preventDefault()` in an
+   * `onDoubleClick` handler is always too late to stop the navigation that
+   * already happened. Browsers set `event.detail` to the click count, so an
+   * `onClickCapture` on the row (capture phase runs BEFORE the `<Link>`'s own
+   * `onClick`, which lives at the target) can intercept the second click of
+   * a double-click and stop it from reaching the anchor at all.
+   */
+  function suppressDoubleClickNavigation(e: React.MouseEvent) {
+    if (e.detail > 1) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function commitInlineRename() {
+    const target = inlineRename;
+    setInlineRename(null);
+    if (!target) return;
+    // Unconditional: an empty submission is a valid request to clear the
+    // name back to the server's computed default (name -> null), not a
+    // silent no-op — matches the rename endpoint's contract.
+    const trimmed = inlineValue.trim().slice(0, 60);
+    if (target.kind === "worktree") {
+      void api.renameWorktree(target.id, trimmed).catch(() => {
+        /* surface errors later */
+      });
+    } else {
+      void api.renameSession(target.id, trimmed).catch(() => {
+        /* surface errors later */
+      });
+    }
+  }
 
   function worktreeLabel(w: Worktree): string {
     return w.name ?? w.branch;
@@ -752,6 +815,12 @@ export function LeftSidebar({
                             data-archived={sess.archivedAt != null ? "true" : undefined}
                             style={{ position: "relative" }}
                             title={`${label} — direct session`}
+                            onClickCapture={suppressDoubleClickNavigation}
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              startInlineRename("session", sess.id, label, "pinned");
+                            }}
                           >
                             <Link
                               to={`/session/${sess.id}`}
@@ -767,7 +836,29 @@ export function LeftSidebar({
                               <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
                             </span>
                             <div className="pinned-row__text">
-                              <span className="pinned-row__primary">{label}</span>
+                              {inlineRename?.kind === "session" &&
+                              inlineRename.id === sess.id &&
+                              inlineRename.site === "pinned" ? (
+                                <input
+                                  ref={inlineInputRef}
+                                  className="pinned-row__primary pinned-row__rename-input"
+                                  aria-label="Rename"
+                                  value={inlineValue}
+                                  autoFocus
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onChange={(e) => setInlineValue(e.target.value)}
+                                  onBlur={commitInlineRename}
+                                  onKeyDown={(e) => {
+                                    e.stopPropagation();
+                                    if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                    if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                  }}
+                                  maxLength={60}
+                                />
+                              ) : (
+                                <span className="pinned-row__primary">{label}</span>
+                              )}
                               <span className="pinned-row__subhead" title={proj?.path}>
                                 {proj?.name ?? sess.projectId}
                               </span>
@@ -849,6 +940,12 @@ export function LeftSidebar({
                                 selectWorktree(w.projectId, w);
                               }
                             }}
+                            onClickCapture={suppressDoubleClickNavigation}
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              startInlineRename("worktree", w.id, label, "pinned");
+                            }}
                           >
                             <Link
                               to={`/worktree/${w.id}`}
@@ -867,7 +964,29 @@ export function LeftSidebar({
                               />
                             </span>
                             <div className="pinned-row__text">
-                              <span className="pinned-row__primary">{label}</span>
+                              {inlineRename?.kind === "worktree" &&
+                              inlineRename.id === w.id &&
+                              inlineRename.site === "pinned" ? (
+                                <input
+                                  ref={inlineInputRef}
+                                  className="pinned-row__primary pinned-row__rename-input"
+                                  aria-label="Rename"
+                                  value={inlineValue}
+                                  autoFocus
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onChange={(e) => setInlineValue(e.target.value)}
+                                  onBlur={commitInlineRename}
+                                  onKeyDown={(e) => {
+                                    e.stopPropagation();
+                                    if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                    if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                  }}
+                                  maxLength={60}
+                                />
+                              ) : (
+                                <span className="pinned-row__primary">{label}</span>
+                              )}
                               <span className="pinned-row__subhead" title={proj?.path}>
                                 {proj?.name ?? w.projectId}
                               </span>
@@ -1061,6 +1180,13 @@ export function LeftSidebar({
                                       data-archived={sess.archivedAt != null ? "true" : undefined}
                                       style={{ position: "relative" }}
                                       title={collapsed ? `${label} — direct session` : "Direct session (no worktree)"}
+                                      onClickCapture={suppressDoubleClickNavigation}
+                                      onDoubleClick={(e) => {
+                                        if (collapsed) return;
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        startInlineRename("session", sess.id, label, "tree");
+                                      }}
                                     >
                                       <Link
                                         to={`/session/${sess.id}`}
@@ -1075,11 +1201,34 @@ export function LeftSidebar({
                                       <span className="direct-session__icon" aria-hidden>
                                         <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
                                       </span>
-                                      <span className="direct-session__label">
-                                        {/* `slot` is gone (Decision 1) — collapsed view now shows a
-                                            truncated label instead of a stable short code. */}
-                                        {collapsed ? label.slice(0, 3) : label}
-                                      </span>
+                                      {!collapsed &&
+                                      inlineRename?.kind === "session" &&
+                                      inlineRename.id === sess.id &&
+                                      inlineRename.site === "tree" ? (
+                                        <input
+                                          ref={inlineInputRef}
+                                          className="direct-session__label direct-session__rename-input"
+                                          aria-label="Rename"
+                                          value={inlineValue}
+                                          autoFocus
+                                          onClick={(e) => e.stopPropagation()}
+                                          onPointerDown={(e) => e.stopPropagation()}
+                                          onChange={(e) => setInlineValue(e.target.value)}
+                                          onBlur={commitInlineRename}
+                                          onKeyDown={(e) => {
+                                            e.stopPropagation();
+                                            if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                            if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                          }}
+                                          maxLength={60}
+                                        />
+                                      ) : (
+                                        <span className="direct-session__label">
+                                          {/* `slot` is gone (Decision 1) — collapsed view now shows a
+                                              truncated label instead of a stable short code. */}
+                                          {collapsed ? label.slice(0, 3) : label}
+                                        </span>
+                                      )}
                                       {!collapsed && sess.pinnedAt ? (
                                         <Pin size={10} fill="currentColor" aria-label="Pinned" style={{ flexShrink: 0, opacity: 0.7 }} />
                                       ) : null}
@@ -1177,6 +1326,13 @@ export function LeftSidebar({
                                         void selectWorktree(p.id, w);
                                       }
                                     }}
+                                    onClickCapture={suppressDoubleClickNavigation}
+                                    onDoubleClick={(e) => {
+                                      if (collapsed) return;
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      startInlineRename("worktree", w.id, label, "tree");
+                                    }}
                                   >
                                     <Link
                                       to={`/worktree/${w.id}`}
@@ -1197,15 +1353,38 @@ export function LeftSidebar({
                                           />
                                         </span>
                                       ) : null}
-                                      <span className="wt-row__label">
-                                        {collapsed
-                                          ? disambiguatedAbbrev(
-                                              label,
-                                              w.id,
-                                              orderedWtList.map((x) => ({ id: x.id, name: worktreeLabel(x) })),
-                                            )
-                                          : label}
-                                      </span>
+                                      {!collapsed &&
+                                      inlineRename?.kind === "worktree" &&
+                                      inlineRename.id === w.id &&
+                                      inlineRename.site === "tree" ? (
+                                        <input
+                                          ref={inlineInputRef}
+                                          className="wt-row__label wt-row__rename-input"
+                                          aria-label="Rename"
+                                          value={inlineValue}
+                                          autoFocus
+                                          onClick={(e) => e.stopPropagation()}
+                                          onPointerDown={(e) => e.stopPropagation()}
+                                          onChange={(e) => setInlineValue(e.target.value)}
+                                          onBlur={commitInlineRename}
+                                          onKeyDown={(e) => {
+                                            e.stopPropagation();
+                                            if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                            if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                          }}
+                                          maxLength={60}
+                                        />
+                                      ) : (
+                                        <span className="wt-row__label">
+                                          {collapsed
+                                            ? disambiguatedAbbrev(
+                                                label,
+                                                w.id,
+                                                orderedWtList.map((x) => ({ id: x.id, name: worktreeLabel(x) })),
+                                              )
+                                            : label}
+                                        </span>
+                                      )}
                                     </div>
                                     {!collapsed ? (
                                       <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
@@ -1376,36 +1555,6 @@ export function LeftSidebar({
         onCancel={() => setPendingDismissSession(null)}
       />
 
-      {/* Rename dialog — calls the real rename endpoint (Part 03 Phase 2).
-          Empty input clears back to the server's computed default name. The
-          store stays current via the `worktree:updated`/`session:updated` WS
-          events (already reconciled, see useServerSync.ts). */}
-      <RenameDialog
-        open={renameTarget !== null}
-        title={renameTarget?.kind === "worktree" ? "Rename worktree" : "Rename session"}
-        currentName={
-          renameTarget?.kind === "worktree"
-            ? worktreeLabel(renameTarget.worktree)
-            : renameTarget?.kind === "session"
-              ? sessionLabel(renameTarget.session)
-              : ""
-        }
-        onCancel={() => setRenameTarget(null)}
-        onSubmit={(name) => {
-          const target = renameTarget;
-          setRenameTarget(null);
-          if (target?.kind === "worktree") {
-            void api.renameWorktree(target.worktree.id, name).catch(() => {
-              /* surface errors later */
-            });
-          } else if (target?.kind === "session") {
-            void api.renameSession(target.session.id, name).catch(() => {
-              /* surface errors later */
-            });
-          }
-        }}
-      />
-
       {wtMenu
         ? createPortal(
             <div
@@ -1453,19 +1602,6 @@ export function LeftSidebar({
                   fill={wtMenu.worktree.pinnedAt != null ? "currentColor" : "none"}
                 />
                 {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setRenameTarget({ kind: "worktree", worktree: wtMenu.worktree });
-                  setWtMenu(null);
-                }}
-              >
-                <Pencil size={13} aria-hidden />
-                Rename
               </button>
               <button
                 type="button"
@@ -1561,19 +1697,6 @@ export function LeftSidebar({
                   fill={sessMenu.session.pinnedAt != null ? "currentColor" : "none"}
                 />
                 {sessMenu.session.pinnedAt != null ? "Unpin" : "Pin to top"}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item menu-pop__item--icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setRenameTarget({ kind: "session", session: sessMenu.session });
-                  setSessMenu(null);
-                }}
-              >
-                <Pencil size={13} aria-hidden />
-                Rename
               </button>
               {sessMenu.session.type === "agent" ? (
                 <button
