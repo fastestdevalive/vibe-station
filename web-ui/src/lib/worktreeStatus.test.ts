@@ -12,7 +12,6 @@ function sess(
     projectId: "p",
     modeId: null,
     type: "agent",
-    label: id,
     isMain: true,
     state,
     lifecycleState: state,

@@ -71,9 +71,10 @@ export interface Session {
   projectId: string;
   modeId: string | null;
   type: SessionType;
-  /** Display label in tabs / sidebar (custom name when set, else a computed default) */
-  label: string;
-  /** User-set/default display name. null when using the computed default label. */
+  /** User-set display name. null/absent when using the computed default label
+   *  — see `sessionLabel()` in `@/lib/sessionLabel`, which every renderer
+   *  calls instead of a stored `label` field (removed: it duplicated `name`
+   *  and could go stale independently of it). */
   name?: string | null;
   /** True for a worktree's single main agent session (non-closable). Replaces the old `slot === "m"` check. */
   isMain: boolean;
@@ -295,7 +296,10 @@ export type WSEvent =
       pinnedAt?: string | null;
       /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
       channel?: Channel;
-      /** After a rename (PATCH .../rename) — `null` means cleared back to the default label. */
+      /** After a rename (PATCH .../rename) — `null` means cleared back to the
+       *  computed default label. Patching this is sufficient: every renderer
+       *  computes the display label from `name` via `sessionLabel()`, so
+       *  there is no separate `label` field that needs its own patch. */
       name?: string | null;
       /** Set once a reset (POST .../reset) archives this session. */
       archivedAt?: string | null;

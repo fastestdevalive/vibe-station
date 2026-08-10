@@ -26,6 +26,7 @@ import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { sessionLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { RenameDialog } from "@/components/dialogs/RenameDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
@@ -301,9 +302,6 @@ export function LeftSidebar({
 
   function worktreeLabel(w: Worktree): string {
     return w.name ?? w.branch;
-  }
-  function sessionLabel(s: Session): string {
-    return s.label;
   }
 
   /** Reorder scope: pinned worktrees float in their own drag-order list,
@@ -1370,7 +1368,7 @@ export function LeftSidebar({
         title="Dismiss agent?"
         message={
           pendingDismissSession
-            ? `Remove “${pendingDismissSession.label}” from vst? The agent process is stopped. Your project files are NOT touched.`
+            ? `Remove “${sessionLabel(pendingDismissSession)}” from vst? The agent process is stopped. Your project files are NOT touched.`
             : ""
         }
         confirmLabel="Dismiss"

@@ -198,7 +198,11 @@ const SessionCreatedSnapshot = z.object({
   isMain: z.boolean(),
   type: z.enum(["agent", "terminal"]),
   modeId: z.string().nullable(),
-  label: z.string(),
+  /** User-set display name; null/absent when using the computed default
+   *  label. Clients compute the display string themselves (see `sessionLabel`
+   *  in web-ui/src/lib/sessionLabel.ts) rather than reading a separate
+   *  server-computed `label` field — see `session:updated` below for why. */
+  name: z.string().nullable().optional(),
   tmuxName: z.string(),
   useTmux: z.boolean().optional().default(true),
   channel: z.enum(["tmux", "pty", "json"]).optional(),
@@ -263,7 +267,12 @@ const SessionUpdatedEvent = z.object({
   pinnedAt: z.string().nullable().optional(),
   /** New execution channel after a live JSON↔terminal toggle (P3, R1.7). */
   channel: z.enum(["tmux", "pty", "json"]).optional(),
-  /** After a rename (PATCH .../rename) — `null` means cleared back to the default label. */
+  /** After a rename (PATCH .../rename) — `null` means cleared back to the
+   *  computed default label. There is no separate `label` field to also
+   *  patch: clients compute the display string from `name`/`isMain`/`type`
+   *  themselves (`sessionLabel()` in web-ui/src/lib/sessionLabel.ts), so
+   *  patching `name` alone is always sufficient and can never go stale
+   *  relative to a second, forgotten field. */
   name: z.string().nullable().optional(),
   /** Set once a reset (POST .../reset) archives this session (Decision 2/9). */
   archivedAt: z.string().optional(),

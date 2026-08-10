@@ -63,7 +63,6 @@ function session(id: string, channel: "tmux" | "pty" | "json"): Session {
     projectId: "proj-a",
     modeId: "mode-1",
     type: "agent",
-    label: "main",
     isMain: true,
     state: "idle",
     lifecycleState: "idle",

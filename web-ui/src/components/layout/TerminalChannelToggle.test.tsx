@@ -13,7 +13,6 @@ function session(extra: Partial<Session> = {}): Session {
     projectId: "proj-a",
     modeId: "mode-1",
     type: "agent",
-    label: "main",
     isMain: true,
     state: "idle",
     lifecycleState: "idle",

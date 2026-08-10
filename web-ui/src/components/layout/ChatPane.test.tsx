@@ -25,7 +25,6 @@ function jsonSession(id: string): Session {
     projectId: "proj-a",
     modeId: "mode-1",
     type: "agent",
-    label: "main",
     isMain: true,
     state: "idle",
     lifecycleState: "idle",

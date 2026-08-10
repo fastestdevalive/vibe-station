@@ -12,7 +12,6 @@ const mockSession = (id: string, isMain = true): Session => ({
   type: "terminal",
   state: "working",
   lifecycleState: "working",
-  label: isMain ? "main" : "alt",
   isMain,
   tmuxName: id,
   createdAt: new Date().toISOString(),
