@@ -1609,7 +1609,7 @@ export function LeftSidebar({
                   setSessMenu(null);
                 }}
               >
-                Dismiss (keep files)
+                Dismiss
               </button>
             </div>,
             document.body,
