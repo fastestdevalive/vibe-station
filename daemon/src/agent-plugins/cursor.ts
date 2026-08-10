@@ -414,6 +414,7 @@ export function createCursorPlugin(): AgentPlugin {
           "- `reset --handoff` -> see \"Important — `reset --handoff` writes its own file\" below",
           '- `reset` followed by other text -> `vst session reset $VST_SESSION --prompt "<that text>"`',
           '- `reset --handoff` followed by other text -> see "Important — `reset --handoff` writes its own file" below (final command includes both `--handoff-file <path>` and `--prompt "<that text>"`)',
+          '- `reset --mode <name>` -> `vst session reset $VST_SESSION --mode "<name>"` (switches mode/CLI on reset — combine with other reset flags, e.g. `--mode "<name>" --prompt "<that text>"`)',
           "- `handoff` -> `vst session handoff $VST_SESSION`",
           '- `rename <name>` -> `vst session rename $VST_SESSION "<name>"`',
           '- `rename --worktree <name>` -> `vst worktree rename $VST_WORKTREE "<name>"`',

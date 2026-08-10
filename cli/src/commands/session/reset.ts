@@ -16,6 +16,7 @@ export function registerSessionReset(session: Command): void {
     .description("Reset a session")
     .option("--handoff", "Generate a handoff summary before reset")
     .option("--prompt <text>", "Custom prompt for the new session")
+    .option("--mode <name-or-id>", "Switch to a different mode/CLI on reset")
     .addOption(
       new Option("--handoff-file <path>", "Read a handoff summary from file").conflicts("handoff")
     )
@@ -23,7 +24,7 @@ export function registerSessionReset(session: Command): void {
       async (
         id: string,
         // Keys must match commander's camelCased option names (--handoff-file → handoffFile).
-        opts: { handoff?: boolean; prompt?: string; handoffFile?: string }
+        opts: { handoff?: boolean; prompt?: string; handoffFile?: string; mode?: string }
       ) => {
         // The CLI is the only party that knows it's running INSIDE the target session — the
         // daemon can't distinguish this caller from the UI. `--handoff` here can never work: the
@@ -49,6 +50,9 @@ export function registerSessionReset(session: Command): void {
             handoff: opts.handoff,
             prompt: opts.prompt,
             handoffText,
+            // Sent as-is — the daemon resolves either a mode id or a mode
+            // name (resolveModeId), same as `session create --mode` already does.
+            modeId: opts.mode,
           }
         );
 
