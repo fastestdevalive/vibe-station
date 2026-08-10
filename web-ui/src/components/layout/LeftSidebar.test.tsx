@@ -705,9 +705,47 @@ describe("LeftSidebar", () => {
     });
   });
 
-  // ─── Rename (Part 03 Phase 2 — real endpoint, not local override) ───────
-  describe("rename dialog", () => {
-    it("2.T2 — renaming a worktree via the dialog calls the real renameWorktree endpoint", async () => {
+  // ─── Inline rename (Part 03 Phase 3 — double-click, no modal fallback) ──
+  // The modal `RenameDialog` is removed entirely (Decision 8); the sidebar
+  // now mirrors TabsStrip.tsx's inline double-click rename exactly.
+  describe("inline rename", () => {
+    // The mock api's `pinSession` mutates its backing store but — unlike
+    // `pinWorktree`/`renameSession` — does not emit a `session:updated` WS
+    // event, so the client-side store never learns about the change. Pin via
+    // the api call (so its own state stays consistent) then emit the event
+    // by hand, mirroring what a real server round-trip would deliver.
+    async function pinSessionAndSync(
+      targetApi: ReturnType<typeof createMockApi>,
+      sessionId: string,
+    ) {
+      await targetApi.pinSession(sessionId, true);
+      targetApi.__test.emit({ type: "session:updated", sessionId, pinnedAt: new Date(0).toISOString() });
+    }
+
+    function emitDirectAgent(targetApi: ReturnType<typeof createMockApi>, sessionId: string, label: string) {
+      targetApi.__test.emit({
+        type: "session:created",
+        sessionId,
+        worktreeId: null,
+        projectId: "proj-a",
+        sessionType: "agent",
+        snapshot: {
+          id: sessionId,
+          worktreeId: null,
+          projectId: "proj-a",
+          modeId: "mode-1",
+          type: "agent",
+          name: label,
+          isMain: false,
+          state: "idle",
+          lifecycleState: "idle",
+          tmuxName: `tm-${sessionId}`,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    it("3.T1 — double-clicking a worktree row reveals a prefilled input; Enter calls renameWorktree", async () => {
       const localApi = createMockApi();
       const renameSpy = vi.spyOn(localApi, "renameWorktree");
       const user = userEvent.setup();
@@ -718,27 +756,439 @@ describe("LeftSidebar", () => {
           </Harness>
         </MemoryRouter>,
       );
-      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
 
-      const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
-      const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
-      await user.click(trigger);
-      const renameItem = await screen.findByRole("menuitem", { name: /rename/i });
-      await user.click(renameItem);
-
-      const input = await screen.findByLabelText("New name");
+      const input = await screen.findByLabelText("Rename");
+      expect(input).toHaveValue("wt-1");
       await user.clear(input);
-      await user.type(input, "renamed-worktree");
-      await user.click(screen.getByRole("button", { name: /^rename$/i }));
+      await user.type(input, "renamed-wt{Enter}");
 
       await waitFor(() => {
-        expect(renameSpy).toHaveBeenCalledWith("wt-1", "renamed-worktree");
+        expect(renameSpy).toHaveBeenCalledWith("wt-1", "renamed-wt");
       });
-      // Store reconciles via the `worktree:updated` WS event the mock emits —
-      // the new name shows up without a manual refresh.
+      // Store reconciles via the `worktree:updated` WS event the mock emits.
       await waitFor(() => {
-        expect(screen.getByRole("link", { name: /Open worktree renamed-worktree/i })).toBeInTheDocument();
+        expect(screen.getByRole("link", { name: /Open worktree renamed-wt/i })).toBeInTheDocument();
       });
+    });
+
+    it("3.T2 — double-clicking a direct-session row and pressing Enter calls renameSession", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameSession");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      emitDirectAgent(localApi, "proj-a-rename", "direct rename");
+
+      const link = await screen.findByRole("link", { name: /Open direct session direct rename/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+
+      const input = await screen.findByLabelText("Rename");
+      expect(input).toHaveValue("direct rename");
+      await user.clear(input);
+      await user.type(input, "renamed-session{Enter}");
+
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledWith("proj-a-rename", "renamed-session");
+      });
+    });
+
+    it("3.T3 — Escape during inline edit restores the label and calls no rename endpoint", async () => {
+      const localApi = createMockApi();
+      const renameWorktreeSpy = vi.spyOn(localApi, "renameWorktree");
+      const renameSessionSpy = vi.spyOn(localApi, "renameSession");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+
+      const input = await screen.findByLabelText("Rename");
+      await user.clear(input);
+      await user.type(input, "should-not-save");
+      await user.keyboard("{Escape}");
+
+      expect(screen.queryByLabelText("Rename")).toBeNull();
+      expect(screen.getByRole("link", { name: /Open worktree wt-1/i })).toBeInTheDocument();
+      expect(renameWorktreeSpy).not.toHaveBeenCalled();
+      expect(renameSessionSpy).not.toHaveBeenCalled();
+    });
+
+    it("3.T4 — blurring the inline input commits (calls renameWorktree once)", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+
+      const input = await screen.findByLabelText("Rename");
+      await user.clear(input);
+      await user.type(input, "blur-renamed");
+      fireEvent.blur(input);
+
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledTimes(1);
+        expect(renameSpy).toHaveBeenCalledWith("wt-1", "blur-renamed");
+      });
+    });
+
+    // Regression: the tree/pinned worktree row is `role="button"` with its
+    // own `onKeyDown` that calls `e.preventDefault()` on Enter/Space to
+    // trigger `selectWorktree`. The rename `<input>` is a DOM descendant of
+    // that row, so without `e.stopPropagation()` on the input's own
+    // `onKeyDown`, every keystroke bubbles up to the row handler too: Space
+    // keystrokes get swallowed (preventDefault on a native `<input>`'s
+    // keydown blocks the character insertion) and Enter both commits the
+    // rename AND fires the row's own "select this worktree" side effect.
+    it("3.T6 — typing spaces into the TREE worktree rename input does not swallow them, and committing via Enter on a non-active worktree does not also select it", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      // wt-1 is the active worktree per the `beforeEach` store seed; wt-2 is
+      // NOT active, so an errant "select" side effect is observable.
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+      const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+
+      const input = await screen.findByLabelText("Rename");
+      await user.clear(input);
+      await user.type(input, "my new name{Enter}");
+
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledWith("wt-2", "my new name");
+      });
+      // The row's own Enter/Space handler must NOT also have fired
+      // `selectWorktree` as a side effect of the rename commit.
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+    });
+
+    it("3.T7 — typing spaces into the PINNED worktree rename input does not swallow them", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-2");
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open pinned worktree wt-2/i });
+      const row = link.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+
+      const input = await screen.findByLabelText("Rename");
+      await user.clear(input);
+      await user.type(input, "my other name{Enter}");
+
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledWith("wt-2", "my other name");
+      });
+    });
+
+    it("3.T5 — collapsed rail: double-clicking a worktree row renders no input", async () => {
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} collapsed />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("wt1");
+      const row = screen.getByText("wt1").closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(row);
+      expect(screen.queryByLabelText("Rename")).toBeNull();
+    });
+
+    it("does not render a 'Rename' item in the worktree or session ⋯ menus", async () => {
+      const localApi = createMockApi();
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const wtRow = (await screen.findByRole("link", { name: /Open worktree wt-1/i })).closest(".tree-row")!;
+      const wtTrigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(wtTrigger);
+      expect(await screen.findByRole("menuitem", { name: /pin to top/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /^rename$/i })).toBeNull();
+
+      // Close the worktree menu, then check the session ⋯ menu too — the
+      // modal RenameDialog was the only consumer of a "Rename" menuitem on
+      // EITHER menu, so both need the same regression coverage.
+      await user.click(wtTrigger);
+      await waitFor(() => expect(screen.queryByRole("menuitem", { name: /pin to top/i })).toBeNull());
+
+      await screen.findByText("Proj A");
+      emitDirectAgent(localApi, "proj-a-menu-check", "menu check session");
+      const sessRow = (
+        await screen.findByRole("link", { name: /Open direct session menu check session/i })
+      ).closest(".tree-row")!;
+      const sessTrigger = sessRow.querySelector("[data-sess-menu-trigger]")! as HTMLElement;
+      await user.click(sessTrigger);
+      expect(await screen.findByRole("menuitem", { name: /pin to top/i })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /^rename$/i })).toBeNull();
+    });
+
+    // ─── Finding 1 regression (pinned rows are MIRRORED, not moved) ────────
+    // Pinned worktrees/direct-sessions render simultaneously in the "Pinned"
+    // section AND the regular project tree. Keying the inline-rename state
+    // only by {kind, id} made double-clicking either copy flip BOTH into
+    // edit mode — the second mount's autoFocus stole focus from the first,
+    // firing its onBlur and committing a rename with the UNEDITED value.
+    it("double-clicking a PINNED worktree row opens only the pinned input, not the mirrored tree-row copy", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      await localApi.pinWorktree("wt-1");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      const pinnedLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
+      const pinnedRow = pinnedLink.closest(".tree-row")! as HTMLElement;
+      const treeLink = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      const treeRow = treeLink.closest(".tree-row")! as HTMLElement;
+
+      fireEvent.doubleClick(pinnedRow);
+
+      // Exactly one input renders — inside the pinned row, not the tree row.
+      const inputs = screen.getAllByLabelText("Rename");
+      expect(inputs).toHaveLength(1);
+      expect(pinnedRow.contains(inputs[0]!)).toBe(true);
+      expect(treeRow.contains(inputs[0]!)).toBe(false);
+      expect(within(treeRow).queryByLabelText("Rename")).toBeNull();
+
+      // The mirrored copy never mounted a second autoFocus input, so no
+      // focus-fight blur ever commits an unedited rename.
+      expect(renameSpy).not.toHaveBeenCalled();
+    });
+
+    it("double-clicking a PINNED direct-session row opens only the pinned input, not the mirrored tree-row copy", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameSession");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      // Use the mock api's own createDirectSession (registers the session in
+      // its backing store) rather than the raw `emitDirectAgent` WS-event
+      // helper, so the subsequent `pinSession` call can find it.
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "pin mirror session",
+      });
+      await pinSessionAndSync(localApi, sess.id);
+
+      await screen.findByRole("region", { name: /^pinned$/i });
+      const pinnedLink = await screen.findByRole("link", {
+        name: /Open pinned direct session pin mirror session/i,
+      });
+      const pinnedRow = pinnedLink.closest(".tree-row")! as HTMLElement;
+      const treeLink = screen.getByRole("link", { name: /^Open direct session pin mirror session$/i });
+      const treeRow = treeLink.closest(".tree-row")! as HTMLElement;
+
+      fireEvent.doubleClick(pinnedRow);
+
+      const inputs = screen.getAllByLabelText("Rename");
+      expect(inputs).toHaveLength(1);
+      expect(pinnedRow.contains(inputs[0]!)).toBe(true);
+      expect(within(treeRow).queryByLabelText("Rename")).toBeNull();
+
+      await user.type(inputs[0]!, "-renamed{Enter}");
+      await waitFor(() => {
+        expect(renameSpy).toHaveBeenCalledWith(sess.id, "pin mirror session-renamed");
+      });
+    });
+
+    it("double-clicking the TREE copy of a pinned worktree opens only the tree input, not the pinned copy", async () => {
+      const localApi = createMockApi();
+      const renameSpy = vi.spyOn(localApi, "renameWorktree");
+      await localApi.pinWorktree("wt-1");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      const pinnedLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
+      const pinnedRow = pinnedLink.closest(".tree-row")! as HTMLElement;
+      const treeLink = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      const treeRow = treeLink.closest(".tree-row")! as HTMLElement;
+
+      fireEvent.doubleClick(treeRow);
+
+      const inputs = screen.getAllByLabelText("Rename");
+      expect(inputs).toHaveLength(1);
+      expect(treeRow.contains(inputs[0]!)).toBe(true);
+      expect(within(pinnedRow).queryByLabelText("Rename")).toBeNull();
+      expect(renameSpy).not.toHaveBeenCalled();
+    });
+
+    // ─── Finding 2 regression — the rename input must carry a dedicated
+    // `*__rename-input` class that CSS raises above the full-bleed
+    // `.wt-row__stretch-link` anchor (z-index 1), so a click to place the
+    // caret lands in the input, not on the anchor. jsdom in this suite does
+    // not evaluate the external stylesheet's cascade (LeftSidebar.tsx never
+    // imports `workspace.css` itself — see `vitest.config.ts`, no `css: true`),
+    // so this asserts the structural half (the class is actually applied to
+    // every render site) — the CSS half (`position: relative; z-index: 2` on
+    // `.wt-row__rename-input`/`.pinned-row__rename-input`/
+    // `.direct-session__rename-input` in `src/styles/workspace.css`) is
+    // reviewed alongside this fix and matches `.wt-row__trail`'s own z-index-2
+    // treatment for the same anchor-overlay problem.
+    it("the inline rename input carries a *__rename-input class at every render site", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "class check session",
+      });
+      await pinSessionAndSync(localApi, sess.id);
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      // Tree worktree row
+      const treeWtLink = await screen.findByRole("link", { name: /^Open worktree wt-1$/i });
+      const treeWtRow = treeWtLink.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(treeWtRow);
+      expect((await screen.findByLabelText("Rename")).className).toContain("wt-row__rename-input");
+      fireEvent.keyDown(screen.getByLabelText("Rename"), { key: "Escape" });
+
+      // Pinned worktree row
+      const pinnedWtLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
+      const pinnedWtRow = pinnedWtLink.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(pinnedWtRow);
+      expect((await screen.findByLabelText("Rename")).className).toContain("pinned-row__rename-input");
+      fireEvent.keyDown(screen.getByLabelText("Rename"), { key: "Escape" });
+
+      // Tree direct-session row
+      const treeSessLink = screen.getByRole("link", { name: /^Open direct session class check session$/i });
+      const treeSessRow = treeSessLink.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(treeSessRow);
+      expect((await screen.findByLabelText("Rename")).className).toContain("direct-session__rename-input");
+      fireEvent.keyDown(screen.getByLabelText("Rename"), { key: "Escape" });
+
+      // Pinned direct-session row
+      const pinnedSessLink = await screen.findByRole("link", {
+        name: /Open pinned direct session class check session/i,
+      });
+      const pinnedSessRow = pinnedSessLink.closest(".tree-row")! as HTMLElement;
+      fireEvent.doubleClick(pinnedSessRow);
+      expect((await screen.findByLabelText("Rename")).className).toContain("pinned-row__rename-input");
+    });
+
+    // ─── Finding 4 regression — a double-click's SECOND click (event.detail
+    // === 2) must not navigate the row's <Link>, since preventDefault() in
+    // an onDoubleClick handler fires too late (click already dispatched). ──
+    it("the second click of a double-click does not trigger the row's navigation onClick", async () => {
+      const localApi = createMockApi();
+      const user = userEvent.setup();
+      // isMobile: true — this is the concretely-bad case from Finding 4: the
+      // pinned direct-session Link's onClick calls setMobileSidebarOpen(false)
+      // only when isMobile, so the regression only reproduces under this prop.
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} isMobile />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "detail check session",
+      });
+      await pinSessionAndSync(localApi, sess.id);
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      const setMobileSidebarOpen = useWorkspaceStore.getState().setMobileSidebarOpen;
+      const spy = vi.fn(setMobileSidebarOpen);
+      act(() => {
+        useWorkspaceStore.setState({ setMobileSidebarOpen: spy, mobileSidebarOpen: true });
+      });
+
+      const pinnedLink = await screen.findByRole("link", {
+        name: /Open pinned direct session detail check session/i,
+      });
+
+      // Fire the click sequence directly on the <Link> element, not the row
+      // — in production the full-bleed `.wt-row__stretch-link` overlay is the
+      // actual DOM element a real mouse click hits (z-index 1 above normal
+      // flow content), and the row only sees the events via bubbling/capture.
+      // userEvent.dblClick dispatches the full click/click/dblclick sequence
+      // with correct `event.detail` values (1, then 2), unlike two separate
+      // fireEvent.click calls.
+      await user.dblClick(pinnedLink);
+
+      // The FIRST click (detail 1) is a legitimate plain click and is
+      // expected to fire the Link's onClick once. Without the fix, the
+      // SECOND click (detail 2) — which is really the first half of a
+      // double-click gesture — would fire it a second time; with the fix,
+      // the row's onClickCapture intercepts (preventDefault/stopPropagation)
+      // any click with detail > 1 before it reaches the Link's onClick.
+      expect(spy).toHaveBeenCalledTimes(1);
+      // The dblclick still bubbles from the Link up to the row and opens
+      // the rename input as normal.
+      expect(await screen.findByLabelText("Rename")).toBeInTheDocument();
     });
   });
 });
