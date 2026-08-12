@@ -16,7 +16,7 @@
 # isolated everything.
 #
 # Usage:
-#   scripts/dev-sandbox.sh up [worktree-name] [port]
+#   scripts/dev-sandbox.sh up [worktree-name] [port] [--seed=file-search|demo]
 #   scripts/dev-sandbox.sh down [worktree-name]
 #   scripts/dev-sandbox.sh logs [worktree-name]
 #
@@ -25,17 +25,46 @@
 # `vst worktree create` names worktree checkout directories).
 # port defaults to the first free port in 5174-5199 (scanned against
 # currently-running `vst-dev` containers) if omitted on `up`.
+# --seed defaults to "file-search" (one lightweight project). Pass
+# --seed=demo for the realistic 3-project/9-worktree/14-session dataset
+# (scripts/demo-seed.sh) when you need actual worktrees/agent sessions to
+# test against instead of an empty tree — this still keeps hot-reload and
+# VST_NO_AUTH, unlike docker-compose.screenshots.yml.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+# --seed=<mode> can appear anywhere in argv; strip it out first so the
+# remaining positional args (command, worktree-name, port) parse the same as
+# before this flag existed. Defaults to an inherited VST_SEED_MODE (so
+# `VST_SEED_MODE=demo scripts/dev-sandbox.sh up` also works, matching
+# docker-compose.dev.yml's own header comment), falling back to
+# "file-search" — --seed on the command line, when given, wins over both.
+SEED_MODE="${VST_SEED_MODE:-file-search}"
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --seed=*) SEED_MODE="${arg#--seed=}" ;;
+    *) ARGS+=("$arg") ;;
+  esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+case "$SEED_MODE" in
+  file-search|demo) ;;
+  *)
+    echo "Unknown --seed mode '$SEED_MODE' — expected 'file-search' or 'demo'." >&2
+    exit 1
+    ;;
+esac
 
 CMD="${1:-}"
 WORKTREE="${2:-$(basename "$PWD")}"
 PORT="${3:-}"
 
 if [ -z "$CMD" ]; then
-  echo "Usage: $0 {up|down|logs} [worktree-name] [port]" >&2
+  echo "Usage: $0 {up|down|logs} [worktree-name] [port] [--seed=file-search|demo]" >&2
   exit 1
 fi
 
@@ -67,8 +96,17 @@ case "$CMD" in
     export VST_SANDBOX_PORT="$PORT"
     export VST_SANDBOX_DATA_VOLUME="vst-dev-data-${WORKTREE}"
     export VST_SANDBOX_PROJECTS_VOLUME="vst-dev-projects-${WORKTREE}"
+    export VST_SEED_MODE="$SEED_MODE"
 
-    echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME})"
+    echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
+    # demo-seed.sh and seed-file-search-demo.sh guard themselves
+    # independently (a $VST/.seeded marker vs. a project-registration check)
+    # — neither knows about the other, so switching --seed on a worktree-name
+    # whose volume was already seeded in the OTHER mode does not cleanly
+    # swap datasets; it merges/corrupts them (see AGENTS.md's "Docker dev
+    # sandboxes" section for specifics). Start with a fresh worktree-name (or
+    # `docker volume rm "$VST_SANDBOX_DATA_VOLUME" "$VST_SANDBOX_PROJECTS_VOLUME"`)
+    # to actually change an existing sandbox's seed mode.
     docker compose -f docker-compose.dev.yml -p "$WORKTREE" up --build -d
     echo "Up: http://localhost:${PORT}"
     ;;

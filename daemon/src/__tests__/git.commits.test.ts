@@ -148,4 +148,54 @@ describe("listCommits", () => {
     expect(mergeCommit!.insertions).toBe(3);
     expect(mergeCommit!.deletions).toBe(0);
   });
+
+  describe("isOnBranch (baseSha-scoped, powers the VCS tab's upstream-commit collapse)", () => {
+    it("Requirement 5 — commits since baseSha are isOnBranch:true, commits at/before it are isOnBranch:false", async () => {
+      await writeFile(join(repoDir, "a.txt"), "a\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "base commit 1"]);
+      await writeFile(join(repoDir, "b.txt"), "b\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "base commit 2"]);
+      const baseSha = git(["rev-parse", "HEAD"]).trim();
+
+      await writeFile(join(repoDir, "c.txt"), "c\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "own commit 1"]);
+      await writeFile(join(repoDir, "d.txt"), "d\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "own commit 2"]);
+
+      const commits = await listCommits(repoDir, 200, baseSha);
+      const bySubject = new Map(commits.map((c) => [c.subject, c]));
+      expect(bySubject.get("own commit 2")!.isOnBranch).toBe(true);
+      expect(bySubject.get("own commit 1")!.isOnBranch).toBe(true);
+      expect(bySubject.get("base commit 2")!.isOnBranch).toBe(false);
+      expect(bySubject.get("base commit 1")!.isOnBranch).toBe(false);
+    });
+
+    it("Requirement 6 — no baseSha passed: every commit is conservatively isOnBranch:true", async () => {
+      await writeFile(join(repoDir, "a.txt"), "a\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "commit 1"]);
+      await writeFile(join(repoDir, "b.txt"), "b\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "commit 2"]);
+
+      const commits = await listCommits(repoDir);
+      expect(commits).toHaveLength(2);
+      expect(commits.every((c) => c.isOnBranch)).toBe(true);
+    });
+
+    it("Requirement 7 — an invalid/unresolvable baseSha fails open: every commit stays isOnBranch:true rather than throwing", async () => {
+      await writeFile(join(repoDir, "a.txt"), "a\n");
+      git(["add", "-A"]);
+      git(["commit", "-q", "-m", "commit 1"]);
+
+      const bogusSha = "0".repeat(40);
+      const commits = await listCommits(repoDir, 200, bogusSha);
+      expect(commits).toHaveLength(1);
+      expect(commits[0]!.isOnBranch).toBe(true);
+    });
+  });
 });

@@ -41,12 +41,55 @@ if [ -d /seed/gemini ] && [ ! -f /home/vst/.gemini/.seeded ]; then
   echo 'Seed complete.'
 fi
 
+# VST_SEED_MODE selects what gets seeded into this sandbox:
+#   file-search (default) — one lightweight project, for general UI dev.
+#   demo                  — 3 projects / 9 worktrees / 14 sessions, the same
+#                            realistic dataset docker-compose.screenshots.yml
+#                            uses, for when you need worktrees/agents to
+#                            click into (not just an empty tree).
+# Either way this sandbox keeps hot-reload + VST_NO_AUTH (no login token) —
+# docker-compose.screenshots.yml trades those away for a baked, single-
+# instance image, which is the right tradeoff for screenshot capture but not
+# for interactive testing.
+#
+# The two seed scripts have opposite ordering requirements relative to the
+# daemon, so this can't be one `case` block run at a single point:
+#   - demo-seed.sh (scripts/demo-seed.sh) writes project manifests and tmux
+#     sessions DIRECTLY TO DISK, with no daemon API calls at all — it must
+#     run BEFORE the daemon starts so the daemon picks the manifests up at
+#     boot (this is exactly how Dockerfile.screenshots sequences it). Run it
+#     after boot instead and the daemon never sees the new projects, only
+#     whatever was already registered/persisted in the volume.
+#   - seed-file-search-demo.sh registers its project via live REST calls
+#     (`POST /projects` etc.), so it must run AFTER the daemon is up.
+#
+# `scripts/dev-sandbox.sh` validates VST_SEED_MODE before it ever gets here,
+# but this script is also reachable directly (`docker compose -f
+# docker-compose.dev.yml up`, or a plain `docker run` off this image), so an
+# unrecognized value is called out explicitly rather than silently falling
+# through to the file-search default — a typo like "Demo" or "demos" should
+# be visible in the logs, not produce a quietly-wrong sandbox.
+case "${VST_SEED_MODE:-file-search}" in
+  file-search|demo) ;;
+  *)
+    echo "[seed] WARNING: unrecognized VST_SEED_MODE='${VST_SEED_MODE}' — expected 'file-search' or 'demo'. Falling back to 'file-search'." >&2
+    VST_SEED_MODE=file-search
+    ;;
+esac
+
+if [ "$VST_SEED_MODE" = "demo" ]; then
+  su vst -c 'bash /app/scripts/demo-seed.sh' || echo '[seed] non-fatal seed error — continuing'
+fi
+
 rm -f /home/vst/.vibe-station/.daemon.lock
 su vst -c 'node cli/dist/daemon/main.js' &
 echo 'Waiting for daemon...'
 until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
 echo 'Daemon ready.'
-su vst -c 'bash /app/scripts/seed-file-search-demo.sh' || echo '[seed] non-fatal seed error — continuing'
+
+if [ "$VST_SEED_MODE" != "demo" ]; then
+  su vst -c 'bash /app/scripts/seed-file-search-demo.sh' || echo '[seed] non-fatal seed error — continuing'
+fi
 
 # --pty: without it, `su` starts a new session and the foreground vite dev
 # server loses the container's tty (stdin_open/tty are set on the compose
