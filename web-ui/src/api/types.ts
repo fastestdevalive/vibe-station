@@ -431,6 +431,31 @@ export interface ChangedPathEntry {
   status: GitStatusChar;
 }
 
+export interface CommitLogEntry {
+  sha: string;
+  shortSha: string;
+  authorName: string;
+  authorEmail: string;
+  /** ISO 8601, author date. */
+  date: string;
+  subject: string;
+  /** Full raw commit message (subject + body). Equal to `subject` when there's no body. */
+  body: string;
+  insertions: number;
+  deletions: number;
+  hasBinaryChanges: boolean;
+}
+
+export interface PrInfo {
+  number: number;
+  url: string;
+  title: string;
+  state: "open" | "closed";
+  merged: boolean;
+  draft: boolean;
+  author: string | null;
+}
+
 export interface ProjectBranchesResponse {
   branches: string[];
   /** Null for a non-git project (the daemon sends null in that case). */

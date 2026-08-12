@@ -6,6 +6,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
 import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
+import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 
 interface ToolPanelProps {
@@ -20,6 +21,7 @@ const TABS: { id: ToolTab; label: string }[] = [
   { id: "files", label: "Files" },
   { id: "devices", label: "Devices" },
   { id: "artifacts", label: "Artifacts" },
+  { id: "vcs", label: "VCS" },
 ];
 
 /**
@@ -76,6 +78,7 @@ export function ToolPanel({ api, worktreeId, scope = "worktree" }: ToolPanelProp
             ) : null}
             {toolPanelTab === "devices" ? <DevicesPanel /> : null}
             {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
+            {toolPanelTab === "vcs" ? <VcsPanel api={api} worktreeId={worktreeId} /> : null}
           </>
         )}
       </div>

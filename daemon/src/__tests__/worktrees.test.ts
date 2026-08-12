@@ -96,6 +96,17 @@ describe("Worktree routes", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  /** Shared worktree-creation helper — `prefix` namespaces the branch name per describe block. */
+  async function createWorktree(prefix: string, branchSuffix: string) {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `${prefix}-${branchSuffix}-${Date.now()}`, modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json<{ id: string; pinnedAt: string | null }>();
+  }
+
   it("GET /worktrees?project=:id returns empty array initially", async () => {
     const res = await app.inject({ method: "GET", url: `/worktrees?project=${projectId}` });
     expect(res.statusCode).toBe(200);
@@ -629,23 +640,13 @@ describe("Worktree routes", () => {
 
   // ─── PATCH /worktrees/:id/pin ───────────────────────────────────────────
   describe("PATCH /worktrees/:id/pin", () => {
-    async function createWorktree(branchSuffix: string) {
-      const res = await app.inject({
-        method: "POST",
-        url: "/worktrees",
-        payload: { projectId, branch: `pin-${branchSuffix}-${Date.now()}`, modeId: "bug-fix" },
-      });
-      expect(res.statusCode).toBe(201);
-      return res.json<{ id: string; pinnedAt: string | null }>();
-    }
-
     it("serializes pinnedAt as null for an unpinned worktree", async () => {
-      const wt = await createWorktree("unpinned");
+      const wt = await createWorktree("pin", "unpinned");
       expect(wt.pinnedAt).toBeNull();
     });
 
     it("PATCH { pinned: true } sets pinnedAt to an ISO timestamp", async () => {
-      const wt = await createWorktree("set");
+      const wt = await createWorktree("pin", "set");
       const res = await app.inject({
         method: "PATCH",
         url: `/worktrees/${wt.id}/pin`,
@@ -659,7 +660,7 @@ describe("Worktree routes", () => {
     });
 
     it("PATCH { pinned: false } clears pinnedAt", async () => {
-      const wt = await createWorktree("clear");
+      const wt = await createWorktree("pin", "clear");
       await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/pin`, payload: { pinned: true } });
       const res = await app.inject({
         method: "PATCH",
@@ -671,7 +672,7 @@ describe("Worktree routes", () => {
     });
 
     it("is idempotent: pinning twice keeps the original timestamp", async () => {
-      const wt = await createWorktree("idempotent");
+      const wt = await createWorktree("pin", "idempotent");
       const first = await app.inject({
         method: "PATCH",
         url: `/worktrees/${wt.id}/pin`,
@@ -699,7 +700,7 @@ describe("Worktree routes", () => {
     });
 
     it("returns 400 for an invalid body", async () => {
-      const wt = await createWorktree("badbody");
+      const wt = await createWorktree("pin", "badbody");
       const res = await app.inject({
         method: "PATCH",
         url: `/worktrees/${wt.id}/pin`,
@@ -713,7 +714,7 @@ describe("Worktree routes", () => {
       // monkey-patching mutateProject to delete the worktree just before our
       // mutator runs. Without the in-lock re-check, the non-null assertion
       // in the route would throw and Fastify would reply 500.
-      const wt = await createWorktree("toctou");
+      const wt = await createWorktree("pin", "toctou");
       const store = await import("../state/project-store.js");
       const orig = store.mutateProject;
       const spy = vi.spyOn(store, "mutateProject").mockImplementation(async (id, fn) => {
@@ -737,7 +738,7 @@ describe("Worktree routes", () => {
     });
 
     it("GET /worktrees response includes pinnedAt for every record", async () => {
-      const wt = await createWorktree("listshape");
+      const wt = await createWorktree("pin", "listshape");
       await app.inject({
         method: "PATCH",
         url: `/worktrees/${wt.id}/pin`,
@@ -751,6 +752,90 @@ describe("Worktree routes", () => {
       }
       const pinned = items.find((w) => w.id === wt.id);
       expect(pinned?.pinnedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
+
+  // ─── GET /worktrees/:id/commits and /pr ─────────────────────────────────
+  describe("GET /worktrees/:id/commits and /pr", () => {
+    it("Requirement 9 — GET /worktrees/:id/commits 404s for an unknown worktree", async () => {
+      const res = await app.inject({ method: "GET", url: "/worktrees/does-not-exist/commits" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("Requirement 10 — GET /worktrees/:id/pr 404s for an unknown worktree", async () => {
+      const res = await app.inject({ method: "GET", url: "/worktrees/does-not-exist/pr" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("Requirement 10 — GET /worktrees/:id/pr returns { pr: null } when the project repo has no origin remote", async () => {
+      const wt = await createWorktree("vcs", "no-remote");
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/pr` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ pr: null });
+    });
+
+    it("GET /worktrees/:id/pr wires owner/repo/branch through to fetchPrForBranch correctly and returns its result verbatim", async () => {
+      // Real git remote (getRemoteUrl + parseGithubRepo run for real); only
+      // the actual network call (fetchPrForBranch) is stubbed — this proves
+      // the route's argument pass-through, not just the trivial no-remote
+      // short-circuit that the test above covers.
+      execSync(`git -C "${repoDir}" remote add origin git@github.com:acme/widgets.git`, {
+        stdio: "ignore",
+      });
+      const createRes = await app.inject({
+        method: "POST",
+        url: "/worktrees",
+        payload: { projectId, branch: "wired-branch-name", modeId: "bug-fix" },
+      });
+      expect(createRes.statusCode).toBe(201);
+      const wt = createRes.json<{ id: string }>();
+
+      const github = await import("../services/github.js");
+      const spy = vi.spyOn(github, "fetchPrForBranch").mockResolvedValue({
+        number: 55,
+        url: "https://github.com/acme/widgets/pull/55",
+        title: "Wired-through PR",
+        state: "open",
+        merged: false,
+        draft: false,
+        author: "someone",
+      });
+
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/pr` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        pr: {
+          number: 55,
+          url: "https://github.com/acme/widgets/pull/55",
+          title: "Wired-through PR",
+          state: "open",
+          merged: false,
+          draft: false,
+          author: "someone",
+        },
+      });
+      expect(spy).toHaveBeenCalledWith("acme", "widgets", "wired-branch-name");
+      spy.mockRestore();
+    });
+
+    it("Requirement 11 — GET /worktrees/:id/commits returns a non-zero diffstat for a real commit made in the worktree", async () => {
+      const wt = await createWorktree("vcs", "with-commit");
+      const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+
+      await writeFile(join(wtPath, "feature.txt"), "line one\nline two\n");
+      execSync(`git -C "${wtPath}" add -A && git -C "${wtPath}" commit -q -m "add feature.txt"`, {
+        stdio: "ignore",
+      });
+
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/commits` });
+      expect(res.statusCode).toBe(200);
+      const { commits } = res.json<{
+        commits: Array<{ subject: string; insertions: number; deletions: number }>;
+      }>();
+      expect(commits.length).toBeGreaterThan(0);
+      const top = commits[0]!;
+      expect(top.subject).toBe("add feature.txt");
+      expect(top.insertions).toBe(2);
     });
   });
 });
