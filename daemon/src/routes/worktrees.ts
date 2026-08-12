@@ -8,7 +8,8 @@ import { getProject, getAllProjects, mutateProject } from "../state/project-stor
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
 import { reserveNextWorktreeNum, generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
 import { slugifyPrompt } from "../services/naming.js";
-import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists } from "../services/git.js";
+import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists, listCommits } from "../services/git.js";
+import { getRemoteUrl, parseGithubRepo, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir } from "../services/paths.js";
@@ -1084,5 +1085,45 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     } catch (err) {
       return reply.status(500).send({ error: `changed-paths failed: ${String(err)}` });
     }
+  });
+
+  // GET /worktrees/:id/commits?limit=<n>
+  // Commit history for the VCS tool tab: most-recent-first, each with a
+  // line-level diffstat (insertions/deletions) versus its first parent.
+  app.get("/worktrees/:id/commits", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const { limit: limitRaw } = req.query as { limit?: string };
+    const limit = Math.min(Math.max(Number(limitRaw) || 200, 1), 1000);
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const wtPath = getWorktreePath(project.id, wtId);
+    try {
+      const commits = await listCommits(wtPath, limit);
+      return reply.send({ commits });
+    } catch (err) {
+      return reply.status(500).send({ error: `commits failed: ${String(err)}` });
+    }
+  });
+
+  // GET /worktrees/:id/pr
+  // Best-effort GitHub PR lookup for the worktree's branch, for the VCS tool
+  // tab's PR banner. Always 200s with `{ pr: null }` when there's no GitHub
+  // remote, no PR, or the lookup fails — this is an annotation, not a
+  // required resource.
+  app.get("/worktrees/:id/pr", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+    const worktree = project.worktrees.find((w) => w.id === wtId)!;
+
+    const remoteUrl = await getRemoteUrl(project.absolutePath);
+    const gh = remoteUrl ? parseGithubRepo(remoteUrl) : null;
+    if (!gh) return reply.send({ pr: null });
+
+    const pr = await fetchPrForBranch(gh.owner, gh.repo, worktree.branch);
+    return reply.send({ pr });
   });
 }

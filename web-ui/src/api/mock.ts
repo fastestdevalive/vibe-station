@@ -6,7 +6,9 @@ import type {
   ChangedPathEntry,
   Channel,
   CliId,
+  CommitLogEntry,
   NormalizedEvent,
+  PrInfo,
   CreateDirectSessionBody,
   CreateModeBody,
   CreateProjectBody,
@@ -778,6 +780,57 @@ export function createMockApi() {
         return Object.keys(unifiedDiffs).map((path) => ({ path, status: "M" as const }));
       }
       return [];
+    },
+
+    async listCommits(worktreeId: string, _limit = 200): Promise<CommitLogEntry[]> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      const now = new Date("2026-08-11T12:00:00Z").getTime();
+      const sample: Array<[string, string, number, number, string?]> = [
+        [
+          "Add VCS commit graph skeleton",
+          "Ada Lovelace",
+          128,
+          4,
+          "Adds the vertical commit graph tool tab: most-recent-first, per-commit\ndiffstat badges, and a GitHub PR banner when the branch has one.\n\nBacked by a new GET /worktrees/:id/commits endpoint that shells out to\n`git log --numstat` and sums insertions/deletions per commit.",
+        ],
+        ["Fix double input after fullscreen toggle", "Grace Hopper", 22, 9],
+        [
+          "Wire up devices panel sub-tabs",
+          "Grace Hopper",
+          61,
+          3,
+          "Web and Emulator sub-tabs now share one live view slot instead of\nmounting/unmounting on switch, avoiding the terminal-remount class of bug.",
+        ],
+        ["Initial worktree scaffold", "Ada Lovelace", 340, 0],
+      ];
+      return sample.map(([subject, authorName, insertions, deletions, body], i) => ({
+        sha: `${worktreeId}-sha-${i}`.padEnd(40, "0"),
+        shortSha: `${i}abcdef`.slice(0, 7),
+        authorName,
+        authorEmail: `${authorName.toLowerCase().replace(/\s+/g, ".")}@example.com`,
+        date: new Date(now - i * 3 * 60 * 60 * 1000).toISOString(),
+        subject,
+        body: body ? `${subject}\n\n${body}` : subject,
+        insertions,
+        deletions,
+        hasBinaryChanges: false,
+      }));
+    },
+
+    async getPr(worktreeId: string): Promise<PrInfo | null> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      if (worktreeId === "wt-1") {
+        return {
+          number: 42,
+          url: "https://github.com/example/example/pull/42",
+          title: "Add VCS commit graph skeleton",
+          state: "open",
+          merged: false,
+          draft: false,
+          author: "ada-lovelace",
+        };
+      }
+      return null;
     },
 
     async listModes(): Promise<Mode[]> {

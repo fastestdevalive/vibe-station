@@ -3,9 +3,9 @@ import { persist } from "zustand/middleware";
 import type { DiffScope, Session, SessionState } from "@/api/types";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
-export type ToolTab = "files" | "devices" | "artifacts";
+export type ToolTab = "files" | "devices" | "artifacts" | "vcs";
 
-export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts"];
+export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs"];
 
 /**
  * Per-worktree workspace layout.

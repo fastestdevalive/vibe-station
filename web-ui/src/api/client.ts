@@ -5,6 +5,8 @@ import type {
   ChangedPathEntry,
   Channel,
   CliId,
+  CommitLogEntry,
+  PrInfo,
   CreateDirectSessionBody,
   CreateModeBody,
   CreateProjectBody,
@@ -588,6 +590,25 @@ export function createClientApi() {
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths?${q}`,
       );
       return parseJson<ChangedPathEntry[]>(res);
+    },
+
+    /** Commit history for the worktree, most-recent-first, with per-commit diffstat. */
+    async listCommits(worktreeId: string, limit = 200): Promise<CommitLogEntry[]> {
+      const root = baseUrl();
+      const q = new URLSearchParams({ limit: String(limit) });
+      const res = await apiFetch(
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/commits?${q}`,
+      );
+      const { commits } = await parseJson<{ commits: CommitLogEntry[] }>(res);
+      return commits;
+    },
+
+    /** Best-effort GitHub PR lookup for the worktree's branch; null if there is none. */
+    async getPr(worktreeId: string): Promise<PrInfo | null> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/pr`);
+      const { pr } = await parseJson<{ pr: PrInfo | null }>(res);
+      return pr;
     },
 
     async listModes(): Promise<Mode[]> {
