@@ -177,6 +177,156 @@ export async function createGitignore(dir: string): Promise<void> {
   await writeFile(join(dir, ".gitignore"), DEFAULT_GITIGNORE, "utf8");
 }
 
+export interface CommitLogEntry {
+  sha: string;
+  shortSha: string;
+  authorName: string;
+  authorEmail: string;
+  /** ISO 8601, author date. */
+  date: string;
+  subject: string;
+  /**
+   * Full raw commit message (subject + body, `git log %B`), untrimmed of
+   * internal newlines. Equal to `subject` for a commit with no body. Used by
+   * the VCS tool tab's expand/collapse — `subject` alone is what's always
+   * shown, `body` is revealed on click when it has more to show.
+   */
+  body: string;
+  insertions: number;
+  deletions: number;
+  /** True if any changed file's diff couldn't be summarized as text (numstat reports "-"). */
+  hasBinaryChanges: boolean;
+}
+
+// Record separator (0x1e) delimits commits; unit separator (0x1f) delimits fields
+// within one commit's header line. Neither appears in normal commit metadata, so
+// this is a safe, allocation-free way to split `git log` output without a
+// per-commit subprocess.
+const RS = "\x1e";
+const US = "\x1f";
+
+/** Full 40-hex-character git SHA. */
+const FULL_SHA_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * List commits reachable from HEAD (i.e. the worktree's full branch history,
+ * not scoped to commits since the worktree's `baseSha` — same "show
+ * everything reachable from here" semantics as a bare `git log`, deliberately
+ * not filtered the way `/changed-paths?scope=branch` filters against
+ * `baseSha`), most recent first, each annotated with its line-level diffstat
+ * (insertions/deletions) versus its first parent. `--diff-merges=first-parent`
+ * ensures merge commits get a real diffstat instead of git's default of
+ * suppressing diff output for merges entirely. Used by the VCS tool tab to
+ * render a commit timeline for a worktree.
+ */
+export async function listCommits(repoPath: string, limit = 200): Promise<CommitLogEntry[]> {
+  let stdout: string;
+  try {
+    stdout = await runGit(
+      [
+        "-C", repoPath,
+        "log",
+        `-n${limit}`,
+        "--diff-merges=first-parent",
+        `--pretty=format:${RS}%H${US}%h${US}%an${US}%ae${US}%aI${US}%s`,
+        "--numstat",
+      ],
+      repoPath,
+    );
+  } catch {
+    // Empty repo (no commits yet) or not a git dir — treat as no history.
+    return [];
+  }
+
+  const blocks = stdout.split(RS).map((b) => b.trim()).filter(Boolean);
+  const commits: CommitLogEntry[] = [];
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const header = lines[0] ?? "";
+    const [sha, shortSha, authorName, authorEmail, date, subject] = header.split(US);
+    // `%H` is always exactly 40 hex chars and can never legitimately contain
+    // the RS/US (0x1e/0x1f) bytes used as delimiters above — so a `sha` that
+    // doesn't match this shape means a commit subject/body contained a
+    // literal RS or US byte and fractured the block/field split. Drop the
+    // resulting phantom entry rather than rendering corrupted data; this is
+    // a defensive guard for adversarial/corrupted input, not an expected
+    // path for normal commit messages.
+    if (!sha || !FULL_SHA_RE.test(sha)) continue;
+
+    let insertions = 0;
+    let deletions = 0;
+    let hasBinaryChanges = false;
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) continue;
+      const [added, removed] = line.split("\t");
+      if (added === "-" || removed === "-") {
+        hasBinaryChanges = true;
+        continue;
+      }
+      const a = Number(added);
+      const r = Number(removed);
+      if (Number.isFinite(a)) insertions += a;
+      if (Number.isFinite(r)) deletions += r;
+    }
+
+    commits.push({
+      sha,
+      shortSha: shortSha ?? sha.slice(0, 7),
+      authorName: authorName ?? "",
+      authorEmail: authorEmail ?? "",
+      date: date ?? "",
+      subject: subject ?? "",
+      body: subject ?? "",
+      insertions,
+      deletions,
+      hasBinaryChanges,
+    });
+  }
+
+  if (commits.length > 0) {
+    await attachFullBodies(repoPath, commits);
+  }
+
+  return commits;
+}
+
+/**
+ * Fills in `body` (full raw commit message, subject + description) for each
+ * entry in `commits`, mutating them in place. A separate `git log` call
+ * (no `--numstat`) keeps this immune to the numstat-line-splitting logic
+ * above — `%B` can contain arbitrary embedded newlines, which would corrupt
+ * the line-based parsing `listCommits` uses for the numstat block if mixed
+ * into the same output. Splitting solely on the RS/US bytes (never on "\n")
+ * sidesteps that entirely. Best-effort: on failure, every commit just keeps
+ * `body === subject` (set by the caller before this runs).
+ */
+async function attachFullBodies(repoPath: string, commits: CommitLogEntry[]): Promise<void> {
+  let stdout: string;
+  try {
+    stdout = await runGit(
+      ["-C", repoPath, "log", `-n${commits.length}`, `--pretty=format:${RS}%H${US}%B`],
+      repoPath,
+    );
+  } catch {
+    return;
+  }
+
+  const bodies = new Map<string, string>();
+  for (const block of stdout.split(RS)) {
+    const sepIdx = block.indexOf(US);
+    if (sepIdx === -1) continue;
+    const sha = block.slice(0, sepIdx);
+    const body = block.slice(sepIdx + 1).trim();
+    if (sha) bodies.set(sha, body);
+  }
+
+  for (const commit of commits) {
+    const body = bodies.get(commit.sha);
+    if (body) commit.body = body;
+  }
+}
+
 /** Check if git is available in PATH. */
 export async function isGitAvailable(): Promise<boolean> {
   try {
