@@ -32,7 +32,35 @@ export const IDLE_THRESHOLD_MS = 4000;
 /** Lines captured for idle hashing — compare full window, not only the last line. */
 export const CAPTURE_LINES = 20;
 
-type IdleTrack = { hash: string; stableSince: number };
+type IdleTrack = {
+  hash: string;
+  stableSince: number;
+  /**
+   * R3 — true once this session has reached "working" at least once.
+   * Seeded `true` the moment this poller starts tracking the session:
+   * `pollSession` already returns early for `"not_started"` (see the guard
+   * above), and a session only reaches `"working"` after its ready signal
+   * has already printed visible content (`getReadySignal()` — a prompt/
+   * banner, at minimum) — so "genuinely blank, nothing has happened yet"
+   * is not achievable by the time this poller ever captures a pane for a
+   * `"working"`/`"idle"`/`"waiting_for_human"` session. R3a's carve-out
+   * ("never reached working stays idle") has no live manifestation on this
+   * poller specifically.
+   *
+   * An earlier revision tried a stricter "only true after an OBSERVED hash
+   * change" rule, to guard against a hypothetical blank-session false
+   * positive — empirically wrong: live-tested against a real fast-completing
+   * turn, the whole response printed and stabilized between two 1s poll
+   * ticks, so no delta was ever observed and R3 silently never fired. Seed
+   * `true` unconditionally instead — both simpler and the only version that
+   * actually works given the poller's 1Hz sampling rate.
+   *
+   * Carried forward across hash resets so it survives for the life of the
+   * tracking entry (in-memory only — reset on daemon restart, see plan
+   * Research §R3's "ever worked" tracking).
+   */
+  everWorked: boolean;
+};
 const idleTracking = new Map<string, IdleTrack>();
 
 let pollerHandle: ReturnType<typeof setInterval> | null = null;
@@ -136,7 +164,11 @@ async function pollSession(
     // Terminals: skip idle/working churn — they're meaningless for shell sessions.
     if (session.type === "terminal") return;
 
-    if (session.lifecycle.state !== "working" && session.lifecycle.state !== "idle") {
+    if (
+      session.lifecycle.state !== "working" &&
+      session.lifecycle.state !== "idle" &&
+      session.lifecycle.state !== "waiting_for_human"
+    ) {
       return;
     }
 
@@ -147,21 +179,46 @@ async function pollSession(
 
     const entry = idleTracking.get(session.id);
     if (!entry) {
-      idleTracking.set(session.id, { hash: newHash, stableSince: now });
+      // A session only reaches "working" after its ready signal has already
+      // printed visible content (getReadySignal() — a prompt/banner, at
+      // minimum), so by the time this poller ever captures a pane for a
+      // "working"/"idle"/"waiting_for_human" session, "genuinely blank,
+      // nothing has happened yet" is not achievable — R3a's carve-out has no
+      // live manifestation here (see the field's doc comment). Empirically
+      // confirmed: requiring an OBSERVED hash change before flagging
+      // `everWorked` missed fast-completing turns entirely (the whole
+      // response can finish between two 1s poll ticks, so no delta is ever
+      // observed) — seeding true immediately is both correct and reliable.
+      idleTracking.set(session.id, { hash: newHash, stableSince: now, everWorked: true });
       return;
     }
 
     if (entry.hash !== newHash) {
-      idleTracking.set(session.id, { hash: newHash, stableSince: now });
-      if (session.lifecycle.state === "idle") {
+      // Pane output changed — resuming from idle/waiting_for_human (a human
+      // responded, or the agent started a new turn) is what flips lifecycle
+      // back to "working" (R4). `everWorked` is already true from the seed
+      // above, so it's just carried forward here, not derived from this event.
+      const resuming = session.lifecycle.state === "idle" || session.lifecycle.state === "waiting_for_human";
+      idleTracking.set(session.id, {
+        hash: newHash,
+        stableSince: now,
+        everWorked: entry.everWorked,
+      });
+      if (resuming) {
         await persistLifecycleState(projectId, worktreeId, session.id, "working");
       }
       return;
     }
 
     const stableAge = now - entry.stableSince;
-    if (stableAge >= IDLE_THRESHOLD_MS && session.lifecycle.state !== "idle") {
-      await persistLifecycleState(projectId, worktreeId, session.id, "idle");
+    if (stableAge >= IDLE_THRESHOLD_MS) {
+      // R3: once this session has ever reached "working" (per this poller's
+      // own observation), idle-stability lands on "waiting_for_human" instead
+      // of "idle" — R3a (never worked) still lands on plain "idle".
+      const target: LifecycleState = entry.everWorked ? "waiting_for_human" : "idle";
+      if (session.lifecycle.state !== target) {
+        await persistLifecycleState(projectId, worktreeId, session.id, target);
+      }
     }
     return;
   }
@@ -189,7 +246,11 @@ async function pollSession(
   // the hash-based detection. They stay "working" until exited (handled above).
   if (session.type === "terminal") return;
 
-  if (session.lifecycle.state !== "working" && session.lifecycle.state !== "idle") {
+  if (
+    session.lifecycle.state !== "working" &&
+    session.lifecycle.state !== "idle" &&
+    session.lifecycle.state !== "waiting_for_human"
+  ) {
     return;
   }
 
@@ -198,23 +259,48 @@ async function pollSession(
     const newHash = hashPane(output);
     const now = Date.now();
 
-    let entry = idleTracking.get(session.id);
+    const entry = idleTracking.get(session.id);
     if (!entry) {
-      idleTracking.set(session.id, { hash: newHash, stableSince: now });
+      // A session only reaches "working" after its ready signal has already
+      // printed visible content (getReadySignal() — a prompt/banner, at
+      // minimum), so by the time this poller ever captures a pane for a
+      // "working"/"idle"/"waiting_for_human" session, "genuinely blank,
+      // nothing has happened yet" is not achievable — R3a's carve-out has no
+      // live manifestation here (see the field's doc comment). Empirically
+      // confirmed: requiring an OBSERVED hash change before flagging
+      // `everWorked` missed fast-completing turns entirely (the whole
+      // response can finish between two 1s poll ticks, so no delta is ever
+      // observed) — seeding true immediately is both correct and reliable.
+      idleTracking.set(session.id, { hash: newHash, stableSince: now, everWorked: true });
       return;
     }
 
     if (entry.hash !== newHash) {
-      idleTracking.set(session.id, { hash: newHash, stableSince: now });
-      if (session.lifecycle.state === "idle") {
+      // Pane output changed — resuming from idle/waiting_for_human (a human
+      // responded, or the agent started a new turn) is what flips lifecycle
+      // back to "working" (R4). `everWorked` is already true from the seed
+      // above, so it's just carried forward here, not derived from this event.
+      const resuming = session.lifecycle.state === "idle" || session.lifecycle.state === "waiting_for_human";
+      idleTracking.set(session.id, {
+        hash: newHash,
+        stableSince: now,
+        everWorked: entry.everWorked,
+      });
+      if (resuming) {
         await persistLifecycleState(projectId, worktreeId, session.id, "working");
       }
       return;
     }
 
     const stableAge = now - entry.stableSince;
-    if (stableAge >= IDLE_THRESHOLD_MS && session.lifecycle.state !== "idle") {
-      await persistLifecycleState(projectId, worktreeId, session.id, "idle");
+    if (stableAge >= IDLE_THRESHOLD_MS) {
+      // R3: once this session has ever reached "working" (per this poller's
+      // own observation), idle-stability lands on "waiting_for_human" instead
+      // of "idle" — R3a (never worked) still lands on plain "idle".
+      const target: LifecycleState = entry.everWorked ? "waiting_for_human" : "idle";
+      if (session.lifecycle.state !== target) {
+        await persistLifecycleState(projectId, worktreeId, session.id, target);
+      }
     }
   } catch {
     // Capture pane failed — session may have just exited

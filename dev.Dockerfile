@@ -19,8 +19,9 @@
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tmux git procps curl ripgrep \
+    tmux git procps curl ripgrep ca-certificates \
     python3 make g++ \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm@9.0.0 @google/gemini-cli

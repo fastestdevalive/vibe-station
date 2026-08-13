@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -19,7 +19,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
-import { computeNewSortOrder, useWorkspaceStore } from "@/hooks/useStore";
+import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
@@ -140,7 +140,7 @@ function disambiguatedAbbrev(
 /** Map SessionState to WorktreeRolledUpStatus for StatusDot. */
 function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   if (state === "not_started") return "spawning";
-  return state; // working, idle, done, exited all map directly
+  return state; // working, idle, waiting_for_human, needs_review, done, exited all map directly
 }
 
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
@@ -285,6 +285,19 @@ export function LeftSidebar({
   // express a cross-project pinned order (Decision 1 exception). ---
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
+  // --- Saved workspace layouts (per-worktree, purely client-side — no daemon
+  // route exists for any of this). Reorder mirrors the pinned sub-lists'
+  // local-only `sortOrders` mechanism above (`workspaceOrder` + `reorderWorkspace`),
+  // since WorkspaceDoc order can't be expressed by the server's sortOrder column
+  // at all (there's no server entity). ---
+  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
+  const workspaceOrder = useWorkspaceStore((s) => s.workspaceOrder);
+  const reorderWorkspace = useWorkspaceStore((s) => s.reorderWorkspace);
+  const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace);
+  const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace);
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
+  const setLayoutMode = useWorkspaceStore((s) => s.setLayoutMode);
+  const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const dndSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   /**
    * Suppresses the browser's trailing `click` after a drag-to-reorder, which
@@ -308,7 +321,7 @@ export function LeftSidebar({
   // value. Including `site` ensures only the row actually double-clicked
   // ever renders an input.
   const [inlineRename, setInlineRename] = useState<
-    { kind: "worktree" | "session"; id: string; site: "pinned" | "tree" } | null
+    { kind: "worktree" | "session" | "workspace"; id: string; site: "pinned" | "tree" } | null
   >(null);
   const [inlineValue, setInlineValue] = useState("");
   const inlineInputRef = useRef<HTMLInputElement>(null);
@@ -318,7 +331,7 @@ export function LeftSidebar({
   }, [inlineRename]);
 
   function startInlineRename(
-    kind: "worktree" | "session",
+    kind: "worktree" | "session" | "workspace",
     id: string,
     currentLabel: string,
     site: "pinned" | "tree",
@@ -356,10 +369,17 @@ export function LeftSidebar({
       void api.renameWorktree(target.id, trimmed).catch(() => {
         /* surface errors later */
       });
-    } else {
+    } else if (target.kind === "session") {
       void api.renameSession(target.id, trimmed).catch(() => {
         /* surface errors later */
       });
+    } else {
+      // Workspace: purely client-side entity, no daemon route — commit
+      // straight to the store. Unlike worktree/session rename, there's no
+      // server-computed default to fall back to on empty input, so an empty
+      // submission is treated as a no-op (keeps the previous name) rather
+      // than clearing it.
+      if (trimmed) renameWorkspace(target.id, trimmed);
     }
   }
 
@@ -399,6 +419,21 @@ export function LeftSidebar({
     next.splice(from, 1);
     next.splice(to, 0, String(active.id));
     setSortOrder(scopeKey, next);
+  }
+
+  /** Workspaces-section reorder — client-only, mirrors `handleReorder` above
+   *  but writes to `workspaceOrder`/`reorderWorkspace` (no daemon route). */
+  function handleWorkspaceReorder(scopeKey: string, currentIds: string[], e: DragEndEvent) {
+    markDrag();
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = currentIds.indexOf(String(active.id));
+    const to = currentIds.indexOf(String(over.id));
+    if (from === -1 || to === -1) return;
+    const next = currentIds.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, String(active.id));
+    reorderWorkspace(scopeKey, next);
   }
 
   /** Non-pinned worktree/direct-session reorder — real server `sortOrder`
@@ -460,6 +495,42 @@ export function LeftSidebar({
   const hideInactiveWorktrees = useWorkspaceStore((s) => s.hideInactiveWorktrees);
   const toggleInactiveWorktreesFilter = useWorkspaceStore((s) => s.toggleInactiveWorktreesFilter);
 
+  /** "Workspaces" section collapse state — mirrors `openProj`'s
+   *  localStorage-persisted chevron-disclosure pattern above, just a single
+   *  boolean instead of a per-project Set since there's only one section. */
+  const [workspacesOpen, setWorkspacesOpen] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem("sidebar:workspacesOpen");
+      if (saved != null) return saved === "1";
+    } catch { /* ignore */ }
+    return true;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebar:workspacesOpen", workspacesOpen ? "1" : "0");
+    } catch { /* ignore */ }
+  }, [workspacesOpen]);
+
+  /** Saved workspaces for the currently active worktree only (this section is
+   *  worktree-scoped, per the spec — dashboard/no-worktree hides it entirely). */
+  const workspacesForActiveWorktree = useMemo(() => {
+    if (!activeWorktreeId) return [];
+    return Object.values(workspaceDocs).filter((d) => d.contextKey === activeWorktreeId);
+  }, [workspaceDocs, activeWorktreeId]);
+  const workspacesScopeKey = activeWorktreeId ? `workspaces:${activeWorktreeId}` : "";
+  const orderedWorkspaces = useMemo(() => {
+    const ids = workspacesForActiveWorktree.map((d) => d.id);
+    const order = applyLocalSortOrder(workspaceOrder[workspacesScopeKey], ids);
+    const byId = new Map(workspacesForActiveWorktree.map((d) => [d.id, d]));
+    return order.map((id) => byId.get(id)!).filter(Boolean);
+  }, [workspacesForActiveWorktree, workspaceOrder, workspacesScopeKey]);
+  const activeWorkspaceId = activeWorktreeId
+    ? (layoutByWorktree[activeWorktreeId]?.activeWorkspaceId ?? null)
+    : null;
+  const activeLayoutMode = activeWorktreeId
+    ? (layoutByWorktree[activeWorktreeId]?.layoutMode ?? "classic")
+    : "classic";
+
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
   const [directAgentProject, setDirectAgentProject] = useState<Project | null>(null);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -480,6 +551,7 @@ export function LeftSidebar({
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const [pendingDismissSession, setPendingDismissSession] = useState<Session | null>(null);
+  const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = useState<WorkspaceDoc | null>(null);
 
   // Subscribe to live session output for every session we know about so the
   // rollup picks up state transitions in real time. The set of ids comes from
@@ -662,6 +734,22 @@ export function LeftSidebar({
       await api.deleteSession(sess.id);
     } catch {
       /* surface errors later */
+    }
+  }
+
+  /** Client-side-only delete (no daemon call) — mirrors the confirm-dialog
+   *  pattern used for worktree/session deletion above, but synchronous. If
+   *  the deleted workspace was the active one for its worktree, fall the
+   *  worktree back to classic layout so the UI doesn't point at a workspace
+   *  that no longer exists. */
+  function confirmDeleteWorkspace() {
+    if (!pendingDeleteWorkspace) return;
+    const ws = pendingDeleteWorkspace;
+    setPendingDeleteWorkspace(null);
+    deleteWorkspace(ws.id);
+    if (layoutByWorktree[ws.contextKey]?.activeWorkspaceId === ws.id) {
+      setActiveWorkspace(ws.contextKey, null);
+      setLayoutMode(ws.contextKey, "classic");
     }
   }
 
@@ -1025,6 +1113,143 @@ export function LeftSidebar({
                 })}
               </SortableContext>
             </DndContext>
+          </section>
+        ) : null}
+        {/* Saved workspace layouts (tiled/free-form pane arrangements) for the
+            currently active worktree only — this section is worktree-scoped,
+            unlike Pinned/Projects above. Hidden entirely when there's no
+            active worktree (e.g. dashboard route). Reorder + rename are both
+            purely client-side (no daemon route exists for WorkspaceDoc). */}
+        {!collapsed && activeWorktreeId ? (
+          <section className="workspaces-section" aria-label="Workspaces">
+            <div className="sidebar-projects-heading pinned-section__heading">
+              <span className="sidebar-projects-heading__gutter" aria-hidden />
+              <button
+                type="button"
+                className="tree-row__project-expand"
+                style={{ flex: 1 }}
+                aria-expanded={workspacesOpen}
+                aria-label={`${workspacesOpen ? "Collapse" : "Expand"} Workspaces`}
+                onClick={() => setWorkspacesOpen((v) => !v)}
+              >
+                <span className="tree-row__chevron" aria-hidden>
+                  {workspacesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </span>
+                <span className="sidebar-projects-heading__title">Workspaces</span>
+              </button>
+            </div>
+            {workspacesOpen ? (
+              orderedWorkspaces.length === 0 ? (
+                <div
+                  className="empty-state"
+                  style={{ padding: "var(--space-2) var(--space-3)", opacity: 0.6 }}
+                >
+                  No workspaces yet
+                </div>
+              ) : (
+                <DndContext
+                  sensors={dndSensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={markDrag}
+                  onDragCancel={markDrag}
+                  onDragEnd={(e) =>
+                    handleWorkspaceReorder(
+                      workspacesScopeKey,
+                      orderedWorkspaces.map((d) => d.id),
+                      e,
+                    )
+                  }
+                >
+                  <SortableContext
+                    items={orderedWorkspaces.map((d) => d.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {orderedWorkspaces.map((ws) => {
+                      const isActive = activeWorkspaceId === ws.id && activeLayoutMode === "workspace";
+                      return (
+                        <SortableRow key={ws.id} id={ws.id}>
+                          {({ setNodeRef, style, attributes, listeners }) => (
+                            <div
+                              ref={setNodeRef}
+                              style={style}
+                              className="wt-row-wrap"
+                              {...attributes}
+                              {...listeners}
+                            >
+                              <div
+                                className="tree-row tree-row--worktree"
+                                data-active={isActive}
+                                style={{ position: "relative" }}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setActiveWorkspace(activeWorktreeId, ws.id);
+                                    setLayoutMode(activeWorktreeId, "workspace");
+                                  }
+                                }}
+                                onClick={() => {
+                                  setActiveWorkspace(activeWorktreeId, ws.id);
+                                  setLayoutMode(activeWorktreeId, "workspace");
+                                }}
+                                onDoubleClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  startInlineRename("workspace", ws.id, ws.name, "tree");
+                                }}
+                              >
+                                <div className="wt-row__expand">
+                                  {inlineRename?.kind === "workspace" &&
+                                  inlineRename.id === ws.id &&
+                                  inlineRename.site === "tree" ? (
+                                    <input
+                                      ref={inlineInputRef}
+                                      className="wt-row__label wt-row__rename-input"
+                                      aria-label="Rename"
+                                      value={inlineValue}
+                                      autoFocus
+                                      onClick={(e) => e.stopPropagation()}
+                                      onPointerDown={(e) => e.stopPropagation()}
+                                      onChange={(e) => setInlineValue(e.target.value)}
+                                      onBlur={commitInlineRename}
+                                      onKeyDown={(e) => {
+                                        e.stopPropagation();
+                                        if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                        if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                      }}
+                                      maxLength={60}
+                                    />
+                                  ) : (
+                                    <span className="wt-row__label">{ws.name}</span>
+                                  )}
+                                </div>
+                                <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                  <button
+                                    type="button"
+                                    className="icon-btn wt-menu-trigger tree-row__action"
+                                    aria-label={`Delete workspace ${ws.name}`}
+                                    title="Delete workspace"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setPendingDeleteWorkspace(ws);
+                                    }}
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </SortableRow>
+                      );
+                    })}
+                  </SortableContext>
+                </DndContext>
+              )
+            ) : null}
           </section>
         ) : null}
         <div className="sidebar-projects-heading">
@@ -1553,6 +1778,19 @@ export function LeftSidebar({
         confirmLabel="Dismiss"
         onConfirm={() => void confirmDismissSession()}
         onCancel={() => setPendingDismissSession(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteWorkspace !== null}
+        title="Delete workspace?"
+        message={
+          pendingDeleteWorkspace
+            ? `Remove the saved workspace “${pendingDeleteWorkspace.name}”? This can't be undone.`
+            : ""
+        }
+        confirmLabel="Delete"
+        onConfirm={confirmDeleteWorkspace}
+        onCancel={() => setPendingDeleteWorkspace(null)}
       />
 
       {wtMenu

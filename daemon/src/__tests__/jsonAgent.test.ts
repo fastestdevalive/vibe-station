@@ -278,8 +278,13 @@ describe("JsonAgentSession", () => {
     agent.enqueue({ message: "hi" });
     await agent.settled();
 
-    // Lifecycle flipped to idle in the persisted manifest (poller skips JSON).
-    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("idle");
+    // Lifecycle flips to waiting_for_human (not idle) in the persisted
+    // manifest — R3 (plan 03, Decision 0/2): the poller skips JSON channel
+    // sessions entirely, so `drain()` is JSON's own R3 entry point, and
+    // reaching this finally block at all means a turn was actually
+    // processed — real, observable agent activity, not a genuinely-blank
+    // bootstrap state — so even the FIRST drain lands here, not on "idle".
+    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("waiting_for_human");
   });
 
   it("Fix #1 — persists lifecycle idle even when the turn errors", async () => {
@@ -306,9 +311,49 @@ describe("JsonAgentSession", () => {
     agent.enqueue({ message: "x" });
     await agent.settled();
 
-    // turnState stays error (transcript) but the session is idle/ready.
+    // turnState stays error (transcript) but the session is ready for the
+    // next message — lifecycle lands on waiting_for_human (R3, same as any
+    // other drain — a turn was attempted, that's real activity, error or not).
     expect(agent.getMeta().turnState).toBe("error");
-    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("idle");
+    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("waiting_for_human");
+  });
+
+  it("1.T3 — EVERY turn's drain lands on waiting_for_human, including the first (R3, JSON channel)", async () => {
+    // Plan 03, Decision 0/2: R2 (immediate tool_use detection) is dropped;
+    // R3 ("idle after ever having worked") is the sole waiting_for_human
+    // entry path for EVERY channel, including JSON. The JSON channel has no
+    // tmux/pty for the poller to watch (`lifecycle.ts` skips it outright),
+    // so this session's own `drain()` is where that rule must apply instead.
+    // Unlike the TTY poller (which can observe a genuinely-blank, nothing-
+    // ever-happened session and correctly stay on plain "idle" the first
+    // time, R3a), `drain()`'s finally block is ONLY ever reached after
+    // `runOneTurn` actually processed a queued turn — that's real,
+    // observable agent activity by construction, with no "blank bootstrap"
+    // case to guard against. So there is no first-vs-later distinction on
+    // this channel: every drain, including the very first, lands on
+    // waiting_for_human.
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin([INIT, TEXT, RESULT].join("\n")),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.enqueue({ message: "first" });
+    await agent.settled();
+    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("waiting_for_human");
+
+    // A human response resumes work (R4) via the existing new-turn-start path;
+    // that turn's own drain lands back on waiting_for_human too, not idle.
+    agent.enqueue({ message: "second" });
+    await agent.settled();
+    expect(getProject(PROJECT_ID)!.directSessions[0]!.lifecycle.state).toBe("waiting_for_human");
   });
 
   it("dispose() closes the session's own SQLite handle (opus review finding — fd leak on teardown)", async () => {

@@ -206,8 +206,24 @@ const SessionCreatedSnapshot = z.object({
   tmuxName: z.string(),
   useTmux: z.boolean().optional().default(true),
   channel: z.enum(["tmux", "pty", "json"]).optional(),
-  state: z.enum(["not_started", "working", "idle", "done", "exited"]),
-  lifecycleState: z.enum(["not_started", "working", "idle", "done", "exited"]),
+  state: z.enum([
+    "not_started",
+    "working",
+    "idle",
+    "waiting_for_human",
+    "needs_review",
+    "done",
+    "exited",
+  ]),
+  lifecycleState: z.enum([
+    "not_started",
+    "working",
+    "idle",
+    "waiting_for_human",
+    "needs_review",
+    "done",
+    "exited",
+  ]),
   createdAt: z.string(),
   pinnedAt: z.string().nullable().optional(),
   /** Set for a session archived by a reset (Decision 2/9); null otherwise. */
@@ -227,7 +243,15 @@ const SessionCreatedEvent = z.object({
 const SessionStateEvent = z.object({
   type: z.literal("session:state"),
   sessionId: z.string(),
-  state: z.enum(["not_started", "working", "idle", "done", "exited"]),
+  state: z.enum([
+    "not_started",
+    "working",
+    "idle",
+    "waiting_for_human",
+    "needs_review",
+    "done",
+    "exited",
+  ]),
   reason: z.string().optional(),
 });
 

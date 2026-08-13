@@ -50,4 +50,21 @@ describe("worktreeRolledUpStatus", () => {
     const sessions = [sess("a", "working")];
     expect(worktreeRolledUpStatus(sessions, { a: "idle" })).toBe("idle");
   });
+
+  // --- 2.T1: waiting_for_human / needs_review rollup precedence (R8) ---
+
+  it("rolls up to waiting_for_human over working", () => {
+    const sessions = [sess("a", "waiting_for_human"), sess("b", "working")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
+  });
+
+  it("rolls up to needs_review over working", () => {
+    const sessions = [sess("a", "needs_review"), sess("b", "working")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("needs_review");
+  });
+
+  it("prefers waiting_for_human over needs_review when both present", () => {
+    const sessions = [sess("a", "needs_review"), sess("b", "waiting_for_human")];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
+  });
 });
