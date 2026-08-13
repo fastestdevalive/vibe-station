@@ -50,6 +50,9 @@ describe("Layout orientation toggle remount invariant", () => {
             toolPanelTab: "files",
             terminalDockVisible: false,
             toolSplitOrientation: "horizontal",
+          layoutMode: "classic",
+          activeWorkspaceId: null,
+          scratchCanvas: null,
           },
         },
       });
@@ -88,6 +91,9 @@ describe("Layout orientation toggle remount invariant", () => {
             toolPanelTab: "files",
             terminalDockVisible: false,
             toolSplitOrientation: "vertical",
+          layoutMode: "classic",
+          activeWorkspaceId: null,
+          scratchCanvas: null,
           },
         },
       });
@@ -122,6 +128,9 @@ describe("Layout orientation toggle remount invariant", () => {
             toolPanelTab: "files",
             terminalDockVisible: false,
             toolSplitOrientation: "horizontal",
+          layoutMode: "classic",
+          activeWorkspaceId: null,
+          scratchCanvas: null,
           },
         },
       });

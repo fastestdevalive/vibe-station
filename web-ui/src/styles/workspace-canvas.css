@@ -1,0 +1,430 @@
+/* ─────────────────────────────────────────────────────────────────────────
+ * WorkspaceCanvas — tiled/free-form canvas of live agent/terminal/tools
+ * panes for a worktree's "workspace" layoutMode. See
+ * components/layout/WorkspaceCanvas.tsx.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+.workspace-canvas {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.workspace-canvas__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.workspace-canvas__toolbar-left,
+.workspace-canvas__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Which canvas is live: the saved workspace's name, or "Unsaved canvas". */
+.workspace-canvas__doc-name {
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.workspace-canvas__doc-name--unsaved {
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+.workspace-canvas__ghost-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.workspace-canvas__ghost-btn:hover {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.workspace-canvas__save-form {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.workspace-canvas__save-input {
+  appearance: none;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  width: 160px;
+}
+
+.workspace-canvas__mode-toggle {
+  display: inline-flex;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.workspace-canvas__mode-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.workspace-canvas__mode-btn + .workspace-canvas__mode-btn {
+  border-left: var(--border-width) solid var(--border-default);
+}
+
+.workspace-canvas__mode-btn--on {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.workspace-canvas__add {
+  position: relative;
+}
+
+.workspace-canvas__add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  appearance: none;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.workspace-canvas__picker {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-elevated, var(--bg-secondary));
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.25));
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+}
+
+.workspace-canvas__picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.workspace-canvas__picker-item:hover {
+  background: var(--bg-active);
+}
+
+.workspace-canvas__picker-kind {
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+}
+
+/* Cross-context picker sections (saved workspaces only): project > worktree. */
+.workspace-canvas__picker-group {
+  border-top: var(--border-width) solid var(--border-default);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+}
+
+.workspace-canvas__picker-heading {
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+}
+
+.workspace-canvas__picker-subheading {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  padding: 0 var(--space-2) 2px var(--space-3);
+}
+
+.workspace-canvas__picker-empty {
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  padding: var(--space-2);
+}
+
+.workspace-canvas__body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.workspace-canvas__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Free-form geometry: absolute-positioned, percent-based tiles. */
+.workspace-canvas__free {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Tiled geometry: nested flexbox mirroring lib/tiling.ts's LayoutNode tree. */
+.workspace-canvas__tiled {
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+.workspace-canvas__split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-canvas__split--row {
+  flex-direction: row;
+}
+
+.workspace-canvas__split--column {
+  flex-direction: column;
+}
+
+.workspace-canvas__split-item {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.workspace-canvas__divider {
+  flex-shrink: 0;
+  background: var(--border-default);
+}
+
+.workspace-canvas__divider--row {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.workspace-canvas__divider--column {
+  height: 4px;
+  cursor: row-resize;
+}
+
+.workspace-canvas__divider:hover {
+  background: var(--accent);
+}
+
+.workspace-canvas__tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+
+.workspace-canvas__free > .workspace-canvas__tile {
+  position: absolute;
+}
+
+/* Colored rectangle around the whole tile, per session interaction state —
+   same color values as StatusDot's `.status-dot--*` rules (workspace.css)
+   so the two surfaces never drift apart. Panel/tools tiles carry no `status`
+   (WorkspaceCanvas only computes one for agent/terminal tiles), so they keep
+   the plain `--border-default` rule above — unset, not a color, on purpose. */
+.workspace-canvas__tile--waiting_for_human {
+  border-color: #ef4444;
+}
+
+.workspace-canvas__tile--needs_review {
+  border-color: #b98cff;
+}
+
+.workspace-canvas__tile--working {
+  border-color: var(--accent);
+}
+
+.workspace-canvas__tile--idle {
+  border-color: var(--fg-muted, var(--border-default));
+}
+
+.workspace-canvas__tile--done {
+  border-color: #22c55e;
+}
+
+.workspace-canvas__tile--exited {
+  border-color: #f59e0b;
+  opacity: 0.9;
+}
+
+.workspace-canvas__tile--spawning {
+  border-color: var(--border-default);
+  border-style: dashed;
+}
+
+.workspace-canvas__tile-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-tertiary, var(--bg-secondary));
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.workspace-canvas__free .workspace-canvas__tile-header,
+.workspace-canvas__tiled .workspace-canvas__tile-header {
+  cursor: grab;
+}
+
+.workspace-canvas__free .workspace-canvas__tile-header:active,
+.workspace-canvas__tiled .workspace-canvas__tile-header:active {
+  cursor: grabbing;
+}
+
+/* The tile currently being dragged onto another tile's drop zone. */
+.workspace-canvas__tile--dragging {
+  opacity: 0.55;
+  outline: var(--border-width) dashed var(--accent);
+  outline-offset: -1px;
+}
+
+/* Drop-zone highlight: where the dragged tile would land on release.
+   Edge zones show the half of the target that the split would take;
+   the center zone covers the whole target (a position swap). */
+.workspace-canvas__drop-zone {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  transition: left 60ms ease, top 60ms ease, width 60ms ease, height 60ms ease;
+}
+
+.workspace-canvas__drop-zone--center {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-style: dashed;
+}
+
+.workspace-canvas__tile-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+}
+
+.workspace-canvas__tile-close {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.workspace-canvas__tile-close:hover {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+.workspace-canvas__tile-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+
+.workspace-canvas__tile-hidden {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  text-align: center;
+  padding: var(--space-2);
+}
+
+.workspace-canvas__tile-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+.workspace-canvas__tile-resize::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--fg-muted);
+  border-bottom: 2px solid var(--fg-muted);
+}

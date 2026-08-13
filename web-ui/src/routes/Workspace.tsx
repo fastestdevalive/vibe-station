@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
@@ -11,7 +11,11 @@ import { PaneTools } from "@/components/layout/PaneTools";
 import { ToolPanel } from "@/components/layout/ToolPanel";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
+import { PaneOutletProvider, PaneOutlet } from "@/components/layout/paneOutlets";
+import { PaneHostLayer, type PaneKey } from "@/components/layout/PaneHostLayer";
+import { WorkspaceCanvas } from "@/components/layout/WorkspaceCanvas";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useLayout } from "@/hooks/useLayout";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -47,6 +51,11 @@ export function Workspace() {
   const setLeftSidebarWidthPx = useWorkspaceStore((s) => s.setLeftSidebarWidthPx);
   const mobileSidebarOpen = useWorkspaceStore((s) => s.mobileSidebarOpen);
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
+
+  // Layout.tsx reads its own `layoutMode` (aliased there as `paneLayoutMode`) to
+  // decide whether to render `workspaceCanvas`; this route only needs the
+  // region-visibility flags to pass down to <WorkspaceCanvas>.
+  const { toolPanelVisible, terminalDockVisible, activeWorkspaceId } = useLayout();
 
   const [quickOpen, setQuickOpen] = useState(false);
 
@@ -174,28 +183,129 @@ export function Workspace() {
   const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : leftSidebarWidthPx;
 
   const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
-  const activeSession = activeSessionId
-    ? sessions.find((s) => s.id === activeSessionId)
-    : undefined;
   const activeTerminalSession = activeTerminalSessionId
     ? sessions.find((s) => s.id === activeTerminalSessionId)
     : undefined;
 
+  // Every live pane (agent/terminal/tools) for the active worktree — mounted
+  // ONCE via a single, always-mounted <PaneHostLayer> below, regardless of
+  // classic vs. workspace mode, so a mode toggle (or a tab switch) never
+  // remounts a live TerminalPane/AgentPaneSlot (ghost-PTY-stream bug, see
+  // AGENTS.md). Direct sessions are exempt — they keep their own direct
+  // rendering untouched (workspace mode is worktree-only).
+  const worktreeAgentSessions = useMemo(
+    () => sessions.filter((s) => s.worktreeId === activeWorktreeId && s.type === "agent"),
+    [sessions, activeWorktreeId],
+  );
+  const worktreeTerminalSessions = useMemo(
+    () => sessions.filter((s) => s.worktreeId === activeWorktreeId && s.type === "terminal"),
+    [sessions, activeWorktreeId],
+  );
+  // A SAVED workspace may tile panes from other worktrees/projects; those panes
+  // are outside the active worktree's own always-mounted set above, so union
+  // them in — otherwise their <PaneOutlet> would have nothing to portal into.
+  // The transient (unsaved) canvas never needs this: it only ever references
+  // this worktree's own sessions.
+  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
+  const crossContextPaneKeys = useMemo<PaneKey[]>(() => {
+    if (!activeWorktreeId || isDirectSession || !activeWorkspaceId) return [];
+    const doc = workspaceDocs[activeWorkspaceId];
+    if (!doc) return [];
+    const keys: PaneKey[] = [];
+    for (const tile of doc.tiles) {
+      if (tile.kind === "tools") {
+        keys.push(`tools:${tile.worktreeId ?? activeWorktreeId}`);
+      } else if (tile.sessionId && sessions.some((s) => s.id === tile.sessionId)) {
+        keys.push(`${tile.kind}:${tile.sessionId}`);
+      }
+    }
+    return keys;
+  }, [activeWorktreeId, isDirectSession, activeWorkspaceId, workspaceDocs, sessions]);
+  const worktreePaneKeys = useMemo<PaneKey[]>(() => {
+    if (!activeWorktreeId || isDirectSession) return [];
+    const keys: PaneKey[] = [];
+    for (const s of worktreeAgentSessions) keys.push(`agent:${s.id}`);
+    for (const s of worktreeTerminalSessions) keys.push(`terminal:${s.id}`);
+    keys.push(`tools:${activeWorktreeId}`);
+    for (const k of crossContextPaneKeys) if (!keys.includes(k)) keys.push(k);
+    return keys;
+  }, [
+    activeWorktreeId,
+    isDirectSession,
+    worktreeAgentSessions,
+    worktreeTerminalSessions,
+    crossContextPaneKeys,
+  ]);
+  const renderWorktreePane = useCallback(
+    (key: PaneKey): ReactNode => {
+      if (key.startsWith("agent:")) {
+        const id = key.slice("agent:".length);
+        return <AgentPaneSlot api={api} sessionId={id} session={sessions.find((s) => s.id === id)} />;
+      }
+      if (key.startsWith("terminal:")) {
+        const id = key.slice("terminal:".length);
+        return <TerminalPane api={api} sessionId={id} session={sessions.find((s) => s.id === id)} />;
+      }
+      const wtId = key.slice("tools:".length);
+      return (
+        <ToolPanel
+          api={api}
+          worktreeId={wtId}
+          baseBranch={worktrees.find((w) => w.id === wtId)?.baseBranch}
+        />
+      );
+    },
+    [sessions, worktrees],
+  );
+  const worktreePaneHostLayer = (
+    <PaneHostLayer paneKeys={worktreePaneKeys} renderPane={renderWorktreePane} />
+  );
+
   const agentPane = (
     <div className="pane-stack">
       <TabsStrip api={api} worktreeId={activeWorktreeId} kind="agent" />
-      {/* TerminalPane stays permanently mounted; ChatPane is toggled beside it
-          by CSS visibility for JSON-channel agents (Decision 14). */}
-      <AgentPaneSlot api={api} sessionId={activeSessionId} session={activeSession} />
+      {/* The live AgentPaneSlot is portaled in via <PaneOutlet> from the
+          shared PaneHostLayer above — never rendered directly here — so it
+          stays mounted across a classic <-> workspace layoutMode toggle. */}
+      {activeSessionId ? (
+        <PaneOutlet paneKey={`agent:${activeSessionId}`} />
+      ) : (
+        <div className="empty-state">No agent session</div>
+      )}
     </div>
   );
 
   const terminalDock = (
     <div className="pane-stack">
       <TabsStrip api={api} worktreeId={activeWorktreeId} kind="terminal" />
-      <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} />
+      {activeTerminalSessionId ? (
+        <PaneOutlet paneKey={`terminal:${activeTerminalSessionId}`} />
+      ) : (
+        <div className="empty-state">No terminal session</div>
+      )}
     </div>
   );
+
+  const worktreeToolPanel = activeWorktreeId ? (
+    <PaneOutlet paneKey={`tools:${activeWorktreeId}`} />
+  ) : (
+    <ToolPanel api={api} worktreeId={null} />
+  );
+
+  const workspaceCanvas =
+    activeWorktreeId && !isDirectSession ? (
+      <WorkspaceCanvas
+        worktreeId={activeWorktreeId}
+        agentSessions={worktreeAgentSessions}
+        terminalSessions={worktreeTerminalSessions}
+        hasTools
+        toolPanelVisible={toolPanelVisible}
+        terminalDockVisible={terminalDockVisible}
+        allSessions={sessions}
+        worktrees={worktrees}
+        projects={projects}
+      />
+    ) : null;
 
   // Direct session: identical to the worktree layout, minus the agent TabsStrip
   // (a direct session is a single agent — no agent tabs). The tool panel and
@@ -235,6 +345,7 @@ export function Workspace() {
         : "workspace";
 
   return (
+    <PaneOutletProvider>
     <div className="workspace-route">
       {!isFullWidthPane ? (
         isDirectSession ? (
@@ -304,16 +415,13 @@ export function Workspace() {
               }
             : {
                 agentPane,
-                toolPanel: (
-                  <ToolPanel
-                    api={api}
-                    worktreeId={activeWorktreeId}
-                    baseBranch={worktrees.find((w) => w.id === activeWorktreeId)?.baseBranch}
-                  />
-                ),
+                toolPanel: worktreeToolPanel,
                 terminalDock,
+                workspaceCanvas,
+                paneHostLayer: worktreePaneHostLayer,
               })}
       />
     </div>
+    </PaneOutletProvider>
   );
 }

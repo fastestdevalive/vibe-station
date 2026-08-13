@@ -124,7 +124,7 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
   it("3.T3 — hides the upload overlay for a session marked done (its pane is released)", () => {
     // "Mark as done" kills the tmux/pty process just like an exit does, so the
     // live-terminal-only upload overlay must be gated for `done` too.
-    const done: Session = { ...session("tty1", "tmux"), lifecycleState: "done" };
+    const done: Session = { ...session("tty1", "tmux"), state: "done", lifecycleState: "done" };
     const { container } = render(<AgentPaneSlot api={api} sessionId="tty1" session={done} />);
     expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="channel-toggle"]')).not.toBeNull();
@@ -136,7 +136,7 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     // normal flow BELOW its own "Session exited / Resume" banner (no overlap),
     // so AgentPaneSlot keeps passing it even when exited. The upload overlay is
     // a plain top-corner overlay that only makes sense live, so it stays gated.
-    const exited: Session = { ...session("tty1", "tmux"), lifecycleState: "exited" };
+    const exited: Session = { ...session("tty1", "tmux"), state: "exited", lifecycleState: "exited" };
     const { container } = render(<AgentPaneSlot api={api} sessionId="tty1" session={exited} />);
     expect(terminalMounts).toBe(1);
     expect(container.querySelector('[data-testid="terminal"]')).not.toBeNull();
@@ -161,5 +161,44 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(terminalMounts).toBe(1);
     expect(terminalUnmounts).toBe(0);
     expect(container.querySelector('[data-testid="terminal"]')?.getAttribute("data-session")).toBe("tty1");
+  });
+
+  // --- Colored border reflects live `.state`, not stale `.lifecycleState` ---
+  // Regression: the live `session:state` WS handler (useServerSync.ts) only
+  // ever patches `.state` on the session object, never `.lifecycleState` (that
+  // field is only set from the initial REST fetch, or by the dev-only
+  // state-simulation panel which patches both — masking this bug in manual
+  // testing via that panel). Reading `.lifecycleState` for the border color
+  // left it permanently stuck on the value from page load.
+  it("borders the pane by `session.state`, ignoring a stale/mismatched `session.lifecycleState`", () => {
+    const s: Session = {
+      ...session("tty1", "tmux"),
+      state: "waiting_for_human",
+      lifecycleState: "exited", // deliberately stale/wrong — must be ignored
+    };
+    const { container } = render(<AgentPaneSlot api={api} sessionId="tty1" session={s} />);
+    const root = container.querySelector(".agent-pane-slot");
+    expect(root?.className).toContain("agent-pane-slot--waiting_for_human");
+    expect(root?.className).not.toContain("agent-pane-slot--exited");
+  });
+
+  it("hides the status border entirely when the showAgentStatusBorders toggle is off", async () => {
+    const { useWorkspaceStore } = await import("@/hooks/useStore");
+    const prev = useWorkspaceStore.getState().showAgentStatusBorders;
+    // Flip the store BEFORE mounting, so the component's initial render already
+    // reflects it — a post-mount setState would need an act() wrapper here.
+    useWorkspaceStore.setState({ showAgentStatusBorders: false });
+    try {
+      const s: Session = { ...session("tty1", "tmux"), state: "waiting_for_human" };
+      const { container, unmount } = render(<AgentPaneSlot api={api} sessionId="tty1" session={s} />);
+      const root = container.querySelector(".agent-pane-slot");
+      expect(root?.className).not.toContain("agent-pane-slot--waiting_for_human");
+      // Unmount before restoring the store so the restore-setState below (which
+      // RTL's own auto-cleanup can't precede) doesn't update a still-subscribed,
+      // still-mounted component outside of act().
+      unmount();
+    } finally {
+      useWorkspaceStore.setState({ showAgentStatusBorders: prev });
+    }
   });
 });

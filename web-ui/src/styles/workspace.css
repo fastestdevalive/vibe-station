@@ -2005,6 +2005,17 @@
   animation: spawning-pulse 1s ease-in-out infinite alternate;
 }
 
+/* waiting_for_human is the one non-negotiable color mapping (PRD R7/W7) —
+   always red, regardless of theme. needs_review is a distinct, less-urgent
+   violet so the two "needs attention" states never visually collide. */
+.status-dot--waiting_for_human {
+  color: #ef4444;
+}
+
+.status-dot--needs_review {
+  color: #b98cff;
+}
+
 .preview-body {
   flex: 1;
   overflow: auto;
@@ -4531,4 +4542,13 @@ a.dashboard-card.dashboard-card--session {
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * PaneHostLayer — permanently-mounted live panes (agent/terminal/tools).
+ * When no <PaneOutlet> currently claims a pane's key, PaneHostSlot renders
+ * it here instead of unmounting it, so its live PTY/stream stays alive.
+ * ───────────────────────────────────────────────────────────────────────── */
+.pane-holder--offscreen {
+  display: none;
 }

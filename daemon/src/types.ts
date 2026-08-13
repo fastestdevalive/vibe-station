@@ -5,7 +5,14 @@
 
 export type { CliId } from "./agent-plugins/registry.js";
 
-export type LifecycleState = "not_started" | "working" | "idle" | "done" | "exited";
+export type LifecycleState =
+  | "not_started"
+  | "working"
+  | "idle"
+  | "waiting_for_human"
+  | "needs_review"
+  | "done"
+  | "exited";
 
 export interface SessionLifecycle {
   state: LifecycleState;

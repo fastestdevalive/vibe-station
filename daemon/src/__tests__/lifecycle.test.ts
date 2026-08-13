@@ -148,7 +148,15 @@ describe("lifecycle polling behavior", () => {
     expect(emittedStateChanges()).not.toContain("idle");
   });
 
-  it("transitions to idle after IDLE_THRESHOLD_MS of unchanged content", async () => {
+  it("transitions to waiting_for_human after IDLE_THRESHOLD_MS of unchanged content, even on a session's very first idle-stable tick (R3)", async () => {
+    // The pane content NEVER CHANGES across the whole test — from the seed
+    // tick through the idle-threshold tick, it's the same frozen snapshot.
+    // A session only ever reaches this poller once it's "working", which
+    // only happens after its ready signal already printed visible content
+    // (see `everWorked`'s doc comment in lifecycle.ts) — so "genuinely
+    // blank, nothing has happened yet" is not achievable here. `everWorked`
+    // is seeded true unconditionally, so even this FIRST idle-stable tick
+    // lands on "waiting_for_human", not plain "idle".
     await seedProject("working");
     tmux.capturePane.mockResolvedValue("frozen pane content");
 
@@ -162,16 +170,17 @@ describe("lifecycle polling behavior", () => {
       await runLifecyclePollOnce(); // seed
 
       vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
-      await runLifecyclePollOnce(); // should flip to idle
+      await runLifecyclePollOnce(); // should flip to waiting_for_human
     } finally {
       vi.useRealTimers();
     }
 
-    expect(await getCurrentState()).toBe("idle");
-    expect(emittedStateChanges()).toContain("idle");
+    expect(await getCurrentState()).toBe("waiting_for_human");
+    expect(emittedStateChanges()).toContain("waiting_for_human");
+    expect(emittedStateChanges()).not.toContain("idle");
   });
 
-  it("resets to working when content changes after idle", async () => {
+  it("resets to working when content changes after waiting_for_human", async () => {
     await seedProject("working");
     tmux.capturePane.mockResolvedValue("static");
 
@@ -182,7 +191,7 @@ describe("lifecycle polling behavior", () => {
       await runLifecyclePollOnce();
       vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
       await runLifecyclePollOnce();
-      expect(await getCurrentState()).toBe("idle");
+      expect(await getCurrentState()).toBe("waiting_for_human");
 
       tmux.capturePane.mockResolvedValue("now changing");
       vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 200);
@@ -193,9 +202,66 @@ describe("lifecycle polling behavior", () => {
 
     expect(await getCurrentState()).toBe("working");
     const changes = emittedStateChanges();
-    expect(changes).toContain("idle");
+    expect(changes).toContain("waiting_for_human");
     expect(changes).toContain("working");
-    expect(changes.lastIndexOf("working")).toBeGreaterThan(changes.indexOf("idle"));
+    expect(changes.lastIndexOf("working")).toBeGreaterThan(changes.indexOf("waiting_for_human"));
+  });
+
+  // --- 1.T3: R3 "idle after ever working" (plan 03, Decision 2) ---
+
+  it("1.T3 — a session that has ALREADY resumed from waiting_for_human once lands on waiting_for_human again on its next idle-stable tick (R3)", async () => {
+    await seedProject("working");
+    tmux.capturePane.mockResolvedValue("static");
+
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      vi.setSystemTime(t0);
+      await runLifecyclePollOnce(); // seed
+      vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
+      await runLifecyclePollOnce(); // first-ever idle-stable -> "waiting_for_human" (R3)
+      expect(await getCurrentState()).toBe("waiting_for_human");
+
+      // Pane changes again — a human responded (or the agent started a new
+      // turn) — this resumes to "working" (R4).
+      tmux.capturePane.mockResolvedValue("busy again");
+      vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 200);
+      await runLifecyclePollOnce();
+      expect(await getCurrentState()).toBe("working");
+
+      // Goes stable again -> waiting_for_human again.
+      tmux.capturePane.mockResolvedValue("static again");
+      vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 200);
+      await runLifecyclePollOnce(); // reseed the new stable hash
+      vi.setSystemTime(t0 + 2 * IDLE_THRESHOLD_MS + 300);
+      await runLifecyclePollOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(await getCurrentState()).toBe("waiting_for_human");
+    expect(emittedStateChanges()).toContain("waiting_for_human");
+  });
+
+  it("1.T3 — a human response (pane changes again) transitions waiting_for_human back to working (R4)", async () => {
+    await seedProject("waiting_for_human");
+    tmux.capturePane.mockResolvedValue("static");
+
+    vi.useFakeTimers();
+    try {
+      const t0 = Date.now();
+      vi.setSystemTime(t0);
+      await runLifecyclePollOnce(); // seed tracking for the waiting_for_human session
+
+      tmux.capturePane.mockResolvedValue("user typed something");
+      vi.setSystemTime(t0 + 100);
+      await runLifecyclePollOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(await getCurrentState()).toBe("working");
+    expect(emittedStateChanges()).toContain("working");
   });
 
   it("deletes tracking entry when pane disappears (session exit)", async () => {
@@ -240,9 +306,11 @@ describe("lifecycle polling behavior", () => {
       const t0 = Date.now();
       vi.setSystemTime(t0 + IDLE_THRESHOLD_MS + 100);
       await runLifecyclePollOnce();
-      // Bug reproduced: a fresh window immediately reads as "idle" because
-      // the leaked entry's `stableSince` is already older than the threshold.
-      expect(await getCurrentState()).toBe("idle");
+      // Bug reproduced: a fresh window immediately reads as idle-stable
+      // because the leaked entry's `stableSince` is already older than the
+      // threshold — lands on "waiting_for_human" since `everWorked` seeds
+      // true unconditionally.
+      expect(await getCurrentState()).toBe("waiting_for_human");
     } finally {
       vi.useRealTimers();
     }

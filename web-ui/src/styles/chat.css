@@ -6,6 +6,45 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
+  border: 2px solid transparent;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease;
+}
+
+/* Colored rectangle around the pane, per session interaction state — same
+   color values as StatusDot's `.status-dot--*` rules (workspace.css) and
+   WorkspaceCanvas's `.workspace-canvas__tile--*` rules, so all three
+   surfaces (dot, workspace tile, single agent pane) stay in sync. Shared by
+   the classic single-agent-pane view and direct sessions — see
+   AgentPaneSlot.tsx for why this is the only "colored rectangle" surface
+   available in either case. */
+.agent-pane-slot--waiting_for_human {
+  border-color: #ef4444;
+}
+
+.agent-pane-slot--needs_review {
+  border-color: #b98cff;
+}
+
+.agent-pane-slot--working {
+  border-color: var(--accent);
+}
+
+.agent-pane-slot--idle {
+  border-color: var(--fg-muted, transparent);
+}
+
+.agent-pane-slot--done {
+  border-color: #22c55e;
+}
+
+.agent-pane-slot--exited {
+  border-color: #f59e0b;
+}
+
+.agent-pane-slot--spawning {
+  border-color: var(--border-default);
+  border-style: dashed;
 }
 .agent-pane-slot__terminal {
   min-height: 0;

@@ -1,6 +1,8 @@
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
 const GLYPH: Record<WorktreeRolledUpStatus, string> = {
+  waiting_for_human: "!",
+  needs_review: "◆",
   working: "●",
   spawning: "◐",
   idle: "○",
