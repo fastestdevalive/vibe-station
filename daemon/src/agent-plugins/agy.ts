@@ -31,20 +31,33 @@
  *                  (times out to null) and `refreshChatIdOnToggle` self-heals
  *                  once the user gets past the prompt and actually converses.
  *
- * JSON mode (verified live, agy 1.1.2):
+ * JSON mode (verified live, agy 1.1.12 — switched from `--output-format json`
+ * to `--output-format stream-json`; see json-agy-stream-json investigation):
  *   agy's `--print`/`-p`/`--prompt` is a STRING flag whose value IS the prompt.
- *   `agy --print=<msg> --output-format json [--model m] [--conversation <id>]
- *    --dangerously-skip-permissions` prints ONE final JSON envelope on stdout:
- *      { conversation_id, status:"SUCCESS"|"ERROR", response, error?,
- *        duration_seconds, num_turns,
- *        usage:{ input_tokens, output_tokens, thinking_tokens, total_tokens } }
- *   Unlike claude/cursor/opencode, agy does NOT stream per-event NDJSON — there
- *   are no live thinking/tool_use/tool_result events in print JSON. The whole
- *   turn resolves to a single result object at process exit, which the parser
- *   fans out into session_init + text + usage + result (+ error). Context resume
- *   via `--conversation` is verified stable (num_turns increments, recall works).
- *   agy reports no cache tokens and no cost, and the envelope carries no model
- *   name, so `model` is threaded in from the requested model.
+ *   `agy --print=<msg> --output-format stream-json [--model m]
+ *    [--conversation <id>] --dangerously-skip-permissions` emits real per-step
+ *    NDJSON on stdout, one JSON object per line:
+ *      {"event":"init", conversation_id, init:{cwd,tools,permission_mode}}
+ *      {"event":"step_update", step_update:{conversation_id, step_index,
+ *        state:"ACTIVE"|"DONE", step_type, text_delta?, tool_name?, tool_info?,
+ *        duration_seconds?, usage?}}
+ *      {"event":"result", result:{conversation_id, status:"SUCCESS"|"ERROR",
+ *        response, error?, duration_seconds, num_turns, usage}}
+ *   `init` is always first EXCEPT on an immediate hard-fail (e.g. unresolvable
+ *   `--model`), where the stream is just one `result` (status:"ERROR", no
+ *   conversation_id). `step_type:"agent_response"` streams the answer as
+ *   `text_delta` chunks (ACTIVE, then a final chunk + usage on DONE);
+ *   `step_type:"tool"` carries the call (`tool_name`/`tool_info.parameters`) on
+ *   ACTIVE and the same + `tool_info.output`/`.error` on DONE. Human-gate tools
+ *   (`ask_question`/`ask_permission`) auto-skip in headless/print mode and
+ *   surface as an anonymous `step_type:"unknown"` with no `tool_name` — not a
+ *   detectable gate signal (separate, already-answered question). Other
+ *   `step_type`s (`user_input`, `unknown`, `checkpoint`, `error_message`) carry
+ *   no renderable payload in any live capture and are dropped. `conversation_id`
+ *   is top-level on `init` but nested inside `step_update`/`result`. Context
+ *   resume via `--conversation` is verified stable (num_turns increments,
+ *   recall works). agy reports no cache tokens and no cost, and no event
+ *   carries a model name, so `model` is threaded in from the requested model.
  */
 
 import { promises as fs, mkdirSync, writeFileSync } from "node:fs";
@@ -78,18 +91,34 @@ function agyEvent(
   };
 }
 
+/** Per-turn mutable state threaded through `parseAgyStreamLine` calls in
+ *  `runTurn`'s readline loop — mirrors opencode's `toolStarted` guard
+ *  (`opencode.ts`'s `parseOpencodeStreamLine`). Must be a FRESH object per
+ *  turn (step_index resets every turn). */
+export interface AgyStreamState {
+  toolStarted: Set<string>;
+}
+
+export function createAgyStreamState(): AgyStreamState {
+  return { toolStarted: new Set() };
+}
+
 /**
- * Parse ONE agy `--output-format json` line — agy emits a SINGLE final result
- * envelope (not streamed NDJSON), so this maps that one object into the full
- * event sequence: session_init → text → usage → result (→ error). Exported for
- * unit testing (the plugin's private normalization boundary — Decision 3). The
- * envelope carries no model name, so `fallbackModel` (the requested model) fills
- * `usage.model`/`session_init.model`. Malformed / non-JSON lines are skipped
- * (Decision 7) — agy logs go to stderr/log-file, but tolerate any stray stdout.
+ * Parse ONE agy `--output-format stream-json` line into zero or more
+ * NormalizedEvents. Exported for unit testing (the plugin's private
+ * normalization boundary — Decision 3). agy streams real per-step NDJSON
+ * (`init` → many `step_update` → `result`, see the file-header doc comment for
+ * the full shape) — this is NOT a single-envelope parser (that was the old
+ * `--output-format json` behavior, retired in the stream-json migration).
+ * `fallbackModel` (the requested model) fills `model` on `session_init`/
+ * `usage`/`result` since no agy event ever carries a model name. Malformed /
+ * non-JSON lines are skipped (Decision 7) — agy logs go to stderr/log-file,
+ * but tolerate any stray stdout.
  */
-export function parseAgyResultLine(
+export function parseAgyStreamLine(
   line: string,
   sessionId: string,
+  state: AgyStreamState,
   fallbackModel?: string,
 ): NormalizedEvent[] {
   const trimmed = line.trim();
@@ -103,66 +132,117 @@ export function parseAgyResultLine(
     return []; // malformed — skip + tolerate
   }
 
-  // agy's result envelope is identified by conversation_id + status. Anything
-  // else on stdout (unexpected) is not our result line → skip.
-  const conversationId = typeof msg.conversation_id === "string" ? msg.conversation_id : undefined;
-  const status = typeof msg.status === "string" ? msg.status : undefined;
-  if (!conversationId && !status) return [];
-
-  const events: NormalizedEvent[] = [];
+  const event = typeof msg.event === "string" ? msg.event : undefined;
   const model = fallbackModel && fallbackModel.length ? fallbackModel : "";
-
-  // session_init — surface the conversation id so the core persists it as the
-  // agentChatId (reused via `--conversation` on the next turn, Decision 10).
-  events.push(
-    agyEvent(sessionId, "session_init", {
-      ...(conversationId ? { agentChatId: conversationId } : {}),
-      ...(model ? { model } : {}),
-    }),
-  );
-
-  // Assistant answer.
-  const response = typeof msg.response === "string" ? msg.response : "";
-  if (response) {
-    events.push(agyEvent(sessionId, "text", { role: "assistant", text: response }));
-  }
-
-  // Usage — agy reports no cache tokens and no cost; `total_tokens` is provided
-  // (input + output + thinking). thinking_tokens has no slot in UsageInfo (it is
-  // already summed into total_tokens by agy).
-  const usageRaw = (msg.usage ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number => (typeof v === "number" ? v : 0);
-  const inputTokens = num(usageRaw.input_tokens);
-  const outputTokens = num(usageRaw.output_tokens);
-  const totalTokens = num(usageRaw.total_tokens) || inputTokens + outputTokens;
-  const usage = {
-    inputTokens,
-    outputTokens,
-    cacheReadTokens: 0,
-    cacheCreateTokens: 0,
-    totalTokens,
-    model,
-  };
-  events.push(agyEvent(sessionId, "usage", { usage, ...(model ? { model } : {}) }));
 
-  // Result — turn finished. On ERROR, carry the error text on the result too.
-  const errorText = typeof msg.error === "string" ? msg.error : undefined;
-  const isError = status === "ERROR" || errorText !== undefined;
-  events.push(
-    agyEvent(sessionId, "result", {
-      usage,
-      ...(model ? { model } : {}),
-      ...(isError && errorText ? { text: errorText } : {}),
-    }),
-  );
-
-  // A failed turn emits a typed `error` event alongside `result` (like claude /
-  // cursor) so the UI can distinguish it from a clean turn.
-  if (isError) {
-    events.push(agyEvent(sessionId, "error", { text: errorText ?? "agy turn failed" }));
+  if (event === "init") {
+    const conversationId = typeof msg.conversation_id === "string" ? msg.conversation_id : undefined;
+    return [
+      agyEvent(sessionId, "session_init", {
+        ...(conversationId ? { agentChatId: conversationId } : {}),
+        ...(model ? { model } : {}),
+      }),
+    ];
   }
 
-  return events;
+  if (event === "step_update") {
+    const step = (msg.step_update ?? {}) as Record<string, unknown>;
+    const stepType = typeof step.step_type === "string" ? step.step_type : undefined;
+    const stepState = typeof step.state === "string" ? step.state : undefined;
+    const events: NormalizedEvent[] = [];
+
+    if (stepType === "agent_response") {
+      const textDelta = typeof step.text_delta === "string" ? step.text_delta : "";
+      if (textDelta) {
+        events.push(agyEvent(sessionId, "text", { role: "assistant", text: textDelta }));
+      }
+      return events;
+    }
+
+    if (stepType === "tool") {
+      // No separate tool-call id in agy's protocol — step_index is unique per
+      // turn and stable across a tool's ACTIVE→DONE pair.
+      const toolId = typeof step.step_index === "number" ? String(step.step_index) : undefined;
+      const toolInfo = (step.tool_info ?? {}) as Record<string, unknown>;
+      const toolName = typeof step.tool_name === "string" ? step.tool_name : undefined;
+      if (toolId && !state.toolStarted.has(toolId)) {
+        state.toolStarted.add(toolId);
+        events.push(
+          agyEvent(sessionId, "tool_use", {
+            role: "assistant",
+            ...(toolName ? { toolName } : {}),
+            toolId,
+            toolInput: toolInfo.parameters,
+          }),
+        );
+      }
+      if (stepState === "DONE") {
+        const raw = toolInfo.output ?? toolInfo.error;
+        const contentStr =
+          typeof raw === "string" ? raw : raw != null ? JSON.stringify(raw) : undefined;
+        events.push(
+          agyEvent(sessionId, "tool_result", {
+            ...(toolId ? { toolId } : {}),
+            toolResult: {
+              ...(contentStr !== undefined ? { content: contentStr } : {}),
+              isError: toolInfo.error !== undefined,
+            },
+          }),
+        );
+      }
+      return events;
+    }
+
+    // user_input / unknown / checkpoint / error_message (and any future
+    // step_type) — no renderable payload observed live; drop (Decision 4).
+    return events;
+  }
+
+  if (event === "result") {
+    const result = (msg.result ?? {}) as Record<string, unknown>;
+    const status = typeof result.status === "string" ? result.status : undefined;
+    const events: NormalizedEvent[] = [];
+
+    // Usage — agy reports no cache tokens and no cost; `total_tokens` is
+    // provided (input + output + thinking). thinking_tokens has no slot in
+    // UsageInfo (already summed into total_tokens by agy).
+    const usageRaw = (result.usage ?? {}) as Record<string, unknown>;
+    const inputTokens = num(usageRaw.input_tokens);
+    const outputTokens = num(usageRaw.output_tokens);
+    const totalTokens = num(usageRaw.total_tokens) || inputTokens + outputTokens;
+    const usage = {
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: 0,
+      cacheCreateTokens: 0,
+      totalTokens,
+      model,
+    };
+    events.push(agyEvent(sessionId, "usage", { usage, ...(model ? { model } : {}) }));
+
+    // Result — turn finished. On ERROR, carry the error text on the result too.
+    const errorText = typeof result.error === "string" ? result.error : undefined;
+    const isError = status === "ERROR" || errorText !== undefined;
+    events.push(
+      agyEvent(sessionId, "result", {
+        usage,
+        ...(model ? { model } : {}),
+        ...(isError && errorText ? { text: errorText } : {}),
+      }),
+    );
+
+    // A failed turn emits a typed `error` event alongside `result` (like claude
+    // / cursor) so the UI can distinguish it from a clean turn.
+    if (isError) {
+      events.push(agyEvent(sessionId, "error", { text: errorText ?? "agy turn failed" }));
+    }
+
+    return events;
+  }
+
+  // Unrecognized top-level event — tolerate any stray/future shape.
+  return [];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -408,9 +488,10 @@ export function createAgyPlugin(): AgentPlugin {
 
     /**
      * Run ONE JSON-channel turn (Decision 2/3). Spawns `agy --print=<msg>
-     * --output-format json` and yields NormalizedEvents once the single result
-     * envelope arrives (agy does not stream). Own process group (detached) so a
-     * stuck turn is group-killed and never orphaned (Decision 13).
+     * --output-format stream-json` and yields NormalizedEvents live, as agy's
+     * per-step NDJSON arrives (see the file-header doc comment for the event
+     * shapes). Own process group (detached) so a stuck turn is group-killed and
+     * never orphaned (Decision 13).
      *
      * The message is passed as the VALUE of `--print` (agy's `--print` is a
      * string flag, NOT a boolean — a bare `--print` with the message on stdin or
@@ -435,7 +516,7 @@ export function createAgyPlugin(): AgentPlugin {
       const args = [
         `--print=${message}`,
         "--output-format",
-        "json",
+        "stream-json",
         "--dangerously-skip-permissions",
       ];
       if (ctx.model) args.push("--model", ctx.model);
@@ -468,10 +549,11 @@ export function createAgyPlugin(): AgentPlugin {
         child.on("close", (code) => resolve(code ?? 0));
       });
 
+      const state = createAgyStreamState();
       try {
         const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
         for await (const line of rl) {
-          for (const ev of parseAgyResultLine(line, sessionId, ctx.model)) {
+          for (const ev of parseAgyStreamLine(line, sessionId, state, ctx.model)) {
             yield ev;
           }
         }

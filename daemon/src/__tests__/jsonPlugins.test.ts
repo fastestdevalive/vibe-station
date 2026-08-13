@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseCursorStreamLine } from "../agent-plugins/cursor.js";
 import { parseOpencodeStreamLine } from "../agent-plugins/opencode.js";
-import { parseAgyResultLine } from "../agent-plugins/agy.js";
+import { parseAgyStreamLine, createAgyStreamState } from "../agent-plugins/agy.js";
 
 /**
  * 3.T1 — per-plugin stream-json parsers map their CLI's native events into
@@ -299,99 +299,219 @@ describe("3.T1 — opencode parser", () => {
   });
 });
 
-describe("3.T1 — agy parser (live-captured 2026-07-15, agy 1.1.2)", () => {
-  // agy emits ONE final result envelope per turn (no streamed NDJSON); the
-  // parser fans it out into session_init → text → usage → result (+ error).
+describe("3.T1 — agy parser (live-captured 2026-08-13, agy 1.1.12, stream-json)", () => {
+  // agy streams real per-step NDJSON: init → many step_update → result. Lines
+  // below are copied verbatim from a real `agy --output-format stream-json` run.
 
-  it("maps a SUCCESS envelope → session_init, text, usage, result (real capture)", () => {
+  it("init event → session_init with agentChatId + fallback model", () => {
     const line = JSON.stringify({
-      conversation_id: "2ee537a2-ddad-42a4-a2cd-5c4dcc29f38c",
-      status: "SUCCESS",
-      response: "HELLO_AGY\n",
-      duration_seconds: 1.231695252,
-      num_turns: 1,
-      usage: { input_tokens: 16958, output_tokens: 8, thinking_tokens: 0, total_tokens: 16966 },
+      event: "init",
+      conversation_id: "a56a04cd-66b1-44cb-b538-90be2387c438",
+      init: { cwd: "/tmp/agytest", tools: ["run_command", "view_file"], permission_mode: "always-proceed" },
     });
-    const evs = parseAgyResultLine(line, SID, "Gemini 3.1 Pro (High)");
-    expect(evs.map((e) => e.kind)).toEqual(["session_init", "text", "usage", "result"]);
-    expect(evs.every((e) => e.provider === "agy")).toBe(true);
+    const evs = parseAgyStreamLine(line, SID, createAgyStreamState(), "Gemini 3.1 Pro (High)");
+    expect(evs).toHaveLength(1);
     expect(evs[0]).toMatchObject({
+      provider: "agy",
       kind: "session_init",
-      agentChatId: "2ee537a2-ddad-42a4-a2cd-5c4dcc29f38c",
+      agentChatId: "a56a04cd-66b1-44cb-b538-90be2387c438",
       model: "Gemini 3.1 Pro (High)",
     });
-    expect(evs[1]).toMatchObject({ kind: "text", role: "assistant", text: "HELLO_AGY\n" });
   });
 
-  it("reads agy usage token keys (input/output/total) and reports no cache/cost", () => {
+  it("agent_response text_delta (ACTIVE) → one text event per chunk", () => {
     const line = JSON.stringify({
-      conversation_id: "c1",
-      status: "SUCCESS",
-      response: "ok",
-      usage: { input_tokens: 16958, output_tokens: 8, thinking_tokens: 0, total_tokens: 16966 },
+      event: "step_update",
+      step_update: {
+        conversation_id: "beeaebcd-b396-4d7a-9fc3-a0c0ac83f1af",
+        step_index: 2,
+        state: "ACTIVE",
+        step_type: "agent_response",
+        text_delta: "I'll run both in parallel since they're independent!",
+      },
     });
-    const usageEv = parseAgyResultLine(line, SID, "Gemini 3.5 Flash (Low)").find((e) => e.kind === "usage");
-    expect(usageEv?.usage).toMatchObject({
-      inputTokens: 16958,
-      outputTokens: 8,
-      cacheReadTokens: 0,
-      cacheCreateTokens: 0,
-      totalTokens: 16966,
-      model: "Gemini 3.5 Flash (Low)",
-    });
-    expect(usageEv?.usage?.costUsd).toBeUndefined();
+    const evs = parseAgyStreamLine(line, SID, createAgyStreamState());
+    expect(evs).toEqual([
+      expect.objectContaining({
+        provider: "agy",
+        kind: "text",
+        role: "assistant",
+        text: "I'll run both in parallel since they're independent!",
+      }),
+    ]);
   });
 
-  it("maps an ERROR envelope → typed error event alongside result (real capture)", () => {
+  it("agent_response text_delta (DONE, carries usage) → text event; usage NOT surfaced as its own event", () => {
     const line = JSON.stringify({
-      conversation_id: "80fe5fd4-6973-43bc-bfff-38faae93082e",
-      status: "ERROR",
-      response: "readme.txt\n",
-      error:
-        "Permission denied for read_file(/home/gb/.gemini/antigravity-cli). Matches hardcoded system protection boundary rule.",
-      duration_seconds: 71.376995065,
-      num_turns: 2,
-      usage: { input_tokens: 147971, output_tokens: 7031, thinking_tokens: 5278, total_tokens: 155002 },
+      event: "step_update",
+      step_update: {
+        conversation_id: "beeaebcd-b396-4d7a-9fc3-a0c0ac83f1af",
+        step_index: 2,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "\n",
+        duration_seconds: 7.145,
+        usage: { input_tokens: 18684, output_tokens: 378, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 19062 },
+      },
     });
-    const evs = parseAgyResultLine(line, SID, "Gemini 3.5 Flash (Low)");
-    // status:ERROR with an `error` field emits a typed error event too, and the
-    // error text is also carried on the result.
-    expect(evs.map((e) => e.kind)).toEqual(["session_init", "text", "usage", "result", "error"]);
-    const capturedErr = evs.find((e) => e.kind === "error");
-    expect(capturedErr?.provider).toBe("agy");
-    expect(capturedErr?.text).toContain("Permission denied for read_file");
-    expect(evs.find((e) => e.kind === "result")?.text).toContain("hardcoded system protection");
-
-    // Minimal shape: partial response + short error.
-    const errLine = JSON.stringify({
-      conversation_id: "x",
-      status: "ERROR",
-      response: "partial",
-      error: "boom",
-    });
-    const errEvs = parseAgyResultLine(errLine, SID);
-    expect(errEvs.map((e) => e.kind)).toEqual(["session_init", "text", "usage", "result", "error"]);
-    const errEv = errEvs.find((e) => e.kind === "error");
-    expect(errEv).toMatchObject({ provider: "agy", kind: "error", text: "boom" });
-    expect(errEvs.find((e) => e.kind === "result")?.text).toBe("boom");
+    const evs = parseAgyStreamLine(line, SID, createAgyStreamState());
+    // Per-step usage is not the turn's final usage (Decision 3 — only the
+    // `result` event's usage becomes a `usage` NormalizedEvent).
+    expect(evs.map((e) => e.kind)).toEqual(["text"]);
+    expect(evs[0]?.text).toBe("\n");
   });
 
-  it("resumed turn carries the same conversation_id as agentChatId", () => {
+  it("empty text_delta emits nothing", () => {
     const line = JSON.stringify({
-      conversation_id: "b69873b6-6867-4830-ae40-fe84ff9707c8",
-      status: "SUCCESS",
-      response: "OK\n",
-      num_turns: 2,
-      usage: { input_tokens: 34061, output_tokens: 6, thinking_tokens: 0, total_tokens: 34067 },
+      event: "step_update",
+      step_update: { step_index: 4, state: "DONE", step_type: "agent_response", duration_seconds: 4.18 },
     });
-    const initEv = parseAgyResultLine(line, SID)[0];
-    expect(initEv).toMatchObject({ kind: "session_init", agentChatId: "b69873b6-6867-4830-ae40-fe84ff9707c8" });
+    expect(parseAgyStreamLine(line, SID, createAgyStreamState())).toEqual([]);
   });
 
-  it("skips malformed / non-result lines", () => {
-    expect(parseAgyResultLine("not json {{", SID)).toEqual([]);
-    expect(parseAgyResultLine("", SID)).toEqual([]);
-    // a stray JSON object without conversation_id/status is not our envelope.
-    expect(parseAgyResultLine(JSON.stringify({ hello: "world" }), SID)).toEqual([]);
+  it("tool step ACTIVE → tool_use, then DONE → tool_result (no duplicate tool_use)", () => {
+    const state = createAgyStreamState();
+    const activeLine = JSON.stringify({
+      event: "step_update",
+      step_update: {
+        conversation_id: "beeaebcd-b396-4d7a-9fc3-a0c0ac83f1af",
+        step_index: 3,
+        state: "ACTIVE",
+        step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { name: "run_command", parameters: { CommandLine: "ls -la" } },
+      },
+    });
+    const activeEvs = parseAgyStreamLine(activeLine, SID, state);
+    expect(activeEvs).toHaveLength(1);
+    expect(activeEvs[0]).toMatchObject({
+      provider: "agy",
+      kind: "tool_use",
+      toolName: "run_command",
+      toolId: "3",
+      toolInput: { CommandLine: "ls -la" },
+    });
+
+    const doneLine = JSON.stringify({
+      event: "step_update",
+      step_update: {
+        conversation_id: "beeaebcd-b396-4d7a-9fc3-a0c0ac83f1af",
+        step_index: 3,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "run_command",
+        duration_seconds: 0.76,
+        tool_info: {
+          name: "run_command",
+          parameters: { CommandLine: "ls -la" },
+          output: "total 8\r\ndrwxr-xr-x  2 gb gb 4096 Jul 15 15:17 .\r\n",
+        },
+      },
+    });
+    const doneEvs = parseAgyStreamLine(doneLine, SID, state);
+    // Already emitted tool_use for step_index "3" — DONE must only add tool_result.
+    expect(doneEvs.map((e) => e.kind)).toEqual(["tool_result"]);
+    expect(doneEvs[0]).toMatchObject({
+      toolId: "3",
+      toolResult: { content: "total 8\r\ndrwxr-xr-x  2 gb gb 4096 Jul 15 15:17 .\r\n", isError: false },
+    });
+  });
+
+  it("tool step arriving DONE-only (fresh state, no prior ACTIVE seen) synthesizes both tool_use and tool_result", () => {
+    const doneLine = JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 5,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "view_file",
+        tool_info: { name: "view_file", parameters: { AbsolutePath: "/tmp/x" }, output: "contents" },
+      },
+    });
+    const evs = parseAgyStreamLine(doneLine, SID, createAgyStreamState());
+    expect(evs.map((e) => e.kind)).toEqual(["tool_use", "tool_result"]);
+    expect(evs[0]).toMatchObject({ toolId: "5", toolName: "view_file", toolInput: { AbsolutePath: "/tmp/x" } });
+    expect(evs[1]).toMatchObject({ toolId: "5", toolResult: { content: "contents", isError: false } });
+  });
+
+  it("tool_info.error (not .output) → tool_result isError:true", () => {
+    const doneLine = JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 3,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "run_command",
+        tool_info: { name: "run_command", parameters: {}, error: "permission denied" },
+      },
+    });
+    const evs = parseAgyStreamLine(doneLine, SID, createAgyStreamState());
+    const resultEv = evs.find((e) => e.kind === "tool_result");
+    expect(resultEv?.toolResult).toEqual({ content: "permission denied", isError: true });
+  });
+
+  it("no-payload step_types (user_input / unknown / checkpoint / error_message) are dropped", () => {
+    for (const step_type of ["user_input", "unknown", "checkpoint", "error_message"]) {
+      const line = JSON.stringify({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type } });
+      expect(parseAgyStreamLine(line, SID, createAgyStreamState())).toEqual([]);
+    }
+  });
+
+  it("result event (SUCCESS) → usage + result, no session_init (init already handled that)", () => {
+    const line = JSON.stringify({
+      event: "result",
+      result: {
+        conversation_id: "a56a04cd-66b1-44cb-b538-90be2387c438",
+        status: "SUCCESS",
+        response: "4\n",
+        duration_seconds: 3.88,
+        num_turns: 1,
+        usage: { input_tokens: 18772, output_tokens: 16, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 18788 },
+      },
+    });
+    const evs = parseAgyStreamLine(line, SID, createAgyStreamState(), "Gemini 3.1 Pro (High)");
+    expect(evs.map((e) => e.kind)).toEqual(["usage", "result"]);
+    expect(evs[0]).toMatchObject({
+      provider: "agy",
+      kind: "usage",
+      usage: {
+        inputTokens: 18772,
+        outputTokens: 16,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+        totalTokens: 18788,
+        model: "Gemini 3.1 Pro (High)",
+      },
+    });
+    expect(evs[1]).toMatchObject({ kind: "result" });
+    expect(evs[1]?.usage?.totalTokens).toBe(18788);
+  });
+
+  it("result event (ERROR, no prior init — immediate hard-fail on bad --model) → usage + result + error", () => {
+    const line = JSON.stringify({
+      event: "result",
+      result: {
+        conversation_id: "",
+        status: "ERROR",
+        response: "",
+        error: 'invalid model selection (--model "totally-bogus-model"): model not recognized',
+        duration_seconds: 0,
+        num_turns: 0,
+        usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 },
+      },
+    });
+    const evs = parseAgyStreamLine(line, SID, createAgyStreamState(), "totally-bogus-model");
+    expect(evs.map((e) => e.kind)).toEqual(["usage", "result", "error"]);
+    const errEv = evs.find((e) => e.kind === "error");
+    expect(errEv).toMatchObject({ provider: "agy", kind: "error" });
+    expect(errEv?.text).toContain("invalid model selection");
+    expect(evs.find((e) => e.kind === "result")?.text).toContain("invalid model selection");
+  });
+
+  it("skips malformed / non-JSON / unrecognized-event lines", () => {
+    expect(parseAgyStreamLine("not json {{", SID, createAgyStreamState())).toEqual([]);
+    expect(parseAgyStreamLine("", SID, createAgyStreamState())).toEqual([]);
+    expect(parseAgyStreamLine(JSON.stringify({ hello: "world" }), SID, createAgyStreamState())).toEqual([]);
+    expect(parseAgyStreamLine(JSON.stringify({ event: "something_future" }), SID, createAgyStreamState())).toEqual([]);
   });
 });
