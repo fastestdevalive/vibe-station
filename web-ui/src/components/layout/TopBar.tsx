@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Columns2,
+  LayoutGrid,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -77,6 +78,12 @@ export function TopBar({
     toggleTerminalDock,
     toolSplitOrientation,
     toggleToolSplitOrientation,
+    // ⚠️ NAMING TRAP: this is the per-worktree pane-arrangement mode
+    // ("classic" | "workspace") from useLayout()'s WorktreeLayout slice —
+    // unrelated to this component's own `layoutMode` prop (page-routing:
+    // "workspace" | "dashboard" | "settings" | ...). Alias it.
+    layoutMode: paneLayoutMode,
+    setLayoutMode,
   } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
 
@@ -237,19 +244,39 @@ export function TopBar({
               <Search size={18} />
             </button>
             <div className="top-bar__pane-toggles" role="toolbar" aria-label="Workspace panes">
-              <button
-                type="button"
-                className="top-bar__pane-btn"
-                aria-label="Toggle agent/tools split orientation"
-                title={
-                  toolSplitOrientation === "horizontal"
-                    ? "Stack agent and tools vertically"
-                    : "Place agent and tools side by side"
-                }
-                onClick={toggleToolSplitOrientation}
-              >
-                {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
-              </button>
+              {layoutMode === "workspace" && activeWorktreeId ? (
+                <button
+                  type="button"
+                  className={`top-bar__pane-btn ${paneLayoutMode === "workspace" ? "top-bar__pane-btn--on" : ""}`}
+                  aria-pressed={paneLayoutMode === "workspace"}
+                  aria-label="Toggle workspace canvas layout"
+                  title={
+                    paneLayoutMode === "workspace"
+                      ? "Switch to classic layout"
+                      : "Switch to workspace canvas (tiled/free-form panes)"
+                  }
+                  onClick={() =>
+                    setLayoutMode(activeWorktreeId, paneLayoutMode === "workspace" ? "classic" : "workspace")
+                  }
+                >
+                  <LayoutGrid size={17} />
+                </button>
+              ) : null}
+              {paneLayoutMode !== "workspace" ? (
+                <button
+                  type="button"
+                  className="top-bar__pane-btn"
+                  aria-label="Toggle agent/tools split orientation"
+                  title={
+                    toolSplitOrientation === "horizontal"
+                      ? "Stack agent and tools vertically"
+                      : "Place agent and tools side by side"
+                  }
+                  onClick={toggleToolSplitOrientation}
+                >
+                  {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
+                </button>
+              ) : null}
               <button
                 type="button"
                 className={`top-bar__pane-btn ${terminalDockVisible ? "top-bar__pane-btn--on" : ""}`}

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DiffScope, Session, SessionState } from "@/api/types";
+import type { LayoutNode } from "@/lib/tiling";
+import { randomId } from "@/lib/uuid";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
 export type ToolTab = "files" | "devices" | "artifacts" | "vcs";
@@ -26,6 +28,20 @@ export interface WorktreeLayout {
   terminalDockVisible: boolean;
   /** "horizontal" = agent | tools side by side; "vertical" = agent / tools stacked. */
   toolSplitOrientation: ToolSplitOrientation;
+  /** "classic" = today's fixed split; "workspace" = tiled/free-form canvas of live panes. */
+  layoutMode: "classic" | "workspace";
+  /** Which saved WorkspaceDoc (below) is currently loaded for this worktree, if any. */
+  activeWorkspaceId: string | null;
+  /**
+   * The TRANSIENT canvas for this worktree — what the top bar's classic↔workspace
+   * toggle drops you into when no saved workspace is selected. Same geometry
+   * payload as a WorkspaceDoc, but it is NOT a WorkspaceDoc: it has no name, never
+   * appears in the sidebar's Workspaces list, and is scoped to this worktree's own
+   * panes only (no cross-worktree tiles). Persisted only incidentally, because
+   * `layoutByWorktree` is persisted — "Save as workspace" is what promotes it into
+   * a real, named, cross-context WorkspaceDoc.
+   */
+  scratchCanvas: CanvasGeometry | null;
 }
 
 export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
@@ -33,7 +49,57 @@ export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
   toolPanelTab: "files",
   terminalDockVisible: false,
   toolSplitOrientation: "horizontal",
+  layoutMode: "classic",
+  activeWorkspaceId: null,
+  scratchCanvas: null,
 };
+
+export type TileKind = "agent" | "terminal" | "tools";
+
+export interface TileSpec {
+  id: string;
+  kind: TileKind;
+  /** For "agent"/"terminal" tiles: the underlying session id. Undefined for "tools". */
+  sessionId?: string;
+  /**
+   * Owning worktree for a CROSS-CONTEXT tile (a saved workspace can host panes
+   * from other worktrees/projects). Undefined means "the worktree this canvas is
+   * being viewed in" — every tile on a transient canvas, and every same-worktree
+   * tile, leaves it undefined. Load-bearing for "tools" tiles, whose pane key is
+   * `tools:${worktreeId}`; carried on agent/terminal tiles too, for grouping/labels.
+   */
+  worktreeId?: string;
+}
+
+export interface FreeRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * The pure geometry payload of a canvas — everything WorkspaceCanvas reads and
+ * writes while you drag/resize/add/remove tiles. Shared verbatim by the saved
+ * `WorkspaceDoc` (below) and the transient `WorktreeLayout.scratchCanvas`, so the
+ * canvas component can run against either backing store unchanged.
+ */
+export interface CanvasGeometry {
+  mode: "tiled" | "free";
+  tiles: TileSpec[];
+  /** Tiling-mode layout tree (see lib/tiling.ts). Null when mode is "free" or canvas is empty. */
+  tree: LayoutNode | null;
+  /** Free-mode per-tile rects, keyed by TileSpec.id. Empty/unused when mode is "tiled". */
+  freeRects: Record<string, FreeRect>;
+}
+
+/** A saved, named workspace layout — a tiled or free-form arrangement of tiles. */
+export interface WorkspaceDoc extends CanvasGeometry {
+  id: string;
+  name: string;
+  /** worktreeId this workspace was created in (drives the sidebar's per-worktree list). */
+  contextKey: string;
+}
 
 /** IDE viewport fullscreen for the agent pane, tool panel, or terminal dock (not persisted). */
 export type WorkspacePaneFullscreen = "agent" | "tools" | "terminal";
@@ -83,6 +149,11 @@ export interface WorkspaceState {
   leftSidebarWidthPx: number;
   /** Hide worktrees whose agent sessions are all explicitly marked done (not exited) */
   hideInactiveWorktrees: boolean;
+  /** Show the colored border around agent panes/workspace tiles keyed to
+   *  interaction state (waiting_for_human red, needs_review violet, etc).
+   *  Client-side view preference (persisted); does not affect the sidebar's
+   *  StatusDot, which always shows. Defaults on. */
+  showAgentStatusBorders: boolean;
   mobileSidebarOpen: boolean;
   /** Transient attach state between openSession and session:opened */
   sessionAttachState: Record<string, "pending" | "attached">;
@@ -113,6 +184,7 @@ export interface WorkspaceState {
   setLeftSidebarWidthPx: (px: number) => void;
   setMobileSidebarOpen: (open: boolean) => void;
   toggleInactiveWorktreesFilter: () => void;
+  toggleAgentStatusBorders: () => void;
   clearWorkspaceSelection: () => void;
   toggleDotFiles: () => void;
   patchSessionState: (sessionId: string, state: SessionState) => void;
@@ -141,7 +213,31 @@ export interface WorkspaceState {
    */
   sortOrders: Record<string, string[]>;
   setSortOrder: (scopeKey: string, orderedIds: string[]) => void;
+
+  /** Saved workspace layouts, keyed by WorkspaceDoc.id. */
+  workspaceDocs: Record<string, WorkspaceDoc>;
+  /** Display order of workspace ids for a given scope key (e.g. `workspaces:${worktreeId}`) — mirrors the existing `sortOrders` client-only-reorder pattern (see line 142/395). */
+  workspaceOrder: Record<string, string[]>;
+  createWorkspace: (contextKey: string, name: string, mode: "tiled" | "free") => string;
+  renameWorkspace: (id: string, name: string) => void;
+  deleteWorkspace: (id: string) => void;
+  updateWorkspaceDoc: (id: string, patch: Partial<Omit<WorkspaceDoc, "id" | "contextKey">>) => void;
+  reorderWorkspace: (scopeKey: string, orderedIds: string[]) => void;
+  setActiveWorkspace: (worktreeId: string, workspaceId: string | null) => void;
+  setLayoutMode: (worktreeId: string, mode: "classic" | "workspace") => void;
+  /** Create-or-patch this worktree's transient (unsaved) canvas geometry. */
+  updateScratchCanvas: (worktreeId: string, patch: Partial<CanvasGeometry>) => void;
+  /** Drop the transient canvas (e.g. after "Save as workspace" promoted it). */
+  clearScratchCanvas: (worktreeId: string) => void;
 }
+
+/** Starting point for a freshly-entered transient canvas. */
+export const EMPTY_CANVAS_GEOMETRY: CanvasGeometry = {
+  mode: "free",
+  tiles: [],
+  tree: null,
+  freeRects: {},
+};
 
 /**
  * Compute the moved item's new fractional `sortOrder` value from the real
@@ -183,10 +279,13 @@ const initial = {
   leftSidebarCollapsed: false,
   leftSidebarWidthPx: 220,
   hideInactiveWorktrees: true,
+  showAgentStatusBorders: true,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
   sortOrders: {} as Record<string, string[]>,
+  workspaceDocs: {} as Record<string, WorkspaceDoc>,
+  workspaceOrder: {} as Record<string, string[]>,
 };
 
 export const useWorkspaceStore = create<WorkspaceState>()(
@@ -352,6 +451,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setMobileSidebarOpen: (open) => set({ mobileSidebarOpen: open }),
         toggleInactiveWorktreesFilter: () =>
           set((s) => ({ hideInactiveWorktrees: !s.hideInactiveWorktrees })),
+        toggleAgentStatusBorders: () =>
+          set((s) => ({ showAgentStatusBorders: !s.showAgentStatusBorders })),
         setWorkspacePaneFullscreen: (next) => set({ workspacePaneFullscreen: next }),
         clearWorkspaceSelection: () =>
           set({
@@ -394,11 +495,97 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             sortOrders: { ...s.sortOrders, [scopeKey]: orderedIds },
           })),
+        createWorkspace: (contextKey, name, mode) => {
+          const id = randomId();
+          set((s) => ({
+            workspaceDocs: {
+              ...s.workspaceDocs,
+              [id]: {
+                id,
+                name,
+                contextKey,
+                mode,
+                tiles: [],
+                tree: null,
+                freeRects: {},
+              },
+            },
+          }));
+          return id;
+        },
+        renameWorkspace: (id, name) =>
+          set((s) => {
+            const doc = s.workspaceDocs[id];
+            if (!doc) return s;
+            return {
+              workspaceDocs: { ...s.workspaceDocs, [id]: { ...doc, name } },
+            };
+          }),
+        deleteWorkspace: (id) =>
+          set((s) => {
+            const next = { ...s.workspaceDocs };
+            delete next[id];
+            return { workspaceDocs: next };
+          }),
+        updateWorkspaceDoc: (id, patch) =>
+          set((s) => {
+            const doc = s.workspaceDocs[id];
+            if (!doc) return s;
+            return {
+              workspaceDocs: { ...s.workspaceDocs, [id]: { ...doc, ...patch } },
+            };
+          }),
+        reorderWorkspace: (scopeKey, orderedIds) =>
+          set((s) => ({
+            workspaceOrder: { ...s.workspaceOrder, [scopeKey]: orderedIds },
+          })),
+        setActiveWorkspace: (worktreeId, workspaceId) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, activeWorkspaceId: workspaceId },
+              },
+            };
+          }),
+        setLayoutMode: (worktreeId, mode) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, layoutMode: mode },
+              },
+            };
+          }),
+        updateScratchCanvas: (worktreeId, patch) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
+            const scratch = cur.scratchCanvas ?? EMPTY_CANVAS_GEOMETRY;
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, scratchCanvas: { ...scratch, ...patch } },
+              },
+            };
+          }),
+        clearScratchCanvas: (worktreeId) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId];
+            if (!cur || cur.scratchCanvas == null) return s;
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, scratchCanvas: null },
+              },
+            };
+          }),
       };
     },
     {
       name: "vibestation:workspace",
-      version: 12,
+      version: 14,
       migrate: (persisted, version) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -423,6 +610,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               toolPanelTab: "files",
               terminalDockVisible: terminalVisible,
               toolSplitOrientation: "horizontal",
+              layoutMode: "classic",
+              activeWorkspaceId: null,
+              scratchCanvas: null,
             };
           }
           p.layoutByWorktree = next;
@@ -447,6 +637,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               toolPanelTab: (treeWasOpen ? "files" : (entry?.toolPanelTab ?? "files")) as ToolTab,
               terminalDockVisible: entry?.terminalDockVisible ?? false,
               toolSplitOrientation: "horizontal",
+              layoutMode: "classic",
+              activeWorkspaceId: null,
+              scratchCanvas: null,
             };
           }
           p.layoutByWorktree = next;
@@ -468,6 +661,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               toolPanelTab: (tab === "browser" || tab === "emulator" ? "devices" : (tab ?? "files")) as ToolTab,
               terminalDockVisible: entry?.terminalDockVisible ?? false,
               toolSplitOrientation: "horizontal",
+              layoutMode: "classic",
+              activeWorkspaceId: null,
+              scratchCanvas: null,
             };
           }
           p.layoutByWorktree = next;
@@ -489,6 +685,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               toolPanelTab: (tab === "preview" ? "files" : (tab ?? "files")) as ToolTab,
               terminalDockVisible: entry?.terminalDockVisible ?? false,
               toolSplitOrientation: "horizontal",
+              layoutMode: "classic",
+              activeWorkspaceId: null,
+              scratchCanvas: null,
             };
           }
           p.layoutByWorktree = next;
@@ -504,6 +703,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               toolPanelTab: (entry?.toolPanelTab ?? "files") as ToolTab,
               terminalDockVisible: entry?.terminalDockVisible ?? false,
               toolSplitOrientation: entry?.toolSplitOrientation ?? "horizontal",
+              layoutMode: entry?.layoutMode ?? "classic",
+              activeWorkspaceId: entry?.activeWorkspaceId ?? null,
+              scratchCanvas: entry?.scratchCanvas ?? null,
             };
           }
           p.layoutByWorktree = next;
@@ -514,6 +716,47 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // the new default so done worktrees hide consistently across clients.
         if (version < 11) {
           p.hideInactiveWorktrees = true;
+        }
+        // v11 → v13 (v12 had no layoutByWorktree shape change): add layoutMode +
+        // activeWorkspaceId to every existing WorktreeLayout entry, default classic/null.
+        if (version < 13) {
+          const old = p.layoutByWorktree as Record<string, unknown>;
+          const next: Record<string, WorktreeLayout> = {};
+          for (const [wt, raw] of Object.entries(old ?? {})) {
+            const entry = raw as Partial<WorktreeLayout> | undefined;
+            next[wt] = {
+              toolPanelVisible: entry?.toolPanelVisible ?? true,
+              toolPanelTab: (entry?.toolPanelTab ?? "files") as ToolTab,
+              terminalDockVisible: entry?.terminalDockVisible ?? false,
+              toolSplitOrientation: entry?.toolSplitOrientation ?? "horizontal",
+              layoutMode: entry?.layoutMode ?? "classic",
+              activeWorkspaceId: entry?.activeWorkspaceId ?? null,
+              scratchCanvas: entry?.scratchCanvas ?? null,
+            };
+          }
+          p.layoutByWorktree = next;
+          if (!p.workspaceDocs) p.workspaceDocs = {};
+          if (!p.workspaceOrder) p.workspaceOrder = {};
+        }
+        // v13 → v14: workspace mode no longer auto-creates a named WorkspaceDoc.
+        // Add the transient `scratchCanvas` slot (null = "nothing scratched yet",
+        // seeded lazily from the worktree's live panes on first entry).
+        if (version < 14) {
+          const old = p.layoutByWorktree as Record<string, unknown>;
+          const next: Record<string, WorktreeLayout> = {};
+          for (const [wt, raw] of Object.entries(old ?? {})) {
+            const entry = raw as Partial<WorktreeLayout> | undefined;
+            next[wt] = {
+              toolPanelVisible: entry?.toolPanelVisible ?? true,
+              toolPanelTab: (entry?.toolPanelTab ?? "files") as ToolTab,
+              terminalDockVisible: entry?.terminalDockVisible ?? false,
+              toolSplitOrientation: entry?.toolSplitOrientation ?? "horizontal",
+              layoutMode: entry?.layoutMode ?? "classic",
+              activeWorkspaceId: entry?.activeWorkspaceId ?? null,
+              scratchCanvas: entry?.scratchCanvas ?? null,
+            };
+          }
+          p.layoutByWorktree = next;
         }
         return p;
       },
@@ -537,7 +780,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         leftSidebarCollapsed: s.leftSidebarCollapsed,
         leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
+        showAgentStatusBorders: s.showAgentStatusBorders,
         sortOrders: s.sortOrders,
+        workspaceDocs: s.workspaceDocs,
+        workspaceOrder: s.workspaceOrder,
       }),
     },
   ),

@@ -1,4 +1,5 @@
 import { useTheme } from "@/hooks/useTheme";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { SectionHeader } from "./SectionHeader";
 
 function Row({
@@ -92,6 +93,8 @@ function SegmentedControl({
 
 export function AppearanceSetting() {
   const { theme, font, toggleTheme, toggleFont } = useTheme();
+  const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
+  const toggleAgentStatusBorders = useWorkspaceStore((s) => s.toggleAgentStatusBorders);
 
   return (
     <div>
@@ -125,6 +128,23 @@ export function AppearanceSetting() {
             ]}
             value={font}
             onChange={(v) => { if (v !== font) toggleFont(); }}
+          />
+        }
+      />
+
+      <Row
+        label="Agent status borders"
+        description="Color the border around agent panes and workspace tiles by interaction state (waiting for human, needs review, working, etc)."
+        control={
+          <SegmentedControl
+            options={[
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+            value={showAgentStatusBorders ? "on" : "off"}
+            onChange={(v) => {
+              if ((v === "on") !== showAgentStatusBorders) toggleAgentStatusBorders();
+            }}
           />
         }
       />

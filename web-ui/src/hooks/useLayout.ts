@@ -20,12 +20,20 @@ export function useLayout() {
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
+  const setLayoutMode = useWorkspaceStore((s) => s.setLayoutMode);
+  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
 
   return {
     toolPanelVisible: activeLayout.toolPanelVisible,
     toolPanelTab: activeLayout.toolPanelTab,
     terminalDockVisible: activeLayout.terminalDockVisible,
     toolSplitOrientation: activeLayout.toolSplitOrientation ?? "horizontal",
+    /** Pane-arrangement mode ("classic" | "workspace") for the active worktree/direct
+     *  context. NOT the page-routing `layoutMode` prop TopBar/Workspace pass around
+     *  ("workspace"|"dashboard"|"settings"|...) — callers destructuring this should
+     *  alias it (e.g. `const { layoutMode: paneLayoutMode } = useLayout();`). */
+    layoutMode: activeLayout.layoutMode ?? "classic",
+    activeWorkspaceId: activeLayout.activeWorkspaceId ?? null,
     activeWorktreeId,
     activeDirectContextId,
     activeSessionId,
@@ -38,5 +46,7 @@ export function useLayout() {
     setActiveSession,
     setActiveTerminalSession,
     setActiveWorktree,
+    setLayoutMode,
+    setActiveWorkspace,
   };
 }

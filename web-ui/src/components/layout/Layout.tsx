@@ -17,6 +17,13 @@ interface LayoutProps {
   toolPanel?: ReactNode;
   /** Bottom region — terminal dock. Pass `null` when unavailable. */
   terminalDock?: ReactNode;
+  /** Tiled/free-form workspace canvas — rendered instead of the classic agent/tools/
+   *  terminal split when the active worktree's `layoutMode` is "workspace". */
+  workspaceCanvas?: ReactNode;
+  /** Every live agent/terminal/tools pane for the active context, permanently mounted
+   *  once regardless of classic vs. workspace mode — see PaneHostLayer.tsx. Rendered
+   *  unconditionally as an always-mounted sibling, never inside a conditional branch. */
+  paneHostLayer?: ReactNode;
   leftColumnPx: number;
   /** Whether the desktop sidebar is collapsed to its icon rail (hides the drag handle). */
   leftSidebarCollapsed?: boolean;
@@ -34,6 +41,8 @@ export function Layout({
   agentPane,
   toolPanel,
   terminalDock,
+  workspaceCanvas,
+  paneHostLayer,
   leftColumnPx,
   leftSidebarCollapsed,
   onLeftSidebarResize,
@@ -41,7 +50,17 @@ export function Layout({
   mobileSidebarOpen,
   onMobileSidebarClose,
 }: LayoutProps) {
-  const { toolPanelVisible, terminalDockVisible, toolSplitOrientation, activeWorktreeId, activeDirectContextId } = useLayout();
+  const {
+    toolPanelVisible,
+    terminalDockVisible,
+    toolSplitOrientation,
+    activeWorktreeId,
+    activeDirectContextId,
+    // ⚠️ `layoutMode` here is the per-worktree pane-arrangement mode
+    // ("classic" | "workspace") from useLayout()/WorktreeLayout — unrelated to
+    // TopBar's page-routing `layoutMode` prop. Alias it to avoid collisions.
+    layoutMode: paneLayoutMode,
+  } = useLayout();
 
   const mainContentRef = useRef<HTMLDivElement>(null);
 
@@ -172,6 +191,7 @@ export function Layout({
             {dashboardPane}
           </div>
         </div>
+        {paneHostLayer}
       </div>
     );
   }
@@ -252,7 +272,7 @@ export function Layout({
     agentWrapper()
   );
 
-  const mainColumnInner = showTerminalDock ? (
+  const classicMainColumnInner = showTerminalDock ? (
     <PanelGroup
       direction="vertical"
       autoSaveId={`vs-ide-dock-${wt}`}
@@ -269,6 +289,9 @@ export function Layout({
   ) : (
     topRow
   );
+
+  const mainColumnInner =
+    paneLayoutMode === "workspace" && workspaceCanvas != null ? workspaceCanvas : classicMainColumnInner;
 
   const mainColumn = (
     <div
@@ -299,6 +322,7 @@ export function Layout({
         {mainColumn}
       </div>
       {fullscreenOverlay}
+      {paneHostLayer}
     </div>
   );
 }

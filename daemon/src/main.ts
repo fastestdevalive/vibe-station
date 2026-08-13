@@ -14,6 +14,7 @@ import { buildServer } from "./server.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
+import { startPrPoller, stopPrPoller } from "./services/prPoller.js";
 
 const VST_HOME = join(homedir(), ".vibe-station");
 const CONFIG_PATH = join(VST_HOME, "config.json");
@@ -170,11 +171,14 @@ async function main() {
 
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
+  // Poll for PR review-readiness → needs_review (plan 03, Decision 3/3b)
+  startPrPoller();
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}; shutting down…`);
     stopLifecyclePoller();
+    stopPrPoller();
     await app.close();
     await releaseLock();
     process.exit(0);

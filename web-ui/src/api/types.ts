@@ -55,7 +55,21 @@ export type FileScope = "worktree" | "project";
 
 export type SessionType = "agent" | "terminal";
 
-export type SessionState = "not_started" | "working" | "idle" | "done" | "exited";
+/**
+ * `waiting_for_human` (idle-after-having-worked, R3) and `needs_review` (open
+ * PR poller) are both wired up daemon-side as of
+ * .vibekit/feature-plans/wip/agent-interaction-workspaces/03-interaction-states —
+ * real `session:state` events carry these values, not just the dev-only
+ * state-simulation panel (components/dev/DevStatePanel.tsx).
+ */
+export type SessionState =
+  | "not_started"
+  | "working"
+  | "idle"
+  | "waiting_for_human"
+  | "needs_review"
+  | "done"
+  | "exited";
 
 /**
  * Execution channel (mirror of daemon `Channel`). `json` = structured JSON

@@ -1,6 +1,8 @@
 import type { Session, SessionState } from "@/api/types";
 
 export type WorktreeRolledUpStatus =
+  | "waiting_for_human"
+  | "needs_review"
   | "working"
   | "spawning"
   | "idle"
@@ -8,7 +10,13 @@ export type WorktreeRolledUpStatus =
   | "exited"
   | "none";
 
+// PRD R8 precedence: waiting_for_human outranks needs_review outranks
+// working — one session actively blocking on a human dominates the whole
+// worktree's displayed status; a ready-for-review PR is informational and
+// ranks just above ordinary activity, not above an active block.
 const rank: Record<WorktreeRolledUpStatus, number> = {
+  waiting_for_human: 8,
+  needs_review: 7,
   working: 6,
   spawning: 5,
   idle: 4,
@@ -16,6 +24,33 @@ const rank: Record<WorktreeRolledUpStatus, number> = {
   exited: 2,
   none: 1,
 };
+
+/**
+ * Single-session status — the per-session equivalent of `worktreeRolledUpStatus`'s
+ * inner mapping, same color scheme. Shared by `WorkspaceCanvas.tsx` (tile chrome)
+ * and `AgentPaneSlot.tsx` (direct-session chrome) so both surfaces use one source
+ * of truth for "what color does this session's state map to."
+ */
+export function sessionStatus(state: SessionState): WorktreeRolledUpStatus {
+  switch (state) {
+    case "not_started":
+      return "spawning";
+    case "working":
+      return "working";
+    case "idle":
+      return "idle";
+    case "waiting_for_human":
+      return "waiting_for_human";
+    case "needs_review":
+      return "needs_review";
+    case "done":
+      return "done";
+    case "exited":
+      return "exited";
+    default:
+      return "none";
+  }
+}
 
 /**
  * Single status for a worktree row: working > spawning (not_started) > idle > done > exited > none.
@@ -40,6 +75,8 @@ export function worktreeRolledUpStatus(
     if (st === "not_started") step = "spawning";
     else if (st === "working") step = "working";
     else if (st === "idle") step = "idle";
+    else if (st === "waiting_for_human") step = "waiting_for_human";
+    else if (st === "needs_review") step = "needs_review";
     else if (st === "done") step = "done";
     else if (st === "exited") step = "exited";
     else step = "none";

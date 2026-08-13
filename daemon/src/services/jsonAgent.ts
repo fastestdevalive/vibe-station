@@ -762,20 +762,34 @@ export class JsonAgentSession {
       this.running = false;
       if (this.turnState !== "error") this.setTurnState("idle");
       this.emitMeta();
-      // Persist lifecycle → idle now the queue has fully drained (Decision 11).
-      // The lifecycle poller deliberately skips JSON sessions, so nothing else
-      // flips the sidebar spinner back off. Even on a turn error the session is
-      // ready for the next message (the error lives in the transcript), so idle
-      // is correct. `POST /chat` / `startJsonCreateTurn` persist `working` while
-      // a turn is active/queued; this is the matching `idle` transition.
-      await this.persistLifecycle("idle");
+      // Persist lifecycle → waiting_for_human now the queue has fully
+      // drained (Decision 11). The lifecycle poller deliberately skips JSON
+      // sessions, so nothing else flips the sidebar spinner back off.
+      // `POST /chat` / `startJsonCreateTurn` persist `working` while a turn
+      // is active/queued; this is the matching post-turn transition.
+      //
+      // R3 (plan 03, Decision 2 / Decision 0 — R2 dropped, R3 is the sole
+      // waiting_for_human entry path for EVERY channel, not just TTY): reaching
+      // this finally block AT ALL means `runOneTurn` processed at least one
+      // turn in the `while` loop above — i.e. the session has, by construction,
+      // already "reached working" this cycle. There is no genesis-vs-later
+      // distinction to make here (unlike a naive reading of the TTY poller's
+      // `everWorked` flag might suggest) — R3a's carve-out ("never reached
+      // working stays idle") has no live manifestation in `drain()` at all,
+      // symmetric with why it has none in `lifecycle.ts`'s poller either (see
+      // that file's own `everWorked` doc comment). So every drain lands on
+      // `waiting_for_human`, including the very first one. Even on a turn
+      // error the session is ready for the next message (the error lives in
+      // the transcript), so the same choice applies.
+      await this.persistLifecycle("waiting_for_human");
     }
   }
 
   /** Persist the session lifecycle to the manifest (JSON channel, Decision 11). */
   private async persistLifecycle(state: LifecycleState): Promise<void> {
-    // Released sessions are terminal (`done`) — the drain's trailing `idle`
-    // must not demote them. See the `released` field comment.
+    // Released sessions are terminal (`done`) — the drain's trailing
+    // `waiting_for_human` (or any other non-terminal state) must not demote
+    // them. See the `released` field comment.
     if (this.released) return;
     try {
       const { persistLifecycleState } = await import("./lifecycle.js");

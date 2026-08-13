@@ -1,0 +1,150 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+
+/**
+ * PaneOutletRegistry — a live directory of `<PaneOutlet>` DOM nodes keyed by
+ * paneKey. `PaneHostLayer` (see PaneHostLayer.tsx) reads this registry via
+ * `usePaneOutletElement` to decide where to portal each permanently-mounted
+ * pane's rendered output. The Map itself lives in a ref (not React state) so
+ * registration/unregistration never triggers a re-render on its own; each
+ * key has its own tiny subscriber list so only components actually watching
+ * that key re-render when its outlet element changes.
+ */
+
+type Listener = () => void;
+
+interface RegistryValue {
+  register: (key: string, el: HTMLElement | null) => void;
+  unregister: (key: string) => void;
+  getOutlet: (key: string) => HTMLElement | null;
+  subscribe: (key: string, listener: Listener) => () => void;
+}
+
+const PaneOutletRegistryContext = createContext<RegistryValue | null>(null);
+
+export function PaneOutletProvider({ children }: { children: ReactNode }) {
+  const outletsRef = useRef<Map<string, HTMLElement | null>>(new Map());
+  const listenersRef = useRef<Map<string, Set<Listener>>>(new Map());
+
+  const notify = useCallback((key: string) => {
+    const listeners = listenersRef.current.get(key);
+    if (!listeners) return;
+    for (const listener of listeners) listener();
+  }, []);
+
+  const register = useCallback(
+    (key: string, el: HTMLElement | null) => {
+      outletsRef.current.set(key, el);
+      notify(key);
+    },
+    [notify],
+  );
+
+  const unregister = useCallback(
+    (key: string) => {
+      outletsRef.current.delete(key);
+      notify(key);
+    },
+    [notify],
+  );
+
+  const getOutlet = useCallback((key: string) => outletsRef.current.get(key) ?? null, []);
+
+  const subscribe = useCallback((key: string, listener: Listener) => {
+    let listeners = listenersRef.current.get(key);
+    if (!listeners) {
+      listeners = new Set();
+      listenersRef.current.set(key, listeners);
+    }
+    listeners.add(listener);
+    return () => {
+      listeners!.delete(listener);
+      if (listeners!.size === 0) listenersRef.current.delete(key);
+    };
+  }, []);
+
+  const value = useMemo<RegistryValue>(
+    () => ({ register, unregister, getOutlet, subscribe }),
+    [register, unregister, getOutlet, subscribe],
+  );
+
+  return (
+    <PaneOutletRegistryContext.Provider value={value}>
+      {children}
+    </PaneOutletRegistryContext.Provider>
+  );
+}
+
+function useRegistry(): RegistryValue {
+  const ctx = useContext(PaneOutletRegistryContext);
+  if (!ctx) {
+    throw new Error("PaneOutlet components must be used within a PaneOutletProvider");
+  }
+  return ctx;
+}
+
+/**
+ * Renders the DOM node other components portal into for `paneKey`. Mount
+ * exactly one of these wherever a pane should currently be visible (e.g.
+ * inside a workspace tile); unmount it (e.g. tile closes/layout changes) and
+ * `usePaneOutletElement` reports null for that key again — the pane itself
+ * stays mounted elsewhere (see PaneHostLayer), it just loses its visible home.
+ */
+export function PaneOutlet({ paneKey }: { paneKey: string }) {
+  const { register, unregister } = useRegistry();
+
+  const refCallback = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el) register(paneKey, el);
+      else unregister(paneKey);
+    },
+    [paneKey, register, unregister],
+  );
+
+  // MUST be a flex column container, not a plain block. Every pane root that
+  // gets portaled in here (`.agent-pane-slot`, `.terminal-pane-root`,
+  // `.tool-panel`) sizes itself with `flex: 1; min-height: 0` — the shape it
+  // needs inside classic layout's `.pane-stack`. In a *block* parent `flex: 1`
+  // is inert, so the pane falls back to `height: auto` and sizes to its
+  // intrinsic content instead of to the outlet: a fresh xterm (no rows yet)
+  // collapses to ~0px, and a warmed-up one overflows past the tile. Making the
+  // outlet a flex container reproduces `.pane-stack`'s height propagation, so
+  // panes fill the outlet exactly and stay responsive when the tile resizes.
+  return (
+    <div
+      ref={refCallback}
+      style={{
+        width: "100%",
+        height: "100%",
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    />
+  );
+}
+
+/** Returns the current outlet DOM node for `paneKey`, or null if none is mounted. */
+export function usePaneOutletElement(paneKey: string): HTMLElement | null {
+  const { getOutlet, subscribe } = useRegistry();
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    // The outlet may have registered/unregistered between the render that
+    // read `getOutlet` and this effect running — re-check once on mount/key
+    // change, then stay in sync via the subscription for subsequent changes.
+    forceRender((v) => v + 1);
+    return subscribe(paneKey, () => forceRender((v) => v + 1));
+  }, [paneKey, subscribe]);
+
+  return getOutlet(paneKey);
+}
