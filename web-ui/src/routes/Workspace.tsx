@@ -305,7 +305,11 @@ export function Workspace() {
             : {
                 agentPane,
                 toolPanel: (
-                  <ToolPanel api={api} worktreeId={activeWorktreeId} />
+                  <ToolPanel
+                    api={api}
+                    worktreeId={activeWorktreeId}
+                    baseBranch={worktrees.find((w) => w.id === activeWorktreeId)?.baseBranch}
+                  />
                 ),
                 terminalDock,
               })}

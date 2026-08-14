@@ -139,3 +139,27 @@ The lock is scoped to one `WSConnection`. Two browser tabs legitimately hold two
 - **Do not change UI copy back to "JSON chat" / "JSON mode"** to "match" the code — same reasoning in reverse. If you're editing a component and see `"json"` in a prop/variable name right next to `"Rich Chat"` in the JSX it renders, that's correct, not a bug — leave both as they are.
 - **New UI copy for this channel:** use "Rich Chat"; add `(json based)` only where the technical detail is genuinely useful to the reader (a tooltip, an advanced-settings hint), not in every occurrence.
 - **New code identifiers for this channel:** use `json`/`Json`-prefixed names, consistent with the existing files above.
+
+---
+
+## Docker dev sandboxes — two different tools, don't conflate them
+
+**Files:** `docker-compose.dev.yml` · `scripts/dev-sandbox.sh` · `scripts/dev-entrypoint.sh` · `docker-compose.screenshots.yml` · `Dockerfile.screenshots` · `scripts/demo-seed.sh` · `scripts/seed-file-search-demo.sh`
+
+There are two separate docker setups in this repo. They look similar (both boot a daemon + Vite dev server) but exist for different jobs — picking the wrong one silently gives you the wrong environment instead of erroring.
+
+| | `docker-compose.dev.yml` (via `scripts/dev-sandbox.sh`) | `docker-compose.screenshots.yml` |
+|---|---|---|
+| Purpose | Interactive dev/testing sandbox | Frozen, realistic dataset for README screenshots |
+| Source | Bind-mounted (`web-ui/src`) — hot reload on edit | Baked into the image (`COPY . .`) — rebuild to see changes |
+| Seed data | `VST_SEED_MODE=demo` (default, 3 projects / 9 worktrees / 14 sessions, via `scripts/demo-seed.sh`) or `VST_SEED_MODE=file-search` (one lightweight project) | Always the same 3-project/9-worktree/14-session dataset |
+| Auth | `VST_NO_AUTH=1` — no login screen | Real token login (printed to container logs) |
+| Instances | Per-worktree (`scripts/dev-sandbox.sh` picks a free port + isolated volumes per worktree checkout) | Single, fixed name/port (`vst-screenshots`, `5174`) — not meant to run more than one at a time |
+
+**Rule of thumb:** a bare `scripts/dev-sandbox.sh up` already gives you *some* worktrees/agent sessions to click into — hot reload, no login, and the realistic dataset, in one sandbox, no flags needed. Pass `--seed=file-search` only when you specifically want a fast, empty single-project tree instead. Reach for `docker-compose.screenshots.yml` directly only when you're actually regenerating README screenshots (`scripts/take-screenshots.ts` targets its fixed port/dataset).
+
+### What to watch for
+
+- **`scripts/dev-sandbox.sh up` with no flags seeds the full demo dataset by default** — worktrees/agents are there out of the box. Pass `--seed=file-search` if you specifically want a fast, empty single-project tree instead.
+- **Switching `--seed` mode on an already-seeded volume does NOT cleanly swap datasets — it merges/corrupts them.** The two seed scripts guard themselves independently and asymmetrically, not via a shared "already seeded in mode X" marker: `demo-seed.sh` checks its own `$VST/.seeded` file; `seed-file-search-demo.sh` checks whether `file-search-demo`'s repo dir exists and whether that project is already registered with the daemon. Neither guard knows about the other, so going `file-search` → `demo` on the same worktree-name runs `demo-seed.sh` in full on a volume the daemon already has state for (it `rm -rf`s its own project dirs and overwrites `modes.json`, but doesn't touch the pre-existing `file-search-demo` data or the daemon's already-booted SQLite state — the result is an inconsistent mix, not a clean demo dataset), and going `demo` → `file-search` just registers a 4th project alongside the demo data rather than being a no-op. Use a fresh worktree-name (or `docker volume rm vst-dev-data-<worktree> vst-dev-projects-<worktree>`) whenever you want to actually change an existing sandbox's seed mode.
+- **Don't add demo-dataset seeding to `docker-compose.screenshots.yml`'s job description** or vice versa — `screenshots` intentionally has no hot reload and real auth so it matches what `take-screenshots.ts` expects; don't "fix" that to make it more dev-friendly.

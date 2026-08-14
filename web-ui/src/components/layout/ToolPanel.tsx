@@ -15,6 +15,8 @@ interface ToolPanelProps {
   worktreeId: string | null;
   /** Browsing scope. "project" is used by direct sessions (files in the base dir). */
   scope?: FileScope;
+  /** Worktree's base branch (e.g. "main"), for the VCS tab's upstream-commits group label. */
+  baseBranch?: string;
 }
 
 const TABS: { id: ToolTab; label: string }[] = [
@@ -30,7 +32,7 @@ const TABS: { id: ToolTab; label: string }[] = [
  * (web browser + emulators) and Artifacts are placeholders until their backends
  * land.
  */
-export function ToolPanel({ api, worktreeId, scope = "worktree" }: ToolPanelProps) {
+export function ToolPanel({ api, worktreeId, scope = "worktree", baseBranch }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
 
   return (
@@ -78,7 +80,9 @@ export function ToolPanel({ api, worktreeId, scope = "worktree" }: ToolPanelProp
             ) : null}
             {toolPanelTab === "devices" ? <DevicesPanel /> : null}
             {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
-            {toolPanelTab === "vcs" ? <VcsPanel api={api} worktreeId={worktreeId} /> : null}
+            {toolPanelTab === "vcs" ? (
+              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} />
+            ) : null}
           </>
         )}
       </div>
