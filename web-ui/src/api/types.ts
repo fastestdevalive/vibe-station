@@ -444,6 +444,12 @@ export interface CommitLogEntry {
   insertions: number;
   deletions: number;
   hasBinaryChanges: boolean;
+  /**
+   * True if this commit is unique to the worktree's branch (not already on
+   * the base branch it forked from). False marks upstream/base-branch
+   * history, which the VCS tool tab collapses by default.
+   */
+  isOnBranch: boolean;
 }
 
 export interface PrInfo {

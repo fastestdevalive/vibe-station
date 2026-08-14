@@ -1097,10 +1097,11 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+    const worktree = project.worktrees.find((w) => w.id === wtId)!;
 
     const wtPath = getWorktreePath(project.id, wtId);
     try {
-      const commits = await listCommits(wtPath, limit);
+      const commits = await listCommits(wtPath, limit, worktree.baseSha);
       return reply.send({ commits });
     } catch (err) {
       return reply.status(500).send({ error: `commits failed: ${String(err)}` });

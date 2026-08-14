@@ -782,10 +782,19 @@ export function createMockApi() {
       return [];
     },
 
-    async listCommits(worktreeId: string, _limit = 200): Promise<CommitLogEntry[]> {
+    async listCommits(worktreeId: string, limit = 200): Promise<CommitLogEntry[]> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const now = new Date("2026-08-11T12:00:00Z").getTime();
-      const sample: Array<[string, string, number, number, string?]> = [
+      // The first OWN_COMMIT_COUNT entries of `curated` are the worktree's
+      // own commits (`isOnBranch: true` below); everything after — the rest
+      // of `curated`, plus the whole synthetic tail — simulates base-branch
+      // history the worktree forked from, so the VCS tab's collapsed
+      // "commits from upstream" group has something to demonstrate. Kept as
+      // an explicit count rather than arithmetic on `curated.length` so
+      // adding/removing a curated commit above can't silently shift the
+      // own/upstream split.
+      const OWN_COMMIT_COUNT = 3;
+      const curated: Array<[string, string, number, number, string?]> = [
         [
           "Add VCS commit graph skeleton",
           "Ada Lovelace",
@@ -801,9 +810,29 @@ export function createMockApi() {
           3,
           "Web and Emulator sub-tabs now share one live view slot instead of\nmounting/unmounting on switch, avoiding the terminal-remount class of bug.",
         ],
+        // OWN_COMMIT_COUNT above must match: these two, plus everything in
+        // the synthetic tail below, are upstream. The synthetic tail extends
+        // this further so "Load more" also has something to demonstrate,
+        // since 5 curated commits alone never exceed a page.
+        ["Bump lockfile", "Grace Hopper", 4, 4],
         ["Initial worktree scaffold", "Ada Lovelace", 340, 0],
       ];
-      return sample.map(([subject, authorName, insertions, deletions, body], i) => ({
+      const SYNTHETIC_UPSTREAM_COUNT = 120;
+      const authors = ["Grace Hopper", "Ada Lovelace", "Katherine Johnson"];
+      const sample: Array<[string, string, number, number, string?]> = [
+        ...curated,
+        ...Array.from({ length: SYNTHETIC_UPSTREAM_COUNT }, (_, j) => {
+          const n = j + 1;
+          return [
+            `Upstream commit #${n}`,
+            authors[n % authors.length]!,
+            (n % 7) + 1,
+            n % 3,
+          ] as [string, string, number, number, string?];
+        }),
+      ];
+      const page = sample.slice(0, limit);
+      return page.map(([subject, authorName, insertions, deletions, body], i) => ({
         sha: `${worktreeId}-sha-${i}`.padEnd(40, "0"),
         shortSha: `${i}abcdef`.slice(0, 7),
         authorName,
@@ -814,6 +843,7 @@ export function createMockApi() {
         insertions,
         deletions,
         hasBinaryChanges: false,
+        isOnBranch: i < OWN_COMMIT_COUNT,
       }));
     },
 

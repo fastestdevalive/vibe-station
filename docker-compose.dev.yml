@@ -1,10 +1,28 @@
 # Dev sandbox: feature branch FE + daemon in isolation.
 # Does NOT touch your running vibe-station instance.
 #
-# Usage:
+# Usage (single sandbox, historical/simple case):
 #   docker compose -f docker-compose.dev.yml up --build
+#   Then open: http://localhost:5174
 #
-# Then open: http://localhost:5174
+# Usage (multiple worktrees' sandboxes running concurrently):
+#   scripts/dev-sandbox.sh up [worktree-name] [port] [--seed=file-search|demo]
+#   scripts/dev-sandbox.sh down [worktree-name]
+#   See scripts/dev-sandbox.sh — it sets VST_SANDBOX_PORT/DATA_VOLUME/
+#   PROJECTS_VOLUME (below) and a `-p <worktree-name>` compose project name so
+#   each worktree gets its own port + volumes instead of colliding on the
+#   defaults every plain `docker compose ... up` shares.
+#
+# This sandbox always has hot-reload (web-ui/src bind-mounted) and no login
+# (VST_NO_AUTH=1). By default it seeds the realistic 3-project/9-worktree/
+# 14-session demo dataset, so there are worktrees/agent sessions to click
+# into out of the box — pass `--seed=file-search` (or set
+# VST_SEED_MODE=file-search) instead if you specifically want a fast, empty
+# single-project tree. If you specifically need to
+# reproduce the frozen, single-instance, real-auth screenshot sandbox itself
+# (e.g. to regenerate README screenshots), use
+# docker-compose.screenshots.yml instead — it bakes source into the image
+# (no hot reload) and keeps auth on, which this file intentionally doesn't.
 #
 # CLI binaries are bind-mounted read-only from the host so that
 # GET /cli-models works inside the container. gemini is installed directly in the image;
@@ -26,9 +44,11 @@ services:
       context: .
       dockerfile: dev.Dockerfile
     ports:
-      # Host 5174 → container 5173 (Vite dev server)
-      # Avoids collision with your main vite instance on 5173
-      - "5174:5173"
+      # Host port → container 5173 (Vite dev server). Override via
+      # VST_SANDBOX_PORT (see scripts/dev-sandbox.sh) so concurrent
+      # worktree sandboxes don't fight over the same host port; defaults to
+      # 5174 to match this file's original single-sandbox behavior.
+      - "${VST_SANDBOX_PORT:-5174}:5173"
     environment:
       HOME: /home/vst
       # Vite proxy already points to 127.0.0.1:7421 — no change needed
@@ -37,6 +57,13 @@ services:
       # mirror these onto a network-exposed production daemon.
       VST_NO_AUTH: "1"
       VITE_DEV_ALLOW_ALL_HOSTS: "1"
+      # "demo" (default) seeds the same realistic 3-project/9-worktree/
+      # 14-session dataset docker-compose.screenshots.yml uses, so every
+      # sandbox has actual worktrees/agents to test against; "file-search"
+      # seeds one lightweight project instead. Override via
+      # `scripts/dev-sandbox.sh up --seed=file-search` — see
+      # scripts/dev-entrypoint.sh for the branch.
+      VST_SEED_MODE: "${VST_SEED_MODE:-demo}"
     volumes:
       # Mount CLI binaries read-only so the daemon can shell out to them.
       # Paths use $HOME — override with OPENCODE_BIN, CURSOR_BIN, CLAUDE_BIN if yours differ.
@@ -79,18 +106,20 @@ services:
     tty: true
 
 volumes:
-  # Explicit global `name:` — every worktree sandbox that uses this base
-  # compose file unmodified mounts these SAME two volumes (see the
-  # "dev-sandbox-volumes-are-shared" memory note: parallel worktree
-  # sandboxes clobber each other's daemon state this way). Known,
-  # intentionally-not-fixed-here limitation: this also means a colleague
-  # still running an OLDER (pre-non-root-daemon) image against these same
-  # volumes will write root-owned files here; the new non-root daemon then
-  # can't read them until this container's next start re-runs the
-  # unconditional chown in scripts/dev-entrypoint.sh. Re-scoping these to
-  # be per-worktree by default is a separate, bigger decision — see
-  # docker-compose.dev.<worktree>.yml for the current workaround.
+  # Explicit `name:`, overridable via VST_SANDBOX_DATA_VOLUME /
+  # VST_SANDBOX_PROJECTS_VOLUME — defaults preserve this file's original
+  # single-shared-sandbox behavior (every plain `docker compose ... up`
+  # mounts the same two volumes), but scripts/dev-sandbox.sh sets these
+  # per-worktree so concurrent sandboxes don't clobber each other's daemon
+  # state (see the "dev-sandbox-volumes-are-shared" memory note — this is
+  # the fix for the "known, intentionally-not-fixed-here limitation" that
+  # note originally described).
+  #
+  # Aside: a colleague still running an OLDER (pre-non-root-daemon) image
+  # against a volume you also use will write root-owned files into it; the
+  # new non-root daemon then can't read them until the next start re-runs
+  # the unconditional chown in scripts/dev-entrypoint.sh.
   vst-dev-data:
-    name: vst-dev-data
+    name: ${VST_SANDBOX_DATA_VOLUME:-vst-dev-data}
   vst-dev-projects:
-    name: vst-dev-projects
+    name: ${VST_SANDBOX_PROJECTS_VOLUME:-vst-dev-projects}

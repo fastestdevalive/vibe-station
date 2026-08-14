@@ -196,6 +196,21 @@ export interface CommitLogEntry {
   deletions: number;
   /** True if any changed file's diff couldn't be summarized as text (numstat reports "-"). */
   hasBinaryChanges: boolean;
+  /**
+   * True if this commit is reachable from HEAD but not from the worktree's
+   * recorded `baseSha` (`git rev-list HEAD --not <baseSha>`) — i.e. not
+   * reachable from the fork point as recorded at worktree-creation time.
+   * This is a proxy for "unique to this branch", not a guarantee of it: if
+   * the branch was rebased, or the base branch was force-pushed/advanced
+   * past what `baseSha` still points at, a commit that's actually on
+   * today's base branch can still read `true` here (harmless — it just
+   * doesn't get collapsed), and in principle the reverse could happen too.
+   * When `baseSha` isn't available (no worktree record, invalid/deleted
+   * ref), every commit is conservatively marked `true` so nothing is
+   * hidden. Used by the VCS tool tab to collapse base-branch history by
+   * default.
+   */
+  isOnBranch: boolean;
 }
 
 // Record separator (0x1e) delimits commits; unit separator (0x1f) delimits fields
@@ -209,17 +224,24 @@ const US = "\x1f";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
 
 /**
- * List commits reachable from HEAD (i.e. the worktree's full branch history,
- * not scoped to commits since the worktree's `baseSha` — same "show
- * everything reachable from here" semantics as a bare `git log`, deliberately
- * not filtered the way `/changed-paths?scope=branch` filters against
- * `baseSha`), most recent first, each annotated with its line-level diffstat
+ * List commits reachable from HEAD (i.e. the worktree's full branch history —
+ * same "show everything reachable from here" semantics as a bare `git log`),
+ * most recent first, each annotated with its line-level diffstat
  * (insertions/deletions) versus its first parent. `--diff-merges=first-parent`
  * ensures merge commits get a real diffstat instead of git's default of
- * suppressing diff output for merges entirely. Used by the VCS tool tab to
- * render a commit timeline for a worktree.
+ * suppressing diff output for merges entirely.
+ *
+ * When `baseSha` is passed, each commit is also annotated with `isOnBranch`
+ * (see `CommitLogEntry`), computed via `git rev-list --not <baseSha> HEAD` —
+ * the same "unique to this branch" semantics `/changed-paths?scope=branch`
+ * uses for `baseSha`-scoped diffs. Used by the VCS tool tab to render a
+ * commit timeline and collapse base-branch history by default.
  */
-export async function listCommits(repoPath: string, limit = 200): Promise<CommitLogEntry[]> {
+export async function listCommits(
+  repoPath: string,
+  limit = 200,
+  baseSha?: string,
+): Promise<CommitLogEntry[]> {
   let stdout: string;
   try {
     stdout = await runGit(
@@ -281,6 +303,8 @@ export async function listCommits(repoPath: string, limit = 200): Promise<Commit
       insertions,
       deletions,
       hasBinaryChanges,
+      // Provisional; overwritten below once the base-branch SHA set is known.
+      isOnBranch: true,
     });
   }
 
@@ -288,7 +312,38 @@ export async function listCommits(repoPath: string, limit = 200): Promise<Commit
     await attachFullBodies(repoPath, commits);
   }
 
+  if (baseSha) {
+    const onBranchShas = await listShasNotIn(repoPath, baseSha);
+    if (onBranchShas) {
+      for (const commit of commits) {
+        commit.isOnBranch = onBranchShas.has(commit.sha);
+      }
+    }
+    // On failure (invalid/deleted baseSha ref), leave every commit's
+    // provisional `isOnBranch: true` in place — fail open rather than hiding
+    // history the user can't get back without knowing to expand it.
+  }
+
   return commits;
+}
+
+/**
+ * Returns the set of full SHAs reachable from `HEAD` but not from `baseSha`
+ * (`git rev-list --not <baseSha> HEAD`), i.e. commits unique to the current
+ * branch. Returns null on failure (e.g. `baseSha` no longer resolves because
+ * the upstream ref was deleted) so callers can fail open.
+ */
+async function listShasNotIn(repoPath: string, baseSha: string): Promise<Set<string> | null> {
+  try {
+    // `--not` negates every ref that follows it, so `baseSha` must come
+    // after `HEAD` — otherwise HEAD itself would be negated too, per
+    // `git rev-list --help`'s "Reverses the meaning ... for all following
+    // revision specifiers" semantics.
+    const stdout = await runGit(["-C", repoPath, "rev-list", "HEAD", "--not", baseSha], repoPath);
+    return new Set(stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  } catch {
+    return null;
+  }
 }
 
 /**
