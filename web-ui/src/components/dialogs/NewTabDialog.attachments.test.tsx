@@ -6,8 +6,10 @@ import { NewTabDialog } from "./NewTabDialog";
 
 /**
  * Attachments at creation for the additional-tab JSON path: the dialog must
- * create the session idle (no prompt in the body → no daemon auto-enqueue),
- * upload the staged file, then send the prompt + attachment id as turn 1.
+ * create the session idle (prompt carried in the body only so the daemon can
+ * derive the auto name/initialPrompt from it — `skipAutoTurn: true` stops it
+ * from also auto-enqueueing turn 1), upload the staged file, then send the
+ * prompt + attachment id as turn 1 itself.
  */
 describe("NewTabDialog JSON attachments at creation", () => {
   it("creates idle → uploads staged file → sends first chat with the attachment id", async () => {
@@ -28,11 +30,16 @@ describe("NewTabDialog JSON attachments at creation", () => {
 
     await userEvent.click(screen.getByText("Create"));
 
-    // 1) Session created idle: channel json, NO prompt in the body (no double turn-1).
+    // 1) Session created idle: channel json, prompt carried for naming, auto-turn skipped (no double turn-1).
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
     const body = createSpy.mock.calls[0]![0];
-    expect(body).toMatchObject({ worktreeId: "wt-1", type: "agent", channel: "json" });
-    expect("prompt" in body).toBe(false);
+    expect(body).toMatchObject({
+      worktreeId: "wt-1",
+      type: "agent",
+      channel: "json",
+      prompt: "fix the bug",
+      skipAutoTurn: true,
+    });
 
     // 2) Uploaded against the new session id.
     const sessionId = (await createSpy.mock.results[0]!.value).id;

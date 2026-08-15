@@ -60,14 +60,18 @@ export function NewTabDialog({
 
   async function submit() {
     if (isJson) {
-      // JSON path: create the session idle (no prompt in the body → daemon does
-      // NOT auto-enqueue turn 1), then upload staged files + send the prompt as
-      // turn 1 via the chat queue. `channel:"json"` forces useTmux=false daemon-side.
+      // JSON path: create the session idle (prompt included only so the
+      // daemon can derive the auto name/initialPrompt from it —
+      // skipAutoTurn:true stops it from also auto-enqueuing turn 1), then
+      // upload staged files + send the prompt as turn 1 via the chat queue.
+      // `channel:"json"` forces useTmux=false daemon-side.
       const sess = await api.createSession({
         worktreeId,
         modeId: modeId || null,
         type: "agent",
+        prompt: prompt.trim() || undefined,
         channel: "json",
+        skipAutoTurn: true,
       });
       await sendJsonFirstTurn(api, sess.id, prompt, files);
     } else {

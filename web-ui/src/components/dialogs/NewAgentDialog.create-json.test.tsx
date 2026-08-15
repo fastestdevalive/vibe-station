@@ -43,9 +43,17 @@ describe("NewAgentDialog create-new-project JSON path", () => {
     await waitFor(() => expect(projSpy).toHaveBeenCalled());
     expect("startAgent" in projSpy.mock.calls[0]![0]).toBe(false);
 
-    // Then a json direct session + first turn.
+    // Then a json direct session + first turn. `prompt` is carried in the
+    // create body so the daemon can derive the auto name/initialPrompt from
+    // it; `skipAutoTurn` stops it from also enqueueing that as turn 1 (the
+    // chat send below is the single source of truth for turn 1 delivery).
     await waitFor(() => expect(sessSpy).toHaveBeenCalled());
-    expect(sessSpy.mock.calls[0]![0]).toMatchObject({ type: "agent", channel: "json" });
+    expect(sessSpy.mock.calls[0]![0]).toMatchObject({
+      type: "agent",
+      channel: "json",
+      prompt: "scaffold it",
+      skipAutoTurn: true,
+    });
     const sess = await sessSpy.mock.results[0]!.value;
     await waitFor(() => expect(chatSpy).toHaveBeenCalledWith(sess.id, "scaffold it", []));
   });

@@ -58,6 +58,19 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
   };
 });
 
+// `startJsonCreateTurn` would otherwise resolve a real JSON agent (spawning a
+// CLI process) — mocked out so `skipAutoTurn` tests can assert on call
+// presence/absence without needing a live agent.
+vi.mock("../services/jsonAgentChat.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../services/jsonAgentChat.js")>();
+  return {
+    ...original,
+    startJsonCreateTurn: vi.fn(async () => {
+      // Mock: do nothing
+    }),
+  };
+});
+
 describe("Session routes", () => {
   let app: FastifyInstance;
   let projectId: string;
@@ -529,6 +542,75 @@ describe("Session routes", () => {
     const fetched = getRes.json<{ channel?: string; state: string }>();
     expect(fetched.channel).toBe("json");
     expect(fetched.state).toBe("not_started");
+  });
+
+  it("skipAutoTurn — worktree-scoped channel:json + prompt names the session but does NOT auto-enqueue turn 1", async () => {
+    const jsonAgentChat = await import("../services/jsonAgentChat.js");
+    const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);
+    startJsonCreateTurnMock.mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: {
+        worktreeId,
+        type: "agent",
+        modeId: "bugfix",
+        channel: "json",
+        prompt: "Implement the login flow described in SPEC.md",
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json<{ name: string | null; nameSource: string | null }>();
+    expect(created).toMatchObject({ name: "implement-login-flow", nameSource: "auto" });
+    // A regression here would double-send the user's first message (once via
+    // auto-enqueue, once via the caller's own sendJsonFirstTurn).
+    expect(startJsonCreateTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("skipAutoTurn — direct channel:json + prompt names the session but does NOT auto-enqueue turn 1", async () => {
+    const jsonAgentChat = await import("../services/jsonAgentChat.js");
+    const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);
+    startJsonCreateTurnMock.mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: {
+        projectId,
+        target: "direct",
+        type: "agent",
+        modeId: "bugfix",
+        channel: "json",
+        prompt: "Implement the login flow described in SPEC.md",
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json<{ name: string | null; nameSource: string | null }>();
+    expect(created).toMatchObject({ name: "implement-login-flow", nameSource: "auto" });
+    expect(startJsonCreateTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("skipAutoTurn omitted — channel:json + prompt DOES auto-enqueue turn 1 (unchanged default)", async () => {
+    const jsonAgentChat = await import("../services/jsonAgentChat.js");
+    const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);
+    startJsonCreateTurnMock.mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: {
+        worktreeId,
+        type: "agent",
+        modeId: "bugfix",
+        channel: "json",
+        prompt: "Implement the login flow described in SPEC.md",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(startJsonCreateTurnMock).toHaveBeenCalledTimes(1);
   });
 
   it("4a.T1 — POST /sessions with sourceAgentId persists it as spawnedFrom on the new record", async () => {

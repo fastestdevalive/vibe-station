@@ -33,8 +33,14 @@ describe("DirectAgentDialog JSON attachments at creation", () => {
 
     await waitFor(() => expect(createSpy).toHaveBeenCalled());
     const body = createSpy.mock.calls[0]![0];
-    expect(body).toMatchObject({ target: "direct", projectId: "proj-a", type: "agent", channel: "json" });
-    expect("prompt" in body).toBe(false);
+    expect(body).toMatchObject({
+      target: "direct",
+      projectId: "proj-a",
+      type: "agent",
+      channel: "json",
+      prompt: "add a test",
+      skipAutoTurn: true,
+    });
 
     const sessionId = (await createSpy.mock.results[0]!.value).id;
     await waitFor(() => expect(uploadSpy).toHaveBeenCalledWith(sessionId, [file]));
