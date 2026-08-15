@@ -53,6 +53,7 @@ describe("Layout orientation toggle remount invariant", () => {
           layoutMode: "classic",
           activeWorkspaceId: null,
           scratchCanvas: null,
+          canvasToolbarVisible: true,
           },
         },
       });
@@ -94,6 +95,7 @@ describe("Layout orientation toggle remount invariant", () => {
           layoutMode: "classic",
           activeWorkspaceId: null,
           scratchCanvas: null,
+          canvasToolbarVisible: true,
           },
         },
       });
@@ -131,6 +133,7 @@ describe("Layout orientation toggle remount invariant", () => {
           layoutMode: "classic",
           activeWorkspaceId: null,
           scratchCanvas: null,
+          canvasToolbarVisible: true,
           },
         },
       });

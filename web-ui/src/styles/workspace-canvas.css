@@ -23,6 +23,21 @@
   flex-shrink: 0;
 }
 
+/* Portaled into TopBar's compact row (WORKSPACE_CANVAS_TOOLBAR_KEY) instead
+   of the canvas's own full-width row — drop the row chrome (border, padding,
+   space-between stretch) that only made sense at full width; sizes to
+   content like every other top-bar control. */
+.workspace-canvas__toolbar--portaled {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  padding: 0;
+  border-bottom: none;
+}
+
+.workspace-canvas__toolbar--portaled .workspace-canvas__doc-name {
+  max-width: 160px;
+}
+
 .workspace-canvas__toolbar-left,
 .workspace-canvas__toolbar-right {
   display: flex;
@@ -44,22 +59,6 @@
 .workspace-canvas__doc-name--unsaved {
   color: var(--fg-muted);
   font-style: italic;
-}
-
-.workspace-canvas__ghost-btn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: var(--font-size-xs);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.workspace-canvas__ghost-btn:hover {
-  background: var(--bg-active);
-  color: var(--fg-primary);
 }
 
 .workspace-canvas__save-form {
@@ -160,9 +159,28 @@
   background: var(--bg-active);
 }
 
+/* Icon + label together, as one flex group on the left — kept separate from
+   the trailing kind-tag so `justify-content: space-between` on the parent
+   still pins the tag to the right regardless of label length. */
+.workspace-canvas__picker-item-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-canvas__picker-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
 .workspace-canvas__picker-kind {
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
+  flex-shrink: 0;
 }
 
 /* Cross-context picker sections (saved workspaces only): project > worktree. */
@@ -173,6 +191,9 @@
 }
 
 .workspace-canvas__picker-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--font-size-xs);
   color: var(--fg-primary);
   font-weight: 600;
@@ -180,15 +201,48 @@
 }
 
 .workspace-canvas__picker-subheading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   padding: 0 var(--space-2) 2px var(--space-3);
+}
+
+/* Sessions/tools nested under a worktree subheading — indented to visually
+   read as children of it, one step deeper than the subheading's own indent,
+   with a vertical guide line (like a file tree) instead of bare whitespace
+   so the nesting reads clearly at a glance. */
+.workspace-canvas__picker-subitems {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--space-3);
+}
+
+.workspace-canvas__picker-indent-line {
+  position: absolute;
+  left: calc(var(--space-3) / 2);
+  top: 0;
+  bottom: var(--space-1);
+  width: 1px;
+  background: var(--border-subtle);
 }
 
 .workspace-canvas__picker-empty {
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
   padding: var(--space-2);
+}
+
+/* Non-interactive hint, not a menu item — separated from real picker entries
+   with a divider rather than looking like one more (unclickable) row. */
+.workspace-canvas__picker-note {
+  color: var(--fg-faint);
+  font-size: var(--font-size-xs);
+  padding: var(--space-2);
+  border-top: var(--border-width) solid var(--border-subtle);
+  cursor: default;
 }
 
 .workspace-canvas__body {
@@ -279,6 +333,21 @@
 
 .workspace-canvas__free > .workspace-canvas__tile {
   position: absolute;
+}
+
+/* Click (not drag) a tile's title bar to expand it over the whole viewport —
+   same escape-the-container technique as the classic pane fullscreen
+   (`.pane-viewport-fullscreen`, workspace.css) so it works regardless of
+   free-mode vs tiled-mode or DOM nesting depth. `position: fixed` is set
+   inline (WorkspaceCanvas.tsx) since it must win over both
+   `.workspace-canvas__free > .workspace-canvas__tile`'s `position: absolute`
+   and tiled mode's flex sizing; this class only carries what inline styles
+   can't (z-index, border, radius reset — a fullscreen tile shouldn't look
+   like it's still "in" the grid). */
+.workspace-canvas__tile--fullscreen {
+  z-index: 200;
+  border-radius: 0;
+  border-width: 0;
 }
 
 /* Colored rectangle around the whole tile, per session interaction state —

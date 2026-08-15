@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
@@ -1190,5 +1190,106 @@ describe("LeftSidebar", () => {
       // the rename input as normal.
       expect(await screen.findByLabelText("Rename")).toBeInTheDocument();
     });
+  });
+});
+
+// --- Phase 3b: global Workspaces section (agent-interaction-workspaces/
+// 04-workspaces, Decision 6) ---
+describe("LeftSidebar - global Workspaces section", () => {
+  const api = createMockApi();
+
+  const workspaceDocs = {
+    "doc-other-wt": {
+      id: "doc-other-wt",
+      name: "Created elsewhere",
+      contextKey: "wt-2", // NOT the active worktree
+      mode: "free" as const,
+      tiles: [],
+      tree: null,
+      freeRects: {},
+    },
+    "doc-no-wt": {
+      id: "doc-no-wt",
+      name: "Created with nothing active",
+      contextKey: "", // simulates a doc saved with no active worktree at creation time
+      mode: "free" as const,
+      tiles: [],
+      tree: null,
+      freeRects: {},
+    },
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeProjectId: "proj-a",
+      activeWorktreeId: "wt-1", // active worktree differs from BOTH docs' contextKey
+      activeSessionId: "sess-main",
+      sessionStates: {},
+      lastSessionByWorktree: {},
+      diffScopeByWorktree: {},
+      hideInactiveWorktrees: false,
+      workspaceDocs,
+    });
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+  });
+
+  it("3b.T1 — lists a saved workspace regardless of which worktree (or none) created it or is active", async () => {
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Created elsewhere")).toBeInTheDocument();
+      expect(screen.getByText("Created with nothing active")).toBeInTheDocument();
+    });
+  });
+
+  it("still lists both workspaces with NO active worktree at all (dashboard)", async () => {
+    useWorkspaceStore.setState({ activeWorktreeId: null });
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Created elsewhere")).toBeInTheDocument();
+      expect(screen.getByText("Created with nothing active")).toBeInTheDocument();
+    });
+  });
+
+  it("3b.T2 — clicking a workspace row navigates to /workspaces/<id> without mutating activeWorktreeId", async () => {
+    const user = userEvent.setup();
+    // A sibling location-reporter inside the same Router context observes the
+    // navigation (useNavigate mutates Router-internal history; there's no
+    // other Router-agnostic way to assert the URL actually changed).
+    function LocationProbe() {
+      const location = useLocation();
+      return <div data-testid="location-probe">{location.pathname}</div>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+        <Harness api={api}>
+          <LeftSidebar api={api} />
+        </Harness>
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId("location-probe").textContent).toBe("/worktree/wt-1");
+
+    const row = await screen.findByText("Created elsewhere");
+    await user.click(row);
+
+    expect(screen.getByTestId("location-probe").textContent).toBe("/workspaces/doc-other-wt");
+    // setActiveWorkspace (the old per-worktree pointer mechanism) must NOT be
+    // invoked by this click anymore — Decision 4 moved this to routing.
+    expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+    expect(useWorkspaceStore.getState().layoutByWorktree["wt-1"]?.activeWorkspaceId ?? null).toBeNull();
   });
 });

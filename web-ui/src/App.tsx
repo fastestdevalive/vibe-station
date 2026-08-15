@@ -17,7 +17,6 @@ function AppShell() {
           layoutMode="login"
           projects={[]}
           worktrees={[]}
-          sessions={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -35,7 +34,6 @@ function AppShell() {
           layoutMode="login"
           projects={[]}
           worktrees={[]}
-          sessions={[]}
           isMobile={false}
           onToggleLeftSidebar={() => {}}
           leftSidebarCollapsed={false}
@@ -60,6 +58,11 @@ function AppShell() {
           <Route path="/worktree/:wtId" element={<Workspace />} />
           <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />
           <Route path="/session/:directSessionId" element={<Workspace />} />
+          {/* Detached-workspace view (agent-interaction-workspaces/04-workspaces
+              Phase 3a, Decision 4) — a saved WorkspaceDoc's own route,
+              independent of any worktree. "/workspace" (singular, no param,
+              just above) is a pre-existing stale redirect and unrelated. */}
+          <Route path="/workspaces/:workspaceId" element={<Workspace />} />
           <Route path="/workspace" element={<Navigate to="/worktree" replace />} />
           <Route path="/dashboard" element={<Navigate to="/" replace />} />
         </Routes>

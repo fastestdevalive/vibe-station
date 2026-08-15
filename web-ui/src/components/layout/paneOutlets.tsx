@@ -133,6 +133,42 @@ export function PaneOutlet({ paneKey }: { paneKey: string }) {
   );
 }
 
+/** paneKey `WorkspaceCanvas.tsx` portals its toolbar (mode toggle, saved-doc
+ *  name, Save as workspace, Add tile) into, via `ToolbarOutlet` below —
+ *  mounted by `TopBar.tsx` for the detached `/workspaces/:id` page ONLY,
+ *  which has room top-right and no per-worktree pane toggles competing for
+ *  it. The classic per-worktree canvas does not portal: it keeps that
+ *  toolbar as its own dedicated row above the canvas body. */
+export const WORKSPACE_CANVAS_TOOLBAR_KEY = "workspace-canvas-toolbar";
+
+/**
+ * Same registry as `PaneOutlet`, but for small inline chrome (e.g. the
+ * workspace canvas's mode/save/add-tile toolbar on the detached
+ * `/workspaces/:id` page, portaled up into `TopBar` — see
+ * `WorkspaceCanvas.tsx`'s `usePaneOutletElement(WORKSPACE_CANVAS_TOOLBAR_KEY)`
+ * call) rather than a
+ * pane that needs to fill its container. Row-flex, sized to content, not
+ * stretched to 100%/100% like `PaneOutlet`.
+ */
+export function ToolbarOutlet({ paneKey }: { paneKey: string }) {
+  const { register, unregister } = useRegistry();
+
+  const refCallback = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (el) register(paneKey, el);
+      else unregister(paneKey);
+    },
+    [paneKey, register, unregister],
+  );
+
+  return (
+    <div
+      ref={refCallback}
+      style={{ display: "flex", alignItems: "center", minWidth: 0 }}
+    />
+  );
+}
+
 /** Returns the current outlet DOM node for `paneKey`, or null if none is mounted. */
 export function usePaneOutletElement(paneKey: string): HTMLElement | null {
   const { getOutlet, subscribe } = useRegistry();
