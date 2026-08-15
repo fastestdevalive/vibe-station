@@ -7,9 +7,21 @@ interface ThinkingBlockProps {
   defaultOpen?: boolean;
 }
 
-/** Collapsible dim "Thinking…" reasoning block (Decision 9). */
+/** Collapsible dim "Thinking…" reasoning block (Decision 9). Signature-only /
+ *  redacted thinking events carry no text — those render as a plain label with
+ *  no chevron, since there's nothing to expand. */
 export function ThinkingBlock({ text, defaultOpen = false }: ThinkingBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
+  const hasContent = text.trim().length > 0;
+  if (!hasContent) {
+    return (
+      <div className="chat-thinking">
+        <span className="chat-thinking__toggle chat-thinking__toggle--static">
+          <span className="chat-thinking__label">Thinking…</span>
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="chat-thinking">
       <button

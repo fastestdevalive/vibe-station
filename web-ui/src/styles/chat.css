@@ -343,6 +343,9 @@
   font-family: inherit;
   font-size: inherit;
 }
+.chat-thinking__toggle--static {
+  cursor: default;
+}
 .chat-thinking__body {
   border-left: var(--border-width-2) solid var(--border-subtle);
   padding-left: var(--space-3);
@@ -352,11 +355,6 @@
 
 /* ── Tool cards ───────────────────────────────────────────────────────────── */
 
-.chat-tool-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
 .chat-tool-card {
   border: var(--border-width) solid var(--border-subtle);
   border-radius: var(--radius-md);

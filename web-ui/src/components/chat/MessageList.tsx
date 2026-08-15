@@ -5,8 +5,6 @@ import type { PendingTurn } from "@/hooks/useChat";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
 import { ThinkingBlock } from "./ThinkingBlock";
-import { ToolUseCard } from "./ToolUseCard";
-import { ToolResultCard } from "./ToolResultCard";
 import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
 import type { ToolCallEntry } from "./toolFormat";
@@ -21,26 +19,32 @@ type RenderItem =
   | { type: "status"; id: string; text: string };
 
 /**
- * A run of 2+ consecutive `tool` items (no text/thinking/user message, and no
- * turn boundary, between them) collapses into one `toolRun` item — rendered
- * as a single integrated, borderless summary line (e.g. "Read 1 file, ran 2
- * shell commands") instead of N separately-bordered tool cards, matching
- * Claude Code's native terminal transcript. A lone tool call keeps rendering
- * as an individual `tool` item (unchanged today's look).
+ * Consecutive `tool` items (no text/user message, and no turn boundary,
+ * between them) collapse into one `toolRun` item — rendered as a single
+ * integrated, borderless summary line (e.g. "Read 1 file, ran 2 shell
+ * commands") instead of separately-bordered tool cards, matching Claude
+ * Code's native terminal transcript. Even a lone tool call becomes a
+ * (single-entry) `toolRun` so its look is consistent regardless of whether
+ * anything ran alongside it.
+ *
+ * An empty/signature-only `thinking` item (no text — a redacted or
+ * signature-only reasoning block, common between near-every tool call in
+ * some sessions) carries no information, so it's transparent to an
+ * in-progress run: it's dropped rather than splitting one logical burst of
+ * tool calls into several single-tool runs.
  */
 export function mergeToolRuns(items: RenderItem[]): RenderItem[] {
   const out: RenderItem[] = [];
   let run: Extract<RenderItem, { type: "tool" }>[] = [];
   const flushRun = () => {
     if (run.length === 0) return;
-    if (run.length === 1) {
-      out.push(run[0]!);
-    } else {
-      out.push({ type: "toolRun", id: run[0]!.id, tools: [...run] });
-    }
+    out.push(run.length === 1 ? { type: "toolRun", id: run[0]!.id, tools: [run[0]!] } : { type: "toolRun", id: run[0]!.id, tools: [...run] });
     run = [];
   };
   for (const item of items) {
+    if (item.type === "thinking" && item.text.trim().length === 0 && run.length > 0) {
+      continue;
+    }
     // A run never spans a turn boundary — two tool calls from different
     // turns just happening to be adjacent (nothing else rendered between
     // them) shouldn't visually merge into one group.
@@ -349,24 +353,6 @@ export function MessageList({
             break;
           case "thinking":
             node = <ThinkingBlock key={key} text={item.text} />;
-            break;
-          case "tool":
-            node = (
-              <div key={key} className="chat-tool-group">
-                <ToolUseCard
-                  toolName={item.toolName}
-                  toolInput={item.toolInput}
-                  running={!item.result && turnActive && i === items.length - 1}
-                />
-                {item.result ? (
-                  <ToolResultCard
-                    toolName={item.toolName}
-                    content={item.result.content}
-                    isError={item.result.isError}
-                  />
-                ) : null}
-              </div>
-            );
             break;
           case "toolRun":
             // "Live" means this run is the trailing item of an active turn —

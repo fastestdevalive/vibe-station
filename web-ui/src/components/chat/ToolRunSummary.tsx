@@ -151,7 +151,11 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
  * element, not a separate card pair.
  */
 export function ToolRunSummary({ tools, live }: ToolRunSummaryProps) {
-  const [open, setOpen] = useState(() => !!live);
+  // A singleton run's summary line is a generic phrase ("Ran 1 shell
+  // command") — start it expanded so the actual tool name + inline args
+  // (in the entry row below) are visible without a click, matching what a
+  // lone tool call used to show directly.
+  const [open, setOpen] = useState(() => !!live || tools.length === 1);
   const hasError = tools.some((t) => t.result?.isError);
   const hasPending = live && tools.some((t) => !t.result);
 
