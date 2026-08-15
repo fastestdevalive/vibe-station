@@ -4,7 +4,7 @@ created: 2026-08-11T00:00:00Z
 master:
   prd: complete
   plan: complete
-current_subfeature: 03-interaction-states
+current_subfeature: 04-workspaces
 
 # v4 restructure note (2026-08-12): docs-only restructure per user feedback on v3 —
 # "I don't understand the 2 part split... 1st introducing the new agent states and
@@ -97,12 +97,96 @@ subfeatures:
   - id: 04-workspaces
     origin: planned
     spawned_from: null
-    mode: implementing
-    last_completed: "2.4"
+    mode: verifying
+    last_completed: "4c.T3"
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan]
     superseded_reason: null
     parked_reason: null
+    handoff: {next_item: "3a.T3", returned_at: null, verified_by: null}
+    commit: null
+    # v7 implement note (2026-08-13): user asked to implement this plan next,
+    # after 03-interaction-states was committed (c41d680). Implemented Phase 3
+    # (workspace detachment: contextKey demoted to provenance-only, persist
+    # v14->v15 migration clearing stale activeWorkspaceId pointers, new
+    # /workspaces/:workspaceId route, LeftSidebar's Workspaces section made
+    # global) and Phase 4 (spawnedFrom: daemon column + REST/WS + CLI
+    # --source-agent flag + client-side auto-insert on session:created).
+    #
+    # Decision 4/6 (detachment + global sidebar) treated as ALREADY confirmed
+    # by the user's own earlier explicit instruction ("A saved workspace
+    # should be detached from the worktree... back to unsaved won't make
+    # sense anymore") rather than re-asked — a per-worktree-filtered sidebar
+    # list is incompatible with "detached" by construction, so global listing
+    # is the only coherent reading, not an open design question. Risk #9/#10
+    # (multi-workspace fan-out) genuinely left unconfirmed per the plan's own
+    # instruction — implemented single-match only, multi-match logs+skips.
+    #
+    # Notable implementation deviation from the plan's literal phrasing:
+    # Decision 8 ("reuse the existing Add tile insert function") couldn't
+    # call into the live WorkspaceCanvas component instance (a session:created
+    # WS event can fire while that workspace isn't even mounted) — instead
+    # extracted the algorithm into a new pure function
+    # (insertTileIntoCanvas, useStore.ts) that BOTH the manual "Add tile" flow
+    # AND the new auto-insert path call, which is a stronger form of "one
+    # implementation" than the plan anticipated (same function object, not
+    # just same behavior).
+    #
+    # Verified: full daemon+cli suite 663/663 passing (was 610 before this
+    # phase — 53 new: lifecycle/jsonAgent tests already counted under
+    # 03-interaction-states, this phase added worktrees/sessions/protocol/cli
+    # sourceAgent tests), full web-ui suite 364/364 passing (was 347), tsc
+    # clean both sides, eslint clean (only pre-existing untouched errors in
+    # cli/src/__tests__/daemon-client.test.ts remain). Live-verified against
+    # the real docker sandbox (not just test doubles): POST /worktrees ->
+    # POST /sessions {sourceAgentId} -> GET confirms spawnedFrom persisted
+    # and round-tripped through sqlite. The client-side route/sidebar/canvas
+    # wiring (Phase 3) and the browser-side auto-insert (Phase 4c) were NOT
+    # re-verified in a live browser this session (no Workspace.tsx test
+    # harness exists in this codebase, and building one was out of scope) —
+    # see 3a.T3/3c.T1-T3's individual notes for what's covered by other means
+    # vs. genuinely deferred. Nothing committed — all changes left
+    # uncommitted per orchestrator ownership of commits (user commits when
+    # ready, same as the prior 03-interaction-states round).
+
+  - id: 05-workspace-persistence
+    origin: planned
+    spawned_from: null
+    mode: planning
+    last_completed: null
+    awaiting_phase: plan
+    awaiting_artifact: ".vibekit/feature-plans/wip/agent-interaction-workspaces/05-workspace-persistence/plan-05-agent-interaction-workspaces-workspace-persistence.md"
+    phase_chain: [prd, plan]
+    superseded_reason: null
+    parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
     commit: null
+    # v1 (2026-08-14): new sub-feature — move SAVED WorkspaceDoc persistence from
+    # client-only localStorage to the daemon's sqlite DB, synced live across
+    # clients over WS. Chosen as a numbered sub-feature under this existing
+    # feature dir (not a new top-level feature) because it shares the same
+    # domain model (WorkspaceDoc, CanvasGeometry) and directly builds on
+    # 04-workspaces' shipped client data model + already-existing
+    # `/workspaces/:workspaceId` route — same .sdlc-state.yaml, same reasoning
+    # the sdlc skill uses for "shares the same domain model" sub-features.
+    # Ran the prd+plan chain only, per instruction — did NOT implement.
+    # PRD written first (storage/sync/concurrency/migration requirements +
+    # options + resolved questions), reviewed by one reviewer subagent pass
+    # (gate: llm, default config — no .vibekit/config.yaml present), two
+    # issues fixed (R11/Open-Q1 contradiction, R1 redundant field list) plus
+    # one added open question (migration id identity) before the plan was
+    # written. Technical plan covers: new top-level `workspaces` daemon table
+    # (Decision 1: no project-store.ts-style graph cache, unneeded at this
+    # entity's scale), REST CRUD + WS broadcast (Decision 2: last-write-wins,
+    # no merge/op-log), client sync via a new `useWorkspaceServerStore`
+    # mirroring the existing `useServerStore`/`useServerSync` shape exactly
+    # (Decision 3, per explicit PRD instruction to reuse that pattern), a
+    # local-optimistic-drag-then-flush-on-gesture-end design for
+    # WorkspaceCanvas.tsx's per-mousemove `patchCanvas` calls (Decision 4 —
+    # confirmed via code read that all three drag/resize/divider handlers
+    # write on every mousemove today, not just on release), and a one-time
+    # client-generated-id-based migration upload (Decision 5). Explicitly did
+    # NOT touch scratchCanvas (stays client-only) or any canvas UX. Did not
+    # edit any source code — docs/plan files only, per orchestrator
+    # instruction; did not commit.
