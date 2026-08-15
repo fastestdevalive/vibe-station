@@ -346,6 +346,28 @@
   display: none;
 }
 
+/* Same box as `.tree-row__chevron` (12px) so Pinned/Projects titles land at
+   the same x-offset as Workspaces' chevron+title heading. The heading's own
+   flex `gap` (--space-1, 4px) already separates this from the title — top up
+   with --space-1 more to match `.tree-row__project-expand`'s `gap: --space-2`
+   (8px) used between the Workspaces chevron and its title. */
+.sidebar-projects-heading__icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  margin-right: var(--space-1);
+}
+
+/* 1px separator between adjacent sidebar sections (Pinned/Workspaces/Projects). */
+.sidebar-section-divider {
+  border-top: var(--border-width) solid var(--border-default);
+  margin: var(--space-2) 0;
+}
+
 .sidebar-projects-heading__title {
   flex: 1;
   font-size: var(--font-size-xs);

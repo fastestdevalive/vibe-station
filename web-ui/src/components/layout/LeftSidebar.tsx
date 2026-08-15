@@ -405,6 +405,15 @@ export function LeftSidebar({
     return order.map((id) => byId.get(id)!).filter(Boolean);
   }, [pinnedDirectSessions, sortOrders]);
 
+  /** Projects reorder scope — local-only (Decision 1 exception, same as
+   *  pinned lists): no `Project.sortOrder` field/route exists server-side. */
+  const orderedVisibleProjects = useMemo(() => {
+    const ids = visibleProjects.map((p) => p.id);
+    const order = applyLocalSortOrder(sortOrders["projects"], ids);
+    const byId = new Map(visibleProjects.map((p) => [p.id, p]));
+    return order.map((id) => byId.get(id)!).filter(Boolean);
+  }, [visibleProjects, sortOrders]);
+
   /** Pinned-scope reorder handler — unchanged local-only mechanism. */
   function handleReorder(scopeKey: string, currentIds: string[], e: DragEndEvent) {
     // Mark BEFORE the early return: a drag that ends where it started still
@@ -867,6 +876,9 @@ export function LeftSidebar({
           <section className="pinned-section" aria-label="Pinned">
             <div className="sidebar-projects-heading pinned-section__heading">
               <span className="sidebar-projects-heading__gutter" aria-hidden />
+              <span className="sidebar-projects-heading__icon" aria-hidden>
+                <Pin size={12} />
+              </span>
               <span className="sidebar-projects-heading__title">Pinned</span>
             </div>
             <DndContext
@@ -1118,6 +1130,7 @@ export function LeftSidebar({
             </DndContext>
           </section>
         ) : null}
+        {!collapsed && hasPinned ? <div className="sidebar-section-divider" aria-hidden /> : null}
         {/* Saved workspace layouts (tiled/free-form pane arrangements) — GLOBAL,
             listed regardless of which worktree (or none) is currently active;
             a saved workspace is detached from its creating worktree (Phase 3,
@@ -1255,6 +1268,7 @@ export function LeftSidebar({
             ) : null}
           </section>
         ) : null}
+        {!collapsed ? <div className="sidebar-section-divider" aria-hidden /> : null}
         <div className="sidebar-projects-heading">
           <span className="sidebar-projects-heading__gutter" aria-hidden />
           {collapsed ? (
@@ -1263,6 +1277,9 @@ export function LeftSidebar({
             </span>
           ) : (
             <>
+              <span className="sidebar-projects-heading__icon" aria-hidden>
+                <FolderTree size={12} />
+              </span>
               <span className="sidebar-projects-heading__title">Projects</span>
               <button
                 type="button"
@@ -1303,8 +1320,27 @@ export function LeftSidebar({
             )}
           </div>
         ) : null}
-        {visibleProjects.map((p) => (
-          <div key={p.id}>
+        <DndContext
+          sensors={dndSensors}
+          collisionDetection={closestCenter}
+          onDragStart={markDrag}
+          onDragCancel={markDrag}
+          onDragEnd={(e) =>
+            handleReorder(
+              "projects",
+              orderedVisibleProjects.map((p) => p.id),
+              e,
+            )
+          }
+        >
+        <SortableContext
+          items={orderedVisibleProjects.map((p) => p.id)}
+          strategy={verticalListSortingStrategy}
+        >
+        {orderedVisibleProjects.map((p) => (
+          <SortableRow key={p.id} id={p.id}>
+          {({ setNodeRef, style, attributes, listeners }) => (
+          <div ref={setNodeRef} style={style} className="wt-row-wrap" {...attributes} {...listeners}>
             <div className="tree-row tree-row--project">
               <button
                 type="button"
@@ -1333,6 +1369,7 @@ export function LeftSidebar({
                 aria-haspopup="menu"
                 aria-expanded={plusMenu?.project.id === p.id}
                 title={collapsed ? `New session — ${p.name}` : undefined}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   const rect = e.currentTarget.getBoundingClientRect();
@@ -1352,6 +1389,7 @@ export function LeftSidebar({
                   aria-expanded={projMenu?.project.id === p.id}
                   aria-haspopup="menu"
                   title="Project menu"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = e.currentTarget.getBoundingClientRect();
@@ -1654,7 +1692,11 @@ export function LeftSidebar({
                 })()
               : null}
           </div>
+          )}
+          </SortableRow>
         ))}
+        </SortableContext>
+        </DndContext>
       </div>
       <div className="left-sidebar__footer">
         <Link
