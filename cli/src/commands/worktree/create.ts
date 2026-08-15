@@ -27,6 +27,10 @@ export function registerWorktreeCreate(worktree: Command): void {
       new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
     )
     .option("--json", "Use the JSON agent-chat channel for the main agent (channel: json)")
+    .option(
+      "--source-agent <sessionId>",
+      "SessionId this worktree's main agent was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
+    )
     .action(
       async (
         projectId: string,
@@ -40,6 +44,7 @@ export function registerWorktreeCreate(worktree: Command): void {
           prompt?: string;
           promptFile?: string;
           json?: boolean;
+          sourceAgent?: string;
         }
       ) => {
         if (!opts.mode) {
@@ -52,6 +57,15 @@ export function registerWorktreeCreate(worktree: Command): void {
 
         const spinner = ora("Creating worktree...").start();
 
+        // Defaults to $VST_SESSION (agent-interaction-workspaces/04-workspaces
+        // Phase 4b, S3) — set by the daemon on every spawned agent's own
+        // process env (routes/sessions.ts), so an agent running `vst worktree
+        // create` from its own shell gets source-agent affinity for free
+        // without passing --source-agent explicitly. From a human's own
+        // terminal (not inside an agent), $VST_SESSION is unset, so this is
+        // simply omitted — no side effect (S5).
+        const sourceAgentId = opts.sourceAgent ?? process.env.VST_SESSION ?? undefined;
+
         try {
           const result = await daemonPost<WorktreeCreateResponse>(
             "/worktrees",
@@ -63,6 +77,7 @@ export function registerWorktreeCreate(worktree: Command): void {
               branch: opts.branch,
               prompt,
               ...(opts.json ? { channel: "json" } : {}),
+              ...(sourceAgentId ? { sourceAgentId } : {}),
             }
           );
 

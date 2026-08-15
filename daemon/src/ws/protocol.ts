@@ -238,6 +238,13 @@ const SessionCreatedEvent = z.object({
   sessionType: z.string(),
   mode: z.string().optional(),
   snapshot: SessionCreatedSnapshot.optional(),
+  /** SessionId this session was spawned from, or null (agent-interaction-
+   *  workspaces/04-workspaces Phase 4b). Present (not omitted) even when
+   *  null so the web-ui can tell "this daemon build supports the field, and
+   *  it's genuinely unset" apart from "old daemon, field absent entirely" —
+   *  both are treated identically client-side (skip the auto-insert scan),
+   *  but the distinction matters for future debugging. */
+  spawnedFrom: z.string().nullable().optional(),
 });
 
 const SessionStateEvent = z.object({

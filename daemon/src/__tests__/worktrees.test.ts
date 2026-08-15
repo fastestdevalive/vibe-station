@@ -126,6 +126,38 @@ describe("Worktree routes", () => {
     expect(wt.baseSha).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it("4a.T1 — POST /worktrees with sourceAgentId persists it as spawnedFrom on the main session", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        branch: "spawned-from-test",
+        modeId: "bug-fix",
+        sourceAgentId: "sess-source-agent-1",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ mainSessionId: string }>();
+
+    const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
+    expect(sessRes.statusCode).toBe(200);
+    expect(sessRes.json<{ spawnedFrom: string | null }>().spawnedFrom).toBe("sess-source-agent-1");
+  });
+
+  it("4a.T2 — POST /worktrees omitting sourceAgentId creates a session with spawnedFrom: null (regression)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "no-source-agent-test", modeId: "bug-fix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ mainSessionId: string }>();
+
+    const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
+    expect(sessRes.json<{ spawnedFrom: string | null }>().spawnedFrom).toBeNull();
+  });
+
   it("3.T5 — POST /worktrees {prompt} (no name) derives the same slug for both worktree.name and the main session's name", async () => {
     const res = await app.inject({
       method: "POST",

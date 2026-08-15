@@ -163,6 +163,10 @@ const CreateWorktreeBody = z.object({
   channel: z.enum(["tmux", "pty", "json"]).optional(),
   // Explicit cosmetic name (F1/F2) — always wins over the heuristic slug.
   name: z.string().trim().max(60).optional(),
+  /** SessionId this worktree's main agent session was spawned from
+   *  (agent-interaction-workspaces/04-workspaces Phase 4a) — see
+   *  WorktreeSessionBody's identical field in routes/sessions.ts. */
+  sourceAgentId: z.string().optional(),
 });
 
 async function runMainSpawnJob(opts: {
@@ -451,6 +455,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           lastTransitionAt: new Date().toISOString(),
         },
         ...(result.data.prompt ? { initialPrompt: result.data.prompt } : {}),
+        spawnedFrom: result.data.sourceAgentId ?? null,
       };
 
       const worktreeRecord: WorktreeRecord = {
@@ -502,6 +507,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         projectId,
         sessionType: "agent",
         mode: modeId,
+        spawnedFrom: mainSession.spawnedFrom ?? null,
         snapshot: serializeSession(wtId, projectId, mainSession),
       });
 
