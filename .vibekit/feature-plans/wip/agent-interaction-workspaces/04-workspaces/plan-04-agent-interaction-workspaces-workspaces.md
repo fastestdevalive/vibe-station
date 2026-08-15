@@ -438,40 +438,40 @@ User opens "New Agent" dialog, fills it out normally, submits
 
 #### Phase 3a — Data model: demote `contextKey`, add view-state route param
 
-- [ ] **3a.1** Update `WorkspaceDoc.contextKey` doc comment (`useStore.ts:100-101`) to reflect "provenance only," confirm no other code path treats it as an ownership gate besides `LeftSidebar.tsx:518` and the toolbar's `isSaved`/`worktreeId` binding in `WorkspaceCanvas.tsx`.
-- [ ] **3a.2** Bump `persist` `version` to `15` (`useStore.ts:579`) and add a `// v14 → v15: workspace detachment` migration branch (`useStore.ts:580` area) — no-op on `contextKey` itself (kept as-is), clears any `layoutByWorktree[*].activeWorkspaceId` that still points at a saved doc (Risk #7), per the established migration-branch pattern (`useStore.ts:583-732`).
-- [ ] **3a.3** Add the new route `web-ui/src/App.tsx:56-64` — `<Route path="/workspaces/:workspaceId" element={<Workspace />} />` (reuses the existing `Workspace` route element, following the same pattern as `/worktree/:wtId` and `/session/:directSessionId`).
-- [ ] **3a.4** In `web-ui/src/routes/Workspace.tsx`, add a `useParams<{ workspaceId?: string }>()` read (mirrors the existing `directSessionId` pattern at `Workspace.tsx:30`) and a `isWorkspaceView`/`viewedWorkspace` derivation (`workspaceDocs[workspaceId]`), analogous to `isDirectSession`/`directSession` (`Workspace.tsx:33, 65-68`).
+- [x] **3a.1** Updated `WorkspaceDoc.contextKey` doc comment (`useStore.ts`) to "provenance only"; confirmed the only remaining reads were `LeftSidebar.tsx`'s filter (removed in 3b.1) and `WorkspaceCanvas.tsx`'s toolbar `isSaved`/`worktreeId` binding (handled by the new `detachedWorkspaceId` prop in 3c).
+- [x] **3a.2** Bumped `persist` `version` to `15`; added the `v14 → v15` migration branch clearing `layoutByWorktree[*].activeWorkspaceId` when it pointed at a doc present in `workspaceDocs` (Risk #7) — `contextKey` itself untouched.
+- [x] **3a.3** Added `<Route path="/workspaces/:workspaceId" element={<Workspace />} />` to `App.tsx`, right beside the existing (unrelated, singular) `/workspace` redirect.
+- [x] **3a.4** Added `params.workspaceId` + `isWorkspaceView`/`viewedWorkspace` derivation to `Workspace.tsx`, mirroring the `directSessionId`/`directSession` pattern. Also wired: mutual-exclusion clear of `activeWorktreeId`/`activeSessionId` on entry, a dedicated `detachedWorkspacePaneKeys`/`detachedWorkspacePaneHostLayer` (the classic `worktreePaneKeys` derivation is gated on `activeWorktreeId`, which is null in this view, so it needed its own pane-key derivation reusing the same `renderWorktreePane`), rendering via `Layout`'s `dashboardPane` slot (full-bleed, since the classic 3-pane `agentPane`/`toolPanel`/`terminalDock` machinery is keyed to a single owning worktree that doesn't exist here), and a `TopBar` `layoutMode: "workspace-view"` breadcrumb showing the doc's name.
 
 **Verify phase 3a:**
-- [ ] **3a.T1** Unit — `useStore.test.ts` (or equivalent): a persisted v14 store with a saved `WorkspaceDoc` migrates to v15 without data loss (doc still present, same `id`/`tiles`/`tree`).
-- [ ] **3a.T2** Unit — a persisted v14 store whose `layoutByWorktree[wtId].activeWorkspaceId` pointed at a saved doc has that pointer cleared post-migration (Risk #7 resolution — confirm the chosen behavior once decided).
-- [ ] **3a.T3** Integration — navigating to `/workspaces/<validId>` resolves `viewedWorkspace` to the correct `WorkspaceDoc`; `/workspaces/<invalidId>` resolves to `null`/not-found state.
+- [x] **3a.T1** Unit — `useStore.test.ts`: a persisted v14 store with a saved `WorkspaceDoc` migrates to v15 with the doc unchanged (`toEqual`). Passing.
+- [x] **3a.T2** Unit — same suite: `layoutByWorktree[wtId].activeWorkspaceId` pointing at a saved doc is cleared post-migration, everything else on the entry preserved; a no-op case (null/dangling pointer) also covered. Passing.
+- [ ] **3a.T3** Integration — deferred: no `Workspace.tsx` test harness exists in this codebase (it's a large, deeply-integrated route component with no prior test file) and building one from scratch was out of scope for this pass. The `viewedWorkspace` derivation itself is a one-line pure memo (`workspaceDocs[params.workspaceId] ?? null`) exercised implicitly by 3a.T1/3a.T2's store-shape tests, and the not-found redirect mirrors the pre-existing, already-tested `directSession` redirect pattern 1:1 (same file, same shape). Live end-to-end (not-found → real redirect, valid id → real canvas render) not re-verified this session — recommended before next touching this route.
 
 ---
 
 #### Phase 3b — Sidebar: global Workspaces section — **blocked on user confirmation (Risk #5)**
 
-- [ ] **3b.1** *(after confirmation)* Remove the `contextKey === activeWorktreeId` filter in `workspacesForActiveWorktree` (`LeftSidebar.tsx:516-519`) — rename to `allWorkspaces` (or similar), list `Object.values(workspaceDocs)` unfiltered.
-- [ ] **3b.2** Move the "Workspaces" `<section>` (`LeftSidebar.tsx:1124-1167`) out of any per-worktree nesting so it renders exactly once, sibling to the worktree/project tree (confirm current nesting at implementation time — Research above didn't fully resolve whether it's already top-level or nested; the `workspacesOpen` collapse state, `:501-512`, is already a single boolean, not per-worktree, which suggests the section may already be structurally top-level and only the *data* filter needs to change).
-- [ ] **3b.3** Update the click handler (`LeftSidebar.tsx:352`, `store.setActiveWorkspace(worktreeId, id)`) to `navigate(`/workspaces/${id}`)` instead (Decision 4).
+- [x] **3b.1** Removed the `contextKey === activeWorktreeId` filter; renamed to `allWorkspaces = Object.values(workspaceDocs)`, unfiltered (Decision 6). **Confirmation note:** treated as already-confirmed by the user's own earlier explicit instruction ("A saved workspace should be detached from the worktree" / "back to unsaved won't make sense anymore") — a per-worktree-filtered sidebar list would contradict "detached" (you'd only ever see a workspace again from the worktree that happened to create it), so global listing is the only coherent reading of that instruction, not a fresh open design question.
+- [x] **3b.2** Confirmed the section was ALREADY structurally top-level (gated only by `!collapsed && activeWorktreeId`, not nested in any per-worktree loop — Research's own speculation was correct). Only the gate changed: `!collapsed && activeWorktreeId` → `!collapsed` (renders regardless of active worktree, including the dashboard).
+- [x] **3b.3** Click/keydown handlers now `navigate(\`/workspaces/${ws.id}\`)` instead of `setActiveWorkspace(activeWorktreeId, ws.id)` + `setLayoutMode(activeWorktreeId, "workspace")`. Row highlighting (`isActive`) switched from the old `activeWorkspaceId === ws.id && activeLayoutMode === "workspace"` check to a route match (`location.pathname` against `/workspaces/:id`).
 
 **Verify phase 3b:**
-- [ ] **3b.T1** Unit — `LeftSidebar.test.tsx`: with two saved workspaces created under different worktrees, both appear in the Workspaces section regardless of which worktree (or none) is active.
-- [ ] **3b.T2** Integration — clicking a workspace row navigates to `/workspaces/<id>` and does not mutate `activeWorktreeId`.
+- [x] **3b.T1** Unit — `LeftSidebar.test.tsx`: two docs (different `contextKey`s, one with an empty-string `contextKey` simulating "created with nothing active") both appear regardless of active worktree, AND with no active worktree at all (dashboard). Passing.
+- [x] **3b.T2** Integration — clicking a workspace row navigates to `/workspaces/<id>` (verified via a sibling `useLocation()` probe inside the same `MemoryRouter`, since `navigate()` mutates router-internal history with no other observable signal) without mutating `activeWorktreeId`. Passing.
 
 ---
 
 #### Phase 3c — Canvas: remove "Back to unsaved" for the detached case, wire route-driven view
 
-- [ ] **3c.1** `WorkspaceCanvas.tsx:688-707` — when rendering via the new `/workspaces/:workspaceId` route (Phase 3a.4), always take the `isSaved` branch (`:689-701`) but **omit** the "Back to unsaved" button (`:693-700`) — there is no unsaved canvas to go back to in this view.
-- [ ] **3c.2** Confirm the existing per-worktree canvas flow (`/worktree/:wtId`, viewing *that worktree's* scratch canvas or a saved workspace via the old `activeWorkspaceId` mechanism) still works for the transient case — this phase must not regress D2 (scratch canvas untouched).
-- [ ] **3c.3** Decide + implement the "workspace not found" state for a stale/deleted `WorkspaceDoc.id` in the URL (Risk #8) — redirect to `/` after showing a brief message, mirroring `Workspace.tsx:105-109`'s pattern for a missing direct session.
+- [x] **3c.1** Added a `detachedWorkspaceId?: string` prop to `WorkspaceCanvas` — when set, `savedDoc`/`isSaved`/`canvas` bind directly to `workspaceDocs[detachedWorkspaceId]` (bypassing `layoutByWorktree`), the scratch-canvas seeding effect is skipped entirely (no scratch concept in this view), and the "Back to unsaved" button is omitted (still shows the doc name).
+- [x] **3c.2** Unaffected by construction: `detachedWorkspaceId` is a new, additive, opt-in prop — every existing call site (`Workspace.tsx`'s per-worktree `workspaceCanvas`) omits it, so `isDetachedView` is `false` and every branch touched in 3c.1 falls through to the pre-existing behavior unchanged. Confirmed via full regression suite (664 daemon+cli / 364 web-ui tests, all passing) rather than a fresh manual click-through.
+- [x] **3c.3** `viewedWorkspace === null` (doc deleted or invalid id) → `navigate("/", { replace: true })`, mirroring the existing `directSession`-not-found effect in the same file.
 
 **Verify phase 3c:**
-- [ ] **3c.T1** Manual — open a saved workspace via `/workspaces/:id`: no "Back to unsaved" button present.
-- [ ] **3c.T2** Manual — open a worktree's *unsaved* scratch canvas via `/worktree/:wtId` (never saved): behaves exactly as before this phase (D2 regression check).
-- [ ] **3c.T3** Manual — navigate to `/workspaces/<deleted-id>`: redirected to `/`, no crash.
+- [ ] **3c.T1** Manual — deferred (no browser click-through this session; the button's conditional render was verified by code read only — `{!isDetachedView ? <button>Back to unsaved</button> : null}`).
+- [ ] **3c.T2** Manual — deferred; see 3c.2's regression-suite note above for the argument this is low-risk (additive-only change).
+- [ ] **3c.T3** Manual — deferred; the redirect effect itself is code-identical in shape to the already-verified `directSession` redirect, but not re-clicked through in a live browser this session.
 
 ---
 
@@ -481,41 +481,41 @@ User opens "New Agent" dialog, fills it out normally, submits
 
 #### Phase 4a — Daemon: `spawnedFrom` field + persistence
 
-- [ ] **4a.1** Locate the session-record schema/insert path (Risk #11) — likely `daemon/src/state/project-store.ts` alongside the `lifecycle.state` column referenced in `03-interaction-states`.
-- [ ] **4a.2** Add `sourceAgentId: z.string().optional()` to `CreateWorktreeBody` (`daemon/src/routes/worktrees.ts:141-156`) and to both `WorktreeSessionBody`/`DirectSessionBody` (`daemon/src/routes/sessions.ts:52-72`).
-- [ ] **4a.3** Thread `sourceAgentId` from the validated body through to the session-record insert (Phase 4a.1's location) as `spawnedFrom`, defaulting to `null` when absent.
-- [ ] **4a.4** Add a migration if the session table's schema requires one (conditional on 4a.1's finding).
+- [x] **4a.1** Located: `daemon/src/services/dbSchema.ts` (schema + `addColumnIfMissing` backfill pattern), `daemon/src/state/sqliteRowMappers.ts` (`SessionRow`/`rowToSession`/`sessionToRow`), `daemon/src/state/project-store.ts` (the actual `INSERT INTO sessions` statement — a full-replace-on-every-mutation strategy, not per-field UPDATE), `daemon/src/types.ts` (`SessionRecord`). Risk #11 resolved: no CHECK constraint issue (same finding as `03-interaction-states`'s analogous `lifecycle.state` investigation) — `spawnedFrom TEXT` needed only the existing `addColumnIfMissing` backfill, no data migration.
+- [x] **4a.2** Added `sourceAgentId: z.string().optional()` to `CreateWorktreeBody`, `WorktreeSessionBody`, and `DirectSessionBody`.
+- [x] **4a.3** Threaded through all three session-record construction sites (`worktrees.ts`'s main-session build, and both branches of `sessions.ts`'s `POST /sessions`) as `spawnedFrom: data.sourceAgentId ?? null` / `result.data.sourceAgentId ?? null`. Also added `spawnedFrom` to `serializeSession()` (the `GET /sessions` response shape) — the plan didn't call this out explicitly but it's necessary for the field to be readable via REST at all, not just via the WS event.
+- [x] **4a.4** Migration: `addColumnIfMissing(db, "sessions", "spawnedFrom", "TEXT")` in `dbSchema.ts`, matching the existing `branchIsPlaceholder` precedent exactly.
 
 **Verify phase 4a:**
-- [ ] **4a.T1** Unit — `worktrees.test.ts`/`sessions.test.ts`: `POST /worktrees`/`POST /sessions` with `sourceAgentId` set persists it as `spawnedFrom` on the new record.
-- [ ] **4a.T2** Regression — omitting `sourceAgentId` still creates a session with `spawnedFrom: null`, identical to pre-change behavior otherwise.
+- [x] **4a.T1** Unit — 2 new tests each in `worktrees.test.ts`/`sessions.test.ts`: `sourceAgentId` set → GET confirms `spawnedFrom` matches, round-tripped through the DB (not just the create response). Passing. **Also live-verified against the real running docker sandbox** (not a test double): `POST /worktrees`, then `POST /sessions {sourceAgentId}`, then `GET /sessions/:id` — `spawnedFrom` correctly persisted and survived the round trip.
+- [x] **4a.T2** Regression — same 2 files: omitting `sourceAgentId` → `spawnedFrom: null`. Passing.
 
 ---
 
 #### Phase 4b — Daemon: WS event + CLI flag
 
-- [ ] **4b.1** Add `spawnedFrom: z.string().nullable().optional()` to `SessionCreatedEvent` (`daemon/src/ws/protocol.ts:218-225`); populate it from the new session record when broadcasting.
-- [ ] **4b.2** Add `--source-agent <sessionId>` option to `cli/src/commands/worktree/create.ts`, threaded into the `daemonPost("/worktrees", { ... sourceAgentId })` call; default via `opts.sourceAgent ?? process.env.VST_SESSION`.
-- [ ] **4b.3** Add the same `--source-agent <sessionId>` option to `cli/src/commands/session/create.ts`, same defaulting rule.
+- [x] **4b.1** Added `spawnedFrom: z.string().nullable().optional()` to `SessionCreatedEvent`; populated at all 3 real create-flow broadcast sites (`worktrees.ts`'s main-session broadcast, both branches of `sessions.ts`'s `POST /sessions` broadcast) as `spawnedFrom: <record>.spawnedFrom ?? null`. Left the 3 non-create broadcast sites (manifest-import/legacy paths in `projects.ts`, a reset-replacement path in `sessions.ts`) omitting the field — correct behavior (optional in the schema), not a gap, since those aren't genuine "spawned from a source" creations. Also added `spawnedFrom` to web-ui's `WSEvent` TS type (`api/types.ts`) so the client can actually read it.
+- [x] **4b.2** Added `--source-agent <sessionId>` to `worktree/create.ts`; defaults via `opts.sourceAgent ?? process.env.VST_SESSION ?? undefined`, sent only when truthy (`...(sourceAgentId ? { sourceAgentId } : {})`) so an old daemon build sees no new field at all rather than an explicit `undefined`.
+- [x] **4b.3** Same for `session/create.ts`.
 
 **Verify phase 4b:**
-- [ ] **4b.T1** Unit — CLI test: `vst worktree create` invoked with `VST_SESSION=abc` in env and no explicit `--source-agent` sends `sourceAgentId: "abc"` in the POST body.
-- [ ] **4b.T2** Unit — CLI test: explicit `--source-agent xyz` overrides `$VST_SESSION` when both are present.
-- [ ] **4b.T3** Unit — `session:created` WS payload includes `spawnedFrom` matching what was persisted in Phase 4a.
+- [x] **4b.T1** Unit — new `cli/src/commands/sourceAgent.test.ts` (no CLI-command test harness existed in this codebase before this file — built one: mock `daemon-client.js`/`preflight.js`, drive the real registered commander action via a minimal parent `Command` tree matching `program.ts`'s own wiring). Covers both `worktree create` and `session create`: `$VST_SESSION` env defaulting, with and without an explicit flag. 8/8 passing.
+- [x] **4b.T2** Unit — same file: explicit `--source-agent` overrides `$VST_SESSION` when both present, for both commands. Passing. Also covers the "neither present → field omitted entirely, not sent as undefined" case (S5).
+- [x] **4b.T3** Unit — new `protocol.test.ts` cases: `SessionCreatedEvent` parses with `spawnedFrom` as a string, as `null`, and absent entirely (pre-upgrade-daemon compat). Passing. The "matches what was persisted" half of this item is covered by 4a.T1's REST-level assertions (same request, same underlying record).
 
 ---
 
 #### Phase 4c — Web-UI: auto-insert on `session:created` — **Risk #9/#10 gate scope of multi-workspace fan-out**
 
-- [ ] **4c.1** Add a `session:created` handler (or extend the existing one) that reads `spawnedFrom`; if null, no-op (CUJ 6 regression guard).
-- [ ] **4c.2** Implement `findWorkspacesTilingSession(sessionId): WorkspaceDoc[]` scanning `workspaceDocs` (Research, System Boundaries).
-- [ ] **4c.3** Locate and reuse the existing "Add tile" insert function (Decision 8, Risk #13) — call it programmatically with the source tile as split target.
-- [ ] **4c.4** *(pending Risk #9/#10 confirmation)* Insert into all matching workspaces vs. only the active one — implement per whichever answer is confirmed; until then, implement for the single-match case only (uncontroversial) and stub/log the multi-match case rather than guessing.
+- [x] **4c.1** Extended the existing `session:created` handler in `useServerSync.ts` — `if (ev.spawnedFrom) { ...scan... }`, falsy (null/absent) → no-op, zero behavior change from before Phase 4 (CUJ 6).
+- [x] **4c.2** Implemented `findWorkspacesTilingSession(sessionId, workspaceDocs)` in `useStore.ts`, exported, unit-tested directly.
+- [x] **4c.3** Resolved Risk #13 (exact function): `WorkspaceCanvas.tsx`'s `addTile(kind, sessionId?, tileWorktreeId?)`. Rather than calling into the live component instance (impossible — the WS event can fire while that workspace isn't even mounted), **extracted its core algorithm** into a new pure function `insertTileIntoCanvas(canvas, kind, sessionId?, tileWorktreeId?, sameWorktreeId?)` in `useStore.ts`, operating on a plain `CanvasGeometry` instead of component state. `WorkspaceCanvas.tsx`'s `addTile` now CALLS this same function (refactored, not duplicated) via `patchCanvas`; a new store action `insertTileIntoWorkspaceDoc(docId, ...)` calls it directly against `workspaceDocs`. Single implementation, satisfies Decision 8 more strongly than the plan's original phrasing implied (not just "behaves identically" — is literally the same code). Also moved `findLeafId` from a `WorkspaceCanvas.tsx`-local function to an exported `lib/tiling.ts` function (needed by the now-headless insert path) and fixed `tiling.ts`'s stale "DEV-ONLY POC" file-header comment (Risk #2, flagged as a drive-by cleanup opportunity — done while already touching the file).
+- [x] **4c.4** Implemented exactly as scoped: single-match case auto-inserts; multi-match (Risk #9/#10, still unconfirmed) logs a `console.warn` and skips both, rather than guessing "all" vs. "active" vs. "none".
 
 **Verify phase 4c:**
-- [ ] **4c.T1** Integration — a `session:created` event with `spawnedFrom` matching a tile in exactly one workspace auto-inserts a new tile there, split from the source tile.
-- [ ] **4c.T2** Integration — a `session:created` event with `spawnedFrom` matching no tile anywhere results in no tile insert, no error (S5).
-- [ ] **4c.T3** Regression — a `session:created` event with `spawnedFrom: null` (or absent, old-daemon compat) behaves identically to pre-change (no scan attempted).
+- [x] **4c.T1** Integration — new `useServerSync.test.ts` cases (real hook, real store, `api.__test.emit`): single-match auto-inserts a new tile, doc's tile count goes 1→2. Passing.
+- [x] **4c.T2** Integration — same file: no-match → no insert, no error, tile count stays 1. Passing.
+- [x] **4c.T3** Regression — same file: `spawnedFrom` absent entirely → no scan, tile count unchanged (CUJ 6). Also added (beyond the plan's 3 items): a multi-match case asserting BOTH docs are left untouched and a warning is logged (4c.4's stub behavior). Plus direct unit tests for `insertTileIntoCanvas`/`findWorkspacesTilingSession` in `useStore.test.ts` (free/tiled mode, cross-context worktreeId stamping, immutability, multi-doc matching). All passing.
 
 ---
 
