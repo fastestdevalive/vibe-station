@@ -130,6 +130,47 @@ export async function revParse(repoPath: string, ref: string): Promise<string> {
   return runGit(["-C", repoPath, "rev-parse", ref]);
 }
 
+/**
+ * Resolves the *current* fork point between `HEAD` and `baseBranch` in the
+ * given worktree (`git merge-base HEAD <baseBranch>`), falling back to
+ * `fallbackBaseSha` (the worktree's stored, creation-time `baseSha`) if
+ * `baseBranch` doesn't resolve — e.g. it was deleted/renamed upstream.
+ *
+ * A worktree's stored `baseSha` is captured once, at creation time, and
+ * never updated. If the branch is later synced/rebased onto an advancing
+ * base branch (a normal, expected workflow for long-running branches), the
+ * true fork point moves forward but the stored value doesn't — every commit
+ * the base branch picked up since creation then reads as "unique to this
+ * branch" wherever `baseSha` is used for branch-scoped diffs/commit lists.
+ * Recomputing the merge-base live avoids that drift. Returns null if neither
+ * `baseBranch` nor the fallback resolves (e.g. a corrupted/pruned repo).
+ */
+export async function resolveBaseSha(
+  repoPath: string,
+  baseBranch: string | null | undefined,
+  fallbackBaseSha?: string | null,
+): Promise<string | null> {
+  if (baseBranch) {
+    try {
+      return await runGit(["-C", repoPath, "merge-base", "HEAD", baseBranch], repoPath);
+    } catch {
+      // baseBranch ref doesn't resolve (deleted/renamed) — fall through.
+    }
+  }
+  if (fallbackBaseSha) {
+    try {
+      // `cat-file -e` checks the object actually exists in the odb — unlike
+      // `rev-parse --verify`, which accepts any syntactically well-formed
+      // 40-hex string as a "valid" revision even if no such object exists.
+      await runGit(["-C", repoPath, "cat-file", "-e", fallbackBaseSha], repoPath);
+      return fallbackBaseSha;
+    } catch {
+      // stored SHA no longer resolves either (pruned) — give up.
+    }
+  }
+  return null;
+}
+
 /** Add a git worktree with a new branch. */
 export async function worktreeAdd(
   repoPath: string,
@@ -197,18 +238,20 @@ export interface CommitLogEntry {
   /** True if any changed file's diff couldn't be summarized as text (numstat reports "-"). */
   hasBinaryChanges: boolean;
   /**
-   * True if this commit is reachable from HEAD but not from the worktree's
-   * recorded `baseSha` (`git rev-list HEAD --not <baseSha>`) — i.e. not
-   * reachable from the fork point as recorded at worktree-creation time.
-   * This is a proxy for "unique to this branch", not a guarantee of it: if
-   * the branch was rebased, or the base branch was force-pushed/advanced
-   * past what `baseSha` still points at, a commit that's actually on
-   * today's base branch can still read `true` here (harmless — it just
-   * doesn't get collapsed), and in principle the reverse could happen too.
-   * When `baseSha` isn't available (no worktree record, invalid/deleted
-   * ref), every commit is conservatively marked `true` so nothing is
-   * hidden. Used by the VCS tool tab to collapse base-branch history by
-   * default.
+   * True if this commit is reachable from HEAD but not from the `baseSha`
+   * passed to `listCommits` (`git rev-list HEAD --not <baseSha>`). Callers
+   * are expected to pass a freshly resolved fork point (see
+   * `resolveBaseSha`, `git merge-base HEAD <baseBranch>`), not a value
+   * cached from worktree-creation time — a cached value goes stale as soon
+   * as the branch is synced/rebased onto an advancing base branch, at which
+   * point every commit the base branch picked up since caching would
+   * misread as "unique to this branch" here. Even with a freshly resolved
+   * `baseSha` this is a proxy, not a guarantee: a force-pushed/rewritten
+   * base branch can still produce a mismatch (harmless — it just doesn't
+   * get collapsed). When `baseSha` isn't available at all (no worktree
+   * record, base branch and stored fallback both unresolvable), every
+   * commit is conservatively marked `true` so nothing is hidden. Used by
+   * the VCS tool tab to collapse base-branch history by default.
    */
   isOnBranch: boolean;
 }
