@@ -38,6 +38,19 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
   };
 });
 
+// `startJsonCreateTurn` would otherwise resolve a real JSON agent (spawning a
+// CLI process) — mocked out so `skipAutoTurn` tests can assert on call
+// presence/absence without needing a live agent.
+vi.mock("../services/jsonAgentChat.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../services/jsonAgentChat.js")>();
+  return {
+    ...original,
+    startJsonCreateTurn: vi.fn(async () => {
+      // Mock: do nothing
+    }),
+  };
+});
+
 describe("Worktree routes", () => {
   let app: FastifyInstance;
   let repoDir: string;
@@ -264,6 +277,56 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: "json-claude", modeId: "bug-fix", channel: "json" },
     });
     expect(res.statusCode).toBe(201);
+  });
+
+  it("skipAutoTurn — channel:json + prompt derives name/initialPrompt but does NOT auto-enqueue turn 1", async () => {
+    const jsonAgentChat = await import("../services/jsonAgentChat.js");
+    const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);
+    startJsonCreateTurnMock.mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        modeId: "bug-fix",
+        channel: "json",
+        prompt: "Implement the login flow described in SPEC.md",
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    const wt = res.json<{ name: string | null; mainSessionId: string }>();
+    // Naming/initialPrompt derive from `prompt` exactly like the non-JSON path...
+    expect(wt.name).toBe("implement-login-flow");
+    const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
+    expect(sessRes.json<{ name: string | null; nameSource: string | null }>()).toMatchObject({
+      name: "implement-login-flow",
+      nameSource: "auto",
+    });
+    // ...but turn 1 is never auto-enqueued — the caller is responsible for
+    // sending it itself once attachments are uploaded (sendJsonFirstTurn).
+    // A regression here would double-send the user's first message.
+    expect(startJsonCreateTurnMock).not.toHaveBeenCalled();
+  });
+
+  it("skipAutoTurn omitted — channel:json + prompt DOES auto-enqueue turn 1 (unchanged default)", async () => {
+    const jsonAgentChat = await import("../services/jsonAgentChat.js");
+    const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);
+    startJsonCreateTurnMock.mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: {
+        projectId,
+        modeId: "bug-fix",
+        channel: "json",
+        prompt: "Implement the login flow described in SPEC.md",
+      },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(startJsonCreateTurnMock).toHaveBeenCalledTimes(1);
   });
 
   it("GET changed-paths scope=local lists staged file", async () => {

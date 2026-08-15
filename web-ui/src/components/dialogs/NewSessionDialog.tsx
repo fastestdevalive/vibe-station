@@ -129,15 +129,19 @@ export function NewSessionDialog({
         // POST /worktrees already spawns the main `m` agent session with the
         // selected mode + prompt. No additional createSession needed.
         if (isJson) {
-          // JSON: create the worktree's agent idle (channel:json, no prompt in
-          // the body → no daemon auto-enqueue), then upload staged files + send
-          // the prompt as turn 1 against the main agent.
+          // JSON: create the worktree's agent idle (channel:json, prompt
+          // included only so the daemon can derive the auto name /
+          // initialPrompt from it — skipAutoTurn:true stops it from also
+          // being auto-enqueued), then upload staged files + send the prompt
+          // as turn 1 against the main agent via sendJsonFirstTurn.
           const wt = await api.createWorktree({
             projectId,
             branch: newWtBranch.trim() || undefined,
             modeId: modeId || "mode-1",
             baseBranch: baseBranch.trim() || undefined,
+            prompt: initialPrompt.trim() || undefined,
             channel: "json",
+            skipAutoTurn: true,
           });
           if (wt.mainSessionId) {
             await sendJsonFirstTurn(api, wt.mainSessionId, initialPrompt, files);
@@ -180,7 +184,9 @@ export function NewSessionDialog({
             worktreeId: existingWtId,
             modeId: modeId || null,
             type: "agent",
+            prompt: initialPrompt.trim() || undefined,
             channel: "json",
+            skipAutoTurn: true,
           });
           await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
         } else {

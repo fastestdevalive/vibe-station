@@ -86,15 +86,18 @@ export function DirectAgentDialog({
     setSubmitting(true);
     try {
       if (channel === "json") {
-        // JSON path: create the session idle (no prompt in the body → daemon does
-        // NOT auto-enqueue turn 1), then upload staged files + send the prompt as
-        // turn 1 via the chat queue.
+        // JSON path: create the session idle (prompt included only so the
+        // daemon can derive the auto name/initialPrompt from it —
+        // skipAutoTurn:true stops it from also auto-enqueuing turn 1), then
+        // upload staged files + send the prompt as turn 1 via the chat queue.
         const sess = await api.createDirectSession({
           target: "direct",
           projectId,
           type: "agent",
           modeId,
+          prompt: initialPrompt.trim() || undefined,
           channel: "json",
+          skipAutoTurn: true,
         });
         await sendJsonFirstTurn(api, sess.id, initialPrompt, files);
       } else {
