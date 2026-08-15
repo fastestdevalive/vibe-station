@@ -17,6 +17,22 @@ interface ToolPanelProps {
   scope?: FileScope;
   /** Worktree's base branch (e.g. "main"), for the VCS tab's upstream-commits group label. */
   baseBranch?: string;
+  /**
+   * True when this same ToolPanel instance is currently portaled into a
+   * workspace-canvas tile (WorkspaceCanvas.tsx) rather than the classic
+   * docked tool-panel region. The tile already has its own close (removes
+   * the tile) and fullscreen (click title bar) controls in that context —
+   * this panel's own fullscreen/close buttons would be redundant at best
+   * (two different "fullscreen" behaviors) and actively confusing at worst
+   * ("close" here means `toggleToolPanel()`, the classic dock's visibility
+   * flag — clicking it from inside a tile just blanks the tile's content
+   * with no obvious way back except the top bar's unrelated toggle).
+   * ToolPanel is a single shared instance/pane (per the never-unmount
+   * invariant) portaled to whichever outlet is currently live, so this has
+   * to be a prop threaded from the call site (Workspace.tsx), not something
+   * ToolPanel can determine on its own.
+   */
+  hidePanelControls?: boolean;
 }
 
 const TABS: { id: ToolTab; label: string }[] = [
@@ -32,7 +48,13 @@ const TABS: { id: ToolTab; label: string }[] = [
  * (web browser + emulators) and Artifacts are placeholders until their backends
  * land.
  */
-export function ToolPanel({ api, worktreeId, scope = "worktree", baseBranch }: ToolPanelProps) {
+export function ToolPanel({
+  api,
+  worktreeId,
+  scope = "worktree",
+  baseBranch,
+  hidePanelControls = false,
+}: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
 
   return (
@@ -54,19 +76,23 @@ export function ToolPanel({ api, worktreeId, scope = "worktree", baseBranch }: T
           ))}
         </div>
         {/* Panel-level controls — fullscreen + close act on the whole tool
-            panel (whichever tool is shown), so they live on the selector bar. */}
-        <div className="tool-panel__tabs-actions">
-          <ToolFullscreenButton />
-          <button
-            type="button"
-            className="tab tab--icon tool-bar-btn"
-            aria-label="Close tool panel"
-            title="Close tool panel"
-            onClick={() => toggleToolPanel()}
-          >
-            <X size={13} />
-          </button>
-        </div>
+            panel (whichever tool is shown), so they live on the selector bar.
+            Hidden inside a workspace-canvas tile — see `hidePanelControls`'s
+            doc comment; the tile's own header already owns both concepts. */}
+        {!hidePanelControls ? (
+          <div className="tool-panel__tabs-actions">
+            <ToolFullscreenButton />
+            <button
+              type="button"
+              className="tab tab--icon tool-bar-btn"
+              aria-label="Close tool panel"
+              title="Close tool panel"
+              onClick={() => toggleToolPanel()}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="tool-panel__body">
         {worktreeId == null ? (

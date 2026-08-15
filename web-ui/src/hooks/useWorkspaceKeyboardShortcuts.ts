@@ -1,10 +1,21 @@
 import { useEffect } from "react";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
-/** ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock; ⌘/Ctrl+P quick-open files */
+/**
+ * ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
+ * ⌘/Ctrl+P quick-open files.
+ *
+ * `canvasMode`: in workspace-canvas mode the terminal dock's visibility flag
+ * no longer means anything (every terminal is its own tile, forced-visible —
+ * see Workspace.tsx's `<WorkspaceCanvas>` props) and its TopBar button is
+ * disabled to match, so ⌘⇧Z is made a no-op there too — a disabled button
+ * with a live shortcut behind it would silently flip a flag the UI shows as
+ * inert, surprising the user when they later leave canvas mode.
+ */
 export function useWorkspaceKeyboardShortcuts(
   setQuickOpen: (v: boolean | ((p: boolean) => boolean)) => void,
   enabled = true,
+  canvasMode = false,
 ) {
   useEffect(() => {
     if (!enabled) return;
@@ -42,12 +53,12 @@ export function useWorkspaceKeyboardShortcuts(
           setToolPanelTab("files");
         } else if (k === "Z") {
           e.preventDefault();
-          toggleTerminalDock();
+          if (!canvasMode) toggleTerminalDock();
         }
       }
     };
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setQuickOpen, enabled]);
+  }, [setQuickOpen, enabled, canvasMode]);
 }

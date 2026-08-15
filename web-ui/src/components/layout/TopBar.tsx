@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ChevronDown,
+  ChevronUp,
   Columns2,
   LayoutGrid,
-  PanelBottom,
   PanelLeft,
   PanelRight,
   PanelTop,
@@ -17,6 +18,7 @@ import type { Project, Session, Worktree } from "@/api/types";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { Logo } from "@/components/shared/Logo";
+import { ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
@@ -37,15 +39,20 @@ function shortcutHints() {
 interface TopBarProps {
   /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles.
    *  login = unauthenticated state — only shows brand + "not signed in" chip, no sidebar.
-   *  direct-session = terminal-only view for direct sessions (no worktree). */
-  layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "direct-session";
+   *  direct-session = terminal-only view for direct sessions (no worktree).
+   *  workspace-view = detached saved-workspace view (agent-interaction-workspaces/
+   *  04-workspaces Phase 3c) — no owning worktree, so (like dashboard) it omits
+   *  quick open and the per-worktree pane toggles; the canvas is fully
+   *  self-contained instead. */
+  layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "direct-session" | "workspace-view";
   projects: Project[];
   worktrees: Worktree[];
-  sessions: Session[];
   /** Direct session for breadcrumb (when layoutMode === "direct-session") */
   directSession?: Session;
   /** Project for direct session breadcrumb */
   directSessionProject?: Project;
+  /** Viewed WorkspaceDoc's name for breadcrumb (when layoutMode === "workspace-view") */
+  viewedWorkspaceName?: string;
   isMobile: boolean;
   onToggleLeftSidebar: () => void;
   leftSidebarCollapsed: boolean;
@@ -58,9 +65,9 @@ export function TopBar({
   layoutMode = "workspace",
   projects,
   worktrees,
-  sessions,
   directSession,
   directSessionProject,
+  viewedWorkspaceName,
   isMobile,
   onToggleLeftSidebar,
   leftSidebarCollapsed,
@@ -71,13 +78,16 @@ export function TopBar({
   const {
     activeProjectId,
     activeWorktreeId,
-    activeSessionId,
     toolPanelVisible,
     toggleToolPanel,
     terminalDockVisible,
     toggleTerminalDock,
     toolSplitOrientation,
     toggleToolSplitOrientation,
+    canvasToolbarVisible,
+    toggleCanvasToolbar,
+    hasWorktreeToolsTile,
+    toggleWorktreeToolsTile,
     // ⚠️ NAMING TRAP: this is the per-worktree pane-arrangement mode
     // ("classic" | "workspace") from useLayout()'s WorktreeLayout slice —
     // unrelated to this component's own `layoutMode` prop (page-routing:
@@ -89,7 +99,6 @@ export function TopBar({
 
   const project = projects.find((p) => p.id === activeProjectId);
   const wt = worktrees.find((w) => w.id === activeWorktreeId);
-  const session = sessions.find((s) => s.id === activeSessionId);
 
   const hints = shortcutHints();
 
@@ -102,10 +111,16 @@ export function TopBar({
     if (brandRef.current) setBrandWidth(brandRef.current.offsetWidth);
   }, []);
 
-  // padding-left(12) + toggle(36) + gap(8) + brand + gap(8) = offset already consumed before crumb.
+  // Target x = leftColumnPx + 12 (the sidebar's right edge, PLUS the same
+  // --space-3 left padding every content panel below uses — WorkspaceCanvas's
+  // own toolbar row and every other pane's chrome all start there, not flush
+  // against the bare sidebar edge — see workspace-canvas.css's
+  // `.workspace-canvas__toolbar` padding). This top bar's own left
+  // padding-left(12) + toggle(36) + gap(8) + brand + gap(8) is the offset
+  // already consumed before the crumb, so the two +12/-12 cancel out.
   const crumbMarginLeft =
     !isMobile && !leftSidebarCollapsed && leftColumnPx != null && brandWidth > 0
-      ? Math.max(8, leftColumnPx - 12 - 36 - 8 - brandWidth - 8)
+      ? Math.max(8, leftColumnPx - 36 - 8 - brandWidth - 8)
       : undefined;
 
   const crumbParts: { label: string; highlight?: boolean }[] = [];
@@ -116,10 +131,15 @@ export function TopBar({
   } else if (layoutMode === "direct-session") {
     if (directSessionProject) crumbParts.push({ label: directSessionProject.name });
     if (directSession) crumbParts.push({ label: sessionLabel(directSession), highlight: true });
+  } else if (layoutMode === "workspace-view") {
+    crumbParts.push({ label: viewedWorkspaceName ?? "Workspace", highlight: true });
   } else {
+    // Project > Worktree is enough — the active agent tab is already visible
+    // in the agent pane's own TabsStrip; naming it again in the breadcrumb
+    // was redundant, and crowded the crumb once the workspace-canvas toolbar
+    // moved into this same bar.
     if (project) crumbParts.push({ label: project.name });
     if (wt) crumbParts.push({ label: wt.branch, highlight: true });
-    if (session) crumbParts.push({ label: sessionLabel(session) });
   }
 
   const crumbTitle = crumbParts.map((p) => p.label).join(" › ") || undefined;
@@ -131,7 +151,9 @@ export function TopBar({
         ? "Settings"
         : layoutMode === "direct-session"
           ? [directSessionProject?.name, directSession ? sessionLabel(directSession) : null].filter(Boolean).join(" · ") || "Direct Session"
-          : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+          : layoutMode === "workspace-view"
+            ? (viewedWorkspaceName ?? "Workspace")
+            : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
     <span className="top-bar__crumb-seg">—</span>
@@ -150,27 +172,50 @@ export function TopBar({
   if (layoutMode === "login") {
     return (
       <header className="top-bar">
-        <span
-          className="top-bar__brand"
-          style={{
-            marginLeft: "var(--space-3)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-          }}
-        >
-          <Logo />
-          Vibe Station
-        </span>
-        <div className="top-bar__end">
-          <span className="top-bar__login-status">● not signed in</span>
+        <div className="top-bar__row">
+          <span
+            className="top-bar__brand"
+            style={{
+              marginLeft: "var(--space-3)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+            }}
+          >
+            <Logo />
+            Vibe Station
+          </span>
+          <div className="top-bar__end">
+            <span className="top-bar__login-status">● not signed in</span>
+          </div>
         </div>
       </header>
     );
   }
 
+  // The workspace-canvas toolbar (mode toggle / doc name / save / add tile)
+  // is portaled up into THIS bar in exactly ONE case: the detached
+  // /workspaces/:id page, where there's plenty of room top-right (no
+  // per-worktree pane-toggle icons compete for space there).
+  //
+  // The classic per-worktree canvas mode deliberately does NOT portal: that
+  // toolbar renders as WorkspaceCanvas's own dedicated full-height row
+  // directly above the canvas body, disclosed/hidden by the chevron in the
+  // canvas chip below (`toggleCanvasToolbar` → `canvasToolbarVisible`, which
+  // WorkspaceCanvas reads as a prop). Squeezing it into this bar's
+  // single-line height budget made it read as "just more top bar" instead of
+  // a canvas toolbar.
+  const isWorkspaceViewToolbar = layoutMode === "workspace-view";
+  // The canvas chip (mode toggle + disclosure chevron) exists only for a
+  // worktree in the classic per-worktree flow; the chevron inside it is
+  // disabled — not unmounted — when that worktree isn't currently in canvas
+  // mode, so the pair never appears/disappears independently of each other.
+  const canvasChipWorktreeId = layoutMode === "workspace" ? activeWorktreeId : null;
+  const inCanvasMode = paneLayoutMode === "workspace";
+
   return (
     <header className="top-bar">
+      <div className="top-bar__row">
       <button
         type="button"
         className="icon-btn"
@@ -209,6 +254,10 @@ export function TopBar({
             <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
           ) : layoutMode === "settings" ? (
             <span className="top-bar__crumb-seg top-bar__mobile-line">Settings</span>
+          ) : layoutMode === "workspace-view" ? (
+            <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
+              {viewedWorkspaceName ?? "Workspace"}
+            </span>
           ) : (
             <>
               <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>
@@ -231,6 +280,13 @@ export function TopBar({
         </div>
       )}
       <div className="top-bar__end">
+        {isWorkspaceViewToolbar ? (
+          // Detached workspace view: plenty of room top-right, same row as
+          // the crumb — no per-worktree pane-toggle icons compete for space
+          // here, so this doesn't need the compacted under-crumb treatment
+          // the classic per-worktree canvas mode gets.
+          <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
+        ) : null}
         <ConnectionStatus />
         {layoutMode === "workspace" || layoutMode === "direct-session" ? (
           <>
@@ -244,56 +300,118 @@ export function TopBar({
               <Search size={18} />
             </button>
             <div className="top-bar__pane-toggles" role="toolbar" aria-label="Workspace panes">
-              {layoutMode === "workspace" && activeWorktreeId ? (
-                <button
-                  type="button"
-                  className={`top-bar__pane-btn ${paneLayoutMode === "workspace" ? "top-bar__pane-btn--on" : ""}`}
-                  aria-pressed={paneLayoutMode === "workspace"}
-                  aria-label="Toggle workspace canvas layout"
-                  title={
-                    paneLayoutMode === "workspace"
-                      ? "Switch to classic layout"
-                      : "Switch to workspace canvas (tiled/free-form panes)"
-                  }
-                  onClick={() =>
-                    setLayoutMode(activeWorktreeId, paneLayoutMode === "workspace" ? "classic" : "workspace")
-                  }
-                >
-                  <LayoutGrid size={17} />
-                </button>
+              {canvasChipWorktreeId ? (
+                // One visually-merged pill holding TWO independent buttons:
+                // enter/leave canvas mode, and (thin, narrower) disclose the
+                // canvas's own toolbar. They read as a unit because they act
+                // on the same thing, but each stays a real, separately
+                // focusable/labelled <button> — the chevron is never a
+                // decoration hanging off the grid button.
+                <div className="top-bar__canvas-chip">
+                  <button
+                    type="button"
+                    className={`top-bar__pane-btn ${inCanvasMode ? "top-bar__pane-btn--on" : ""}`}
+                    aria-pressed={inCanvasMode}
+                    aria-label="Toggle workspace canvas layout"
+                    title={
+                      inCanvasMode
+                        ? "Switch to classic layout"
+                        : "Switch to workspace canvas (tiled/free-form panes)"
+                    }
+                    onClick={() =>
+                      setLayoutMode(canvasChipWorktreeId, inCanvasMode ? "classic" : "workspace")
+                    }
+                  >
+                    <LayoutGrid size={17} />
+                  </button>
+                  <button
+                    type="button"
+                    className="top-bar__pane-btn top-bar__canvas-chip-chevron"
+                    aria-expanded={inCanvasMode ? canvasToolbarVisible : undefined}
+                    // Same visible-but-disabled treatment as the split-
+                    // orientation / terminal-dock buttons below: outside
+                    // canvas mode there's no dedicated bar to disclose, but
+                    // unmounting it would make the chip's second half blink
+                    // in and out as the mode toggles.
+                    disabled={!inCanvasMode}
+                    aria-label={
+                      !inCanvasMode
+                        ? "Show canvas toolbar"
+                        : canvasToolbarVisible
+                          ? "Hide canvas toolbar"
+                          : "Show canvas toolbar"
+                    }
+                    title={
+                      !inCanvasMode
+                        ? "Only available in canvas mode — switch to the workspace canvas first"
+                        : canvasToolbarVisible
+                          ? "Hide canvas toolbar (mode, save, add tile)"
+                          : "Show canvas toolbar (mode, save, add tile)"
+                    }
+                    onClick={toggleCanvasToolbar}
+                  >
+                    {inCanvasMode && canvasToolbarVisible ? (
+                      <ChevronUp size={15} />
+                    ) : (
+                      <ChevronDown size={15} />
+                    )}
+                  </button>
+                </div>
               ) : null}
-              {paneLayoutMode !== "workspace" ? (
-                <button
-                  type="button"
-                  className="top-bar__pane-btn"
-                  aria-label="Toggle agent/tools split orientation"
-                  title={
-                    toolSplitOrientation === "horizontal"
+              <button
+                type="button"
+                className="top-bar__pane-btn"
+                aria-label="Toggle agent/tools split orientation"
+                disabled={paneLayoutMode === "workspace"}
+                title={
+                  paneLayoutMode === "workspace"
+                    ? "Not applicable in canvas mode — each pane is its own tile"
+                    : toolSplitOrientation === "horizontal"
                       ? "Stack agent and tools vertically"
                       : "Place agent and tools side by side"
-                  }
-                  onClick={toggleToolSplitOrientation}
-                >
-                  {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
-                </button>
-              ) : null}
+                }
+                onClick={toggleToolSplitOrientation}
+              >
+                {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
+              </button>
               <button
                 type="button"
                 className={`top-bar__pane-btn ${terminalDockVisible ? "top-bar__pane-btn--on" : ""}`}
                 aria-pressed={terminalDockVisible}
                 aria-label="Toggle terminal dock"
-                title={`Toggle terminal dock (${hints.terminal})`}
+                disabled={paneLayoutMode === "workspace"}
+                title={
+                  paneLayoutMode === "workspace"
+                    ? "Not applicable in canvas mode — every terminal is its own tile (use Add tile)"
+                    : `Toggle terminal dock (${hints.terminal})`
+                }
                 onClick={toggleTerminalDock}
               >
                 <SquareTerminal size={17} />
               </button>
               <button
                 type="button"
-                className={`top-bar__pane-btn ${toolPanelVisible ? "top-bar__pane-btn--on" : ""}`}
-                aria-pressed={toolPanelVisible}
-                aria-label="Toggle tool panel"
-                title="Toggle tool panel"
-                onClick={toggleToolPanel}
+                className={`top-bar__pane-btn ${
+                  (paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible)
+                    ? "top-bar__pane-btn--on"
+                    : ""
+                }`}
+                aria-pressed={paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible}
+                aria-label={
+                  paneLayoutMode === "workspace"
+                    ? hasWorktreeToolsTile
+                      ? "Remove Tools tile from canvas"
+                      : "Add Tools tile to canvas"
+                    : "Toggle tool panel"
+                }
+                title={
+                  paneLayoutMode === "workspace"
+                    ? hasWorktreeToolsTile
+                      ? "Remove Tools tile from canvas"
+                      : "Add Tools tile to canvas"
+                    : "Toggle tool panel"
+                }
+                onClick={paneLayoutMode === "workspace" ? toggleWorktreeToolsTile : toggleToolPanel}
               >
                 {/* Vertical split docks the tool panel to the top, so mirror
                     that with a top-panel icon instead of the right-panel one. */}
@@ -302,6 +420,7 @@ export function TopBar({
             </div>
           </>
         ) : null}
+      </div>
       </div>
     </header>
   );

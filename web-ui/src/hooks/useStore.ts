@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { DiffScope, Session, SessionState } from "@/api/types";
-import type { LayoutNode } from "@/lib/tiling";
+import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
 import { randomId } from "@/lib/uuid";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
@@ -42,6 +42,16 @@ export interface WorktreeLayout {
    * a real, named, cross-context WorkspaceDoc.
    */
   scratchCanvas: CanvasGeometry | null;
+  /**
+   * Whether the workspace-canvas toolbar (mode toggle / doc name / save /
+   * add tile — portaled into TopBar via WORKSPACE_CANVAS_TOOLBAR_KEY, see
+   * paneOutlets.tsx) is currently disclosed under the crumb in the classic
+   * per-worktree canvas view. Defaults true (the toolbar IS the canvas's
+   * primary UI — hiding it by default would make canvas mode look broken on
+   * first use). Only meaningful for that placement; the detached
+   * `/workspaces/:id` view always shows its toolbar regardless of this flag.
+   */
+  canvasToolbarVisible: boolean;
 }
 
 export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
@@ -52,6 +62,7 @@ export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
   layoutMode: "classic",
   activeWorkspaceId: null,
   scratchCanvas: null,
+  canvasToolbarVisible: true,
 };
 
 export type TileKind = "agent" | "terminal" | "tools";
@@ -97,7 +108,15 @@ export interface CanvasGeometry {
 export interface WorkspaceDoc extends CanvasGeometry {
   id: string;
   name: string;
-  /** worktreeId this workspace was created in (drives the sidebar's per-worktree list). */
+  /**
+   * worktreeId this workspace was originally created in. Provenance/display
+   * only (e.g. a future "created in ‹name›" hint) — a saved workspace is
+   * detached from its creating worktree (Phase 3, agent-interaction-
+   * workspaces/04-workspaces): the sidebar's Workspaces section lists every
+   * doc globally and this field is no longer read as an ownership/filter
+   * gate anywhere. Kept (not removed) to avoid a field-removal migration —
+   * every existing stored doc already has a valid value.
+   */
   contextKey: string;
 }
 
@@ -168,6 +187,15 @@ export interface WorkspaceState {
   toggleTerminalDock: () => void;
   /** Flip the agent pane ↔ tool panel split between horizontal and vertical. */
   toggleToolSplitOrientation: () => void;
+  /** Show/hide the workspace-canvas toolbar's disclosure under the crumb (classic per-worktree canvas placement only). */
+  toggleCanvasToolbar: () => void;
+  /**
+   * Canvas-mode equivalent of `toggleToolPanel`: instead of toggling content
+   * visibility inside an already-placed Tools tile, adds/removes the Tools
+   * tile itself on the active worktree's canvas (saved doc if one is active,
+   * else the transient scratch canvas). No-op if no canvas exists yet.
+   */
+  toggleWorktreeToolsTile: () => void;
   setActiveWorktree: (projectId: string, worktreeId: string, sessions?: Session[]) => void;
   /** Set (or clear with null) the direct-session layout context (project id). */
   setActiveDirectContext: (projectId: string | null) => void;
@@ -222,6 +250,19 @@ export interface WorkspaceState {
   renameWorkspace: (id: string, name: string) => void;
   deleteWorkspace: (id: string) => void;
   updateWorkspaceDoc: (id: string, patch: Partial<Omit<WorkspaceDoc, "id" | "contextKey">>) => void;
+  /**
+   * Insert a new tile into a saved WorkspaceDoc, splitting off its last tile
+   * (same split-target+side model as `WorkspaceCanvas.tsx`'s "Add tile"
+   * picker, Decision 8 — single insert implementation, not a parallel one).
+   * A no-op if `docId` doesn't resolve to a doc. Used by both the manual
+   * "Add tile" flow and the Phase 4c `session:created` auto-insert listener.
+   */
+  insertTileIntoWorkspaceDoc: (
+    docId: string,
+    kind: TileKind,
+    sessionId?: string,
+    tileWorktreeId?: string,
+  ) => void;
   reorderWorkspace: (scopeKey: string, orderedIds: string[]) => void;
   setActiveWorkspace: (worktreeId: string, workspaceId: string | null) => void;
   setLayoutMode: (worktreeId: string, mode: "classic" | "workspace") => void;
@@ -238,6 +279,83 @@ export const EMPTY_CANVAS_GEOMETRY: CanvasGeometry = {
   tree: null,
   freeRects: {},
 };
+
+/**
+ * Pure tile-insert core, shared by BOTH `WorkspaceCanvas.tsx`'s "Add tile"
+ * picker (manual) and `insertTileIntoWorkspaceDoc` below (Phase 4c's
+ * `session:created` auto-insert) — agent-interaction-workspaces/04-workspaces
+ * Decision 8: one implementation, not two divergent ones, so a manually- and
+ * an auto-inserted tile behave identically. Splits off the canvas's LAST
+ * tile (side "right") in tiled mode; cascades a new free-rect in free mode.
+ * Returns a NEW `CanvasGeometry`-shaped patch — never mutates `canvas`.
+ *
+ * `sameWorktreeId`: the tile's own `worktreeId` is only stamped when it
+ * differs from this — keeps same-context tiles byte-identical to the
+ * pre-cross-context tile shape (pass the viewed worktreeId for the scratch-
+ * canvas case, or the doc's own `contextKey` for a saved-doc case).
+ */
+export function insertTileIntoCanvas(
+  canvas: CanvasGeometry,
+  kind: TileKind,
+  sessionId?: string,
+  tileWorktreeId?: string,
+  sameWorktreeId?: string,
+): CanvasGeometry {
+  const id = randomId();
+  const tile: TileSpec = { id, kind, sessionId };
+  if (tileWorktreeId && tileWorktreeId !== sameWorktreeId) tile.worktreeId = tileWorktreeId;
+  const nextTiles = [...canvas.tiles, tile];
+  if (canvas.mode === "tiled") {
+    let nextTree: LayoutNode | null;
+    if (!canvas.tree || canvas.tiles.length === 0) {
+      nextTree = insertPane(null, null, "right", id);
+    } else {
+      const lastTileId = canvas.tiles[canvas.tiles.length - 1]!.id;
+      const targetLeafId = findLeafId(canvas.tree, lastTileId);
+      nextTree = insertPane(canvas.tree, targetLeafId, "right", id);
+    }
+    return { ...canvas, tiles: nextTiles, tree: nextTree };
+  }
+  const cascade = canvas.tiles.length;
+  const rect: FreeRect = { x: 6 + (cascade % 5) * 5, y: 6 + (cascade % 5) * 5, w: 42, h: 42 };
+  return { ...canvas, tiles: nextTiles, freeRects: { ...canvas.freeRects, [id]: rect } };
+}
+
+/**
+ * Pure tile-remove core — the inverse of `insertTileIntoCanvas` above, and the
+ * single implementation shared by `WorkspaceCanvas.tsx`'s tile-close button
+ * and the store's `toggleWorktreeToolsTile` action, so both stay in sync on
+ * tree/free-rect cleanup instead of drifting into two divergent removals.
+ * Returns a NEW `CanvasGeometry` — never mutates `canvas`. Callers that track
+ * a fullscreen-tile id locally (WorkspaceCanvas's `fullscreenTileId` state)
+ * are responsible for reconciling it themselves afterwards — this function
+ * has no way to reach component-local React state.
+ */
+export function removeTileFromCanvas(canvas: CanvasGeometry, tileId: string): CanvasGeometry {
+  const nextTiles = canvas.tiles.filter((t) => t.id !== tileId);
+  const nextFreeRects = { ...canvas.freeRects };
+  delete nextFreeRects[tileId];
+  let nextTree = canvas.tree;
+  if (canvas.mode === "tiled") {
+    const leafId = findLeafId(canvas.tree, tileId);
+    nextTree = leafId ? removePane(canvas.tree, leafId) : canvas.tree;
+  }
+  return { ...canvas, tiles: nextTiles, freeRects: nextFreeRects, tree: nextTree };
+}
+
+/**
+ * Every saved WorkspaceDoc that currently tiles `sessionId` (agent-
+ * interaction-workspaces/04-workspaces Phase 4c, Research "Client-side
+ * auto-insert target"). `workspaceDocs` is already a flat, global map
+ * regardless of Phase 3's detachment status — this scan doesn't care whether
+ * a matched doc is "the active one" or not, it just finds every match.
+ */
+export function findWorkspacesTilingSession(
+  sessionId: string,
+  workspaceDocs: Record<string, WorkspaceDoc>,
+): WorkspaceDoc[] {
+  return Object.values(workspaceDocs).filter((doc) => doc.tiles.some((t) => t.sessionId === sessionId));
+}
 
 /**
  * Compute the moved item's new fractional `sortOrder` value from the real
@@ -349,6 +467,46 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : DEFAULT_WORKTREE_LAYOUT;
             const next = cur.toolSplitOrientation === "horizontal" ? "vertical" : "horizontal";
             return patchLayout(s, { toolSplitOrientation: next });
+          }),
+        toggleCanvasToolbar: () =>
+          set((s) => {
+            const key = layoutKey(s);
+            const cur = key
+              ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
+              : DEFAULT_WORKTREE_LAYOUT;
+            return patchLayout(s, { canvasToolbarVisible: !cur.canvasToolbarVisible });
+          }),
+        // A worktree's classic canvas is ALWAYS its own scratch canvas (a
+        // worktree never binds to a saved WorkspaceDoc — see
+        // WorkspaceCanvas.tsx's module doc); this only ever targets
+        // `scratchCanvas`, never `workspaceDocs`.
+        toggleWorktreeToolsTile: () =>
+          set((s) => {
+            const key = layoutKey(s);
+            if (!key) return s;
+            const cur = s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT;
+            const canvas = cur.scratchCanvas;
+            // Nothing to toggle before the canvas has been seeded (e.g. a
+            // click landing before WorkspaceCanvas's seed effect commits) —
+            // no-op rather than creating a canvas containing only a tools
+            // tile, which would starve the seed effect of ever running.
+            if (!canvas) return s;
+            // Same fallback resolution WorkspaceCanvas itself uses for
+            // `placedToolWorktrees`/`paneKeyForTile` (tile.worktreeId ??
+            // the worktree this canvas is being viewed in) — must match, or
+            // this can add a second tools tile sharing one pane key/outlet.
+            const existing = canvas.tiles.find(
+              (t) => t.kind === "tools" && (t.worktreeId ?? key) === key,
+            );
+            const nextCanvas = existing
+              ? removeTileFromCanvas(canvas, existing.id)
+              : insertTileIntoCanvas(canvas, "tools", undefined, key, key);
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [key]: { ...cur, scratchCanvas: nextCanvas },
+              },
+            };
           }),
         setActiveWorktree: (projectId, worktreeId, sessions) =>
           set((s) => {
@@ -535,6 +693,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               workspaceDocs: { ...s.workspaceDocs, [id]: { ...doc, ...patch } },
             };
           }),
+        insertTileIntoWorkspaceDoc: (docId, kind, sessionId, tileWorktreeId) =>
+          set((s) => {
+            const doc = s.workspaceDocs[docId];
+            if (!doc) return s;
+            const next = insertTileIntoCanvas(doc, kind, sessionId, tileWorktreeId, doc.contextKey);
+            return {
+              workspaceDocs: { ...s.workspaceDocs, [docId]: { ...doc, ...next } },
+            };
+          }),
         reorderWorkspace: (scopeKey, orderedIds) =>
           set((s) => ({
             workspaceOrder: { ...s.workspaceOrder, [scopeKey]: orderedIds },
@@ -585,7 +752,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     },
     {
       name: "vibestation:workspace",
-      version: 14,
+      version: 16,
       migrate: (persisted, version) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -613,6 +780,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: "classic",
               activeWorkspaceId: null,
               scratchCanvas: null,
+              canvasToolbarVisible: true,
             };
           }
           p.layoutByWorktree = next;
@@ -640,6 +808,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: "classic",
               activeWorkspaceId: null,
               scratchCanvas: null,
+              canvasToolbarVisible: true,
             };
           }
           p.layoutByWorktree = next;
@@ -664,6 +833,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: "classic",
               activeWorkspaceId: null,
               scratchCanvas: null,
+              canvasToolbarVisible: true,
             };
           }
           p.layoutByWorktree = next;
@@ -688,6 +858,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: "classic",
               activeWorkspaceId: null,
               scratchCanvas: null,
+              canvasToolbarVisible: true,
             };
           }
           p.layoutByWorktree = next;
@@ -706,6 +877,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: entry?.layoutMode ?? "classic",
               activeWorkspaceId: entry?.activeWorkspaceId ?? null,
               scratchCanvas: entry?.scratchCanvas ?? null,
+              canvasToolbarVisible: entry?.canvasToolbarVisible ?? true,
             };
           }
           p.layoutByWorktree = next;
@@ -732,6 +904,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: entry?.layoutMode ?? "classic",
               activeWorkspaceId: entry?.activeWorkspaceId ?? null,
               scratchCanvas: entry?.scratchCanvas ?? null,
+              canvasToolbarVisible: entry?.canvasToolbarVisible ?? true,
             };
           }
           p.layoutByWorktree = next;
@@ -754,6 +927,60 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               layoutMode: entry?.layoutMode ?? "classic",
               activeWorkspaceId: entry?.activeWorkspaceId ?? null,
               scratchCanvas: entry?.scratchCanvas ?? null,
+              canvasToolbarVisible: entry?.canvasToolbarVisible ?? true,
+            };
+          }
+          p.layoutByWorktree = next;
+        }
+        // v14 → v15: workspace detachment (agent-interaction-workspaces/04-workspaces
+        // Phase 3a, Decision 5/Risk #7). A saved WorkspaceDoc is no longer owned by
+        // the worktree it was created in — viewing one moves to the route-driven
+        // `/workspaces/:id` view (Decision 4), not `layoutByWorktree[wtId].
+        // activeWorkspaceId`. That pointer's old meaning ("this worktree's canvas
+        // is currently showing saved workspace X") is gone, so clear any entry that
+        // still points at a saved doc — leaving it would make WorkspaceCanvas's
+        // per-worktree flow (Phase 3c) incorrectly think it's still displaying that
+        // now-detached doc. `contextKey` itself is untouched — kept as provenance
+        // (Decision 5), no data loss, no doc dropped from `workspaceDocs`.
+        if (version < 15) {
+          const old = p.layoutByWorktree as Record<string, unknown>;
+          const docs = (p.workspaceDocs ?? {}) as Record<string, unknown>;
+          const next: Record<string, WorktreeLayout> = {};
+          for (const [wt, raw] of Object.entries(old ?? {})) {
+            const entry = raw as Partial<WorktreeLayout> | undefined;
+            const pointsAtSavedDoc = !!entry?.activeWorkspaceId && !!docs[entry.activeWorkspaceId];
+            next[wt] = {
+              toolPanelVisible: entry?.toolPanelVisible ?? true,
+              toolPanelTab: (entry?.toolPanelTab ?? "files") as ToolTab,
+              terminalDockVisible: entry?.terminalDockVisible ?? false,
+              toolSplitOrientation: entry?.toolSplitOrientation ?? "horizontal",
+              layoutMode: entry?.layoutMode ?? "classic",
+              activeWorkspaceId: pointsAtSavedDoc ? null : (entry?.activeWorkspaceId ?? null),
+              scratchCanvas: entry?.scratchCanvas ?? null,
+              canvasToolbarVisible: entry?.canvasToolbarVisible ?? true,
+            };
+          }
+          p.layoutByWorktree = next;
+        }
+        // v15 → v16: canvas-mode toolbar disclosure (the workspace-canvas
+        // toolbar's TopBar placement gained a show/hide control). Default
+        // visible for every existing entry — the toolbar is the canvas's
+        // primary UI, so a silent default-hidden would make canvas mode look
+        // broken on first load post-upgrade.
+        if (version < 16) {
+          const old = p.layoutByWorktree as Record<string, unknown>;
+          const next: Record<string, WorktreeLayout> = {};
+          for (const [wt, raw] of Object.entries(old ?? {})) {
+            const entry = raw as Partial<WorktreeLayout> | undefined;
+            next[wt] = {
+              toolPanelVisible: entry?.toolPanelVisible ?? true,
+              toolPanelTab: (entry?.toolPanelTab ?? "files") as ToolTab,
+              terminalDockVisible: entry?.terminalDockVisible ?? false,
+              toolSplitOrientation: entry?.toolSplitOrientation ?? "horizontal",
+              layoutMode: entry?.layoutMode ?? "classic",
+              activeWorkspaceId: entry?.activeWorkspaceId ?? null,
+              scratchCanvas: entry?.scratchCanvas ?? null,
+              canvasToolbarVisible: entry?.canvasToolbarVisible ?? true,
             };
           }
           p.layoutByWorktree = next;

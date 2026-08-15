@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useServerStore } from "./useServerStore";
-import { useWorkspaceStore } from "./useStore";
+import { useWorkspaceStore, findWorkspacesTilingSession } from "./useStore";
 
 /**
  * Module-level in-flight guard. Collapses three refresh triggers that all
@@ -103,9 +103,36 @@ export function useServerSync(api: ApiInstance): void {
       if (ev.type === "worktree:updated") applyWorktreeUpdated(ev.worktree);
     });
     const offSessCreated = api.on("session:created", (ev) => {
-      if (ev.type === "session:created" && ev.snapshot) {
+      if (ev.type !== "session:created") return;
+      if (ev.snapshot) {
         applySessionCreated(ev.snapshot);
         patchSessionState(ev.snapshot.id, ev.snapshot.state);
+      }
+      // Phase 4c (agent-interaction-workspaces/04-workspaces): a session
+      // spawned from a currently-tiled source auto-inserts as a new tile,
+      // splitting the source's own tile (S4/S6/Decision 8). `spawnedFrom`
+      // absent or null (CUJ 6 — no source, the common case today) skips this
+      // entirely — no scan, no behavior change from before Phase 4.
+      if (ev.spawnedFrom) {
+        const store = useWorkspaceStore.getState();
+        const matches = findWorkspacesTilingSession(ev.spawnedFrom, store.workspaceDocs);
+        if (matches.length === 1) {
+          store.insertTileIntoWorkspaceDoc(
+            matches[0]!.id,
+            ev.sessionType,
+            ev.sessionId,
+            ev.worktreeId ?? undefined,
+          );
+        } else if (matches.length > 1) {
+          // Multi-workspace fan-out (S4's proposed "insert into all") is
+          // still pending user confirmation (plan Risk #9/#10) — log and
+          // skip rather than guessing which of "all" / "the active one" /
+          // "none" is correct.
+          console.warn(
+            `[workspaces] session ${ev.spawnedFrom} is tiled in ${matches.length} workspaces at once; ` +
+              `auto-insert for new session ${ev.sessionId} skipped pending Risk #9/#10 confirmation.`,
+          );
+        }
       }
     });
     const offSessState = api.on("session:state", (ev) => {

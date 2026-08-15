@@ -1,9 +1,12 @@
 import "@/styles/workspace-canvas.css";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { Check, Plus, Save, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
+import { Bot, Check, FolderOpen, GitBranch, Minimize2, PanelRight, Plus, Save, SquareTerminal, X } from "lucide-react";
 import type { Project, Session, Worktree } from "@/api/types";
 import {
   buildBalancedTree,
+  findLeafId,
   insertPane,
   removePane,
   resizeSplit,
@@ -14,18 +17,28 @@ import {
 } from "@/lib/tiling";
 import {
   useWorkspaceStore,
+  insertTileIntoCanvas,
+  removeTileFromCanvas,
   type CanvasGeometry,
   type FreeRect,
   type TileKind,
   type TileSpec,
 } from "@/hooks/useStore";
-import { PaneOutlet } from "@/components/layout/paneOutlets";
+import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 
 interface WorkspaceCanvasProps {
+  /**
+   * Owning worktree for the classic per-worktree flow (scratch canvas +
+   * `layoutByWorktree[worktreeId].activeWorkspaceId`). In detached-workspace-
+   * view mode (`detachedWorkspaceId` set — agent-interaction-workspaces/
+   * 04-workspaces Phase 3c) this is used only as a provenance fallback for
+   * anything that needs *some* worktreeId (e.g. a tile missing its own
+   * `tile.worktreeId`) — pass the doc's own `contextKey` in that case.
+   */
   worktreeId: string;
   /** This worktree's agent-type sessions. */
   agentSessions: Session[];
@@ -43,20 +56,29 @@ interface WorkspaceCanvasProps {
   worktrees: Worktree[];
   /** Every project app-wide (picker grouping). */
   projects: Project[];
+  /**
+   * Detached-workspace-view mode: when set, the canvas binds directly to
+   * `workspaceDocs[detachedWorkspaceId]` — the ONLY place a saved doc is ever
+   * bound to this component. The classic per-worktree placement (this prop
+   * unset) never binds to a saved doc at all, always the worktree's own
+   * `scratchCanvas` — see the module doc comment. The caller (Workspace.tsx)
+   * has already confirmed the doc exists before rendering with this prop set.
+   */
+  detachedWorkspaceId?: string;
+  /**
+   * Whether this canvas's own dedicated toolbar row (mode toggle / doc name
+   * / save / add tile), rendered directly above the canvas body, should show
+   * right now. Driven by `layoutByWorktree[worktreeId].canvasToolbarVisible`
+   * — the flag the disclosure chevron in TopBar's canvas chip toggles
+   * (`useLayout().canvasToolbarVisible`). The detached `/workspaces/:id`
+   * view passes a hardcoded `true`: it has no disclosure control, and its
+   * toolbar lives portaled top-right in TopBar rather than in this row.
+   */
+  canvasToolbarVisible: boolean;
 }
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
-}
-
-function findLeafId(root: LayoutNode | null, tileId: string): string | null {
-  if (!root) return null;
-  if (root.type === "leaf") return root.tileId === tileId ? root.id : null;
-  for (const child of root.children) {
-    const found = findLeafId(child, tileId);
-    if (found) return found;
-  }
-  return null;
 }
 
 function paneKeyForTile(tile: TileSpec, worktreeId: string): string {
@@ -80,13 +102,16 @@ interface DropTarget {
 /**
  * Tiled/free-form canvas for workspace-mode.
  *
- * Backing store is EITHER the worktree's transient `scratchCanvas` (the top
- * bar's classic↔workspace toggle — unsaved, never in the sidebar, this
- * worktree's own panes only) OR a saved `WorkspaceDoc` once one is active
- * (picked in the sidebar, or just created via "Save as workspace"). Both
- * expose the same `CanvasGeometry`, so everything below — rendering, drag,
+ * Backing store: for the classic per-worktree placement this is ALWAYS the
+ * worktree's transient `scratchCanvas` — a worktree is either in canvas mode
+ * or not, full stop, it never "remembers" a saved workspace. Saving promotes
+ * the scratch canvas into a real, named, detached `WorkspaceDoc` and
+ * navigates away to its own `/workspaces/:id` route (`saveAsWorkspace`
+ * below) — that route is the ONLY place a saved doc is ever viewed/edited,
+ * via `detachedWorkspaceId`/`isDetachedView`. Both placements expose the
+ * same `CanvasGeometry` shape, so everything below — rendering, drag,
  * resize, tiling — runs against `canvas`/`patchCanvas()` regardless of which
- * is live. Only a SAVED workspace may host cross-worktree tiles.
+ * is live. Only a SAVED (detached) workspace may host cross-worktree tiles.
  *
  * Per tile it renders a chrome wrapper hosting a <PaneOutlet> that
  * PaneHostLayer (mounted once, unconditionally, by the caller) portals the
@@ -102,17 +127,22 @@ export function WorkspaceCanvas({
   allSessions,
   worktrees,
   projects,
+  detachedWorkspaceId,
+  canvasToolbarVisible,
 }: WorkspaceCanvasProps) {
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
-  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
+  const navigate = useNavigate();
 
-  const activeWorkspaceId = layoutByWorktree[worktreeId]?.activeWorkspaceId ?? null;
-  const savedDoc = activeWorkspaceId ? workspaceDocs[activeWorkspaceId] : undefined;
+  const isDetachedView = !!detachedWorkspaceId;
+  // Classic per-worktree placement NEVER reads a saved doc — see the module
+  // doc comment above. `savedDoc`/`isSaved` are only ever true for the
+  // detached `/workspaces/:id` view.
+  const savedDoc = isDetachedView ? workspaceDocs[detachedWorkspaceId as string] : undefined;
   const savedDocId = savedDoc?.id ?? null;
-  const scratch = layoutByWorktree[worktreeId]?.scratchCanvas ?? null;
-  /** The live canvas: the saved doc when one is active, else the transient scratch. */
+  const scratch = isDetachedView ? null : (layoutByWorktree[worktreeId]?.scratchCanvas ?? null);
+  /** The live canvas: the saved doc for the detached view, else the transient scratch. */
   const canvas: CanvasGeometry | null = savedDoc ?? scratch;
   const isSaved = !!savedDoc;
 
@@ -129,6 +159,21 @@ export function WorkspaceCanvas({
   // mouseup reads the hover through a ref — the window listener closes over the
   // render that started the drag, so React state alone would be stale there.
   const dropTargetRef = useRef<DropTarget | null>(null);
+  /** Tile currently expanded to fill the viewport — toggled by clicking (not
+   *  dragging) its title bar. Null = no tile is fullscreen. */
+  const [fullscreenTileId, setFullscreenTileId] = useState<string | null>(null);
+  function toggleFullscreen(tileId: string) {
+    setFullscreenTileId((cur) => (cur === tileId ? null : tileId));
+  }
+  // Escape backs out of fullscreen — standard convention, cheap to support.
+  useEffect(() => {
+    if (!fullscreenTileId) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setFullscreenTileId(null);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreenTileId]);
 
   /** Read the CURRENT canvas straight from the store (drag handlers, post-mount). */
   function readCanvas(): CanvasGeometry | null {
@@ -150,6 +195,10 @@ export function WorkspaceCanvas({
   // nothing appears in the sidebar's Workspaces list until the user asks for it.
   const seededForRef = useRef<string | null>(null);
   useEffect(() => {
+    // Detached view has no scratch canvas to seed — a missing doc here means
+    // "not found," which the caller (Workspace.tsx) already redirects away
+    // from before this ever renders; nothing to do on this component's side.
+    if (isDetachedView) return;
     if (canvas) {
       seededForRef.current = null;
       return;
@@ -181,6 +230,31 @@ export function WorkspaceCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worktreeId, canvas]);
 
+  // MUST run before the early return below (rules-of-hooks) — every hook in
+  // this component has to execute on every render regardless of `canvas`.
+  //
+  // Only the DETACHED /workspaces/:id view portals its toolbar up into
+  // TopBar (top-right, where that page has room). The classic per-worktree
+  // canvas keeps its toolbar as its OWN dedicated row above the body — see
+  // the render below — so `toolbarPortalEl` stays null there even when some
+  // other route has an outlet registered.
+  const toolbarOutletEl = usePaneOutletElement(WORKSPACE_CANVAS_TOOLBAR_KEY);
+  const toolbarPortalEl = isDetachedView ? toolbarOutletEl : null;
+
+  // Reconcile a dangling `fullscreenTileId` against whatever tile set is
+  // CURRENTLY live — every non-fullscreen tile hides via `display:none`
+  // (renderTileChrome below), so a fullscreen id pointing at a since-removed
+  // tile would hide the entire canvas permanently. Covers `removeTile`
+  // below AND any removal that happens outside this component entirely
+  // (e.g. the TopBar Tools-tile toggle's store action, which has no way to
+  // reach this component-local state directly).
+  useEffect(() => {
+    if (!canvas) return;
+    if (fullscreenTileId && !canvas.tiles.some((t) => t.id === fullscreenTileId)) {
+      setFullscreenTileId(null);
+    }
+  }, [canvas, fullscreenTileId]);
+
   if (!canvas) {
     return <div className="workspace-canvas workspace-canvas--loading" />;
   }
@@ -192,6 +266,7 @@ export function WorkspaceCanvas({
   for (const s of agentSessions) sessionById.set(s.id, s);
   for (const s of terminalSessions) sessionById.set(s.id, s);
   const worktreeById = new Map(worktrees.map((w) => [w.id, w]));
+  const projectById = new Map(projects.map((p) => [p.id, p]));
 
   const placedSessionIds = new Set(
     cv.tiles.filter((t) => t.sessionId).map((t) => t.sessionId as string),
@@ -274,51 +349,30 @@ export function WorkspaceCanvas({
   }
 
   function addTile(kind: TileKind, sessionId?: string, tileWorktreeId?: string) {
-    const id = randomId();
-    const tile: TileSpec = { id, kind, sessionId };
-    // Only stamp the owning worktree when it isn't the one we're viewing —
-    // keeps same-worktree tiles byte-identical to the pre-cross-context shape.
-    if (tileWorktreeId && tileWorktreeId !== worktreeId) tile.worktreeId = tileWorktreeId;
-    const nextTiles = [...cv.tiles, tile];
-    if (cv.mode === "tiled") {
-      let nextTree: LayoutNode | null;
-      if (!cv.tree || cv.tiles.length === 0) {
-        nextTree = insertPane(null, null, "right", id);
-      } else {
-        const lastTileId = cv.tiles[cv.tiles.length - 1]!.id;
-        const targetLeafId = findLeafId(cv.tree, lastTileId);
-        nextTree = insertPane(cv.tree, targetLeafId, "right", id);
-      }
-      patchCanvas({ tiles: nextTiles, tree: nextTree });
-    } else {
-      const cascade = cv.tiles.length;
-      const rect: FreeRect = {
-        x: 6 + (cascade % 5) * 5,
-        y: 6 + (cascade % 5) * 5,
-        w: 42,
-        h: 42,
-      };
-      patchCanvas({ tiles: nextTiles, freeRects: { ...cv.freeRects, [id]: rect } });
-    }
+    // Shared with the Phase 4c auto-insert (Decision 8) — see
+    // `insertTileIntoCanvas`'s own doc comment in useStore.ts.
+    const next = insertTileIntoCanvas(cv, kind, sessionId, tileWorktreeId, worktreeId);
+    patchCanvas(next);
     setPickerOpen(false);
   }
 
   function removeTile(tileId: string) {
-    const nextTiles = cv.tiles.filter((t) => t.id !== tileId);
-    const nextFreeRects = { ...cv.freeRects };
-    delete nextFreeRects[tileId];
-    let nextTree = cv.tree;
-    if (cv.mode === "tiled") {
-      const leafId = findLeafId(cv.tree, tileId);
-      nextTree = leafId ? removePane(cv.tree, leafId) : cv.tree;
-    }
-    patchCanvas({ tiles: nextTiles, freeRects: nextFreeRects, tree: nextTree });
+    // Shared with the TopBar Tools-tile toggle (useStore.ts's
+    // `toggleWorktreeToolsTile`) — one tree/free-rect removal
+    // implementation. `fullscreenTileId` cleanup is handled by the
+    // reconciliation effect above, not inline here, so it also covers
+    // removals this component didn't itself trigger.
+    patchCanvas(removeTileFromCanvas(cv, tileId));
   }
 
   /**
-   * Promote the transient canvas into a real, named WorkspaceDoc: snapshot its
-   * geometry, make it the active workspace, and drop the scratch (it's now
-   * superseded). From here the Add-tile picker also offers other worktrees.
+   * Promote the transient canvas into a real, named, DETACHED WorkspaceDoc:
+   * snapshot its geometry, drop the scratch (it's now superseded — this
+   * worktree goes back to a fresh, empty canvas next time it's opened), and
+   * navigate to the doc's own `/workspaces/:id` route. The worktree never
+   * "remembers" the saved doc (no `setActiveWorkspace` call) — from here on
+   * the ONLY place this doc is viewed/edited is its own route, where the
+   * Add-tile picker also offers other worktrees' panes.
    */
   function saveAsWorkspace() {
     const name = saveName.trim() || "Workspace";
@@ -328,10 +382,10 @@ export function WorkspaceCanvas({
     if (cur) {
       store.updateWorkspaceDoc(id, { tiles: cur.tiles, tree: cur.tree, freeRects: cur.freeRects });
     }
-    store.setActiveWorkspace(worktreeId, id);
     store.clearScratchCanvas(worktreeId);
     setSavePromptOpen(false);
     setSaveName("");
+    navigate(`/workspaces/${id}`);
   }
 
   // Free-form drag: window-level mousemove/mouseup, fixed drag-start baseline
@@ -346,8 +400,17 @@ export function WorkspaceCanvas({
     const startX = e.clientX;
     const startY = e.clientY;
     const startRect = { ...rect };
+    // Same threshold idiom as startTileDrag below — without it, the tiniest
+    // mouse jitter during a click nudges the tile by a fraction of a percent,
+    // AND a plain click (title-bar-click-to-fullscreen) would never reach
+    // `onUp` with zero movement to distinguish it from a real drag.
+    let armed = false;
 
     function onMove(ev: MouseEvent) {
+      if (!armed) {
+        if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 5) return;
+        armed = true;
+      }
       const dxPct = ((ev.clientX - startX) / containerRect.width) * 100;
       const dyPct = ((ev.clientY - startY) / containerRect.height) * 100;
       const nextX = clamp(startRect.x + dxPct, 0, Math.max(0, 100 - startRect.w));
@@ -361,6 +424,7 @@ export function WorkspaceCanvas({
     function onUp() {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (!armed) toggleFullscreen(tileId);
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -530,6 +594,7 @@ export function WorkspaceCanvas({
       setDrop(null);
       setDraggingTileId(null);
       if (armed && target) applyDrop(tileId, target);
+      else if (!armed) toggleFullscreen(tileId);
     }
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
@@ -537,15 +602,28 @@ export function WorkspaceCanvas({
 
   function renderTileChrome(tile: TileSpec, style?: CSSProperties): ReactNode {
     const session = tile.sessionId ? sessionById.get(tile.sessionId) : undefined;
-    const baseLabel =
-      tile.kind === "tools" ? "Tools" : session ? sessionLabel(session) : tile.kind;
-    const otherWorktree =
-      tile.worktreeId && tile.worktreeId !== worktreeId
-        ? worktreeById.get(tile.worktreeId)
+    // Fully-qualified tile label so a saved (possibly cross-worktree/cross-
+    // project) workspace never has ambiguous same-named tiles:
+    //   agent/terminal, worktree-scoped: "Project > Worktree > Agent"
+    //   agent/terminal, no worktree (direct session, hypothetical today —
+    //     the cross-context picker never offers one, kept for correctness):
+    //     "Project > Agent"
+    //   tools tile: "Project > Tools" (no worktree segment, per design)
+    const tileWorktree = tile.worktreeId ? worktreeById.get(tile.worktreeId) : worktreeById.get(worktreeId);
+    const tileProject = session
+      ? projectById.get(session.projectId)
+      : tileWorktree
+        ? projectById.get(tileWorktree.projectId)
         : undefined;
-    const label = otherWorktree
-      ? `${baseLabel} · ${otherWorktree.name || otherWorktree.branch}`
-      : baseLabel;
+    const projectName = tileProject?.name;
+    const label =
+      tile.kind === "tools"
+        ? [projectName, "Tools"].filter(Boolean).join(" > ")
+        : session
+          ? [projectName, session.worktreeId ? (tileWorktree?.name || tileWorktree?.branch) : null, sessionLabel(session)]
+              .filter(Boolean)
+              .join(" > ")
+          : tile.kind;
     const status =
       tile.kind !== "tools" && session && showAgentStatusBorders
         ? sessionStatus(session.state)
@@ -553,6 +631,24 @@ export function WorkspaceCanvas({
     const paneKey = paneKeyForTile(tile, worktreeId);
     const outletVisible =
       tile.kind === "tools" ? toolPanelVisible : tile.kind === "terminal" ? terminalDockVisible : true;
+
+    // Fullscreen (click, not drag, on the title bar — see startDrag/
+    // startTileDrag's `!armed` branches). The fullscreen tile escapes
+    // whatever position/size `style` would otherwise give it (free-mode %
+    // rect, or tiled-mode flex sizing) via `position: fixed` — same escape-
+    // the-container technique as the classic agent/tools/terminal pane
+    // fullscreen (`.pane-viewport-fullscreen`, Layout.tsx/AGENTS.md), which
+    // works regardless of DOM nesting depth (tiled mode can nest a tile
+    // several split levels deep). Every OTHER tile hides via `display: none`
+    // (not unmounted — panes stay mounted per the never-unmount invariant,
+    // see paneOutlets.tsx) so only the fullscreen one is visible/interactive.
+    const isFullscreen = fullscreenTileId === tile.id;
+    const isHiddenForFullscreen = fullscreenTileId !== null && !isFullscreen;
+    const tileStyle: CSSProperties = isFullscreen
+      ? { position: "fixed", inset: 0 }
+      : isHiddenForFullscreen
+        ? { ...style, display: "none" }
+        : (style ?? {});
 
     return (
       <div
@@ -562,11 +658,20 @@ export function WorkspaceCanvas({
         }}
         className={`workspace-canvas__tile${
           draggingTileId === tile.id ? " workspace-canvas__tile--dragging" : ""
-        }${status ? ` workspace-canvas__tile--${status}` : ""}`}
-        style={style}
+        }${status ? ` workspace-canvas__tile--${status}` : ""}${
+          isFullscreen ? " workspace-canvas__tile--fullscreen" : ""
+        }`}
+        style={tileStyle}
       >
         <div
           className="workspace-canvas__tile-header"
+          title={
+            isFullscreen
+              ? "Click to exit fullscreen"
+              : cv.mode === "free"
+                ? "Click to fullscreen · drag to move"
+                : "Click to fullscreen · drag to rearrange"
+          }
           onMouseDown={
             cv.mode === "free"
               ? (e) => startDrag(e, tile.id)
@@ -574,19 +679,26 @@ export function WorkspaceCanvas({
           }
         >
           {status ? <StatusDot status={status} /> : null}
-          <span className="workspace-canvas__tile-label">{label}</span>
+          <span className="workspace-canvas__tile-label" title={label}>{label}</span>
+          {/* Fullscreen: swap "remove tile" for "exit fullscreen" — clicking
+              the header already exits fullscreen too (same toggle), this is
+              just a second, more discoverable affordance for it. Removing a
+              tile while fullscreen would need its own confirmation-adjacent
+              thought (which one? still fullscreen after?) that isn't worth
+              designing for when a plain header-click already gets you out. */}
           <button
             type="button"
             className="workspace-canvas__tile-close"
-            aria-label={`Remove ${label} tile`}
-            title="Remove from canvas"
+            aria-label={isFullscreen ? "Exit fullscreen" : `Remove ${label} tile`}
+            title={isFullscreen ? "Exit fullscreen" : "Remove from canvas"}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              removeTile(tile.id);
+              if (isFullscreen) toggleFullscreen(tile.id);
+              else removeTile(tile.id);
             }}
           >
-            <X size={13} />
+            {isFullscreen ? <Minimize2 size={13} /> : <X size={13} />}
           </button>
         </div>
         <div className="workspace-canvas__tile-body">
@@ -596,7 +708,7 @@ export function WorkspaceCanvas({
             <div className="workspace-canvas__tile-hidden">Hidden — toggle it on in the top bar</div>
           )}
         </div>
-        {cv.mode === "free" ? (
+        {cv.mode === "free" && !isFullscreen ? (
           <div
             className="workspace-canvas__tile-resize"
             onMouseDown={(e) => startResize(e, tile.id)}
@@ -645,9 +757,16 @@ export function WorkspaceCanvas({
     );
   }
 
-  return (
-    <div className="workspace-canvas">
-      <div className="workspace-canvas__toolbar" role="toolbar" aria-label="Workspace canvas">
+  // toolbarPortalEl computed above (before the early return, rules-of-hooks).
+  // In the detached view it falls back to rendering inline (this component's
+  // own row) on the rare frame where TopBar hasn't registered the outlet
+  // yet, so the toolbar is never just missing.
+  const toolbarNode = (
+      <div
+        className={`workspace-canvas__toolbar${toolbarPortalEl ? " workspace-canvas__toolbar--portaled" : ""}`}
+        role="toolbar"
+        aria-label="Workspace canvas"
+      >
         <div className="workspace-canvas__toolbar-left">
           <div className="workspace-canvas__mode-toggle" role="group" aria-label="Canvas mode">
             <button
@@ -667,20 +786,14 @@ export function WorkspaceCanvas({
               Tiling
             </button>
           </div>
+          {/* `isSaved` is only ever true for the detached /workspaces/:id
+              route — the classic per-worktree placement always shows its own
+              scratch canvas, never a saved doc, so there's no "back to
+              unsaved" concept to offer here anymore (see module doc). */}
           {isSaved ? (
-            <>
-              <span className="workspace-canvas__doc-name" title="Saved workspace">
-                {savedDoc.name}
-              </span>
-              <button
-                type="button"
-                className="workspace-canvas__ghost-btn"
-                title="Leave this saved workspace and go back to the unsaved canvas"
-                onClick={() => setActiveWorkspace(worktreeId, null)}
-              >
-                Back to unsaved
-              </button>
-            </>
+            <span className="workspace-canvas__doc-name" title="Saved workspace">
+              {savedDoc.name}
+            </span>
           ) : (
             <span className="workspace-canvas__doc-name workspace-canvas__doc-name--unsaved">
               Unsaved canvas
@@ -768,7 +881,11 @@ export function WorkspaceCanvas({
                     className="workspace-canvas__picker-item"
                     onClick={() => addTile("agent", s.id)}
                   >
-                    {sessionLabel(s)} <span className="workspace-canvas__picker-kind">agent</span>
+                    <span className="workspace-canvas__picker-item-main">
+                      <Bot size={13} className="workspace-canvas__picker-icon" />
+                      {sessionLabel(s)}
+                    </span>
+                    <span className="workspace-canvas__picker-kind">agent</span>
                   </button>
                 ))}
                 {availableTerminals.map((s) => (
@@ -778,7 +895,11 @@ export function WorkspaceCanvas({
                     className="workspace-canvas__picker-item"
                     onClick={() => addTile("terminal", s.id)}
                   >
-                    {sessionLabel(s)} <span className="workspace-canvas__picker-kind">terminal</span>
+                    <span className="workspace-canvas__picker-item-main">
+                      <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
+                      {sessionLabel(s)}
+                    </span>
+                    <span className="workspace-canvas__picker-kind">terminal</span>
                   </button>
                 ))}
                 {canAddTools ? (
@@ -787,47 +908,88 @@ export function WorkspaceCanvas({
                     className="workspace-canvas__picker-item"
                     onClick={() => addTile("tools")}
                   >
-                    Tools <span className="workspace-canvas__picker-kind">tools</span>
+                    <span className="workspace-canvas__picker-item-main">
+                      <PanelRight size={13} className="workspace-canvas__picker-icon" />
+                      Tools
+                    </span>
+                    <span className="workspace-canvas__picker-kind">tools</span>
                   </button>
                 ) : null}
                 {/* Cross-context panes — saved workspaces only (see otherContextGroups). */}
                 {otherContextGroups.map((group) => (
                   <div key={group.project.id} className="workspace-canvas__picker-group">
-                    <div className="workspace-canvas__picker-heading">{group.project.name}</div>
+                    <div className="workspace-canvas__picker-heading">
+                      <FolderOpen size={13} className="workspace-canvas__picker-icon" />
+                      {group.project.name}
+                    </div>
                     {group.worktrees.map(({ worktree, sessions, canAddTools: wtTools }) => (
                       <div key={worktree.id}>
                         <div className="workspace-canvas__picker-subheading">
+                          <GitBranch size={12} className="workspace-canvas__picker-icon" />
                           {worktree.name || worktree.branch}
                         </div>
-                        {sessions.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            className="workspace-canvas__picker-item"
-                            onClick={() => addTile(s.type as TileKind, s.id, worktree.id)}
-                          >
-                            {sessionLabel(s)}{" "}
-                            <span className="workspace-canvas__picker-kind">{s.type}</span>
-                          </button>
-                        ))}
-                        {wtTools ? (
-                          <button
-                            type="button"
-                            className="workspace-canvas__picker-item"
-                            onClick={() => addTile("tools", undefined, worktree.id)}
-                          >
-                            Tools <span className="workspace-canvas__picker-kind">tools</span>
-                          </button>
-                        ) : null}
+                        <div className="workspace-canvas__picker-subitems">
+                          <span className="workspace-canvas__picker-indent-line" aria-hidden />
+                          {sessions.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              className="workspace-canvas__picker-item"
+                              onClick={() => addTile(s.type as TileKind, s.id, worktree.id)}
+                            >
+                              <span className="workspace-canvas__picker-item-main">
+                                {s.type === "agent" ? (
+                                  <Bot size={13} className="workspace-canvas__picker-icon" />
+                                ) : (
+                                  <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
+                                )}
+                                {sessionLabel(s)}
+                              </span>
+                              <span className="workspace-canvas__picker-kind">{s.type}</span>
+                            </button>
+                          ))}
+                          {wtTools ? (
+                            <button
+                              type="button"
+                              className="workspace-canvas__picker-item"
+                              onClick={() => addTile("tools", undefined, worktree.id)}
+                            >
+                              <span className="workspace-canvas__picker-item-main">
+                                <PanelRight size={13} className="workspace-canvas__picker-icon" />
+                                Tools
+                              </span>
+                              <span className="workspace-canvas__picker-kind">tools</span>
+                            </button>
+                          ) : null}
+                        </div>
                       </div>
                     ))}
                   </div>
                 ))}
+                {/* Unsaved (transient) canvases only ever offer THIS worktree's
+                    own sessions/tools above — otherContextGroups stays empty
+                    until "Save as workspace" promotes it (see !isSaved guard
+                    there). Make that limitation legible instead of the
+                    cross-worktree section just silently never appearing. */}
+                {!isSaved ? (
+                  <div className="workspace-canvas__picker-note" role="note">
+                    To add panes from other worktrees, save this canvas as a workspace.
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
         </div>
       </div>
+  );
+
+  return (
+    <div className="workspace-canvas">
+      {canvasToolbarVisible
+        ? toolbarPortalEl
+          ? createPortal(toolbarNode, toolbarPortalEl)
+          : toolbarNode
+        : null}
       <div className="workspace-canvas__body" ref={canvasBodyRef}>
         {cv.tiles.length === 0 ? (
           <div className="workspace-canvas__empty">
