@@ -45,3 +45,31 @@ describe("ws protocol — session:state accepts the new LifecycleState values (1
     }
   });
 });
+
+// 4b.T3 (plan 04, "Workspaces"): session:created gains `spawnedFrom` —
+// present as a string, present as null, or absent entirely (pre-upgrade-
+// daemon compat) must all parse.
+describe("ws protocol — session:created accepts spawnedFrom (4b.T3)", () => {
+  const base = {
+    type: "session:created" as const,
+    sessionId: "sess-1",
+    worktreeId: "wt-1",
+    sessionType: "agent",
+  };
+
+  it("parses with spawnedFrom as a session id string", () => {
+    const msg = { ...base, spawnedFrom: "sess-source" };
+    expect(() => ServerMessage.parse(msg)).not.toThrow();
+    expect(ServerMessage.parse(msg)).toMatchObject({ spawnedFrom: "sess-source" });
+  });
+
+  it("parses with spawnedFrom: null (no source)", () => {
+    const msg = { ...base, spawnedFrom: null };
+    expect(() => ServerMessage.parse(msg)).not.toThrow();
+    expect(ServerMessage.parse(msg)).toMatchObject({ spawnedFrom: null });
+  });
+
+  it("parses with spawnedFrom absent entirely (pre-upgrade daemon compat)", () => {
+    expect(() => ServerMessage.parse(base)).not.toThrow();
+  });
+});
