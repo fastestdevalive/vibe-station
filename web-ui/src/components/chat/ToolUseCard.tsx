@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { prettyToolInput, summarizeToolInput } from "./toolFormat";
 
 interface ToolUseCardProps {
   toolName: string;
@@ -7,30 +8,11 @@ interface ToolUseCardProps {
   running?: boolean;
 }
 
-function summarize(input: unknown): string {
-  if (input == null) return "";
-  if (typeof input === "string") return input;
-  if (typeof input === "object") {
-    const obj = input as Record<string, unknown>;
-    // Common single-value tool inputs render inline (command / path / pattern).
-    for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query"]) {
-      if (typeof obj[key] === "string") return obj[key] as string;
-    }
-  }
-  return "";
-}
-
 /** A tool invocation: name + input (collapsible pretty JSON) + running spinner. */
 export function ToolUseCard({ toolName, toolInput, running }: ToolUseCardProps) {
   const [open, setOpen] = useState(false);
-  const inline = summarize(toolInput);
-  const pretty = (() => {
-    try {
-      return JSON.stringify(toolInput, null, 2);
-    } catch {
-      return String(toolInput);
-    }
-  })();
+  const inline = summarizeToolInput(toolInput);
+  const pretty = prettyToolInput(toolInput);
   const hasBody = toolInput != null && pretty !== "undefined";
 
   return (

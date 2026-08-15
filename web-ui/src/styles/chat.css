@@ -373,6 +373,116 @@
   word-break: break-word;
 }
 
+/* ── Tool run summary (collapsed consecutive tool calls) ─────────────────────
+   A run of 2+ consecutive tool calls collapses into one integrated,
+   borderless line (e.g. "Read 1 file, ran 1 shell command") instead of
+   stacking N bordered cards — mirrors Claude Code's native terminal look. */
+
+.chat-tool-run__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+}
+.chat-tool-run__summary:hover {
+  color: var(--fg-secondary);
+}
+.chat-tool-run__caret {
+  flex-shrink: 0;
+}
+.chat-tool-run__text--error {
+  color: var(--destructive);
+}
+.chat-tool-run__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-left: var(--space-3);
+  padding-top: var(--space-1);
+}
+
+/* A single tool call inside an expanded run: borderless, integrated row —
+   the call and its result are ONE element (no separate "X result" card). A
+   small chevron only appears when there's detail beyond the inline summary
+   (pretty input JSON and/or the result/diff). */
+.chat-tool-entry {
+  font-size: var(--font-size-sm);
+}
+.chat-tool-entry__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) 0;
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+}
+.chat-tool-entry--error .chat-tool-entry__header {
+  color: var(--destructive);
+}
+.chat-tool-entry__caret {
+  flex-shrink: 0;
+  width: 1em;
+  color: var(--fg-muted);
+}
+.chat-tool-entry__caret--spacer {
+  visibility: hidden;
+}
+.chat-tool-entry__name {
+  font-weight: var(--font-weight-medium);
+  flex-shrink: 0;
+}
+.chat-tool-entry__inline {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.chat-tool-entry__status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.chat-tool-entry__done {
+  color: var(--fg-muted);
+}
+.chat-tool-entry__body {
+  margin-left: calc(1em + var(--space-2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.chat-tool-entry__pre {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ── Error card ───────────────────────────────────────────────────────────── */
 
 .chat-error-card {
