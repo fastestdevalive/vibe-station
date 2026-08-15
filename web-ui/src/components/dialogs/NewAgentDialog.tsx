@@ -819,7 +819,9 @@ export function NewAgentDialog({
             branch: trimmedBranch || undefined,
             baseBranch: result.project.defaultBranch,
             modeId,
+            prompt: prompt.trim() || undefined,
             channel: "json",
+            skipAutoTurn: true,
           });
           worktreeId = wt.id;
           if (wt.mainSessionId) {
@@ -836,7 +838,9 @@ export function NewAgentDialog({
             projectId: result.project.id,
             type: "agent",
             modeId,
+            prompt: prompt.trim() || undefined,
             channel: "json",
+            skipAutoTurn: true,
           });
           sessionId = sess.id;
           await sendJsonFirstTurn(api, sess.id, prompt, files);
@@ -913,16 +917,16 @@ export function NewAgentDialog({
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
       if (useWorktree && project.isGit) {
-        // JSON (Dec 8): create idle (no prompt in the body → no daemon
+        // JSON (Dec 8): create idle (prompt included only so the daemon can
+        // derive the auto name/initialPrompt — skipAutoTurn:true stops
         // auto-enqueue), then upload staged files + send the prompt as turn 1.
         const wt = await api.createWorktree({
           projectId: project.id,
           branch: trimmedBranch || undefined,
           baseBranch: project.defaultBranch,
           modeId,
-          ...(isJson
-            ? { channel: "json" as const }
-            : { prompt: prompt.trim() || undefined }),
+          prompt: prompt.trim() || undefined,
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
         });
         worktreeId = wt.id;
         if (isJson) {
@@ -944,9 +948,8 @@ export function NewAgentDialog({
           projectId: project.id,
           type: "agent",
           modeId,
-          ...(isJson
-            ? { channel: "json" as const }
-            : { prompt: prompt.trim() || undefined }),
+          prompt: prompt.trim() || undefined,
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
         });
         sessionId = sess.id;
         if (isJson) {
@@ -992,7 +995,8 @@ export function NewAgentDialog({
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
       if (useWorktree && !worktreeDisabled) {
-        // JSON (Dec 8): create idle (no prompt in the body → no daemon
+        // JSON (Dec 8): create idle (prompt included only so the daemon can
+        // derive the auto name/initialPrompt — skipAutoTurn:true stops
         // auto-enqueue), then upload staged files + send the prompt as turn 1
         // against the returned worktree's main agent.
         const wt = await api.createWorktree({
@@ -1000,9 +1004,8 @@ export function NewAgentDialog({
           branch: trimmedBranch || undefined,
           baseBranch: baseBranch.trim() || undefined,
           modeId,
-          ...(isJson
-            ? { channel: "json" as const }
-            : { prompt: prompt.trim() || undefined }),
+          prompt: prompt.trim() || undefined,
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
         });
         worktreeId = wt.id;
         if (isJson) {
@@ -1024,9 +1027,8 @@ export function NewAgentDialog({
           projectId: selectedProject.id,
           type: "agent",
           modeId,
-          ...(isJson
-            ? { channel: "json" as const }
-            : { prompt: prompt.trim() || undefined }),
+          prompt: prompt.trim() || undefined,
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
         });
         sessionId = sess.id;
         if (isJson) {

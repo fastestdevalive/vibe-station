@@ -64,6 +64,10 @@ const WorktreeSessionBody = z.object({
    *  as-is, never validated against a real session — an unknown/dangling
    *  id is harmless (S5). */
   sourceAgentId: z.string().optional(),
+  /** See `spawnNewSessionForChannel`'s doc — lets a JSON-channel caller pass
+   *  `prompt` here purely for naming/initialPrompt without the daemon
+   *  auto-enqueueing it as turn 1. */
+  skipAutoTurn: z.boolean().optional(),
 });
 
 const DirectSessionBody = z.object({
@@ -76,6 +80,7 @@ const DirectSessionBody = z.object({
   channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
   sourceAgentId: z.string().optional(),
+  skipAutoTurn: z.boolean().optional(),
 });
 
 const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
@@ -323,9 +328,17 @@ async function spawnNewSessionForChannel(opts: {
   modeId: string;
   prompt: string | undefined;
   daemonPort: number;
+  /** See `skipAutoTurn` on `WorktreeSessionBody`/`DirectSessionBody` above:
+   *  caller included `prompt` only so naming/initialPrompt could be derived
+   *  from it, and will send the real turn 1 itself (after uploading staged
+   *  attachments) — don't also auto-enqueue it here. Defaults to false so
+   *  `/sessions/:id/reset`'s call site (no create-dialog body to speak of)
+   *  keeps its existing auto-enqueue behavior unchanged. */
+  skipAutoTurn?: boolean;
 }): Promise<void> {
-  const { project, worktree, session, modeId, prompt, daemonPort } = opts;
+  const { project, worktree, session, modeId, prompt, daemonPort, skipAutoTurn } = opts;
   if (sessionChannel(session) === "json") {
+    if (skipAutoTurn) return;
     try {
       await startJsonCreateTurn({ sessionId: session.id, prompt, daemonPort });
     } catch (err) {
@@ -617,7 +630,14 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // the create-dialog prompt via the JSON turn queue.
       if (type === "agent" && modeId) {
         const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-        void spawnNewSessionForChannel({ project, session: sessionRecord, modeId, prompt, daemonPort });
+        void spawnNewSessionForChannel({
+          project,
+          session: sessionRecord,
+          modeId,
+          prompt,
+          daemonPort,
+          skipAutoTurn: data.skipAutoTurn,
+        });
       }
 
       return reply.status(201).send(serializeSession(null, project.id, sessionRecord));
@@ -759,7 +779,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // process starts on turn 1, auto-enqueued from the create-dialog prompt.
     if (type === "agent" && modeId) {
       const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-      void spawnNewSessionForChannel({ project, worktree, session: sessionRecord, modeId, prompt, daemonPort });
+      void spawnNewSessionForChannel({
+        project,
+        worktree,
+        session: sessionRecord,
+        modeId,
+        prompt,
+        daemonPort,
+        skipAutoTurn: data.skipAutoTurn,
+      });
     }
 
     return reply.status(201).send(serializeSession(worktreeId, project.id, sessionRecord));

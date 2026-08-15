@@ -7,8 +7,10 @@ import { NewAgentDialog } from "./NewAgentDialog";
 
 /**
  * Attachments at creation for the worktree-main JSON path: create the worktree
- * idle (no prompt in the body), upload the staged file, then send prompt +
- * attachment id as turn 1 against the returned worktree's main session.
+ * idle (prompt carried in the body only so the daemon can derive the auto
+ * name/initialPrompt — `skipAutoTurn: true` stops it from also auto-enqueueing
+ * turn 1), upload the staged file, then send prompt + attachment id as turn 1
+ * against the returned worktree's main session.
  */
 describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
   it("creates worktree idle → uploads → sends first chat to the main session", async () => {
@@ -47,8 +49,12 @@ describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
 
     await waitFor(() => expect(wtSpy).toHaveBeenCalled());
     const body = wtSpy.mock.calls[0]![0];
-    expect(body).toMatchObject({ projectId: "proj-a", channel: "json" });
-    expect("prompt" in body).toBe(false);
+    expect(body).toMatchObject({
+      projectId: "proj-a",
+      channel: "json",
+      prompt: "refactor",
+      skipAutoTurn: true,
+    });
 
     const wt = await wtSpy.mock.results[0]!.value;
     // Session ids are independently generated (Decision 1) — no longer

@@ -503,6 +503,15 @@ export interface CreateWorktreeBody {
   useTmux?: boolean;
   /** `"json"` selects the JSON agent-chat channel for the main agent. */
   channel?: Channel;
+  /**
+   * JSON-channel callers that stage attachments before sending turn 1 (see
+   * `sendJsonFirstTurn`) should still pass `prompt` here so the daemon can
+   * derive the auto name / `initialPrompt` from it, but set this to `true`
+   * so the daemon does NOT also auto-enqueue that prompt as turn 1 — the
+   * caller sends it itself once attachments are uploaded. No-op outside the
+   * JSON channel.
+   */
+  skipAutoTurn?: boolean;
 }
 
 export interface CreateSessionBody {
@@ -515,6 +524,8 @@ export interface CreateSessionBody {
   channel?: Channel;
   /** Optional display name for terminals; blank → daemon assigns "Terminal N". */
   name?: string;
+  /** See `CreateWorktreeBody.skipAutoTurn`. */
+  skipAutoTurn?: boolean;
 }
 
 /** Body for creating a direct session (no worktree). */
@@ -528,6 +539,8 @@ export interface CreateDirectSessionBody {
   /** `"json"` selects the JSON agent-chat channel. */
   channel?: Channel;
   name?: string;
+  /** See `CreateWorktreeBody.skipAutoTurn`. */
+  skipAutoTurn?: boolean;
 }
 
 /** Body for adding a new project. */

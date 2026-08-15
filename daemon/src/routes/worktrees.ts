@@ -167,6 +167,15 @@ const CreateWorktreeBody = z.object({
    *  (agent-interaction-workspaces/04-workspaces Phase 4a) — see
    *  WorktreeSessionBody's identical field in routes/sessions.ts. */
   sourceAgentId: z.string().optional(),
+  /** JSON-channel callers that stage attachments before sending turn 1
+   *  (see `sendJsonFirstTurn` in web-ui) still want `prompt` present in this
+   *  body so the naming heuristic (F1) and `initialPrompt` get populated —
+   *  but must NOT have the daemon auto-enqueue that same prompt as turn 1,
+   *  since they're about to send it themselves once attachments are
+   *  uploaded. Set this to skip the `startJsonCreateTurn` auto-enqueue
+   *  below while still deriving the name/initialPrompt from `prompt`.
+   *  No-op for non-JSON channels (they never auto-enqueue from this body). */
+  skipAutoTurn: z.boolean().optional(),
 });
 
 async function runMainSpawnJob(opts: {
@@ -513,8 +522,14 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
       if (isJson) {
         // JSON main agent (Decision 2/8): no TTY spawn — auto-enqueue the
-        // create-dialog prompt as turn 1 via the JSON turn queue.
-        void startJsonCreateTurn({ sessionId: mainSession.id, prompt: result.data.prompt, daemonPort });
+        // create-dialog prompt as turn 1 via the JSON turn queue. Skipped
+        // when the caller passed `skipAutoTurn` (it included `prompt` here
+        // only so naming/initialPrompt could be derived, and will send the
+        // real turn 1 itself once attachments are uploaded — see
+        // `skipAutoTurn`'s doc on `CreateWorktreeBody` above).
+        if (!result.data.skipAutoTurn) {
+          void startJsonCreateTurn({ sessionId: mainSession.id, prompt: result.data.prompt, daemonPort });
+        }
       } else {
         void runMainSpawnJob({
           projectId,
