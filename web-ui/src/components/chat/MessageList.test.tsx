@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { NormalizedEvent } from "@/api/types";
-import { MessageList, groupEvents } from "./MessageList";
+import { MessageList, groupEvents, mergeToolRuns } from "./MessageList";
 
 function userEvent(turnId: string, text: string, edited = false): NormalizedEvent {
   return {
@@ -101,6 +101,38 @@ describe("MessageList queued-turn filtering (tray relocation)", () => {
     expect(screen.queryByText("now running")).toBeNull();
     rerender(<MessageList events={[userEvent("t1", "now running")]} pending={[]} hiddenTurnIds={new Set()} />);
     expect(screen.getByText("now running")).toBeTruthy();
+  });
+});
+
+function toolItem(id: string, turnId: string) {
+  return { type: "tool" as const, id, toolName: "Bash", turnId, toolInput: { command: "echo" } };
+}
+function thinkingItem(id: string, turnId: string, text: string) {
+  return { type: "thinking" as const, id, turnId, text };
+}
+
+describe("mergeToolRuns", () => {
+  it("wraps even a lone tool call in a toolRun (consistent new-style rendering)", () => {
+    const out = mergeToolRuns([toolItem("a", "t1")]);
+    expect(out).toEqual([{ type: "toolRun", id: "a", tools: [toolItem("a", "t1")] }]);
+  });
+
+  it("does not let an empty/signature-only thinking event split an otherwise-contiguous tool run", () => {
+    const out = mergeToolRuns([
+      toolItem("a", "t1"),
+      thinkingItem("th", "t1", ""),
+      toolItem("b", "t1"),
+    ]);
+    expect(out).toEqual([{ type: "toolRun", id: "a", tools: [toolItem("a", "t1"), toolItem("b", "t1")] }]);
+  });
+
+  it("still splits the run when the thinking event carries real content", () => {
+    const out = mergeToolRuns([
+      toolItem("a", "t1"),
+      thinkingItem("th", "t1", "reasoning about next step"),
+      toolItem("b", "t1"),
+    ]);
+    expect(out.map((i) => i.type)).toEqual(["toolRun", "thinking", "toolRun"]);
   });
 });
 
