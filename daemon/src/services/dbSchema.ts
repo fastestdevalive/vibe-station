@@ -99,6 +99,15 @@ export function ensureSchema(db: Database): void {
   // COLUMN` (idempotent: skipped once the column is present, safe to run on
   // every `getDb()` open like the rest of this function).
   addColumnIfMissing(db, "worktrees", "branchIsPlaceholder", "INTEGER NOT NULL DEFAULT 0");
+  // spawnedFrom (agent-interaction-workspaces/04-workspaces Phase 4a) — the
+  // sessionId this session was spawned from (via the in-app dialogs or a
+  // running agent's own `vst --source-agent` shell), or NULL when spawned
+  // with no source (the common case: a human via the dialogs with no source
+  // picker yet, Out of Scope this round). Write-once (Decision 7) — set at
+  // insert time, never updated. No FK enforcement: a deleted source session
+  // leaving a dangling id is harmless (Research: the client-side workspace
+  // tile scan simply won't find a match, S5).
+  addColumnIfMissing(db, "sessions", "spawnedFrom", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */

@@ -58,6 +58,12 @@ const WorktreeSessionBody = z.object({
   useTmux: z.boolean().optional(),
   channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
+  /** SessionId this session was spawned from (agent-interaction-workspaces/
+   *  04-workspaces Phase 4a) — from an agent's own `vst --source-agent`
+   *  invocation, or (future) an in-app dialog's source picker. Stored
+   *  as-is, never validated against a real session — an unknown/dangling
+   *  id is harmless (S5). */
+  sourceAgentId: z.string().optional(),
 });
 
 const DirectSessionBody = z.object({
@@ -69,6 +75,7 @@ const DirectSessionBody = z.object({
   useTmux: z.boolean().optional(),
   channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
+  sourceAgentId: z.string().optional(),
 });
 
 const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
@@ -371,6 +378,7 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     archivedAt: s.archivedAt ?? null,
     sortOrder: s.sortOrder,
     handoffSummary: s.handoffSummary ?? null,
+    spawnedFrom: s.spawnedFrom ?? null,
   };
 }
 
@@ -554,6 +562,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           lastTransitionAt: new Date().toISOString(),
         },
         ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
+        spawnedFrom: data.sourceAgentId ?? null,
       };
 
       // Spawn terminal immediately if type=terminal
@@ -599,6 +608,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         worktreeId: null,
         sessionType: type,
         mode: typeof modeId === "string" ? modeId : undefined,
+        spawnedFrom: sessionRecord.spawnedFrom ?? null,
         snapshot: serializeSession(null, project.id, sessionRecord),
       });
 
@@ -685,6 +695,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         lastTransitionAt: new Date().toISOString(),
       },
       ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
+      spawnedFrom: data.sourceAgentId ?? null,
     };
 
     // Spawn terminal session immediately if type=terminal
@@ -740,6 +751,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       worktreeId,
       sessionType: type,
       mode: typeof modeId === "string" ? modeId : undefined,
+      spawnedFrom: sessionRecord.spawnedFrom ?? null,
       snapshot: serializeSession(worktreeId, project.id, sessionRecord),
     });
 

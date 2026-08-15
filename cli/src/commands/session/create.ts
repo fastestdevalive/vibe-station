@@ -22,6 +22,10 @@ export function registerSessionCreate(session: Command): void {
       new Option("--prompt-file <path>", "Read prompt from file").conflicts("prompt")
     )
     .option("--json", "Use the JSON agent-chat channel (channel: json)")
+    .option(
+      "--source-agent <sessionId>",
+      "SessionId this session was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
+    )
     .action(
       async (
         worktreeId: string,
@@ -33,6 +37,7 @@ export function registerSessionCreate(session: Command): void {
           prompt?: string;
           promptFile?: string;
           json?: boolean;
+          sourceAgent?: string;
         }
       ) => {
         // The daemon only consumes `prompt` for agent sessions (routes/sessions.ts:420) — a
@@ -48,6 +53,11 @@ export function registerSessionCreate(session: Command): void {
 
         const spinner = ora("Creating session...").start();
 
+        // Same defaulting rule as `vst worktree create` (agent-interaction-
+        // workspaces/04-workspaces Phase 4b, S3) — see that command for the
+        // full rationale.
+        const sourceAgentId = opts.sourceAgent ?? process.env.VST_SESSION ?? undefined;
+
         try {
           const result = await daemonPost<SessionCreateResponse>("/sessions", {
             worktreeId,
@@ -55,6 +65,7 @@ export function registerSessionCreate(session: Command): void {
             modeId: opts.mode,
             prompt,
             ...(opts.json ? { channel: "json" } : {}),
+            ...(sourceAgentId ? { sourceAgentId } : {}),
           });
 
           spinner.stop();

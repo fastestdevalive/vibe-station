@@ -39,6 +39,7 @@ export interface SessionRow {
   initialPrompt: string | null;
   archivedAt: string | null;
   handoffSummary: string | null;
+  spawnedFrom: string | null;
 }
 
 export function rowToSession(row: SessionRow): SessionRecord {
@@ -72,6 +73,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.initialPrompt != null ? { initialPrompt: row.initialPrompt } : {}),
     ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
     ...(row.handoffSummary != null ? { handoffSummary: row.handoffSummary } : {}),
+    ...(row.spawnedFrom != null ? { spawnedFrom: row.spawnedFrom } : {}),
   };
 }
 
@@ -115,6 +117,7 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     initialPrompt: session.initialPrompt ?? null,
     archivedAt: session.archivedAt ?? null,
     handoffSummary: session.handoffSummary ?? null,
+    spawnedFrom: session.spawnedFrom ?? null,
   };
 }
 

@@ -252,6 +252,18 @@ export interface SessionRecord {
    * `null`/absent when no handoff was requested or it timed out.
    */
   handoffSummary?: string | null;
+  /**
+   * SessionId this session was spawned from — set from `sourceAgentId` in the
+   * create request body (in-app dialogs, or a running agent's own shell via
+   * `vst ... --source-agent`), or absent/null when created with no source
+   * (the common case today: Out of Scope this round for the in-app dialogs,
+   * which have no source-agent picker UI yet). Write-once: set at creation,
+   * never mutated afterward (agent-interaction-workspaces/04-workspaces
+   * Phase 4a, Decision 7). No FK enforcement — a deleted source session
+   * leaving a dangling id is harmless (the web-ui's workspace-tile scan
+   * simply finds no match, S5).
+   */
+  spawnedFrom?: string | null;
 }
 
 export interface WorktreeRecord {
