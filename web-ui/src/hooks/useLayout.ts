@@ -17,11 +17,26 @@ export function useLayout() {
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const toggleTerminalDock = useWorkspaceStore((s) => s.toggleTerminalDock);
   const toggleToolSplitOrientation = useWorkspaceStore((s) => s.toggleToolSplitOrientation);
+  const toggleCanvasToolbar = useWorkspaceStore((s) => s.toggleCanvasToolbar);
+  const toggleWorktreeToolsTile = useWorkspaceStore((s) => s.toggleWorktreeToolsTile);
   const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
   const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
   const setLayoutMode = useWorkspaceStore((s) => s.setLayoutMode);
-  const setActiveWorkspace = useWorkspaceStore((s) => s.setActiveWorkspace);
+
+  // Canvas-mode "does this worktree's scratch canvas already have a Tools
+  // tile" — a worktree's classic canvas is ALWAYS its own scratch canvas now
+  // (it never binds to a saved WorkspaceDoc, see WorkspaceCanvas.tsx's
+  // module doc), so this only ever reads `scratchCanvas`. Mirrors
+  // WorkspaceCanvas.tsx's own `placedToolWorktrees` resolution
+  // (tile.worktreeId ?? the worktree this canvas is viewed in), so this
+  // selector and the renderer never disagree about which tile "counts" as
+  // this worktree's Tools tile.
+  const hasWorktreeToolsTile = layoutKey
+    ? !!activeLayout.scratchCanvas?.tiles.some(
+        (t) => t.kind === "tools" && (t.worktreeId ?? layoutKey) === layoutKey,
+      )
+    : false;
 
   return {
     toolPanelVisible: activeLayout.toolPanelVisible,
@@ -33,7 +48,10 @@ export function useLayout() {
      *  ("workspace"|"dashboard"|"settings"|...) — callers destructuring this should
      *  alias it (e.g. `const { layoutMode: paneLayoutMode } = useLayout();`). */
     layoutMode: activeLayout.layoutMode ?? "classic",
-    activeWorkspaceId: activeLayout.activeWorkspaceId ?? null,
+    /** Show/hide the workspace-canvas toolbar's disclosure under the crumb (classic per-worktree canvas placement only). */
+    canvasToolbarVisible: activeLayout.canvasToolbarVisible ?? true,
+    /** Whether the scratch canvas already has a Tools tile for this worktree — canvas mode's Tools-button "on" state. */
+    hasWorktreeToolsTile,
     activeWorktreeId,
     activeDirectContextId,
     activeSessionId,
@@ -43,10 +61,11 @@ export function useLayout() {
     setToolPanelTab,
     toggleTerminalDock,
     toggleToolSplitOrientation,
+    toggleCanvasToolbar,
+    toggleWorktreeToolsTile,
     setActiveSession,
     setActiveTerminalSession,
     setActiveWorktree,
     setLayoutMode,
-    setActiveWorkspace,
   };
 }

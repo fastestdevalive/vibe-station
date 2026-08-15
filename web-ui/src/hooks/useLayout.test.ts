@@ -57,4 +57,30 @@ describe("useLayout", () => {
     const layout = useWorkspaceStore.getState().layoutByWorktree[WT_ID] ?? DEFAULT_WORKTREE_LAYOUT;
     expect(layout.terminalDockVisible).toBe(!DEFAULT_WORKTREE_LAYOUT.terminalDockVisible);
   });
+
+  it("exposes canvasToolbarVisible defaulting true, flipped by toggleCanvasToolbar", () => {
+    const { result } = renderHook(() => useLayout());
+    expect(result.current.canvasToolbarVisible).toBe(true);
+    act(() => useWorkspaceStore.getState().toggleCanvasToolbar());
+    const { result: result2 } = renderHook(() => useLayout());
+    expect(result2.current.canvasToolbarVisible).toBe(false);
+  });
+
+  it("hasWorktreeToolsTile reflects the active canvas's tiles, updated by toggleWorktreeToolsTile", () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [WT_ID]: { ...DEFAULT_WORKTREE_LAYOUT, scratchCanvas: { mode: "free", tiles: [], tree: null, freeRects: {} } },
+      },
+    });
+    const { result } = renderHook(() => useLayout());
+    expect(result.current.hasWorktreeToolsTile).toBe(false);
+
+    act(() => useWorkspaceStore.getState().toggleWorktreeToolsTile());
+    const { result: result2 } = renderHook(() => useLayout());
+    expect(result2.current.hasWorktreeToolsTile).toBe(true);
+
+    act(() => useWorkspaceStore.getState().toggleWorktreeToolsTile());
+    const { result: result3 } = renderHook(() => useLayout());
+    expect(result3.current.hasWorktreeToolsTile).toBe(false);
+  });
 });

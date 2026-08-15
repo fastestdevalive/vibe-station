@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -511,25 +511,28 @@ export function LeftSidebar({
     } catch { /* ignore */ }
   }, [workspacesOpen]);
 
-  /** Saved workspaces for the currently active worktree only (this section is
-   *  worktree-scoped, per the spec — dashboard/no-worktree hides it entirely). */
-  const workspacesForActiveWorktree = useMemo(() => {
-    if (!activeWorktreeId) return [];
-    return Object.values(workspaceDocs).filter((d) => d.contextKey === activeWorktreeId);
-  }, [workspaceDocs, activeWorktreeId]);
-  const workspacesScopeKey = activeWorktreeId ? `workspaces:${activeWorktreeId}` : "";
+  /** ALL saved workspaces, globally — detached from any owning worktree
+   *  (agent-interaction-workspaces/04-workspaces Phase 3b, Decision 6). A
+   *  saved workspace is independent once created, so it's listed regardless
+   *  of which worktree (or none — the dashboard) is currently active.
+   *  `contextKey` (the worktree it was originally created in) is provenance
+   *  only now, not a filter (Decision 5). */
+  const allWorkspaces = useMemo(() => Object.values(workspaceDocs), [workspaceDocs]);
+  /** Single global ordering key — the section is no longer per-worktree, so
+   *  its reorder state isn't either. */
+  const workspacesScopeKey = "workspaces:global";
   const orderedWorkspaces = useMemo(() => {
-    const ids = workspacesForActiveWorktree.map((d) => d.id);
+    const ids = allWorkspaces.map((d) => d.id);
     const order = applyLocalSortOrder(workspaceOrder[workspacesScopeKey], ids);
-    const byId = new Map(workspacesForActiveWorktree.map((d) => [d.id, d]));
+    const byId = new Map(allWorkspaces.map((d) => [d.id, d]));
     return order.map((id) => byId.get(id)!).filter(Boolean);
-  }, [workspacesForActiveWorktree, workspaceOrder, workspacesScopeKey]);
-  const activeWorkspaceId = activeWorktreeId
-    ? (layoutByWorktree[activeWorktreeId]?.activeWorkspaceId ?? null)
+  }, [allWorkspaces, workspaceOrder, workspacesScopeKey]);
+  /** "Currently viewing this workspace" is route-driven now (Decision 4), not
+   *  a per-worktree pointer — highlight the row whose id matches the open
+   *  `/workspaces/:id` route. */
+  const activeDetachedWorkspaceId = location.pathname.startsWith("/workspaces/")
+    ? location.pathname.slice("/workspaces/".length)
     : null;
-  const activeLayoutMode = activeWorktreeId
-    ? (layoutByWorktree[activeWorktreeId]?.layoutMode ?? "classic")
-    : "classic";
 
   const [newSessProject, setNewSessProject] = useState<Project | null>(null);
   const [directAgentProject, setDirectAgentProject] = useState<Project | null>(null);
@@ -1115,12 +1118,12 @@ export function LeftSidebar({
             </DndContext>
           </section>
         ) : null}
-        {/* Saved workspace layouts (tiled/free-form pane arrangements) for the
-            currently active worktree only — this section is worktree-scoped,
-            unlike Pinned/Projects above. Hidden entirely when there's no
-            active worktree (e.g. dashboard route). Reorder + rename are both
-            purely client-side (no daemon route exists for WorkspaceDoc). */}
-        {!collapsed && activeWorktreeId ? (
+        {/* Saved workspace layouts (tiled/free-form pane arrangements) — GLOBAL,
+            listed regardless of which worktree (or none) is currently active;
+            a saved workspace is detached from its creating worktree (Phase 3,
+            Decision 4/6). Reorder + rename are both purely client-side (no
+            daemon route exists for WorkspaceDoc). */}
+        {!collapsed ? (
           <section className="workspaces-section" aria-label="Workspaces">
             <div className="sidebar-projects-heading pinned-section__heading">
               <span className="sidebar-projects-heading__gutter" aria-hidden />
@@ -1165,7 +1168,7 @@ export function LeftSidebar({
                     strategy={verticalListSortingStrategy}
                   >
                     {orderedWorkspaces.map((ws) => {
-                      const isActive = activeWorkspaceId === ws.id && activeLayoutMode === "workspace";
+                      const isActive = activeDetachedWorkspaceId === ws.id;
                       return (
                         <SortableRow key={ws.id} id={ws.id}>
                           {({ setNodeRef, style, attributes, listeners }) => (
@@ -1185,13 +1188,13 @@ export function LeftSidebar({
                                 onKeyDown={(e) => {
                                   if (e.key === "Enter" || e.key === " ") {
                                     e.preventDefault();
-                                    setActiveWorkspace(activeWorktreeId, ws.id);
-                                    setLayoutMode(activeWorktreeId, "workspace");
+                                    if (isMobile) setMobileSidebarOpen(false);
+                                    navigate(`/workspaces/${ws.id}`);
                                   }
                                 }}
                                 onClick={() => {
-                                  setActiveWorkspace(activeWorktreeId, ws.id);
-                                  setLayoutMode(activeWorktreeId, "workspace");
+                                  if (isMobile) setMobileSidebarOpen(false);
+                                  navigate(`/workspaces/${ws.id}`);
                                 }}
                                 onDoubleClick={(e) => {
                                   e.preventDefault();
@@ -1316,7 +1319,7 @@ export function LeftSidebar({
                 onClick={() => toggleProj(p.id)}
               >
                 <span className="tree-row__chevron tree-row__project-chevron" aria-hidden>
-                  {openProj.has(p.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  {openProj.has(p.id) ? <FolderOpen size={14} /> : <Folder size={14} />}
                 </span>
                 <span className="tree-row__label">
                   {collapsed ? disambiguatedAbbrev(p.name, p.id, visibleProjects) : p.name}

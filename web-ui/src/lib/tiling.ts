@@ -3,8 +3,12 @@
  * tiling design research. Pure functions — every op returns a NEW root,
  * never mutates its input, so React state updates are trivial.
  *
- * DEV-ONLY POC code (web-ui/workspaces-demo.html), not wired into the real
- * app. See .vibekit/feature-plans/wip/agent-interaction-workspaces/.
+ * Actively used by the real app — `WorkspaceCanvas.tsx` (tiling-mode canvas)
+ * and `useStore.ts` (`insertTileIntoWorkspaceDoc`, Phase 4c auto-insert).
+ * The original design was validated first as a standalone POC artifact
+ * (`.scratch/workspaces-poc.html`, superseded/historical — see
+ * .vibekit/feature-plans/wip/agent-interaction-workspaces/04-workspaces);
+ * this file is the real, shipped implementation, not that POC.
  */
 
 export type Axis = "row" | "column";
@@ -280,4 +284,15 @@ export function collectTileIds(root: LayoutNode | null): string[] {
   if (!root) return [];
   if (root.type === "leaf") return [root.tileId];
   return root.children.flatMap(collectTileIds);
+}
+
+/** Find the leaf NODE's own id (not the tile id) hosting `tileId`, or null. */
+export function findLeafId(root: LayoutNode | null, tileId: string): string | null {
+  if (!root) return null;
+  if (root.type === "leaf") return root.tileId === tileId ? root.id : null;
+  for (const child of root.children) {
+    const found = findLeafId(child, tileId);
+    if (found) return found;
+  }
+  return null;
 }

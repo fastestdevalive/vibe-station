@@ -27,10 +27,13 @@ import { QuickOpen } from "@/components/dialogs/QuickOpen";
 export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
-  const params = useParams<{ directSessionId?: string }>();
+  const params = useParams<{ directSessionId?: string; workspaceId?: string }>();
   const isDashboard = location.pathname === "/";
   const isSettings = location.pathname === "/settings";
   const isDirectSession = location.pathname.startsWith("/session/");
+  // Detached-workspace view (agent-interaction-workspaces/04-workspaces Phase 3,
+  // Decision 4) — a saved WorkspaceDoc's own route, independent of any worktree.
+  const isWorkspaceView = location.pathname.startsWith("/workspaces/");
   const isFullWidthPane = isDashboard || isSettings;
 
   // Server data lives in `useServerStore`, populated and refreshed by
@@ -53,9 +56,10 @@ export function Workspace() {
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
 
   // Layout.tsx reads its own `layoutMode` (aliased there as `paneLayoutMode`) to
-  // decide whether to render `workspaceCanvas`; this route only needs the
-  // region-visibility flags to pass down to <WorkspaceCanvas>.
-  const { toolPanelVisible, terminalDockVisible, activeWorkspaceId } = useLayout();
+  // decide whether to render `workspaceCanvas`; this route needs the same
+  // flag too, to tell `ToolPanel` when it's currently live inside a
+  // workspace-canvas tile (see `hidePanelControls`).
+  const { layoutMode: paneLayoutMode, canvasToolbarVisible } = useLayout();
 
   const [quickOpen, setQuickOpen] = useState(false);
 
@@ -72,10 +76,26 @@ export function Workspace() {
     return projects.find((p) => p.id === directSession.projectId) ?? null;
   }, [directSession, projects]);
 
+  // Derive the detached workspace being viewed, if any (Phase 3a.4). `workspaceDocs`
+  // is client-only persisted state (zustand `persist`, hydrated synchronously from
+  // localStorage) — no `bundleLoaded` gate needed the way directSession's redirect
+  // effect below needs one for server-fetched `sessions`.
+  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
+  const viewedWorkspace = useMemo(() => {
+    if (!isWorkspaceView || !params.workspaceId) return null;
+    return workspaceDocs[params.workspaceId] ?? null;
+  }, [isWorkspaceView, params.workspaceId, workspaceDocs]);
+
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
   // Quick Open + pane shortcuts work in both worktree and direct-session modes
-  // (direct sessions browse the project base dir); only full-width panes opt out.
-  useWorkspaceKeyboardShortcuts(setQuickOpen, !isFullWidthPane);
+  // (direct sessions browse the project base dir); only full-width panes (and
+  // the detached workspace view, which has no single owning worktree/project
+  // to scope a file search to) opt out.
+  useWorkspaceKeyboardShortcuts(
+    setQuickOpen,
+    !isFullWidthPane && !isWorkspaceView,
+    paneLayoutMode === "workspace",
+  );
 
   // Clear worktree context when entering direct session mode (mutual exclusion)
   useEffect(() => {
@@ -89,6 +109,21 @@ export function Workspace() {
       });
     }
   }, [isDirectSession, bundleLoaded]);
+
+  // Same mutual exclusion for the detached workspace view — it isn't "owned"
+  // by any single worktree (that's the whole point of Phase 3), so clear any
+  // leftover worktree/direct-session context on entry.
+  useEffect(() => {
+    if (!isWorkspaceView) return;
+    const s = useWorkspaceStore.getState();
+    if (s.activeWorktreeId || s.activeSessionId) {
+      useWorkspaceStore.setState({
+        activeWorktreeId: null,
+        activeSessionId: null,
+        activeFilePath: null,
+      });
+    }
+  }, [isWorkspaceView]);
 
   // Bind the direct-session layout context (project id) so the tool panel /
   // terminal dock toggles persist per project, and the Files tree + terminals
@@ -108,6 +143,17 @@ export function Workspace() {
     }
   }, [isDirectSession, bundleLoaded, params.directSessionId, directSession, navigate]);
 
+  // Redirect to dashboard if the workspace doc no longer exists (deleted, or a
+  // stale/invalid id in the URL — Risk #8, Phase 3c.3). Mirrors the direct-
+  // session pattern above; no `bundleLoaded` gate since `workspaceDocs` isn't
+  // server-fetched.
+  useEffect(() => {
+    if (!isWorkspaceView) return;
+    if (params.workspaceId && !viewedWorkspace) {
+      navigate("/", { replace: true });
+    }
+  }, [isWorkspaceView, params.workspaceId, viewedWorkspace, navigate]);
+
   // Update browser tab title to reflect current context
   useEffect(() => {
     if (isSettings) {
@@ -115,13 +161,25 @@ export function Workspace() {
     } else if (isDirectSession && directSession) {
       const projectName = directSessionProject?.name ?? "Direct";
       document.title = `${sessionLabel(directSession)} — ${projectName} — Vibe Station`;
+    } else if (isWorkspaceView && viewedWorkspace) {
+      document.title = `${viewedWorkspace.name} — Vibe Station`;
     } else if (isDashboard || !activeWorktreeId) {
       document.title = "Vibe Station";
     } else {
       const wt = worktrees.find((w) => w.id === activeWorktreeId);
       document.title = wt ? `${wt.branch} — Vibe Station` : "Vibe Station";
     }
-  }, [activeWorktreeId, worktrees, isDashboard, isSettings, isDirectSession, directSession, directSessionProject]);
+  }, [
+    activeWorktreeId,
+    worktrees,
+    isDashboard,
+    isSettings,
+    isDirectSession,
+    directSession,
+    directSessionProject,
+    isWorkspaceView,
+    viewedWorkspace,
+  ]);
 
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
   // even before the first session subscription. The api client owns reconnects.
@@ -201,41 +259,26 @@ export function Workspace() {
     () => sessions.filter((s) => s.worktreeId === activeWorktreeId && s.type === "terminal"),
     [sessions, activeWorktreeId],
   );
-  // A SAVED workspace may tile panes from other worktrees/projects; those panes
-  // are outside the active worktree's own always-mounted set above, so union
-  // them in — otherwise their <PaneOutlet> would have nothing to portal into.
-  // The transient (unsaved) canvas never needs this: it only ever references
-  // this worktree's own sessions.
-  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
-  const crossContextPaneKeys = useMemo<PaneKey[]>(() => {
-    if (!activeWorktreeId || isDirectSession || !activeWorkspaceId) return [];
-    const doc = workspaceDocs[activeWorkspaceId];
-    if (!doc) return [];
-    const keys: PaneKey[] = [];
-    for (const tile of doc.tiles) {
-      if (tile.kind === "tools") {
-        keys.push(`tools:${tile.worktreeId ?? activeWorktreeId}`);
-      } else if (tile.sessionId && sessions.some((s) => s.id === tile.sessionId)) {
-        keys.push(`${tile.kind}:${tile.sessionId}`);
-      }
-    }
-    return keys;
-  }, [activeWorktreeId, isDirectSession, activeWorkspaceId, workspaceDocs, sessions]);
+  // A worktree's classic per-worktree canvas placement is ALWAYS its own
+  // transient scratch canvas now — it never binds to a saved WorkspaceDoc
+  // (see WorkspaceCanvas.tsx's module doc), so its pane-key set is just its
+  // own sessions + tools, no cross-worktree union needed. A saved doc's
+  // cross-worktree panes are handled entirely by `detachedWorkspacePaneKeys`
+  // below, for the doc's own `/workspaces/:id` route.
   const worktreePaneKeys = useMemo<PaneKey[]>(() => {
     if (!activeWorktreeId || isDirectSession) return [];
     const keys: PaneKey[] = [];
     for (const s of worktreeAgentSessions) keys.push(`agent:${s.id}`);
     for (const s of worktreeTerminalSessions) keys.push(`terminal:${s.id}`);
     keys.push(`tools:${activeWorktreeId}`);
-    for (const k of crossContextPaneKeys) if (!keys.includes(k)) keys.push(k);
     return keys;
-  }, [
-    activeWorktreeId,
-    isDirectSession,
-    worktreeAgentSessions,
-    worktreeTerminalSessions,
-    crossContextPaneKeys,
-  ]);
+  }, [activeWorktreeId, isDirectSession, worktreeAgentSessions, worktreeTerminalSessions]);
+  // Whether ToolPanel instances rendered via this pane-key registry are
+  // CURRENTLY live inside a workspace-canvas tile (either the classic
+  // per-worktree canvas, or the detached /workspaces/:id view — both use
+  // this same `renderWorktreePane`) rather than the classic docked tool
+  // panel — see `ToolPanel`'s `hidePanelControls` prop.
+  const inWorkspaceCanvas = isWorkspaceView || paneLayoutMode === "workspace";
   const renderWorktreePane = useCallback(
     (key: PaneKey): ReactNode => {
       if (key.startsWith("agent:")) {
@@ -252,14 +295,52 @@ export function Workspace() {
           api={api}
           worktreeId={wtId}
           baseBranch={worktrees.find((w) => w.id === wtId)?.baseBranch}
+          hidePanelControls={inWorkspaceCanvas}
         />
       );
     },
-    [sessions, worktrees],
+    [sessions, worktrees, inWorkspaceCanvas],
   );
   const worktreePaneHostLayer = (
     <PaneHostLayer paneKeys={worktreePaneKeys} renderPane={renderWorktreePane} />
   );
+
+  // Detached workspace view (Phase 3c): the viewed doc's own pane set, derived
+  // straight from its tiles, WITHOUT requiring an `activeWorktreeId` (there
+  // isn't one — this route has no owning worktree; a worktree's own classic
+  // canvas placement is always its own scratch canvas, never a saved doc —
+  // see WorkspaceCanvas.tsx's module doc). Reuses `renderWorktreePane`, which
+  // is already generic over the `agent:`/`terminal:`/`tools:` key prefixes.
+  const detachedWorkspacePaneKeys = useMemo<PaneKey[]>(() => {
+    if (!viewedWorkspace) return [];
+    const keys: PaneKey[] = [];
+    for (const tile of viewedWorkspace.tiles) {
+      if (tile.kind === "tools") {
+        keys.push(`tools:${tile.worktreeId ?? viewedWorkspace.contextKey}`);
+      } else if (tile.sessionId && sessions.some((s) => s.id === tile.sessionId)) {
+        keys.push(`${tile.kind}:${tile.sessionId}`);
+      }
+    }
+    return keys;
+  }, [viewedWorkspace, sessions]);
+  const detachedWorkspacePaneHostLayer = (
+    <PaneHostLayer paneKeys={detachedWorkspacePaneKeys} renderPane={renderWorktreePane} />
+  );
+  const detachedWorkspaceCanvas = viewedWorkspace ? (
+    <WorkspaceCanvas
+      worktreeId={viewedWorkspace.contextKey}
+      agentSessions={[]}
+      terminalSessions={[]}
+      hasTools
+      toolPanelVisible
+      terminalDockVisible
+      allSessions={sessions}
+      worktrees={worktrees}
+      projects={projects}
+      detachedWorkspaceId={viewedWorkspace.id}
+      canvasToolbarVisible
+    />
+  ) : null;
 
   const agentPane = (
     <div className="pane-stack">
@@ -299,11 +380,18 @@ export function Workspace() {
         agentSessions={worktreeAgentSessions}
         terminalSessions={worktreeTerminalSessions}
         hasTools
-        toolPanelVisible={toolPanelVisible}
-        terminalDockVisible={terminalDockVisible}
+        // Canvas mode: every pane is its own tile, so the classic docked
+        // panel's visibility flags no longer mean "hide this region" — they'd
+        // just blank a tile's content with nothing left to un-hide it from
+        // (the TopBar buttons that used to control these are now disabled/
+        // repurposed for canvas mode, see TopBar.tsx). Force both true, same
+        // as the detached workspace-view canvas above.
+        toolPanelVisible
+        terminalDockVisible
         allSessions={sessions}
         worktrees={worktrees}
         projects={projects}
+        canvasToolbarVisible={canvasToolbarVisible}
       />
     ) : null;
 
@@ -342,12 +430,14 @@ export function Workspace() {
       ? "dashboard"
       : isDirectSession
         ? "direct-session"
-        : "workspace";
+        : isWorkspaceView
+          ? "workspace-view"
+          : "workspace";
 
   return (
     <PaneOutletProvider>
     <div className="workspace-route">
-      {!isFullWidthPane ? (
+      {!isFullWidthPane && !isWorkspaceView ? (
         isDirectSession ? (
           <QuickOpen
             api={api}
@@ -366,9 +456,9 @@ export function Workspace() {
             layoutMode={layoutMode}
             projects={projects}
             worktrees={worktrees}
-            sessions={sessions}
             directSession={directSession ?? undefined}
             directSessionProject={directSessionProject ?? undefined}
+            viewedWorkspaceName={viewedWorkspace?.name}
             isMobile={isMobile}
             onToggleLeftSidebar={() => {
               if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
@@ -387,14 +477,22 @@ export function Workspace() {
             isMobile={isMobile}
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard || isSettings || isDirectSession) navigate(`/worktree/${wtId}`);
+              if (isDashboard || isSettings || isDirectSession || isWorkspaceView) navigate(`/worktree/${wtId}`);
             }}
           />
         }
         dashboardPane={
           isDashboard ? (
             <DashboardPanel api={api} />
-          ) : isSettings ? <SettingsPanel api={api} /> : undefined
+          ) : isSettings ? (
+            <SettingsPanel api={api} />
+          ) : isWorkspaceView ? (
+            // Rendered via the `dashboardPane` slot (full-bleed, no classic
+            // agent/tools/terminal three-pane machinery) since this view has
+            // no single owning worktree to key that machinery's persisted
+            // sizes/visibility off of — see Layout.tsx's dashboard branch.
+            (detachedWorkspaceCanvas ?? <div className="workspace-canvas workspace-canvas--loading" />)
+          ) : undefined
         }
         leftColumnPx={leftColumnPx}
         leftSidebarCollapsed={leftSidebarCollapsed}
@@ -402,24 +500,32 @@ export function Workspace() {
         isMobile={isMobile}
         mobileSidebarOpen={mobileSidebarOpen}
         onMobileSidebarClose={() => setMobileSidebarOpen(false)}
-        {...(isFullWidthPane
-          ? {}
-          : isDirectSession
-            ? {
-                // Direct session: full worktree layout minus the agent tabs.
-                // Tool panel (Files) + terminal dock resolve to the project
-                // base dir (scope="project").
-                agentPane: directAgentPane,
-                toolPanel: directToolPanel,
-                terminalDock: directTerminalDock,
-              }
-            : {
-                agentPane,
-                toolPanel: worktreeToolPanel,
-                terminalDock,
-                workspaceCanvas,
-                paneHostLayer: worktreePaneHostLayer,
-              })}
+        {...(isWorkspaceView
+          ? // Detached workspace view: rendered via `dashboardPane` above, which
+            // doesn't read agentPane/toolPanel/terminalDock/workspaceCanvas at
+            // all (Layout.tsx returns early once `dashboardPane` is set) — the
+            // only prop that branch still needs from here is `paneHostLayer`,
+            // so the viewed doc's tiles have somewhere to portal their live
+            // panes into.
+            { paneHostLayer: detachedWorkspacePaneHostLayer }
+          : isFullWidthPane
+            ? {}
+            : isDirectSession
+              ? {
+                  // Direct session: full worktree layout minus the agent tabs.
+                  // Tool panel (Files) + terminal dock resolve to the project
+                  // base dir (scope="project").
+                  agentPane: directAgentPane,
+                  toolPanel: directToolPanel,
+                  terminalDock: directTerminalDock,
+                }
+              : {
+                  agentPane,
+                  toolPanel: worktreeToolPanel,
+                  terminalDock,
+                  workspaceCanvas,
+                  paneHostLayer: worktreePaneHostLayer,
+                })}
       />
     </div>
     </PaneOutletProvider>

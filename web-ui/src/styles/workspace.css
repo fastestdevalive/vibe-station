@@ -321,6 +321,26 @@
   padding-left: var(--space-2);
 }
 
+/* The Workspaces section header's disclosure toggle (`.tree-row__project-expand`
+   reused here, not inside a `.tree-row--project` row like the per-project
+   ones) — `.sidebar-projects-heading`'s own `align-items: center` sizes it to
+   its own content instead of the full 32px heading row, leaving most of that
+   row unclickable and the chevron+label vertically centered against a
+   shorter box than the row appears to be. Stretch it to the full row height
+   so the whole heading row is the click target, and center its own content
+   within that taller box (`.tree-row__project-expand` already sets
+   `align-items: center`). */
+.sidebar-projects-heading .tree-row__project-expand {
+  align-self: stretch;
+  padding: 0 var(--space-1);
+  margin: 0 calc(var(--space-1) * -1);
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-projects-heading .tree-row__project-expand:hover {
+  background: var(--bg-hover);
+}
+
 .sidebar-projects-heading__gutter {
   /* hidden — alignment handled by padding-left on the heading itself */
   display: none;
@@ -486,6 +506,15 @@
   width: 12px;
   height: 12px;
   flex-shrink: 0;
+  /* Center the chevron glyph itself within its fixed box — without this an
+     SVG icon's own intrinsic baseline can sit a px or two off from the
+     adjacent label text, most visible in the Workspaces section header
+     (`.sidebar-projects-heading .tree-row__project-expand` below), which —
+     unlike the per-project tree rows — has no `.tree-row` row chrome to
+     absorb the difference. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .tree-row__chevron-spacer {
@@ -538,7 +567,9 @@
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  /* More breathing room than the default --space-1 (4px) — the folder icon
+     and project name were reading as too close together. */
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   border: none;
@@ -562,6 +593,11 @@
 }
 
 .tree-row__project-chevron {
+  /* Folder open/closed glyph is visually a touch bigger than the plain
+     chevron the base `.tree-row__chevron` box (12px) was sized for —
+     widen its own box slightly so the icon isn't clipped. */
+  width: 14px;
+  height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1201,13 +1237,17 @@
 }
 
 .top-bar {
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.top-bar__row {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-bottom: var(--border-width) solid var(--border-default);
-  background: var(--bg-secondary);
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .top-bar__end {
@@ -1358,6 +1398,33 @@
   opacity: 0.3;
 }
 
+/* Canvas chip — the canvas-mode toggle and its toolbar-disclosure chevron,
+   merged into one pill so they read as a single control-with-a-dropdown
+   while staying two independently clickable <button>s (see TopBar.tsx).
+   Reuses `.top-bar__pane-btn` for the buttons themselves; this wrapper only
+   supplies the shared rounded ground and the hairline between them. */
+.top-bar__canvas-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+
+.top-bar__canvas-chip > .top-bar__pane-btn {
+  border-radius: 0;
+}
+
+.top-bar__canvas-chip > .top-bar__pane-btn + .top-bar__pane-btn {
+  border-left: var(--border-width) solid var(--border-default);
+}
+
+/* The chevron is a thin disclosure arrow, not a peer icon button — same
+   height so it aligns inside the chip, but narrower. */
+.top-bar__canvas-chip-chevron {
+  width: 21px;
+}
+
 .top-bar__actions {
   display: flex;
   align-items: center;
@@ -1429,7 +1496,7 @@
 }
 
 .left-sidebar .tree-row--project {
-  font-size: calc(var(--font-size-sm) + 2px);
+  font-size: calc(var(--font-size-sm) + 1px);
 }
 
 .left-sidebar--collapsed .tree-row.tree-row--worktree {

@@ -3,22 +3,27 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect } from "vitest";
 import axe from "axe-core";
 import { TopBar } from "@/components/layout/TopBar";
+import { PaneOutletProvider } from "@/components/layout/paneOutlets";
 import { Dialog } from "@/components/dialogs/Dialog";
 
 describe("a11y smoke", () => {
   it("TopBar has no axe violations", async () => {
     const { container } = render(
       <MemoryRouter>
-        <TopBar
-          projects={[]}
-          worktrees={[]}
-          sessions={[]}
-          isMobile={false}
-          onToggleLeftSidebar={() => {}}
-          leftSidebarCollapsed={false}
-          mobileSidebarOpen={false}
-          onOpenQuickOpen={() => {}}
-        />
+        {/* TopBar always renders inside one in the real app (Workspace.tsx) —
+            it now hosts a ToolbarOutlet (WorkspaceCanvas's portaled
+            toolbar), which needs the registry context. */}
+        <PaneOutletProvider>
+          <TopBar
+            projects={[]}
+            worktrees={[]}
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
       </MemoryRouter>,
     );
     const results = await axe.run(container);

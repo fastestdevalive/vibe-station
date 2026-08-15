@@ -109,6 +109,9 @@ export interface Session {
   archivedAt?: string | null;
   /** Handoff summary written during a `reset --handoff`. Only ever set on an archived row. */
   handoffSummary?: string | null;
+  /** SessionId this session was spawned from, or null (agent-interaction-
+   *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
+  spawnedFrom?: string | null;
 }
 
 /** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
@@ -279,6 +282,10 @@ export type WSEvent =
       mode?: string;
       /** Full session row for optimistic UI (daemon v1+) */
       snapshot?: Session;
+      /** SessionId this session was spawned from, or null (agent-interaction-
+       *  workspaces/04-workspaces Phase 4b). Absent ≡ pre-upgrade daemon —
+       *  treat identically to null (skip the auto-insert scan, Phase 4c). */
+      spawnedFrom?: string | null;
     }
   | {
       type: "session:state";
