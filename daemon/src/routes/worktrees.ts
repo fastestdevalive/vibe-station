@@ -8,7 +8,15 @@ import { getProject, getAllProjects, mutateProject } from "../state/project-stor
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
 import { reserveNextWorktreeNum, generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
 import { slugifyPrompt } from "../services/naming.js";
-import { worktreeAdd, worktreeRemove, revParse, fetchOrigin, branchExists, listCommits } from "../services/git.js";
+import {
+  worktreeAdd,
+  worktreeRemove,
+  revParse,
+  fetchOrigin,
+  branchExists,
+  listCommits,
+  resolveBaseSha,
+} from "../services/git.js";
 import { getRemoteUrl, parseGithubRepo, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
@@ -953,6 +961,14 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
     const wtPath = getWorktreePath(project.id, wtId);
 
+    const baseSha =
+      scope === "branch"
+        ? await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha)
+        : null;
+    if (scope === "branch" && !baseSha) {
+      return reply.status(422).send({ error: "Could not resolve base branch fork point" });
+    }
+
     const gitArgs =
       scope === "branch"
         ? ([
@@ -961,7 +977,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
             "-c",
             "core.quotepath=false",
             "diff",
-            worktree.baseSha,
+            baseSha!,
             "--",
             filePath,
           ] as const)
@@ -1042,9 +1058,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     try {
       if (scope === "branch") {
+        const branchBaseSha = await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha);
+        if (!branchBaseSha) {
+          return reply.status(422).send({ error: "Could not resolve base branch fork point" });
+        }
         const ns = spawnSync(
           "git",
-          ["-c", "core.quotepath=false", "diff", "-z", "--name-status", worktree.baseSha],
+          ["-c", "core.quotepath=false", "diff", "-z", "--name-status", branchBaseSha],
           {
             cwd: wtPath,
             encoding: "utf-8",
@@ -1101,7 +1121,8 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const wtPath = getWorktreePath(project.id, wtId);
     try {
-      const commits = await listCommits(wtPath, limit, worktree.baseSha);
+      const baseSha = await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha);
+      const commits = await listCommits(wtPath, limit, baseSha ?? undefined);
       return reply.send({ commits });
     } catch (err) {
       return reply.status(500).send({ error: `commits failed: ${String(err)}` });
