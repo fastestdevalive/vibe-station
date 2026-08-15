@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { DiffView } from "@/components/preview/DiffView";
+import { capForDisplay, looksLikeUnifiedDiff } from "./toolFormat";
 
 interface ToolResultCardProps {
   toolName?: string;
@@ -7,27 +8,9 @@ interface ToolResultCardProps {
   isError?: boolean;
 }
 
-/** Heuristic: does this look like a unified diff (edit-tool output)? */
-export function looksLikeUnifiedDiff(text: string): boolean {
-  if (!text) return false;
-  if (/^diff --git /m.test(text)) return true;
-  // A hunk header plus at least one +/- line is a strong signal.
-  return /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text) && /^[+-]/m.test(text);
-}
-
-/**
- * Client-side mirror of the server's `TOOL_RESULT_MAX_BYTES` cap
- * (`daemon/src/services/toolResultCap.ts`). Defense-in-depth only — the
- * server caps both write paths (live turns + at-rest import backfill), so
- * this guard mainly protects against a stale cached transcript fetched
- * before the one-time backfill migration ran.
- */
-const CLIENT_TOOL_RESULT_MAX_CHARS = 20_000;
-
-function capForDisplay(text: string): string {
-  if (text.length <= CLIENT_TOOL_RESULT_MAX_CHARS) return text;
-  return `(tool result omitted — ${text.length} chars)`;
-}
+// Re-exported for existing callers/tests — canonical implementation now
+// lives in toolFormat.ts (shared with ToolRunSummary's merged rows).
+export { looksLikeUnifiedDiff };
 
 /**
  * Tool output attached to a tool card. Collapsible; unified diffs render via the

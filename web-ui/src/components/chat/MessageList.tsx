@@ -7,15 +7,54 @@ import { QueuedTurnEditor } from "./QueuedTurnEditor";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolUseCard } from "./ToolUseCard";
 import { ToolResultCard } from "./ToolResultCard";
+import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
+import type { ToolCallEntry } from "./toolFormat";
 
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
   | { type: "assistant"; id: string; text: string; turnId?: string }
   | { type: "thinking"; id: string; text: string; turnId?: string }
-  | { type: "tool"; id: string; toolName: string; toolInput?: unknown; result?: { content?: string; isError?: boolean } }
+  | ({ type: "tool" } & ToolCallEntry)
+  | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
   | { type: "error"; id: string; text: string }
   | { type: "status"; id: string; text: string };
+
+/**
+ * A run of 2+ consecutive `tool` items (no text/thinking/user message, and no
+ * turn boundary, between them) collapses into one `toolRun` item — rendered
+ * as a single integrated, borderless summary line (e.g. "Read 1 file, ran 2
+ * shell commands") instead of N separately-bordered tool cards, matching
+ * Claude Code's native terminal transcript. A lone tool call keeps rendering
+ * as an individual `tool` item (unchanged today's look).
+ */
+export function mergeToolRuns(items: RenderItem[]): RenderItem[] {
+  const out: RenderItem[] = [];
+  let run: Extract<RenderItem, { type: "tool" }>[] = [];
+  const flushRun = () => {
+    if (run.length === 0) return;
+    if (run.length === 1) {
+      out.push(run[0]!);
+    } else {
+      out.push({ type: "toolRun", id: run[0]!.id, tools: [...run] });
+    }
+    run = [];
+  };
+  for (const item of items) {
+    // A run never spans a turn boundary — two tool calls from different
+    // turns just happening to be adjacent (nothing else rendered between
+    // them) shouldn't visually merge into one group.
+    if (item.type === "tool" && (run.length === 0 || run[run.length - 1]!.turnId === item.turnId)) {
+      run.push(item);
+    } else {
+      flushRun();
+      if (item.type === "tool") run.push(item);
+      else out.push(item);
+    }
+  }
+  flushRun();
+  return out;
+}
 
 /**
  * Fold the flat normalized-event stream into renderable items: consecutive
@@ -90,7 +129,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       }
       case "tool_use": {
-        items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", toolInput: ev.toolInput });
+        items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", toolInput: ev.toolInput, turnId: ev.turnId });
         if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
         break;
       }
@@ -101,7 +140,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         if (target && target.type === "tool") {
           target.result = result;
         } else {
-          items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", result });
+          items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", result, turnId: ev.turnId });
         }
         break;
       }
@@ -192,13 +231,13 @@ export function MessageList({
   const grouped = useMemo(() => groupEvents(events), [events]);
   // Queued / editing user turns render in the tray above the composer, not in
   // the log. Filter after grouping so the A7 edited-turn dedupe still applies.
-  const items = useMemo(
-    () =>
+  const items = useMemo(() => {
+    const filtered =
       hiddenTurnIds && hiddenTurnIds.size > 0
         ? grouped.filter((it) => it.type !== "user" || !it.turnId || !hiddenTurnIds.has(it.turnId))
-        : grouped,
-    [grouped, hiddenTurnIds],
-  );
+        : grouped;
+    return mergeToolRuns(filtered);
+  }, [grouped, hiddenTurnIds]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -328,6 +367,13 @@ export function MessageList({
                 ) : null}
               </div>
             );
+            break;
+          case "toolRun":
+            // "Live" means this run is the trailing item of an active turn —
+            // any tool inside it still missing a result is genuinely running
+            // (turns can fire several tool calls before results land), not
+            // just the last one in the run.
+            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} />;
             break;
           case "error":
             node = <ErrorCard key={key} text={item.text} onRetry={onRetry} />;
