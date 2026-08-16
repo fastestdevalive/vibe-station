@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach } from "vitest";
 import type { ReactNode } from "react";
@@ -37,7 +38,7 @@ describe("DashboardPanel", () => {
     });
   });
 
-  it("renders working, idle, and finished sections", async () => {
+  it("renders working and waiting-for-user sections, with finished hidden until toggled", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -50,7 +51,12 @@ describe("DashboardPanel", () => {
       expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
     });
     expect(screen.getByText("working")).toBeInTheDocument();
-    expect(screen.getByText("idle")).toBeInTheDocument();
+    // wt-3's idle session buckets under "waiting for user", not "finished".
+    expect(screen.getByText("waiting for user")).toBeInTheDocument();
+    // wt-2's "done" session is finished — hidden by default.
+    expect(screen.queryByText("finished")).toBeNull();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /show finished/i }));
     expect(screen.getByText("finished")).toBeInTheDocument();
   });
 
@@ -79,7 +85,7 @@ describe("DashboardPanel", () => {
       // Bucket hides entirely when empty — old section refs would point at stale detached DOM.
       expect(screen.queryByText("working")).toBeNull();
     });
-    const idleSection = screen.getByText("idle").closest("section");
+    const idleSection = screen.getByText("waiting for user").closest("section");
     expect(idleSection).not.toBeNull();
     await waitFor(() => {
       expect(within(idleSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
