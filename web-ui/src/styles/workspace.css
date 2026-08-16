@@ -3319,8 +3319,26 @@ textarea.input {
   border-bottom: var(--border-width) solid var(--border-default);
 }
 
-.dashboard-header__view-toggle {
+.dashboard-header__actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
+.dashboard-header__show-finished {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.dashboard-header__view-toggle {
   flex-shrink: 0;
 }
 
@@ -3472,6 +3490,12 @@ a.dashboard-card.dashboard-card--session {
   gap: var(--space-3);
   align-items: start;
   width: 100%;
+}
+
+/* Show finished" adds a 4th column — without this the 4th `__col` still
+   wraps onto its own row under the fixed 3-column track above. */
+.dashboard-kanban--with-finished {
+  grid-template-columns: repeat(4, 1fr);
 }
 
 .dashboard-kanban__col {

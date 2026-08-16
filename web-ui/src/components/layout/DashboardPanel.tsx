@@ -16,13 +16,26 @@ interface DashboardPanelProps {
   api: ApiInstance;
 }
 
-function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "idle" | "finished" {
+/**
+ * Dashboard buckets, coarser than the full `WorktreeRolledUpStatus` set:
+ *  - "working": actively running, or not started yet (`spawning`).
+ *  - "waiting": stopped and needs a human — either explicitly flagged
+ *    (`waiting_for_human`) or just idle after finishing a turn (`idle`).
+ *    Idle deliberately lives here, NOT in "finished" — an idle worktree is
+ *    still open work waiting on the user, not done.
+ *  - "pr": the review poller found an open PR for this session (`needs_review`).
+ *  - "finished": actually done or exited (or no recognizable state at all) —
+ *    hidden by default behind the "Show finished" checkbox.
+ */
+function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "waiting" | "pr" | "finished" {
   if (r === "working" || r === "spawning") return "working";
-  if (r === "idle") return "idle";
+  if (r === "waiting_for_human" || r === "idle") return "waiting";
+  if (r === "needs_review") return "pr";
   return "finished";
 }
 
 const DASHBOARD_VIEW_KEY = "dashboard:view";
+const DASHBOARD_SHOW_FINISHED_KEY = "dashboard:showFinished";
 
 export function DashboardPanel({ api }: DashboardPanelProps) {
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -70,6 +83,22 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     }
   }, [dashboardView]);
 
+  const [showFinished, setShowFinished] = useState(() => {
+    try {
+      return localStorage.getItem(DASHBOARD_SHOW_FINISHED_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(DASHBOARD_SHOW_FINISHED_KEY, String(showFinished));
+    } catch {
+      /* ignore */
+    }
+  }, [showFinished]);
+
   // Subscribe to live session output for every session in the store so the
   // rollup updates in real time. The set of ids comes from the central store
   // (single source of truth) — no local fetch, no local listeners.
@@ -93,9 +122,10 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
    *  back to the REST session's `state` field. */
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
-  const { working, idle, finished } = useMemo(() => {
+  const { working, waiting, pr, finished } = useMemo(() => {
     const wtsWorking: Worktree[] = [];
-    const wtsIdle: Worktree[] = [];
+    const wtsWaiting: Worktree[] = [];
+    const wtsPr: Worktree[] = [];
     const wtsFinished: Worktree[] = [];
     for (const wt of worktrees) {
       if (hiddenProjectIds.has(wt.projectId)) continue;
@@ -104,10 +134,11 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const b = bucketForRollup(rolled);
       if (b === "working") wtsWorking.push(wt);
-      else if (b === "idle") wtsIdle.push(wt);
+      else if (b === "waiting") wtsWaiting.push(wt);
+      else if (b === "pr") wtsPr.push(wt);
       else wtsFinished.push(wt);
     }
-    return { working: wtsWorking, idle: wtsIdle, finished: wtsFinished };
+    return { working: wtsWorking, waiting: wtsWaiting, pr: wtsPr, finished: wtsFinished };
   }, [worktrees, sessions, sessionStates, hiddenProjectIds]);
 
   const daemonOk = connState === "online";
@@ -184,17 +215,27 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
                   : "daemon unreachable"}
             </span>
           </div>
-          {!isMobile ? (
-            <button
-              type="button"
-              className="icon-btn dashboard-header__view-toggle"
-              aria-label={toggleViewLabel}
-              title={toggleViewLabel}
-              onClick={() => setDashboardView((v) => (v === "list" ? "kanban" : "list"))}
-            >
-              {dashboardView === "list" ? <Columns3 size={18} /> : <LayoutList size={18} />}
-            </button>
-          ) : null}
+          <div className="dashboard-header__actions">
+            <label className="dashboard-header__show-finished">
+              <input
+                type="checkbox"
+                checked={showFinished}
+                onChange={(e) => setShowFinished(e.target.checked)}
+              />
+              Show finished
+            </label>
+            {!isMobile ? (
+              <button
+                type="button"
+                className="icon-btn dashboard-header__view-toggle"
+                aria-label={toggleViewLabel}
+                title={toggleViewLabel}
+                onClick={() => setDashboardView((v) => (v === "list" ? "kanban" : "list"))}
+              >
+                {dashboardView === "list" ? <Columns3 size={18} /> : <LayoutList size={18} />}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {/* On mobile always render the list layout — kanban columns don't work on narrow screens */}
@@ -207,26 +248,33 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               </section>
             ) : null}
 
-            {idle.length > 0 ? (
+            {waiting.length > 0 ? (
               <section className="dashboard-section">
-                <div className="dashboard-section__label">idle</div>
-                <div className="dashboard-card-list">{idle.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-section__label">waiting for user</div>
+                <div className="dashboard-card-list">{waiting.map((wt) => renderWorktreeCard(wt))}</div>
               </section>
             ) : null}
 
-            {finished.length > 0 ? (
+            {pr.length > 0 ? (
+              <section className="dashboard-section">
+                <div className="dashboard-section__label">pr created</div>
+                <div className="dashboard-card-list">{pr.map((wt) => renderWorktreeCard(wt))}</div>
+              </section>
+            ) : null}
+
+            {showFinished && finished.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">finished</div>
                 <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
               </section>
             ) : null}
 
-            {working.length === 0 && idle.length === 0 && finished.length === 0 ? (
+            {working.length === 0 && waiting.length === 0 && pr.length === 0 && (!showFinished || finished.length === 0) ? (
               <p className="dashboard-empty">No agent worktrees yet. Add a project with the CLI.</p>
             ) : null}
           </>
         ) : (
-          <div className="dashboard-kanban">
+          <div className={`dashboard-kanban${showFinished ? " dashboard-kanban--with-finished" : ""}`}>
             <div className="dashboard-kanban__col">
               <div className="dashboard-kanban__col-header">
                 Working <span className="dashboard-kanban__col-count">({working.length})</span>
@@ -235,16 +283,24 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
             </div>
             <div className="dashboard-kanban__col">
               <div className="dashboard-kanban__col-header">
-                Idle <span className="dashboard-kanban__col-count">({idle.length})</span>
+                Waiting for User <span className="dashboard-kanban__col-count">({waiting.length})</span>
               </div>
-              <div className="dashboard-card-list">{idle.map((wt) => renderWorktreeCard(wt))}</div>
+              <div className="dashboard-card-list">{waiting.map((wt) => renderWorktreeCard(wt))}</div>
             </div>
             <div className="dashboard-kanban__col">
               <div className="dashboard-kanban__col-header">
-                Finished <span className="dashboard-kanban__col-count">({finished.length})</span>
+                PR Created <span className="dashboard-kanban__col-count">({pr.length})</span>
               </div>
-              <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+              <div className="dashboard-card-list">{pr.map((wt) => renderWorktreeCard(wt))}</div>
             </div>
+            {showFinished ? (
+              <div className="dashboard-kanban__col">
+                <div className="dashboard-kanban__col-header">
+                  Finished <span className="dashboard-kanban__col-count">({finished.length})</span>
+                </div>
+                <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+              </div>
+            ) : null}
           </div>
         )}
 
