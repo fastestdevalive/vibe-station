@@ -36,6 +36,15 @@ export interface Worktree {
    * default sort order (newest first).
    */
   pinnedAt: string | null;
+  /**
+   * ISO8601 timestamp set by the daemon's PR poller when this worktree's PR
+   * was seen merged while its main session was `needs_review` — lets the
+   * dashboard keep crediting "PR created" instead of reading as idle/working
+   * again once the poller falls the session back out of `needs_review`.
+   * Cleared once a fresh open, non-draft PR appears on the same branch.
+   * Optional for legacy/test fixtures predating this field (same as `sortOrder` below).
+   */
+  prMergedAt?: string | null;
   /** Fractional display-order rank among a project's worktrees (F9). Optional for legacy/test fixtures predating this field. */
   sortOrder?: number;
   /**

@@ -108,6 +108,12 @@ export function ensureSchema(db: Database): void {
   // leaving a dangling id is harmless (Research: the client-side workspace
   // tile scan simply won't find a match, S5).
   addColumnIfMissing(db, "sessions", "spawnedFrom", "TEXT");
+  // prMergedAt (dashboard-bucket-fixes) — ISO8601 timestamp remembering that
+  // this worktree's PR was seen merged, so the dashboard can keep crediting
+  // "PR created" instead of reading as idle/working again once the poller
+  // falls the session back out of needs_review. NULL until a merge is seen;
+  // cleared once a fresh open+non-draft PR appears on the same branch.
+  addColumnIfMissing(db, "worktrees", "prMergedAt", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */
