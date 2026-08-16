@@ -368,8 +368,18 @@ export function WorkspaceCanvas({
               canAddTools: !placedToolWorktrees.has(w.id),
             }))
             .filter((entry) => entry.sessions.length > 0 || entry.canAddTools),
+          // Direct (worktree-less) sessions of the SAME project — no
+          // worktree to nest under, so they get their own subheading instead
+          // of a `{worktree, sessions}` entry above.
+          directSessions: allSessions.filter(
+            (s) =>
+              s.projectId === project.id &&
+              s.worktreeId == null &&
+              (s.type === "agent" || s.type === "terminal") &&
+              !placedSessionIds.has(s.id),
+          ),
         }))
-        .filter((group) => group.worktrees.length > 0);
+        .filter((group) => group.worktrees.length > 0 || group.directSessions.length > 0);
 
   // Own-worktree canvases always offer "New agent" (below), so the picker is
   // never truly empty there — only the detached workspace view (no New Agent
@@ -1069,6 +1079,32 @@ export function WorkspaceCanvas({
                         </div>
                       </div>
                     ))}
+                    {group.directSessions.length > 0 ? (
+                      <div>
+                        <div className="workspace-canvas__picker-subheading">Direct</div>
+                        <div className="workspace-canvas__picker-subitems">
+                          <span className="workspace-canvas__picker-indent-line" aria-hidden />
+                          {group.directSessions.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              className="workspace-canvas__picker-item"
+                              onClick={() => addTile(s.type as TileKind, s.id)}
+                            >
+                              <span className="workspace-canvas__picker-item-main">
+                                {s.type === "agent" ? (
+                                  <Bot size={13} className="workspace-canvas__picker-icon" />
+                                ) : (
+                                  <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
+                                )}
+                                {sessionLabel(s)}
+                              </span>
+                              <span className="workspace-canvas__picker-kind">{s.type}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))}
                 {/* Unsaved (transient) canvases only ever offer THIS worktree's
