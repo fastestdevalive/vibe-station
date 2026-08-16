@@ -2,7 +2,7 @@ import "@/styles/workspace-canvas.css";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Bot, Check, FolderOpen, GitBranch, Minimize2, MoreVertical, PanelRight, Plus, Save, SquareTerminal, X } from "lucide-react";
+import { Bot, Check, Folder, FolderOpen, GitBranch, Minimize2, MoreVertical, PanelRight, Plus, Save, Search, SquareTerminal, X } from "lucide-react";
 import type { Project, Session, Worktree } from "@/api/types";
 import {
   buildBalancedTree,
@@ -26,7 +26,7 @@ import {
 } from "@/hooks/useStore";
 import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 import { StatusDot } from "@/components/layout/StatusDot";
-import { sessionStatus } from "@/lib/worktreeStatus";
+import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
@@ -84,6 +84,29 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
+/**
+ * Same ordering rule as `LeftSidebar.tsx`'s private `applyLocalSortOrder`
+ * (small enough to duplicate here rather than extracting a shared lib for
+ * one caller): known ids keep the saved order, anything not in it falls
+ * back to its position in `liveIds`, appended after the known ones.
+ */
+function applyLocalSortOrder(order: string[] | undefined, liveIds: string[]): string[] {
+  if (!order || order.length === 0) return liveIds;
+  const liveSet = new Set(liveIds);
+  const known = order.filter((id) => liveSet.has(id));
+  const knownSet = new Set(known);
+  const rest = liveIds.filter((id) => !knownSet.has(id));
+  return [...known, ...rest];
+}
+
+/** Same worktree ordering the sidebar tree uses: `Worktree.sortOrder`, id as tiebreak. */
+function compareWorktreeOrder(a: Worktree, b: Worktree): number {
+  const ao = a.sortOrder ?? 0;
+  const bo = b.sortOrder ?? 0;
+  if (ao !== bo) return ao - bo;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
 function paneKeyForTile(tile: TileSpec, worktreeId: string): string {
   if (tile.kind === "tools") return `tools:${tile.worktreeId ?? worktreeId}`;
   return `${tile.kind}:${tile.sessionId}`;
@@ -136,6 +159,10 @@ export function WorkspaceCanvas({
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
+  const sessionStates = useWorkspaceStore((s) => s.sessionStates);
+  /** Same store field `LeftSidebar.tsx` uses for its drag-reordered project
+   *  list — reused here so the picker's project order matches the sidebar's. */
+  const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const navigate = useNavigate();
 
   const isDetachedView = !!detachedWorkspaceId;
@@ -155,6 +182,12 @@ export function WorkspaceCanvas({
   const splitRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerSearch, setPickerSearch] = useState("");
+  /** Ids the user has explicitly collapsed — absence means expanded, so a
+   *  project that appears (or first gets cross-context content) while the
+   *  picker is already open renders expanded by default without needing to
+   *  be seeded into any "expanded" set first. */
+  const [collapsedPickerProjects, setCollapsedPickerProjects] = useState<Set<string>>(new Set());
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   // Agent tile "⋯" popup — same actions as the agent tab bar's right-click
   // menu (Reset / Reset with handoff) plus Terminate (mirrors the tab bar's
@@ -213,6 +246,16 @@ export function WorkspaceCanvas({
       window.clearTimeout(timer);
       removeListeners?.();
     };
+  }, [pickerOpen]);
+
+  /** Reset the picker's transient UI state on every open — this popup isn't
+   *  persisted (unlike the sidebar's `openProj`), so a fresh open always
+   *  starts with an empty search and every project's cross-context section
+   *  expanded. */
+  useEffect(() => {
+    if (!pickerOpen) return;
+    setPickerSearch("");
+    setCollapsedPickerProjects(new Set());
   }, [pickerOpen]);
 
   /** Same deferred close-on-outside pattern as the picker above and
@@ -341,9 +384,55 @@ export function WorkspaceCanvas({
   const placedToolWorktrees = new Set(
     cv.tiles.filter((t) => t.kind === "tools").map((t) => t.worktreeId ?? worktreeId),
   );
-  const availableAgents = agentSessions.filter((s) => !placedSessionIds.has(s.id));
-  const availableTerminals = terminalSessions.filter((s) => !placedSessionIds.has(s.id));
   const canAddTools = hasTools && !placedToolWorktrees.has(worktreeId);
+
+  const pickerQuery = pickerSearch.trim().toLowerCase();
+  function matchesSearch(label: string): boolean {
+    return !pickerQuery || label.toLowerCase().includes(pickerQuery);
+  }
+
+  const availableAgents = agentSessions.filter(
+    (s) => !placedSessionIds.has(s.id) && matchesSearch(sessionLabel(s)),
+  );
+  const availableTerminals = terminalSessions.filter(
+    (s) => !placedSessionIds.has(s.id) && matchesSearch(sessionLabel(s)),
+  );
+
+  /**
+   * A worktree counts as "done" the same way the dashboard's "Finished"
+   * bucket does (`DashboardPanel.tsx`'s bucketing `useMemo`): its LIVE
+   * (non-archived) agent sessions rolled up to `done`/`exited`. Archived
+   * (handed-off/reset) sessions are excluded first, same as the dashboard's
+   * `s.archivedAt == null` filter — otherwise a worktree with only an
+   * archived agent session would read as having agents at all, skipping the
+   * "no agents ⇒ not done" branch below. A worktree with NO live agent
+   * sessions is deliberately NOT "done" here — the dashboard skips those
+   * rows entirely rather than bucketing them "finished" (they may still be
+   * worth adding for a terminal session or a Tools pane), so this mirrors
+   * that skip rather than the dashboard's own-purpose fallback branch.
+   */
+  function worktreeIsDone(w: Worktree): boolean {
+    const agents = allSessions.filter(
+      (s) => s.worktreeId === w.id && s.type === "agent" && s.archivedAt == null,
+    );
+    if (agents.length === 0) return false;
+    const rolled = worktreeRolledUpStatus(agents, sessionStates);
+    return rolled === "done" || rolled === "exited";
+  }
+
+  /**
+   * Same project order as the left sidebar (`sortOrders["projects"]`,
+   * `LeftSidebar.tsx`'s `orderedVisibleProjects`) — the picker should list
+   * projects the way the user has arranged them there, not API order.
+   */
+  const orderedProjects = (() => {
+    const order = applyLocalSortOrder(
+      sortOrders["projects"],
+      projects.map((p) => p.id),
+    );
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    return order.map((id) => byId.get(id)).filter((p): p is Project => !!p);
+  })();
 
   /**
    * Cross-context picker content — ONLY offered for a saved workspace. A
@@ -352,21 +441,27 @@ export function WorkspaceCanvas({
    */
   const otherContextGroups = !isSaved
     ? []
-    : projects
+    : orderedProjects
         .map((project) => ({
           project,
           worktrees: worktrees
-            .filter((w) => w.projectId === project.id && w.id !== worktreeId)
-            .map((w) => ({
-              worktree: w,
-              sessions: allSessions.filter(
-                (s) =>
-                  s.worktreeId === w.id &&
-                  (s.type === "agent" || s.type === "terminal") &&
-                  !placedSessionIds.has(s.id),
-              ),
-              canAddTools: !placedToolWorktrees.has(w.id),
-            }))
+            .filter((w) => w.projectId === project.id && w.id !== worktreeId && !worktreeIsDone(w))
+            .sort(compareWorktreeOrder)
+            .map((w) => {
+              const wtLabel = w.name || w.branch;
+              const wtNameMatches = matchesSearch(wtLabel);
+              return {
+                worktree: w,
+                sessions: allSessions.filter(
+                  (s) =>
+                    s.worktreeId === w.id &&
+                    (s.type === "agent" || s.type === "terminal") &&
+                    !placedSessionIds.has(s.id) &&
+                    (wtNameMatches || matchesSearch(sessionLabel(s))),
+                ),
+                canAddTools: !placedToolWorktrees.has(w.id) && wtNameMatches,
+              };
+            })
             .filter((entry) => entry.sessions.length > 0 || entry.canAddTools),
           // Direct (worktree-less) sessions of the SAME project — no
           // worktree to nest under, so they get their own subheading instead
@@ -376,7 +471,8 @@ export function WorkspaceCanvas({
               s.projectId === project.id &&
               s.worktreeId == null &&
               (s.type === "agent" || s.type === "terminal") &&
-              !placedSessionIds.has(s.id),
+              !placedSessionIds.has(s.id) &&
+              matchesSearch(sessionLabel(s)),
           ),
         }))
         .filter((group) => group.worktrees.length > 0 || group.directSessions.length > 0);
@@ -427,6 +523,15 @@ export function WorkspaceCanvas({
       });
       patchCanvas({ mode: "free", freeRects: rects });
     }
+  }
+
+  function togglePickerProject(projectId: string) {
+    setCollapsedPickerProjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
   }
 
   function addTile(kind: TileKind, sessionId?: string, tileWorktreeId?: string) {
@@ -971,10 +1076,23 @@ export function WorkspaceCanvas({
             </button>
             {pickerOpen ? (
               <div className="workspace-canvas__picker" role="menu" data-workspace-canvas-picker-panel>
+                <div className="workspace-canvas__picker-search">
+                  <Search size={13} className="workspace-canvas__picker-search-icon" aria-hidden />
+                  <input
+                    type="search"
+                    value={pickerSearch}
+                    onChange={(e) => setPickerSearch(e.target.value)}
+                    placeholder="Search…"
+                    className="workspace-canvas__picker-search-input"
+                    autoFocus
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
                 {pickerEmpty ? (
                   <div className="workspace-canvas__picker-empty">Everything's already on the canvas</div>
                 ) : null}
-                {!isDetachedView ? (
+                {!isDetachedView && matchesSearch("New agent") ? (
                   <button
                     type="button"
                     className="workspace-canvas__picker-item"
@@ -1017,7 +1135,7 @@ export function WorkspaceCanvas({
                     <span className="workspace-canvas__picker-kind">terminal</span>
                   </button>
                 ))}
-                {canAddTools ? (
+                {canAddTools && matchesSearch("Tools") ? (
                   <button
                     type="button"
                     className="workspace-canvas__picker-item"
@@ -1031,82 +1149,102 @@ export function WorkspaceCanvas({
                   </button>
                 ) : null}
                 {/* Cross-context panes — saved workspaces only (see otherContextGroups). */}
-                {otherContextGroups.map((group) => (
+                {otherContextGroups.map((group) => {
+                  // An active search forces every matching group open — a
+                  // manual collapse from before the query was typed must
+                  // never hide a result the user is actively searching for.
+                  const expanded = !!pickerQuery || !collapsedPickerProjects.has(group.project.id);
+                  return (
                   <div key={group.project.id} className="workspace-canvas__picker-group">
-                    <div className="workspace-canvas__picker-heading">
-                      <FolderOpen size={13} className="workspace-canvas__picker-icon" />
+                    <button
+                      type="button"
+                      className="workspace-canvas__picker-heading workspace-canvas__picker-heading--toggle"
+                      aria-expanded={expanded}
+                      aria-label={`${expanded ? "Collapse" : "Expand"} project ${group.project.name}`}
+                      onClick={() => togglePickerProject(group.project.id)}
+                    >
+                      {expanded ? (
+                        <FolderOpen size={13} className="workspace-canvas__picker-icon" />
+                      ) : (
+                        <Folder size={13} className="workspace-canvas__picker-icon" />
+                      )}
                       {group.project.name}
-                    </div>
-                    {group.worktrees.map(({ worktree, sessions, canAddTools: wtTools }) => (
-                      <div key={worktree.id}>
-                        <div className="workspace-canvas__picker-subheading">
-                          <GitBranch size={12} className="workspace-canvas__picker-icon" />
-                          {worktree.name || worktree.branch}
-                        </div>
-                        <div className="workspace-canvas__picker-subitems">
-                          <span className="workspace-canvas__picker-indent-line" aria-hidden />
-                          {sessions.map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              className="workspace-canvas__picker-item"
-                              onClick={() => addTile(s.type as TileKind, s.id, worktree.id)}
-                            >
-                              <span className="workspace-canvas__picker-item-main">
-                                {s.type === "agent" ? (
-                                  <Bot size={13} className="workspace-canvas__picker-icon" />
-                                ) : (
-                                  <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
-                                )}
-                                {sessionLabel(s)}
-                              </span>
-                              <span className="workspace-canvas__picker-kind">{s.type}</span>
-                            </button>
-                          ))}
-                          {wtTools ? (
-                            <button
-                              type="button"
-                              className="workspace-canvas__picker-item"
-                              onClick={() => addTile("tools", undefined, worktree.id)}
-                            >
-                              <span className="workspace-canvas__picker-item-main">
-                                <PanelRight size={13} className="workspace-canvas__picker-icon" />
-                                Tools
-                              </span>
-                              <span className="workspace-canvas__picker-kind">tools</span>
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                    {group.directSessions.length > 0 ? (
-                      <div>
-                        <div className="workspace-canvas__picker-subheading">Direct</div>
-                        <div className="workspace-canvas__picker-subitems">
-                          <span className="workspace-canvas__picker-indent-line" aria-hidden />
-                          {group.directSessions.map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              className="workspace-canvas__picker-item"
-                              onClick={() => addTile(s.type as TileKind, s.id)}
-                            >
-                              <span className="workspace-canvas__picker-item-main">
-                                {s.type === "agent" ? (
-                                  <Bot size={13} className="workspace-canvas__picker-icon" />
-                                ) : (
-                                  <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
-                                )}
-                                {sessionLabel(s)}
-                              </span>
-                              <span className="workspace-canvas__picker-kind">{s.type}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+                    </button>
+                    {expanded ? (
+                      <>
+                        {group.worktrees.map(({ worktree, sessions, canAddTools: wtTools }) => (
+                          <div key={worktree.id}>
+                            <div className="workspace-canvas__picker-subheading">
+                              <GitBranch size={12} className="workspace-canvas__picker-icon" />
+                              {worktree.name || worktree.branch}
+                            </div>
+                            <div className="workspace-canvas__picker-subitems">
+                              <span className="workspace-canvas__picker-indent-line" aria-hidden />
+                              {sessions.map((s) => (
+                                <button
+                                  key={s.id}
+                                  type="button"
+                                  className="workspace-canvas__picker-item"
+                                  onClick={() => addTile(s.type as TileKind, s.id, worktree.id)}
+                                >
+                                  <span className="workspace-canvas__picker-item-main">
+                                    {s.type === "agent" ? (
+                                      <Bot size={13} className="workspace-canvas__picker-icon" />
+                                    ) : (
+                                      <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
+                                    )}
+                                    {sessionLabel(s)}
+                                  </span>
+                                  <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                </button>
+                              ))}
+                              {wtTools ? (
+                                <button
+                                  type="button"
+                                  className="workspace-canvas__picker-item"
+                                  onClick={() => addTile("tools", undefined, worktree.id)}
+                                >
+                                  <span className="workspace-canvas__picker-item-main">
+                                    <PanelRight size={13} className="workspace-canvas__picker-icon" />
+                                    Tools
+                                  </span>
+                                  <span className="workspace-canvas__picker-kind">tools</span>
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                        {group.directSessions.length > 0 ? (
+                          <div>
+                            <div className="workspace-canvas__picker-subheading">Direct</div>
+                            <div className="workspace-canvas__picker-subitems">
+                              <span className="workspace-canvas__picker-indent-line" aria-hidden />
+                              {group.directSessions.map((s) => (
+                                <button
+                                  key={s.id}
+                                  type="button"
+                                  className="workspace-canvas__picker-item"
+                                  onClick={() => addTile(s.type as TileKind, s.id)}
+                                >
+                                  <span className="workspace-canvas__picker-item-main">
+                                    {s.type === "agent" ? (
+                                      <Bot size={13} className="workspace-canvas__picker-icon" />
+                                    ) : (
+                                      <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
+                                    )}
+                                    {sessionLabel(s)}
+                                  </span>
+                                  <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
                     ) : null}
                   </div>
-                ))}
+                  );
+                })}
                 {/* Unsaved (transient) canvases only ever offer THIS worktree's
                     own sessions/tools above — otherContextGroups stays empty
                     until "Save as workspace" promotes it (see !isSaved guard
