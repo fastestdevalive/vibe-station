@@ -60,6 +60,48 @@ describe("DashboardPanel", () => {
     expect(screen.getByText("finished")).toBeInTheDocument();
   });
 
+  it("dashboard-direct-agents — shows a direct (worktree-less) agent session, bucketed and linking to /session/:id", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    api.__test.emit({
+      type: "session:created",
+      sessionId: "sess-direct-1",
+      worktreeId: null,
+      projectId: "proj-a",
+      sessionType: "agent",
+      snapshot: {
+        id: "sess-direct-1",
+        worktreeId: null,
+        projectId: "proj-a",
+        modeId: "mode-1",
+        type: "agent",
+        name: "My Direct Agent",
+        isMain: false,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "sess-direct-1",
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    await waitFor(() => {
+      const workingSection = screen.getByText("working").closest("section");
+      expect(workingSection).not.toBeNull();
+      const link = within(workingSection!).getByRole("link", { name: /My Direct Agent/i });
+      expect(link).toHaveAttribute("href", "/session/sess-direct-1");
+    });
+  });
+
   it("updates worktree row bucket when session:state fires", async () => {
     const api = createMockApi();
     render(
