@@ -2,7 +2,7 @@ import "@/styles/workspace-canvas.css";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Bot, Check, FolderOpen, GitBranch, Minimize2, PanelRight, Plus, Save, SquareTerminal, X } from "lucide-react";
+import { Bot, Check, FolderOpen, GitBranch, Minimize2, MoreVertical, PanelRight, Plus, Save, SquareTerminal, X } from "lucide-react";
 import type { Project, Session, Worktree } from "@/api/types";
 import {
   buildBalancedTree,
@@ -29,6 +29,9 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
+import { api } from "@/api";
+import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
+import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 interface WorkspaceCanvasProps {
   /**
@@ -152,6 +155,15 @@ export function WorkspaceCanvas({
   const splitRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [newAgentOpen, setNewAgentOpen] = useState(false);
+  // Agent tile "⋯" popup — same actions as the agent tab bar's right-click
+  // menu (Reset / Reset with handoff) plus Terminate (mirrors the tab bar's
+  // "×" close). Only one tile's menu can be open at a time, mirroring
+  // TabsStrip's `resetMenu`.
+  const [tileMenu, setTileMenu] = useState<{ tileId: string; x: number; y: number } | null>(null);
+  const [resetTarget, setResetTarget] = useState<Session | null>(null);
+  const [resetHandoff, setResetHandoff] = useState(false);
+  const [terminateTarget, setTerminateTarget] = useState<{ tileId: string; session: Session } | null>(null);
   const [savePromptOpen, setSavePromptOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [draggingTileId, setDraggingTileId] = useState<string | null>(null);
@@ -174,6 +186,61 @@ export function WorkspaceCanvas({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [fullscreenTileId]);
+
+  /** Close-on-outside must attach after the opening click finishes (same tap
+   *  would otherwise immediately close the picker it just opened) — same
+   *  deferred pattern as the sidebar's kebab menus (LeftSidebar.tsx). */
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-workspace-canvas-picker-panel]") || t.closest("[data-workspace-canvas-picker-trigger]")) return;
+        setPickerOpen(false);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setPickerOpen(false);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [pickerOpen]);
+
+  /** Same deferred close-on-outside pattern as the picker above and
+   *  TabsStrip's `resetMenu` (portaled panel → tag it, check `closest`). */
+  useEffect(() => {
+    if (!tileMenu) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-workspace-canvas-tile-menu-panel]")) return;
+        setTileMenu(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setTileMenu(null);
+      }
+      document.addEventListener("click", onDocClick);
+      document.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        document.removeEventListener("click", onDocClick);
+        document.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [tileMenu]);
 
   /** Read the CURRENT canvas straight from the store (drag handlers, post-mount). */
   function readCanvas(): CanvasGeometry | null {
@@ -304,7 +371,11 @@ export function WorkspaceCanvas({
         }))
         .filter((group) => group.worktrees.length > 0);
 
+  // Own-worktree canvases always offer "New agent" (below), so the picker is
+  // never truly empty there — only the detached workspace view (no New Agent
+  // entry, see the picker JSX) can hit the empty state.
   const pickerEmpty =
+    isDetachedView &&
     availableAgents.length === 0 &&
     availableTerminals.length === 0 &&
     !canAddTools &&
@@ -680,6 +751,24 @@ export function WorkspaceCanvas({
         >
           {status ? <StatusDot status={status} /> : null}
           <span className="workspace-canvas__tile-label" title={label}>{label}</span>
+          {tile.kind === "agent" && session ? (
+            <button
+              type="button"
+              className="workspace-canvas__tile-menu-trigger"
+              aria-label={`${label} actions`}
+              title="Agent actions"
+              aria-expanded={tileMenu?.tileId === tile.id}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTileMenu((prev) =>
+                  prev?.tileId === tile.id ? null : { tileId: tile.id, x: e.clientX, y: e.clientY },
+                );
+              }}
+            >
+              <MoreVertical size={13} />
+            </button>
+          ) : null}
           {/* Fullscreen: swap "remove tile" for "exit fullscreen" — clicking
               the header already exits fullscreen too (same toggle), this is
               just a second, more discoverable affordance for it. Removing a
@@ -863,6 +952,7 @@ export function WorkspaceCanvas({
           <div className="workspace-canvas__add">
             <button
               type="button"
+              data-workspace-canvas-picker-trigger
               className="workspace-canvas__add-btn"
               onClick={() => setPickerOpen((v) => !v)}
               aria-expanded={pickerOpen}
@@ -870,9 +960,24 @@ export function WorkspaceCanvas({
               <Plus size={14} /> Add tile
             </button>
             {pickerOpen ? (
-              <div className="workspace-canvas__picker" role="menu">
+              <div className="workspace-canvas__picker" role="menu" data-workspace-canvas-picker-panel>
                 {pickerEmpty ? (
                   <div className="workspace-canvas__picker-empty">Everything's already on the canvas</div>
+                ) : null}
+                {!isDetachedView ? (
+                  <button
+                    type="button"
+                    className="workspace-canvas__picker-item"
+                    onClick={() => {
+                      setNewAgentOpen(true);
+                      setPickerOpen(false);
+                    }}
+                  >
+                    <span className="workspace-canvas__picker-item-main">
+                      <Plus size={13} className="workspace-canvas__picker-icon" />
+                      New agent
+                    </span>
+                  </button>
                 ) : null}
                 {availableAgents.map((s) => (
                   <button
@@ -983,6 +1088,10 @@ export function WorkspaceCanvas({
       </div>
   );
 
+  const tileMenuTile = tileMenu ? (cv.tiles.find((t) => t.id === tileMenu.tileId) ?? null) : null;
+  const tileMenuSession = tileMenuTile?.sessionId ? (sessionById.get(tileMenuTile.sessionId) ?? null) : null;
+  const tileMenuLabel = tileMenuSession ? sessionLabel(tileMenuSession) : "";
+
   return (
     <div className="workspace-canvas">
       {canvasToolbarVisible
@@ -990,6 +1099,110 @@ export function WorkspaceCanvas({
           ? createPortal(toolbarNode, toolbarPortalEl)
           : toolbarNode
         : null}
+      {!isDetachedView ? (
+        <NewTabDialog
+          open={newAgentOpen}
+          api={api}
+          worktreeId={worktreeId}
+          onClose={() => setNewAgentOpen(false)}
+          onCreated={(sessionId) => addTile("agent", sessionId)}
+        />
+      ) : null}
+      {tileMenu && tileMenuSession
+        ? createPortal(
+            <div
+              className="menu-pop"
+              data-workspace-canvas-tile-menu-panel
+              role="menu"
+              aria-label="Agent actions"
+              style={{
+                position: "fixed",
+                top: tileMenu.y + 6,
+                left: Math.max(
+                  8,
+                  Math.min(tileMenu.x, typeof window !== "undefined" ? window.innerWidth - 178 : 8),
+                ),
+                minWidth: 150,
+                zIndex: 4000,
+              }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setResetTarget(tileMenuSession);
+                  setResetHandoff(false);
+                  setTileMenu(null);
+                }}
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setResetTarget(tileMenuSession);
+                  setResetHandoff(true);
+                  setTileMenu(null);
+                }}
+              >
+                Reset with handoff
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (tileMenuTile) setTerminateTarget({ tileId: tileMenuTile.id, session: tileMenuSession });
+                  setTileMenu(null);
+                }}
+              >
+                Terminate
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+      <ConfirmDialog
+        open={!!resetTarget}
+        title={resetHandoff ? "Reset with handoff" : "Reset session"}
+        message="Resetting ends the current chat and starts a fresh session in its place. This can't be undone."
+        confirmLabel="Reset"
+        onCancel={() => setResetTarget(null)}
+        onConfirm={() => {
+          const target = resetTarget;
+          const handoff = resetHandoff;
+          setResetTarget(null);
+          if (target) {
+            void api.resetSession(target.id, { handoff }).catch(() => {
+              /* surface errors later */
+            });
+          }
+        }}
+      />
+      {/* Mirrors the agent tab bar's "×" close — same confirm copy, same
+          `deleteSession` call. Also drops the tile from THIS canvas (the tab
+          bar has no canvas to reconcile) so a terminated session doesn't
+          linger as a dead tile. */}
+      <ConfirmDialog
+        open={!!terminateTarget}
+        title="Close agent"
+        message="Close this agent session?"
+        confirmLabel="Close"
+        onCancel={() => setTerminateTarget(null)}
+        onConfirm={() => {
+          const target = terminateTarget;
+          setTerminateTarget(null);
+          if (target) {
+            void api.deleteSession(target.session.id).then(() => removeTile(target.tileId));
+          }
+        }}
+      />
       <div className="workspace-canvas__body" ref={canvasBodyRef}>
         {cv.tiles.length === 0 ? (
           <div className="workspace-canvas__empty">
