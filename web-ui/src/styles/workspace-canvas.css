@@ -350,38 +350,34 @@
   border-width: 0;
 }
 
-/* Colored rectangle around the whole tile, per session interaction state —
-   same color values as StatusDot's `.status-dot--*` rules (workspace.css)
-   so the two surfaces never drift apart. Panel/tools tiles carry no `status`
-   (WorkspaceCanvas only computes one for agent/terminal tiles), so they keep
-   the plain `--border-default` rule above — unset, not a color, on purpose. */
+/* Colored rectangle around the whole tile, for the only TWO session states
+   that warrant one: `waiting_for_human` (red — needs you now) and
+   `needs_review` (green — a PR is ready, actionable but not urgent). Every
+   other status (`working`, `idle`, `done`, `exited`, `spawning`, none) is
+   deliberately left with the plain `--border-default` border from the base
+   rule above — a border on every state made the colored ones meaningless.
+   StatusDot's `.status-dot--*` rules (workspace.css) still carry the full
+   status range; this surface intentionally no longer mirrors them.
+   Panel/tools tiles carry no `status` at all (WorkspaceCanvas only computes
+   one for agent/terminal tiles), so they land on the same neutral default. */
 .workspace-canvas__tile--waiting_for_human {
   border-color: #ef4444;
 }
 
 .workspace-canvas__tile--needs_review {
-  border-color: #b98cff;
+  border-color: var(--success);
 }
 
-.workspace-canvas__tile--working {
-  border-color: var(--accent);
-}
-
-.workspace-canvas__tile--idle {
-  border-color: var(--fg-muted, var(--border-default));
-}
-
-.workspace-canvas__tile--done {
-  border-color: #22c55e;
-}
-
+/* Non-color cues, kept independent of the border-color scope-down above:
+   an exited session's tile still dims (it's gone, not just "no border"),
+   and a spawning one still gets a dashed edge (not started yet) — the user
+   asked to limit COLOR to waiting_for_human/needs_review, not to drop every
+   other visual distinction these two states had. */
 .workspace-canvas__tile--exited {
-  border-color: #f59e0b;
   opacity: 0.9;
 }
 
 .workspace-canvas__tile--spawning {
-  border-color: var(--border-default);
   border-style: dashed;
 }
 
