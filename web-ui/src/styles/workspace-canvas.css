@@ -139,6 +139,37 @@
   padding: var(--space-1);
 }
 
+/* Search box, sticky to the top of the scrollable picker so it stays
+   reachable while a long cross-project list scrolls under it. */
+.workspace-canvas__picker-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--bg-elevated, var(--bg-secondary));
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.workspace-canvas__picker-search-icon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.workspace-canvas__picker-search-input {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+  width: 100%;
+  outline: none;
+}
+
 .workspace-canvas__picker-item {
   display: flex;
   align-items: center;
@@ -198,6 +229,21 @@
   color: var(--fg-primary);
   font-weight: 600;
   padding: var(--space-1) var(--space-2);
+}
+
+/* The heading doubles as a collapse/expand toggle for its project's
+   worktree list — same interaction as the left sidebar's project rows. */
+.workspace-canvas__picker-heading--toggle {
+  appearance: none;
+  border: none;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius-sm);
+}
+
+.workspace-canvas__picker-heading--toggle:hover {
+  background: var(--bg-active);
 }
 
 .workspace-canvas__picker-subheading {
