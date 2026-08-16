@@ -95,6 +95,55 @@ describe("PR poller behavior", () => {
     return getProject("proj-pr")!.worktrees[0]!.sessions[0]!.lifecycle.state;
   }
 
+  async function getCurrentPrMergedAt(): Promise<string | undefined> {
+    const { getProject } = await import("../state/project-store.js");
+    return getProject("proj-pr")!.worktrees[0]!.prMergedAt;
+  }
+
+  /** Same as `seedProject`, plus a pre-existing `prMergedAt` on the worktree
+   *  — for the "clear on fresh PR" test below. */
+  async function seedProjectWithMergedAt(
+    initialState: LifecycleState,
+    prMergedAt: string,
+  ): Promise<void> {
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    const record: ProjectRecord = {
+      id: "proj-pr",
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pfx",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [],
+      worktrees: [
+        {
+          id: "wt-pr",
+          branch: "feature-branch",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          createdAt: new Date().toISOString(),
+          prMergedAt,
+          sessions: [
+            {
+              id: "sess-pr",
+              slot: "m",
+              isMain: true,
+              type: "agent",
+              modeId: "mode",
+              tmuxName: "pane-pr",
+              lifecycle: {
+                state: initialState,
+                lastTransitionAt: new Date().toISOString(),
+              },
+            },
+          ],
+        },
+      ],
+    };
+    await addProject(record);
+  }
+
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "vst-prpoller-test-"));
     await mkdir(join(tempDir, "projects", "proj-pr"), { recursive: true });
@@ -165,6 +214,23 @@ describe("PR poller behavior", () => {
     expect(await getCurrentState()).toBe("idle");
   });
 
+  it("dashboard-bucket-fixes — a merged PR also stamps the worktree's prMergedAt", async () => {
+    await seedProject("needs_review");
+    github.fetchPrForBranch.mockResolvedValue({
+      number: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      title: "Add widget",
+      state: "closed",
+      merged: true,
+      draft: false,
+      author: "octocat",
+    });
+
+    await pollAllPrs();
+
+    expect(await getCurrentPrMergedAt()).toBeDefined();
+  });
+
   it("a closed-without-merge PR also transitions the session out of needs_review", async () => {
     await seedProject("needs_review");
     github.fetchPrForBranch.mockResolvedValue({
@@ -180,6 +246,41 @@ describe("PR poller behavior", () => {
     await pollAllPrs();
 
     expect(await getCurrentState()).toBe("idle");
+  });
+
+  it("dashboard-bucket-fixes — a closed-without-merge PR does NOT stamp prMergedAt", async () => {
+    await seedProject("needs_review");
+    github.fetchPrForBranch.mockResolvedValue({
+      number: 9,
+      url: "https://github.com/acme/widgets/pull/9",
+      title: "Abandoned",
+      state: "closed",
+      merged: false,
+      draft: false,
+      author: "octocat",
+    });
+
+    await pollAllPrs();
+
+    expect(await getCurrentPrMergedAt()).toBeUndefined();
+  });
+
+  it("dashboard-bucket-fixes — a fresh open+non-draft PR on the same branch clears a previously-set prMergedAt", async () => {
+    await seedProjectWithMergedAt("idle", "2024-01-01T00:00:00.000Z");
+    github.fetchPrForBranch.mockResolvedValue({
+      number: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+      title: "Round two",
+      state: "open",
+      merged: false,
+      draft: false,
+      author: "octocat",
+    });
+
+    await pollAllPrs();
+
+    expect(await getCurrentState()).toBe("needs_review");
+    expect(await getCurrentPrMergedAt()).toBeUndefined();
   });
 
   it("no PR at all transitions the session out of needs_review", async () => {
