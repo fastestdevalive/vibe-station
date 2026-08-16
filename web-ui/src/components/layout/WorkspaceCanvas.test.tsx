@@ -134,6 +134,69 @@ describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("offers a project's direct sessions in the cross-context picker (saved workspace), addable with no worktreeId", async () => {
+    const user = userEvent.setup();
+    const docId = "doc-1";
+    const canvas: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };
+    useWorkspaceStore.setState({
+      workspaceDocs: { [docId]: { id: docId, name: "Doc", contextKey: W1, ...canvas } },
+    });
+    const project = {
+      id: "proj-a",
+      name: "Proj A",
+      path: "/home/dev/proj-a",
+      prefix: "pa",
+      isGit: true,
+      createdAt: new Date().toISOString(),
+      hidden: false,
+    };
+    const directSession = {
+      id: "sess-direct-1",
+      worktreeId: null,
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent" as const,
+      name: "My Direct Agent",
+      isMain: false,
+      state: "idle" as const,
+      lifecycleState: "idle" as const,
+      tmuxName: "sess-direct-1",
+      createdAt: new Date().toISOString(),
+    };
+    render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <WorkspaceCanvas
+            worktreeId={W1}
+            agentSessions={[]}
+            terminalSessions={[]}
+            hasTools
+            toolPanelVisible
+            terminalDockVisible
+            allSessions={[directSession]}
+            worktrees={[]}
+            projects={[project]}
+            canvasToolbarVisible
+            detachedWorkspaceId={docId}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByText("Add tile"));
+    expect(screen.getByText("Direct")).toBeInTheDocument();
+    const item = screen.getByText("My Direct Agent");
+    expect(item).toBeInTheDocument();
+
+    await user.click(item);
+
+    // Tile landed with the direct session's id and no worktreeId (undefined —
+    // it's not scoped to any other worktree, matching an own-worktree tile).
+    const doc = useWorkspaceStore.getState().workspaceDocs[docId];
+    expect(doc?.tiles).toHaveLength(1);
+    expect(doc?.tiles[0]).toMatchObject({ kind: "agent", sessionId: "sess-direct-1" });
+    expect(doc?.tiles[0]?.worktreeId).toBeUndefined();
+  });
+
   it("a worktree's classic canvas never binds to a saved doc even if a stale activeWorkspaceId is present (regression)", async () => {
     const user = userEvent.setup();
     const docId = "doc-1";

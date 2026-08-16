@@ -4,17 +4,22 @@ import { Link } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { ConnectionState } from "@/api/client";
-import type { HealthResponse, Worktree } from "@/api/types";
+import type { HealthResponse, Session, Worktree } from "@/api/types";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
-import { type WorktreeRolledUpStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { type WorktreeRolledUpStatus, sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { sessionLabel } from "@/lib/sessionLabel";
 
 interface DashboardPanelProps {
   api: ApiInstance;
 }
+
+/** A dashboard card is either a worktree or a direct (worktree-less) agent
+ *  session — both bucket into the same Working/Waiting/PR/Finished sections. */
+type DashboardItem = { kind: "worktree"; worktree: Worktree } | { kind: "direct"; session: Session };
 
 /**
  * Dashboard buckets, coarser than the full `WorktreeRolledUpStatus` set:
@@ -123,10 +128,10 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
   const { working, waiting, pr, finished } = useMemo(() => {
-    const wtsWorking: Worktree[] = [];
-    const wtsWaiting: Worktree[] = [];
-    const wtsPr: Worktree[] = [];
-    const wtsFinished: Worktree[] = [];
+    const wtsWorking: DashboardItem[] = [];
+    const wtsWaiting: DashboardItem[] = [];
+    const wtsPr: DashboardItem[] = [];
+    const wtsFinished: DashboardItem[] = [];
     for (const wt of worktrees) {
       if (hiddenProjectIds.has(wt.projectId)) continue;
       // Archived (handed-off/reset) sessions are excluded from bucketing —
@@ -145,31 +150,70 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
         const st = sessionStates[s.id] ?? s.state;
         return st === "working" || st === "not_started";
       });
+      const wtItem: DashboardItem = { kind: "worktree", worktree: wt };
       if (hasLiveActivity) {
-        wtsWorking.push(wt);
+        wtsWorking.push(wtItem);
         continue;
       }
       // A remembered PR merge (see prPoller.ts) keeps reading as "PR
       // created" instead of silently falling back to idle/waiting — as long
       // as nothing here is actively working (checked above).
       if (wt.prMergedAt) {
-        wtsPr.push(wt);
+        wtsPr.push(wtItem);
         continue;
       }
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const b = bucketForRollup(rolled);
-      if (b === "waiting") wtsWaiting.push(wt);
-      else if (b === "pr") wtsPr.push(wt);
-      else if (b === "finished") wtsFinished.push(wt);
-      else wtsWorking.push(wt); // defensive — hasLiveActivity already covers "working"
+      if (b === "waiting") wtsWaiting.push(wtItem);
+      else if (b === "pr") wtsPr.push(wtItem);
+      else if (b === "finished") wtsFinished.push(wtItem);
+      else wtsWorking.push(wtItem); // defensive — hasLiveActivity already covers "working"
+    }
+    // Direct (worktree-less) agent sessions bucket the same way, one card per
+    // session — there's no rollup to do since there's only ever one session
+    // per card here.
+    for (const s of sessions) {
+      if (s.type !== "agent" || s.worktreeId != null || s.archivedAt != null) continue;
+      if (!s.projectId || hiddenProjectIds.has(s.projectId)) continue;
+      const item: DashboardItem = { kind: "direct", session: s };
+      // No sibling sessions to prioritize over (one session = one card here),
+      // so — unlike the worktree loop above — a plain rollup is sufficient.
+      const b = bucketForRollup(sessionStatus(sessionStates[s.id] ?? s.state));
+      if (b === "working") wtsWorking.push(item);
+      else if (b === "waiting") wtsWaiting.push(item);
+      else if (b === "pr") wtsPr.push(item);
+      else wtsFinished.push(item);
     }
     return { working: wtsWorking, waiting: wtsWaiting, pr: wtsPr, finished: wtsFinished };
   }, [worktrees, sessions, sessionStates, hiddenProjectIds]);
 
   const daemonOk = connState === "online";
 
-  const renderWorktreeCard = useCallback(
-    (wt: Worktree) => {
+  const renderDashboardItem = useCallback(
+    (item: DashboardItem) => {
+      if (item.kind === "direct") {
+        const s = item.session;
+        const status = sessionStatus(sessionStates[s.id] ?? s.state);
+        const proj = projectById[s.projectId];
+        return (
+          <div key={s.id} className="dashboard-card-shell">
+            <Link
+              to={`/session/${s.id}`}
+              className="dashboard-card dashboard-card--session dashboard-card--worktree"
+            >
+              <span className="dashboard-card__dot dashboard-card__dot--status">
+                <StatusDot status={status} />
+              </span>
+              <span className="dashboard-card__session-main">
+                <span className="dashboard-card__primary">{sessionLabel(s)}</span>
+                <span className="dashboard-card__branch">direct</span>
+              </span>
+              <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
+            </Link>
+          </div>
+        );
+      }
+      const wt = item.worktree;
       const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
@@ -269,28 +313,28 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
             {working.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">working</div>
-                <div className="dashboard-card-list">{working.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-card-list">{working.map((item) => renderDashboardItem(item))}</div>
               </section>
             ) : null}
 
             {waiting.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">waiting for user</div>
-                <div className="dashboard-card-list">{waiting.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-card-list">{waiting.map((item) => renderDashboardItem(item))}</div>
               </section>
             ) : null}
 
             {pr.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">pr created</div>
-                <div className="dashboard-card-list">{pr.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-card-list">{pr.map((item) => renderDashboardItem(item))}</div>
               </section>
             ) : null}
 
             {showFinished && finished.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">finished</div>
-                <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-card-list">{finished.map((item) => renderDashboardItem(item))}</div>
               </section>
             ) : null}
 
@@ -304,26 +348,26 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               <div className="dashboard-kanban__col-header">
                 Working <span className="dashboard-kanban__col-count">({working.length})</span>
               </div>
-              <div className="dashboard-card-list">{working.map((wt) => renderWorktreeCard(wt))}</div>
+              <div className="dashboard-card-list">{working.map((item) => renderDashboardItem(item))}</div>
             </div>
             <div className="dashboard-kanban__col">
               <div className="dashboard-kanban__col-header">
                 Waiting for User <span className="dashboard-kanban__col-count">({waiting.length})</span>
               </div>
-              <div className="dashboard-card-list">{waiting.map((wt) => renderWorktreeCard(wt))}</div>
+              <div className="dashboard-card-list">{waiting.map((item) => renderDashboardItem(item))}</div>
             </div>
             <div className="dashboard-kanban__col">
               <div className="dashboard-kanban__col-header">
                 PR Created <span className="dashboard-kanban__col-count">({pr.length})</span>
               </div>
-              <div className="dashboard-card-list">{pr.map((wt) => renderWorktreeCard(wt))}</div>
+              <div className="dashboard-card-list">{pr.map((item) => renderDashboardItem(item))}</div>
             </div>
             {showFinished ? (
               <div className="dashboard-kanban__col">
                 <div className="dashboard-kanban__col-header">
                   Finished <span className="dashboard-kanban__col-count">({finished.length})</span>
                 </div>
-                <div className="dashboard-card-list">{finished.map((wt) => renderWorktreeCard(wt))}</div>
+                <div className="dashboard-card-list">{finished.map((item) => renderDashboardItem(item))}</div>
               </div>
             ) : null}
           </div>
