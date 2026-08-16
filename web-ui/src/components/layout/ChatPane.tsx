@@ -1,11 +1,28 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
 import { StatusBar } from "@/components/chat/StatusBar";
+
+// Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
+// PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
+// there). Chat's font-size rules read the shared --font-size-* custom
+// properties, which are otherwise fixed, app-wide tokens — overriding them
+// here (inline style) scopes the zoom to just this pane's subtree instead of
+// resizing the whole app.
+const CHAT_FONT_BASE_PX: Record<string, number> = {
+  "--font-size-xs": 11,
+  "--font-size-sm": 12,
+  "--font-size-base": 14,
+  "--font-size-lg": 16,
+  "--font-size-xl": 18,
+  "--font-size-2xl": 22,
+  "--font-size-3xl": 28,
+};
 
 interface ChatPaneProps {
   api: ApiInstance;
@@ -26,6 +43,15 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const isJson = session?.channel === "json";
   const sessionId = session?.id ?? null;
   const enabled = visible && isJson && !!sessionId;
+
+  const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+  const chatFontVars = useMemo(() => {
+    const vars: Record<string, string> = {};
+    for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
+      vars[name] = `${Math.round(base * terminalFontScale)}px`;
+    }
+    return vars as CSSProperties;
+  }, [terminalFontScale]);
 
   const {
     events,
@@ -151,11 +177,11 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // Keep the pane mounted even when hidden (Decision 14) — the terminal beside it
   // must never remount. `hidden` also stops the offscreen list from scrolling.
   if (!enabled) {
-    return <div className="chat-pane chat-pane--hidden" aria-hidden hidden />;
+    return <div className="chat-pane chat-pane--hidden" aria-hidden hidden style={chatFontVars} />;
   }
 
   return (
-    <div className="chat-pane">
+    <div className="chat-pane" style={chatFontVars}>
       <div className="chat-pane__body">
         {loading ? (
           <div className="chat-pane__state">
