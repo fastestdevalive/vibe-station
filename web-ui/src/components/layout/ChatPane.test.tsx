@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { render, screen, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
@@ -122,6 +124,18 @@ describe("ChatPane (4.T2)", () => {
     } finally {
       useWorkspaceStore.setState({ terminalFontScale: 1 });
     }
+  });
+
+  it("`.chat-pane` re-declares font-size from the scaled token, so inherited text zooms too", () => {
+    // jsdom resolves neither stylesheets nor var(), so the *rendered* size of a
+    // message bubble can't be asserted here. The regression guarded instead is
+    // structural: without this declaration, `body`'s font-size (computed from
+    // the UNSCALED root token) inherits into every element that doesn't read a
+    // --font-size-* var itself — user messages and assistant markdown — and
+    // only tool cards / the composer follow the zoom.
+    const css = readFileSync(resolve(process.cwd(), "src/styles/chat.css"), "utf8");
+    const block = /\.chat-pane \{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toMatch(/font-size:\s*var\(--font-size-base\)/);
   });
 
   it("a non-archived session still renders the live composer", async () => {
