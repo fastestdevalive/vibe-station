@@ -18,12 +18,14 @@
  * ever touches a `needs_review` session).
  */
 
-import { getAllProjects } from "../state/project-store.js";
+import { getAllProjects, mutateProject } from "../state/project-store.js";
 import { getRemoteUrl, parseGithubRepo, fetchPrForBranch } from "./github.js";
 import { persistLifecycleState } from "./lifecycle.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import { sessionChannel } from "./channel.js";
-import type { SessionRecord } from "../types.js";
+import { broadcastAll } from "../broadcaster.js";
+import { serializeWorktree } from "../routes/worktrees.js";
+import type { SessionRecord, WorktreeRecord } from "../types.js";
 
 /**
  * 60s (Decision 3b): >= github.ts's own 30s cache TTL (polling faster is
@@ -60,12 +62,46 @@ function fallbackStateFor(session: SessionRecord): "working" | "idle" {
   return "idle";
 }
 
+/**
+ * Set/clear `WorktreeRecord.prMergedAt` (dashboard-bucket-fixes) and
+ * broadcast the change — same mutate-then-broadcast shape as the `/pin`
+ * route (`routes/worktrees.ts`), just triggered by the poller instead of a
+ * user action. `null` drops the field entirely rather than persisting an
+ * explicit null, matching `pinnedAt`'s own unset convention.
+ */
+async function setWorktreePrMergedAt(
+  projectId: string,
+  worktreeId: string,
+  value: string | null,
+): Promise<void> {
+  let updated: WorktreeRecord | undefined;
+  await mutateProject(projectId, (p) => ({
+    ...p,
+    worktrees: p.worktrees.map((w) => {
+      if (w.id !== worktreeId) return w;
+      if (value == null) {
+        const { prMergedAt: _drop, ...rest } = w;
+        void _drop;
+        updated = rest;
+        return rest;
+      }
+      const next = { ...w, prMergedAt: value };
+      updated = next;
+      return next;
+    }),
+  }));
+  if (updated) {
+    broadcastAll({ type: "worktree:updated", worktree: serializeWorktree(projectId, updated) });
+  }
+}
+
 async function pollWorktree(
   projectId: string,
   projectAbsolutePath: string,
   worktreeId: string,
   branch: string,
   mainSession: SessionRecord | undefined,
+  currentPrMergedAt: string | undefined,
 ): Promise<void> {
   if (!mainSession) return; // No agent session to attribute needs_review to.
   // Terminal state — same as lifecycle.ts's own terminal-state early return.
@@ -82,12 +118,23 @@ async function pollWorktree(
     if (mainSession.lifecycle.state !== "needs_review") {
       await persistLifecycleState(projectId, worktreeId, mainSession.id, "needs_review");
     }
+    // A fresh reviewable PR on this branch is a new review cycle — any
+    // earlier merge we remembered no longer applies.
+    if (currentPrMergedAt != null) {
+      await setWorktreePrMergedAt(projectId, worktreeId, null);
+    }
     return;
   }
 
   // PR merged/closed/gone — only act if WE are the one holding this session
   // in needs_review; anything else (done/exited, handled above) wins as-is.
   if (mainSession.lifecycle.state === "needs_review") {
+    // Distinguish "merged" (worth remembering — dashboard-bucket-fixes) from
+    // "closed without merging" / "gone entirely": only a genuine merge sets
+    // prMergedAt. `pr` can be null here (PR deleted/branch gone).
+    if (pr?.merged && currentPrMergedAt == null) {
+      await setWorktreePrMergedAt(projectId, worktreeId, new Date().toISOString());
+    }
     await persistLifecycleState(projectId, worktreeId, mainSession.id, fallbackStateFor(mainSession));
   }
 }
@@ -118,6 +165,7 @@ export async function pollAllPrs(): Promise<void> {
           worktree.id,
           worktree.branch,
           mainSession,
+          worktree.prMergedAt,
         ).catch((err) => {
           console.error(`[prPoller] Poll error for worktree ${worktree.id}:`, err);
         });

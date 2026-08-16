@@ -129,14 +129,39 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     const wtsFinished: Worktree[] = [];
     for (const wt of worktrees) {
       if (hiddenProjectIds.has(wt.projectId)) continue;
-      const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
+      // Archived (handed-off/reset) sessions are excluded from bucketing —
+      // one stuck in `waiting_for_human` shouldn't poison this worktree's
+      // bucket the way a live session's state should.
+      const agentSessions = sessions.filter(
+        (s) => s.worktreeId === wt.id && s.type === "agent" && s.archivedAt == null,
+      );
       if (agentSessions.length === 0) continue;
+      // "Working" means "is there live activity here right now" — ANY
+      // session actively working takes priority over the rollup's single
+      // highest-ranked status, which would otherwise let one session's
+      // `waiting_for_human` (rank 8) hide a SIBLING session's `working`
+      // (rank 6) for the whole worktree.
+      const hasLiveActivity = agentSessions.some((s) => {
+        const st = sessionStates[s.id] ?? s.state;
+        return st === "working" || st === "not_started";
+      });
+      if (hasLiveActivity) {
+        wtsWorking.push(wt);
+        continue;
+      }
+      // A remembered PR merge (see prPoller.ts) keeps reading as "PR
+      // created" instead of silently falling back to idle/waiting — as long
+      // as nothing here is actively working (checked above).
+      if (wt.prMergedAt) {
+        wtsPr.push(wt);
+        continue;
+      }
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
       const b = bucketForRollup(rolled);
-      if (b === "working") wtsWorking.push(wt);
-      else if (b === "waiting") wtsWaiting.push(wt);
+      if (b === "waiting") wtsWaiting.push(wt);
       else if (b === "pr") wtsPr.push(wt);
-      else wtsFinished.push(wt);
+      else if (b === "finished") wtsFinished.push(wt);
+      else wtsWorking.push(wt); // defensive — hasLiveActivity already covers "working"
     }
     return { working: wtsWorking, waiting: wtsWaiting, pr: wtsPr, finished: wtsFinished };
   }, [worktrees, sessions, sessionStates, hiddenProjectIds]);

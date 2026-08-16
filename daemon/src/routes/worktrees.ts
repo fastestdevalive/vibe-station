@@ -125,7 +125,7 @@ function parseBranchNameStatus(stdout: string): { path: string; status: string }
 }
 
 /** Map internal WorktreeRecord to API shape (adds projectId, drops nested sessions). */
-function serializeWorktree(projectId: string, w: WorktreeRecord) {
+export function serializeWorktree(projectId: string, w: WorktreeRecord) {
   return {
     id: w.id,
     projectId,
@@ -137,6 +137,9 @@ function serializeWorktree(projectId: string, w: WorktreeRecord) {
     createdAt: w.createdAt,
     // Always emit pinnedAt so the client doesn't have to special-case undefined.
     pinnedAt: w.pinnedAt ?? null,
+    // Same rationale — set by prPoller.ts when this worktree's PR is seen
+    // merged, so the dashboard can keep crediting "PR created" through it.
+    prMergedAt: w.prMergedAt ?? null,
     sortOrder: w.sortOrder,
     // Id of the worktree's main agent session (isMain === true — replaces the
     // old slot==="m" check, Decision 1). Lets the create-dialog JSON path

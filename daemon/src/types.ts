@@ -290,6 +290,16 @@ export interface WorktreeRecord {
    * (newest pinned first), so we don't need a separate sort field.
    */
   pinnedAt?: string; // ISO8601
+  /**
+   * When set, this worktree's PR was seen merged by `prPoller.ts` while its
+   * main session was `needs_review` — kept around (distinct from a PR that
+   * was merely closed without merging) so the dashboard can keep crediting
+   * "PR created" instead of silently reading as idle/working again. Cleared
+   * the moment `prPoller.ts` finds a fresh open, non-draft PR on the same
+   * branch (a new review cycle has started). Absent / undefined ≡ no
+   * remembered merge.
+   */
+  prMergedAt?: string; // ISO8601
   /** Fractional display-order rank among a project's worktrees (F9 — reordering itself is Part 03). */
   sortOrder: number;
   /**

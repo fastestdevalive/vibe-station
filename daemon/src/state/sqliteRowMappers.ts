@@ -130,6 +130,7 @@ export interface WorktreeRow {
   baseSha: string | null;
   createdAt: string;
   pinnedAt: string | null;
+  prMergedAt: string | null;
   sortOrder: number;
   terminalSeq: number;
   agentSeq: number;
@@ -146,6 +147,7 @@ export function rowToWorktree(row: WorktreeRow, sessions: SessionRecord[]): Work
     baseSha: row.baseSha ?? "",
     createdAt: row.createdAt,
     ...(row.pinnedAt != null ? { pinnedAt: row.pinnedAt } : {}),
+    ...(row.prMergedAt != null ? { prMergedAt: row.prMergedAt } : {}),
     sortOrder: row.sortOrder,
     terminalSeq: row.terminalSeq,
     agentSeq: row.agentSeq,
@@ -163,6 +165,7 @@ export function worktreeToRow(w: WorktreeRecord, projectId: string): WorktreeRow
     baseSha: w.baseSha ?? null,
     createdAt: w.createdAt,
     pinnedAt: w.pinnedAt ?? null,
+    prMergedAt: w.prMergedAt ?? null,
     sortOrder: w.sortOrder ?? 0,
     terminalSeq: w.terminalSeq ?? 0,
     agentSeq: w.agentSeq ?? 0,

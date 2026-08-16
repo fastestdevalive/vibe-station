@@ -1090,7 +1090,6 @@ export function WorkspaceCanvas({
 
   const tileMenuTile = tileMenu ? (cv.tiles.find((t) => t.id === tileMenu.tileId) ?? null) : null;
   const tileMenuSession = tileMenuTile?.sessionId ? (sessionById.get(tileMenuTile.sessionId) ?? null) : null;
-  const tileMenuLabel = tileMenuSession ? sessionLabel(tileMenuSession) : "";
 
   return (
     <div className="workspace-canvas">

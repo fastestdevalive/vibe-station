@@ -95,6 +95,62 @@ describe("DashboardPanel", () => {
     });
   });
 
+  it("dashboard-bucket-fixes — a sibling session actively working keeps the worktree bucketed as working, even if another session is waiting_for_human", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    // wt-1: sess-main stays "working"; sess-agent2 flips to waiting_for_human
+    // (rank 8, would normally outrank "working" rank 6 in the single-winner
+    // rollup) — the worktree must still read as "working" because SOME
+    // session is actively working right now.
+    api.__test.emit({ type: "session:state", sessionId: "sess-agent2", state: "waiting_for_human" });
+
+    await waitFor(() => {
+      const workingSection = screen.getByText("working").closest("section");
+      expect(workingSection).not.toBeNull();
+      expect(within(workingSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+        "href",
+        "/worktree/wt-1",
+      );
+    });
+  });
+
+  it("dashboard-bucket-fixes — excludes an archived session from bucketing", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(document.querySelector('a[href="/worktree/wt-3"]')).not.toBeNull();
+    });
+
+    // wt-3's only agent session (idle) gets archived — with no non-archived
+    // agent sessions left, the worktree must drop out of every bucket
+    // entirely rather than keep poisoning "waiting for user".
+    api.__test.emit({
+      type: "session:updated",
+      sessionId: "sess-wt3-main",
+      archivedAt: new Date().toISOString(),
+    });
+
+    await waitFor(() => {
+      expect(document.querySelector('a[href="/worktree/wt-3"]')).toBeNull();
+    });
+  });
+
   it("excludes a hidden project's worktree cards and its project card", async () => {
     const api = createMockApi();
     render(
