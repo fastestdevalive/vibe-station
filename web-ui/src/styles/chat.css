@@ -154,6 +154,15 @@
   background: var(--bg-primary);
   color: var(--fg-primary);
   font-family: var(--font-sans);
+  /* Re-resolve the base text size HERE, from this subtree's (possibly zoomed)
+     --font-size-base — ChatPane overrides the --font-size-* tokens inline for
+     the "Aa −/+" control. `body` already sets font-size: var(--font-size-base)
+     (global.css), but that computed at the root with the UNSCALED token, and
+     font-size itself inherits as a computed px value — so without this rule
+     everything that just inherits (message bubbles, markdown prose) stays at
+     the unzoomed size while rules that read var(--font-size-*) directly
+     (tool cards, composer) scale. */
+  font-size: var(--font-size-base);
   /* Positioning context for the json→terminal channel toggle overlay (item 4) —
      mirrors `.agent-pane-slot__terminal` on the tty→json side. */
   position: relative;
@@ -312,6 +321,14 @@
 }
 .chat-pane .workspace-markdown-preview > :first-child { margin-top: 0; }
 .chat-pane .workspace-markdown-preview > :last-child { margin-bottom: 0; }
+
+/* Code-block chrome (lang label + Copy) is hardcoded to 11px in workspace.css,
+   so it wouldn't follow the "Aa −/+" zoom like the code it labels. Same scope
+   rule as above: only inside the chat pane. */
+.chat-pane .workspace-md-code-block-header,
+.chat-pane .workspace-md-code-block-copy {
+  font-size: var(--font-size-xs);
+}
 
 /* ── Markdown segments (prose + inline mermaid diagrams) ───────────────────── */
 
