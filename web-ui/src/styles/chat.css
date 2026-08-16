@@ -11,40 +11,23 @@
   transition: border-color 0.2s ease;
 }
 
-/* Colored rectangle around the pane, per session interaction state — same
-   color values as StatusDot's `.status-dot--*` rules (workspace.css) and
-   WorkspaceCanvas's `.workspace-canvas__tile--*` rules, so all three
-   surfaces (dot, workspace tile, single agent pane) stay in sync. Shared by
-   the classic single-agent-pane view and direct sessions — see
-   AgentPaneSlot.tsx for why this is the only "colored rectangle" surface
-   available in either case. */
+/* Colored rectangle around the pane, for the only TWO session states that
+   warrant one: `waiting_for_human` (red — needs you now) and `needs_review`
+   (green — a PR is ready, actionable but not urgent). Every other status
+   (`working`, `idle`, `done`, `exited`, `spawning`, none) is deliberately
+   left with the base rule's `transparent` border — a border on every state
+   made the colored ones meaningless. Mirrors WorkspaceCanvas's
+   `.workspace-canvas__tile--*` rules exactly (workspace-canvas.css); note
+   StatusDot's `.status-dot--*` rules (workspace.css) still carry the full
+   status range and no longer match this surface. Shared by the classic
+   single-agent-pane view and direct sessions — see AgentPaneSlot.tsx for why
+   this is the only "colored rectangle" surface available in either case. */
 .agent-pane-slot--waiting_for_human {
   border-color: #ef4444;
 }
 
 .agent-pane-slot--needs_review {
-  border-color: #b98cff;
-}
-
-.agent-pane-slot--working {
-  border-color: var(--accent);
-}
-
-.agent-pane-slot--idle {
-  border-color: var(--fg-muted, transparent);
-}
-
-.agent-pane-slot--done {
-  border-color: #22c55e;
-}
-
-.agent-pane-slot--exited {
-  border-color: #f59e0b;
-}
-
-.agent-pane-slot--spawning {
-  border-color: var(--border-default);
-  border-style: dashed;
+  border-color: var(--success);
 }
 .agent-pane-slot__terminal {
   min-height: 0;
