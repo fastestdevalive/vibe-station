@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createMockApi } from "@/api/mock";
 import type { NormalizedEvent, Session, SessionMeta } from "@/api/types";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import { ChatPane } from "./ChatPane";
 
 function meta(sessionId: string, extra: Partial<SessionMeta> = {}): SessionMeta {
@@ -106,6 +107,21 @@ describe("ChatPane (4.T2)", () => {
     ).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /send message/i })).toBeNull();
+  });
+
+  it("scales its --font-size-* CSS variables with the shared terminalFontScale (Aa −/+ control)", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({ terminalFontScale: 1.2 });
+    try {
+      const { container } = render(<ChatPane api={api} session={jsonSession("js-zoom")} visible />);
+      await screen.findByText("Start chatting");
+      const pane = container.querySelector(".chat-pane") as HTMLElement;
+      // Base --font-size-sm is 12px; at 1.2x scale it should round to 14px.
+      expect(pane.style.getPropertyValue("--font-size-sm")).toBe("14px");
+      expect(pane.style.getPropertyValue("--font-size-base")).toBe("17px");
+    } finally {
+      useWorkspaceStore.setState({ terminalFontScale: 1 });
+    }
   });
 
   it("a non-archived session still renders the live composer", async () => {

@@ -9,13 +9,17 @@ interface PaneToolsProps {
 }
 
 /**
- * Terminal-zoom (`Aa −/+`) + fullscreen toggle, shared between `TabsStrip`
+ * Agent font-zoom (`Aa −/+`) + fullscreen toggle, shared between `TabsStrip`
  * (worktree agent/terminal tabs, direct-session terminal dock) and any pane
  * that renders a `TerminalPane` without a surrounding tab list — e.g. a
  * direct session's single agent, which intentionally has no `TabsStrip`
  * ("single agent, no tabs") but still needs these controls above its
  * terminal. Extracted out of `TabsStrip` so the controls aren't lost when
  * the tab list itself is legitimately skipped.
+ *
+ * The zoom scale (`terminalFontScale`) drives both TerminalPane's xterm
+ * fontSize AND ChatPane's font-size CSS variables — one control zooms
+ * whichever agent view (tmux terminal or Rich Chat) is currently visible.
  */
 export function PaneTools({ fsTarget, onCloseDock }: PaneToolsProps) {
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
@@ -25,12 +29,12 @@ export function PaneTools({ fsTarget, onCloseDock }: PaneToolsProps) {
 
   return (
     <div className="tabs-strip__tools">
-      <div className="tabs-strip__zoom" aria-label="Terminal zoom">
+      <div className="tabs-strip__zoom" aria-label="Agent font zoom">
         <span className="tabs-strip__zoom-label">Aa</span>
         <button
           type="button"
           className="tab tab--icon"
-          aria-label="Decrease terminal font"
+          aria-label="Decrease agent font"
           onClick={() => bumpTerminalFont(-0.05)}
         >
           <Minus size={11} />
@@ -38,7 +42,7 @@ export function PaneTools({ fsTarget, onCloseDock }: PaneToolsProps) {
         <button
           type="button"
           className="tab tab--icon"
-          aria-label="Increase terminal font"
+          aria-label="Increase agent font"
           onClick={() => bumpTerminalFont(0.05)}
         >
           <Plus size={11} />
