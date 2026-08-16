@@ -1025,13 +1025,14 @@
   padding-top: 4px;
 }
 
-/* Defeat the inherited `top:50%; translateY(-50%)` on `.wt-menu-trigger` so the
- * ⋯ button sits at the top-right of the pinned row, next to the id chip, not
- * floating between branch and subheader. */
-.pinned-row .wt-menu-trigger {
-  top: 4px;
-  transform: none;
-}
+/* Previously overrode `.wt-menu-trigger`'s inherited `top:50%; translateY(-50%)`
+ * with a hardcoded `top: 4px` to pin the button to the top-right, next to the
+ * id chip — but visual testing showed that reads as noticeably OFF-center
+ * against the two-line pinned row (it lands near the second line, not
+ * centered), which is exactly the "not center aligned" complaint. Just
+ * inherit the base centering instead: vertically centered in the row like
+ * every other `.wt-menu-trigger` (worktree rows, direct-session rows). No
+ * override needed here anymore. */
 
 /* The `.pinned-row` resets for indent/height/alignment (above) are single-class
  * (0,1,0) and were silently defeated by the later, higher-specificity
@@ -1061,6 +1062,29 @@
 .tree-row--direct-session.pinned-row .wt-menu-trigger[aria-expanded="true"] {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Touch devices have no `:hover` — the reveal-on-hover rules above left the
+ * ⋯ trigger `pointer-events: none` at rest, so the first tap only landed on
+ * the row underneath (synthesizing a hover-like state) and only the SECOND
+ * tap actually hit the button. Keep it always interactive when hover isn't
+ * available. Selectors + specificity mirror the rules above exactly so this
+ * wins the cascade for every `.wt-menu-trigger` variant (plain worktree rows,
+ * pinned worktree rows, pinned direct-session rows). */
+@media (hover: none) {
+  .tree-row--worktree .wt-menu-trigger,
+  .tree-row--direct-session.pinned-row .wt-menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* The trigger and the id chip share the same trailing slot (see
+     `.tree-row--worktree:hover .wt-row__id` above) — now that the trigger is
+     always shown here, hide the chip the same way hover already does, so the
+     two don't render on top of each other. */
+  .tree-row--worktree .wt-row__id {
+    opacity: 0;
+  }
 }
 
 /* Direct sessions read italic in the project tree (`.direct-session__label`);

@@ -23,6 +23,8 @@ import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
+import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
+import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
 
 export function Workspace() {
   const location = useLocation();
@@ -62,6 +64,12 @@ export function Workspace() {
   const { layoutMode: paneLayoutMode, canvasToolbarVisible } = useLayout();
 
   const [quickOpen, setQuickOpen] = useState(false);
+  // Keyboard-shortcut-triggered dialogs (Alt+N, Alt+Shift+N below) —
+  // reuse the same dialogs the sidebar's "+" (new worktree) and the tab bar's
+  // "+" (new agent) already open, just driven from here since this is where
+  // "current project"/"current worktree" are already resolved.
+  const [shortcutNewWorktreeOpen, setShortcutNewWorktreeOpen] = useState(false);
+  const [shortcutNewAgentOpen, setShortcutNewAgentOpen] = useState(false);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
@@ -86,6 +94,32 @@ export function Workspace() {
     return workspaceDocs[params.workspaceId] ?? null;
   }, [isWorkspaceView, params.workspaceId, workspaceDocs]);
 
+  // Current worktree + its owning project, for the new-worktree/new-agent
+  // shortcuts below — same lookup pattern as `directSessionProject` above.
+  const activeWorktree = useMemo(
+    () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
+    [worktrees, activeWorktreeId],
+  );
+  const activeWorktreeProject = useMemo(
+    () => (activeWorktree ? (projects.find((p) => p.id === activeWorktree.projectId) ?? null) : null),
+    [activeWorktree, projects],
+  );
+
+  // The dialogs these open are scoped to `activeWorktree`/`activeWorktreeProject`
+  // (below) — reset if either goes away (e.g. switching to a direct session)
+  // so a dialog left open doesn't silently reappear scoped to whatever
+  // worktree/project the user lands on next.
+  useEffect(() => {
+    setShortcutNewWorktreeOpen(false);
+    setShortcutNewAgentOpen(false);
+  }, [activeWorktreeId]);
+
+  // Stable identities so `useWorkspaceKeyboardShortcuts`'s effect (keyed on
+  // these) doesn't tear down and re-add its `keydown` listener on every
+  // unrelated re-render of this route.
+  const openNewWorktreeShortcut = useCallback(() => setShortcutNewWorktreeOpen(true), []);
+  const openNewAgentShortcut = useCallback(() => setShortcutNewAgentOpen(true), []);
+
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
   // Quick Open + pane shortcuts work in both worktree and direct-session modes
   // (direct sessions browse the project base dir); only full-width panes (and
@@ -95,6 +129,8 @@ export function Workspace() {
     setQuickOpen,
     !isFullWidthPane && !isWorkspaceView,
     paneLayoutMode === "workspace",
+    activeWorktreeProject ? openNewWorktreeShortcut : undefined,
+    activeWorktree ? openNewAgentShortcut : undefined,
   );
 
   // Clear worktree context when entering direct session mode (mutual exclusion)
@@ -449,6 +485,25 @@ export function Workspace() {
         ) : (
           <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
         )
+      ) : null}
+      {activeWorktreeProject ? (
+        <NewSessionDialog
+          open={shortcutNewWorktreeOpen}
+          projectId={activeWorktreeProject.id}
+          projectName={activeWorktreeProject.name}
+          api={api}
+          onClose={() => setShortcutNewWorktreeOpen(false)}
+          onCreated={() => { /* store stays current via worktree:created WS event */ }}
+        />
+      ) : null}
+      {activeWorktree ? (
+        <NewTabDialog
+          open={shortcutNewAgentOpen}
+          api={api}
+          worktreeId={activeWorktree.id}
+          onClose={() => setShortcutNewAgentOpen(false)}
+          onCreated={() => { /* store stays current via session:created WS event */ }}
+        />
       ) : null}
       <Layout
         topBar={
