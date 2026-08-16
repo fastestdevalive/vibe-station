@@ -441,7 +441,8 @@
   color: var(--fg-primary);
 }
 
-.workspace-canvas__tile-close {
+.workspace-canvas__tile-close,
+.workspace-canvas__tile-menu-trigger {
   appearance: none;
   border: none;
   background: transparent;
@@ -454,7 +455,9 @@
   border-radius: var(--radius-sm);
 }
 
-.workspace-canvas__tile-close:hover {
+.workspace-canvas__tile-close:hover,
+.workspace-canvas__tile-menu-trigger:hover,
+.workspace-canvas__tile-menu-trigger[aria-expanded="true"] {
   background: var(--bg-active);
   color: var(--fg-primary);
 }

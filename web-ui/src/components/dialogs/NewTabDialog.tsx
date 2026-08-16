@@ -11,7 +11,7 @@ interface NewTabDialogProps {
   onClose: () => void;
   api: ApiInstance;
   worktreeId: string;
-  onCreated?: () => void;
+  onCreated?: (sessionId: string) => void;
 }
 
 /** Create a new agent session. Terminals use NewTerminalDialog. */
@@ -59,6 +59,7 @@ export function NewTabDialog({
   const isJson = channel === "json";
 
   async function submit() {
+    let sessionId: string;
     if (isJson) {
       // JSON path: create the session idle (prompt included only so the
       // daemon can derive the auto name/initialPrompt from it —
@@ -74,6 +75,7 @@ export function NewTabDialog({
         skipAutoTurn: true,
       });
       await sendJsonFirstTurn(api, sess.id, prompt, files);
+      sessionId = sess.id;
     } else {
       // KNOWN RACE: unlike the JSON path above, the daemon spawns the CLI
       // with `prompt` baked into argv fire-and-forget as soon as this route
@@ -94,8 +96,9 @@ export function NewTabDialog({
       if (files.length > 0) {
         await api.uploadAttachments(sess.id, files);
       }
+      sessionId = sess.id;
     }
-    onCreated?.();
+    onCreated?.(sessionId);
     onClose();
   }
 
