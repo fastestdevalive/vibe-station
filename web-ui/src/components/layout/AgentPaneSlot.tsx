@@ -5,6 +5,7 @@ import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
 import { sessionStatus } from "@/lib/worktreeStatus";
+import { resolveStatusClass } from "@/lib/statusColor";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface AgentPaneSlotProps {
@@ -55,7 +56,10 @@ export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
   // sessions (no tile header to host a StatusDot dot in either case), so a
   // border is the only "colored rectangle" surface available here.
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
-  const status = session && showAgentStatusBorders ? sessionStatus(session.state) : null;
+  const status =
+    session && showAgentStatusBorders
+      ? resolveStatusClass(sessionStatus(session.state), session.pr ?? null)
+      : null;
   return (
     <div className={`agent-pane-slot${status ? ` agent-pane-slot--${status}` : ""}`}>
       <div

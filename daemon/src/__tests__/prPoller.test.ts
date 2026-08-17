@@ -4,12 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as githubNs from "../services/github.js";
 import * as broadcasterNs from "../broadcaster.js";
-import {
-  PR_POLL_INTERVAL_MS,
-  pollAllPrs,
-  _resetPrPollerWarningForTest,
-} from "../services/prPoller.js";
-import type { ProjectRecord, LifecycleState } from "../types.js";
+import { PR_POLL_INTERVAL_MS, pollAllPrs, _resetPrPollerWarningForTest } from "../services/prPoller.js";
+import type { ProjectRecord, LifecycleState, PrStatus } from "../types.js";
 
 let tempDir: string;
 
@@ -32,8 +28,10 @@ vi.mock("../services/paths.js", async () => {
 
 vi.mock("../services/github.js", () => ({
   getRemoteUrl: vi.fn(),
-  parseGithubRepo: vi.fn(),
+  resolveGithubRemote: vi.fn(),
+  fetchPrsForBranches: vi.fn(),
   fetchPrForBranch: vi.fn(),
+  _clearPrCacheForTest: vi.fn(),
 }));
 
 vi.mock("../broadcaster.js", () => ({
@@ -44,70 +42,22 @@ vi.mock("../broadcaster.js", () => ({
 }));
 
 describe("PR poller configuration", () => {
-  it("polls once every 60s (Decision 3b)", () => {
-    expect(PR_POLL_INTERVAL_MS).toBe(60_000);
+  it("polls once every 10s (K8)", () => {
+    expect(PR_POLL_INTERVAL_MS).toBe(10_000);
   });
 });
 
 describe("PR poller behavior", () => {
   const github = vi.mocked(githubNs);
 
-  async function seedProject(initialState: LifecycleState = "working"): Promise<void> {
-    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
-    _clearStoreForTest();
-    const record: ProjectRecord = {
-      id: "proj-pr",
-      absolutePath: join(tempDir, "repo"),
-      prefix: "pfx",
-      isGit: true,
-      defaultBranch: "main",
-      createdAt: new Date().toISOString(),
-      directSessions: [],
-      worktrees: [
-        {
-          id: "wt-pr",
-          branch: "feature-branch",
-          baseBranch: "main",
-          baseSha: "a".repeat(40),
-          createdAt: new Date().toISOString(),
-          sessions: [
-            {
-              id: "sess-pr",
-              slot: "m",
-              isMain: true,
-              type: "agent",
-              modeId: "mode",
-              tmuxName: "pane-pr",
-              lifecycle: {
-                state: initialState,
-                lastTransitionAt: new Date().toISOString(),
-              },
-            },
-          ],
-        },
-      ],
-    };
-    await addProject(record);
-  }
-
-  async function getCurrentState(): Promise<LifecycleState> {
-    const { getProject } = await import("../state/project-store.js");
-    return getProject("proj-pr")!.worktrees[0]!.sessions[0]!.lifecycle.state;
-  }
-
-  async function getCurrentPrMergedAt(): Promise<string | undefined> {
-    const { getProject } = await import("../state/project-store.js");
-    return getProject("proj-pr")!.worktrees[0]!.prMergedAt;
-  }
-
-  /** Same as `seedProject`, plus a pre-existing `prMergedAt` on the worktree
-   *  — for the "clear on fresh PR" test below. */
-  async function seedProjectWithMergedAt(
-    initialState: LifecycleState,
-    prMergedAt: string,
+  async function seedProject(
+    lifecycleState: LifecycleState = "working",
+    pr?: PrStatus,
+    opts?: { worktreeCount?: number },
   ): Promise<void> {
     const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
     _clearStoreForTest();
+    const worktreeCount = opts?.worktreeCount ?? 1;
     const record: ProjectRecord = {
       id: "proj-pr",
       absolutePath: join(tempDir, "repo"),
@@ -116,32 +66,37 @@ describe("PR poller behavior", () => {
       defaultBranch: "main",
       createdAt: new Date().toISOString(),
       directSessions: [],
-      worktrees: [
-        {
-          id: "wt-pr",
-          branch: "feature-branch",
-          baseBranch: "main",
-          baseSha: "a".repeat(40),
-          createdAt: new Date().toISOString(),
-          prMergedAt,
-          sessions: [
-            {
-              id: "sess-pr",
-              slot: "m",
-              isMain: true,
-              type: "agent",
-              modeId: "mode",
-              tmuxName: "pane-pr",
-              lifecycle: {
-                state: initialState,
-                lastTransitionAt: new Date().toISOString(),
-              },
+      worktrees: Array.from({ length: worktreeCount }, (_, i) => ({
+        id: `wt-pr-${i}`,
+        branch: `feature-branch-${i}`,
+        baseBranch: "main",
+        baseSha: "a".repeat(40),
+        createdAt: new Date().toISOString(),
+        sortOrder: i,
+        sessions: [
+          {
+            id: `sess-pr-${i}`,
+            isMain: true,
+            sortOrder: 0,
+            type: "agent" as const,
+            modeId: "mode",
+            tmuxName: `pane-pr-${i}`,
+            useTmux: true,
+            lifecycle: {
+              state: lifecycleState,
+              lastTransitionAt: new Date().toISOString(),
             },
-          ],
-        },
-      ],
+            ...(pr ? { pr } : {}),
+          },
+        ],
+      })),
     };
     await addProject(record);
+  }
+
+  async function getSession(index = 0): Promise<{ lifecycle: { state: LifecycleState }; pr?: PrStatus }> {
+    const { getProject } = await import("../state/project-store.js");
+    return getProject("proj-pr")!.worktrees[index]!.sessions[0]!;
   }
 
   beforeEach(async () => {
@@ -149,182 +104,304 @@ describe("PR poller behavior", () => {
     await mkdir(join(tempDir, "projects", "proj-pr"), { recursive: true });
     await mkdir(join(tempDir, "repo"), { recursive: true });
     github.getRemoteUrl.mockReset();
-    github.parseGithubRepo.mockReset();
-    github.fetchPrForBranch.mockReset();
+    github.resolveGithubRemote.mockReset();
+    github.fetchPrsForBranches.mockReset();
     vi.mocked(broadcasterNs.broadcastAll).mockClear();
     _resetPrPollerWarningForTest();
     // Default happy path: a resolvable GitHub remote.
     github.getRemoteUrl.mockResolvedValue("https://github.com/acme/widgets.git");
-    github.parseGithubRepo.mockReturnValue({ owner: "acme", repo: "widgets" });
+    github.resolveGithubRemote.mockResolvedValue({ host: "github.com", owner: "acme", repo: "widgets" });
   });
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("1b.T1 — an open non-draft PR transitions the worktree's main session to needs_review", async () => {
+  it("2.T2 — an open non-draft PR sets pr.state to open", async () => {
     await seedProject("idle");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/widgets/pull/7",
-      title: "Add widget",
-      state: "open",
-      merged: false,
-      draft: false,
-      author: "octocat",
-    });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 7,
+              url: "https://github.com/acme/widgets/pull/7",
+              title: "Add widget",
+              state: "open" as const,
+              merged: false,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
 
     await pollAllPrs();
 
-    expect(await getCurrentState()).toBe("needs_review");
+    const session = await getSession();
+    expect(session.pr?.state).toBe("open");
+    expect(session.pr?.number).toBe(7);
+    // Lifecycle is never touched by this poller (D5/D6).
+    expect(session.lifecycle.state).toBe("idle");
   });
 
-  it("does not flag a draft PR as needs_review", async () => {
+  it("2.T2 — a merged PR sets pr.state to merged", async () => {
     await seedProject("idle");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 8,
-      url: "https://github.com/acme/widgets/pull/8",
-      title: "WIP widget",
-      state: "open",
-      merged: false,
-      draft: true,
-      author: "octocat",
-    });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 7,
+              url: "https://github.com/acme/widgets/pull/7",
+              title: "Add widget",
+              state: "closed" as const,
+              merged: true,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
 
     await pollAllPrs();
 
-    expect(await getCurrentState()).toBe("idle");
+    expect((await getSession()).pr?.state).toBe("merged");
   });
 
-  it("1b.T2 — a merged PR transitions the session OUT of needs_review", async () => {
-    await seedProject("needs_review");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/widgets/pull/7",
-      title: "Add widget",
-      state: "closed",
-      merged: true,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentState()).not.toBe("needs_review");
-    expect(await getCurrentState()).toBe("idle");
-  });
-
-  it("dashboard-bucket-fixes — a merged PR also stamps the worktree's prMergedAt", async () => {
-    await seedProject("needs_review");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/widgets/pull/7",
-      title: "Add widget",
-      state: "closed",
-      merged: true,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentPrMergedAt()).toBeDefined();
-  });
-
-  it("a closed-without-merge PR also transitions the session out of needs_review", async () => {
-    await seedProject("needs_review");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 9,
-      url: "https://github.com/acme/widgets/pull/9",
-      title: "Abandoned",
-      state: "closed",
-      merged: false,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentState()).toBe("idle");
-  });
-
-  it("dashboard-bucket-fixes — a closed-without-merge PR does NOT stamp prMergedAt", async () => {
-    await seedProject("needs_review");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 9,
-      url: "https://github.com/acme/widgets/pull/9",
-      title: "Abandoned",
-      state: "closed",
-      merged: false,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentPrMergedAt()).toBeUndefined();
-  });
-
-  it("dashboard-bucket-fixes — a fresh open+non-draft PR on the same branch clears a previously-set prMergedAt", async () => {
-    await seedProjectWithMergedAt("idle", "2024-01-01T00:00:00.000Z");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 12,
-      url: "https://github.com/acme/widgets/pull/12",
-      title: "Round two",
-      state: "open",
-      merged: false,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentState()).toBe("needs_review");
-    expect(await getCurrentPrMergedAt()).toBeUndefined();
-  });
-
-  it("no PR at all transitions the session out of needs_review", async () => {
-    await seedProject("needs_review");
-    github.fetchPrForBranch.mockResolvedValue(null);
-
-    await pollAllPrs();
-
-    expect(await getCurrentState()).toBe("idle");
-  });
-
-  it("leaves a done session alone even with an open PR", async () => {
-    await seedProject("done");
-    github.fetchPrForBranch.mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/widgets/pull/7",
-      title: "Add widget",
-      state: "open",
-      merged: false,
-      draft: false,
-      author: "octocat",
-    });
-
-    await pollAllPrs();
-
-    expect(await getCurrentState()).toBe("done");
-  });
-
-  it("1b.T3 — a worktree with a non-GitHub remote is skipped without throwing", async () => {
+  it("2.T2 — a draft PR sets pr.state to draft", async () => {
     await seedProject("idle");
-    github.parseGithubRepo.mockReturnValue(null);
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 8,
+              url: "https://github.com/acme/widgets/pull/8",
+              title: "WIP widget",
+              state: "open" as const,
+              merged: false,
+              draft: true,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
 
-    await expect(pollAllPrs()).resolves.toBeUndefined();
-    expect(github.fetchPrForBranch).not.toHaveBeenCalled();
-    expect(await getCurrentState()).toBe("idle");
+    await pollAllPrs();
+
+    expect((await getSession()).pr?.state).toBe("draft");
   });
 
-  it("1b.T3 — a worktree with no resolvable remote at all is skipped without throwing", async () => {
+  it("2.T2 — a closed-without-merge PR sets pr.state to closed", async () => {
+    await seedProject("idle");
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 9,
+              url: "https://github.com/acme/widgets/pull/9",
+              title: "Abandoned",
+              state: "closed" as const,
+              merged: false,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    expect((await getSession()).pr?.state).toBe("closed");
+  });
+
+  it("pr-status-axis 5 — records the branch it queried (D20)", async () => {
+    await seedProject("idle");
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 7,
+              url: "https://github.com/acme/widgets/pull/7",
+              title: "Add widget",
+              state: "open" as const,
+              merged: false,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    expect((await getSession()).pr?.prBranch).toBe("feature-branch-0");
+  });
+
+  it("2.T2 — a no_pr result sets pr.state to none", async () => {
+    await seedProject("idle", { state: "open", number: 3, checkedAt: "2020-01-01T00:00:00.000Z" });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([["acme/widgets#feature-branch-0", { kind: "no_pr" as const }]]),
+    );
+
+    await pollAllPrs();
+
+    expect((await getSession()).pr?.state).toBe("none");
+  });
+
+  it("2.T2 — a not_github worktree is skipped: no batch call, no session write, no log", async () => {
+    await seedProject("idle");
+    github.resolveGithubRemote.mockResolvedValue(null);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await pollAllPrs();
+
+    expect(github.fetchPrsForBranches).not.toHaveBeenCalled();
+    expect((await getSession()).pr).toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("2.T1 — a kind:\"error\" result holds session.pr.state AND leaves lifecycle unchanged (R4)", async () => {
+    await seedProject("waiting_for_human", { state: "open", number: 5, checkedAt: "2020-01-01T00:00:00.000Z" });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          { kind: "error" as const, reason: "network" as const, message: "boom" },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    // `error` is surfaced live over the WS broadcast (not a persisted column,
+    // see § Data model) — assert it there; the persisted/re-read state must
+    // still hold its previous value.
+    expect(broadcasterNs.broadcastAll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session:updated",
+        sessionId: "sess-pr-0",
+        pr: expect.objectContaining({ state: "open", number: 5, error: "boom" }),
+      }),
+    );
+    const session = await getSession();
+    expect(session.pr?.state).toBe("open");
+    expect(session.pr?.number).toBe(5);
+    expect(session.lifecycle.state).toBe("waiting_for_human");
+  });
+
+  it("2.T1 — a kind:\"no_credentials\" result holds session.pr.state (R4)", async () => {
+    await seedProject("idle", { state: "open", number: 5, checkedAt: "2020-01-01T00:00:00.000Z" });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([["acme/widgets#feature-branch-0", { kind: "no_credentials" as const }]]),
+    );
+
+    await pollAllPrs();
+
+    expect(broadcasterNs.broadcastAll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session:updated",
+        sessionId: "sess-pr-0",
+        pr: expect.objectContaining({ state: "open", error: expect.any(String) }),
+      }),
+    );
+    const session = await getSession();
+    expect(session.pr?.state).toBe("open");
+  });
+
+  it("2.T3 — one tick, 3 worktrees → exactly one batched fetchPrsForBranches call", async () => {
+    await seedProject("idle", undefined, { worktreeCount: 3 });
+    github.fetchPrsForBranches.mockResolvedValue(new Map());
+
+    await pollAllPrs();
+
+    expect(github.fetchPrsForBranches).toHaveBeenCalledTimes(1);
+    const entries = github.fetchPrsForBranches.mock.calls[0]![0];
+    expect(entries).toHaveLength(3);
+  });
+
+  it("2.T4 — getRemoteUrl returning null makes zero fetch calls and zero log lines (R9/C5)", async () => {
     await seedProject("idle");
     github.getRemoteUrl.mockResolvedValue(null);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await expect(pollAllPrs()).resolves.toBeUndefined();
-    expect(github.fetchPrForBranch).not.toHaveBeenCalled();
-    expect(await getCurrentState()).toBe("idle");
+
+    expect(github.fetchPrsForBranches).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(logSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("B2 — a second tick with an unchanged PR result performs no write and no broadcast", async () => {
+    const existing: PrStatus = {
+      state: "open",
+      number: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      checkedAt: "2020-01-01T00:00:00.000Z",
+      prBranch: "feature-branch-0",
+    };
+    await seedProject("idle", existing);
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 7,
+              url: "https://github.com/acme/widgets/pull/7",
+              title: "Add widget",
+              state: "open" as const,
+              merged: false,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    expect(broadcasterNs.broadcastAll).not.toHaveBeenCalled();
+    // The write itself was skipped, so `checkedAt` was never bumped — it
+    // still holds the value from the seed, not this tick's `now`.
+    expect((await getSession()).pr).toEqual(existing);
+  });
+
+  it("B2 — getRemoteUrl/resolveGithubRemote are called once per project per tick, not once per worktree", async () => {
+    await seedProject("idle", undefined, { worktreeCount: 5 });
+    github.fetchPrsForBranches.mockResolvedValue(new Map());
+
+    await pollAllPrs();
+
+    expect(github.getRemoteUrl).toHaveBeenCalledTimes(1);
+    expect(github.resolveGithubRemote).toHaveBeenCalledTimes(1);
   });
 
   it("skips a worktree with no main agent session, without throwing", async () => {
@@ -345,6 +422,7 @@ describe("PR poller behavior", () => {
           baseBranch: "main",
           baseSha: "a".repeat(40),
           createdAt: new Date().toISOString(),
+          sortOrder: 0,
           sessions: [],
         },
       ],
@@ -352,6 +430,6 @@ describe("PR poller behavior", () => {
     await addProject(record);
 
     await expect(pollAllPrs()).resolves.toBeUndefined();
-    expect(github.fetchPrForBranch).not.toHaveBeenCalled();
+    expect(github.fetchPrsForBranches).not.toHaveBeenCalled();
   });
 });

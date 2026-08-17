@@ -51,20 +51,27 @@ describe("worktreeRolledUpStatus", () => {
     expect(worktreeRolledUpStatus(sessions, { a: "idle" })).toBe("idle");
   });
 
-  // --- 2.T1: waiting_for_human / needs_review rollup precedence (R8) ---
+  // --- 2.T1: waiting_for_human rollup precedence (R8) ---
 
   it("rolls up to waiting_for_human over working", () => {
     const sessions = [sess("a", "waiting_for_human"), sess("b", "working")];
     expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
   });
 
-  it("rolls up to needs_review over working", () => {
-    const sessions = [sess("a", "needs_review"), sess("b", "working")];
-    expect(worktreeRolledUpStatus(sessions, {})).toBe("needs_review");
+  // --- 4.T5: `needs_review` removed from LifecycleState/SessionState (Phase 4) ---
+  // A legacy `needs_review` value can still arrive (e.g. a `session:state` WS
+  // event predating the daemon's back-compat read in sqliteRowMappers.ts, or
+  // any other stale/unexpected string) — `worktreeRolledUpStatus`'s default
+  // branch must treat it as unranked (`none`), not crash or silently sort it
+  // above other real states.
+
+  it("falls back to none for an unrecognized legacy state (e.g. needs_review)", () => {
+    const sessions = [sess("a", "needs_review" as unknown as SessionState)];
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("none");
   });
 
-  it("prefers waiting_for_human over needs_review when both present", () => {
-    const sessions = [sess("a", "needs_review"), sess("b", "waiting_for_human")];
+  it("waiting_for_human still outranks an unrecognized legacy state", () => {
+    const sessions = [sess("a", "needs_review" as unknown as SessionState), sess("b", "waiting_for_human")];
     expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
   });
 });

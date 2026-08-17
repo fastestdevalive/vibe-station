@@ -1,181 +1,242 @@
 /**
- * PR-review poller (plan 03, "Interaction States", Decision 3/3b).
+ * PR-status poller (pr-status-axis plan, Phase 2).
  *
  * Mirrors `lifecycle.ts`'s `pollAll`/`startLifecyclePoller`/`stopLifecyclePoller`
  * shape: one `setInterval`, one sweep per tick over every worktree, not one
- * timer per worktree. Every tick, checks each worktree's branch for an open
- * non-draft PR via the existing `github.ts` service (`fetchPrForBranch`,
- * already cached/rate-limit-aware) and flips the worktree's MAIN agent
- * session's lifecycle to `"needs_review"` (R6/R7). When the PR is no longer
- * open (merged, closed, or gone) while that session is currently
- * `"needs_review"`, it reverts to `"working"`/`"idle"` (R6).
+ * timer per worktree.
  *
- * `needs_review` is deliberately NOT part of the 1Hz `lifecycle.ts` poller's
- * idle/working detection (its membership guard excludes it, same as
- * done/exited) — this poller is its sole owner, entry and exit, matching R5
- * ("absorbed into done/exited like every other non-terminal state, no
- * special-case guard needed" — nothing OTHER than done/exited/this poller
- * ever touches a `needs_review` session).
+ * Ownership invariant (D5/D6): this poller writes **only** `SessionRecord.pr`
+ * — the orthogonal VCS-outcome axis. It never touches `SessionLifecycle`
+ * (agent-activity axis); `lifecycle.ts` is the sole writer of that. This is
+ * what removes the three-writer clobber race that made PR detection
+ * effectively dead (see
+ * `.vibekit/reports/2026-08-16-pr-detection-broken-root-cause-and-fix.md`).
+ *
+ * Every tick batches ALL worktrees' branch lookups into a single
+ * `fetchPrsForBranches` call (R3) rather than one call per worktree —
+ * `fetchPrsForBranches` itself groups by GitHub account internally (one
+ * aliased GraphQL query per account, K4).
  */
 
-import { getAllProjects, mutateProject } from "../state/project-store.js";
-import { getRemoteUrl, parseGithubRepo, fetchPrForBranch } from "./github.js";
-import { persistLifecycleState } from "./lifecycle.js";
-import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
-import { sessionChannel } from "./channel.js";
+import { getAllProjects, updateSessionPr } from "../state/project-store.js";
+import { getRemoteUrl, resolveGithubRemote, fetchPrsForBranches } from "./github.js";
+import { listAccounts } from "./githubAuth.js";
 import { broadcastAll } from "../broadcaster.js";
-import { serializeWorktree } from "../routes/worktrees.js";
-import type { SessionRecord, WorktreeRecord } from "../types.js";
+import type { PrInfo, PrLookupResult } from "./github.js";
+import type { PrStatus, SessionRecord } from "../types.js";
 
 /**
- * 60s (Decision 3b): >= github.ts's own 30s cache TTL (polling faster is
- * pure churn against a cached value), and — per-worktree — already at the
- * unauthenticated GitHub rate-limit ceiling (60 req/hr) with a single
- * worktree polled continuously, which is exactly why 1b.4's token warning
- * exists. Not configurable this round (matches `lifecycle.ts`'s own
- * `POLL_INTERVAL_MS` precedent).
+ * 10s (K8) — matches `github.ts`'s own 5s cache TTL closely enough that the
+ * cache never defeats the interval, while staying well under the authed
+ * GitHub rate limit (5,000 req/hr) given the batching above.
  */
-export const PR_POLL_INTERVAL_MS = 60_000;
+export const PR_POLL_INTERVAL_MS = 10_000;
 
 let pollerHandle: ReturnType<typeof setInterval> | null = null;
 
-/** 1b.4 — warn once per daemon lifetime, not once per tick. */
-let warnedNoToken = false;
+/** Warn once per daemon lifetime — not once per tick, not once per worktree. */
+let warnedNoCredentials = false;
 
-function hasGithubToken(): boolean {
-  return Boolean(process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
+/** Warn at most once per 10 minutes, per error `reason`. */
+const ERROR_WARN_THROTTLE_MS = 10 * 60 * 1000;
+const lastErrorWarnAt = new Map<string, number>();
+
+function classifyPrState(pr: PrInfo): PrStatus["state"] {
+  if (pr.merged) return "merged";
+  if (pr.draft) return "draft";
+  if (pr.state === "closed") return "closed";
+  return "open";
 }
 
 /**
- * Best-effort "what should this session fall back to, now that its PR is no
- * longer open" (R6). The 1Hz lifecycle poller never touches a
- * `needs_review` session (see module doc), so by the time this fires the
- * session's activity is otherwise unobserved — a live JSON agent with a
- * turn in flight reports "working"; everything else falls back to "idle"
- * (matches plan CUJ 3's example transition).
+ * Maps one `PrLookupResult` to the `SessionRecord.pr` write it produces, per
+ * the plan's § System boundaries table. Returns `null` when nothing should be
+ * written (not reached in practice here — `not_github`/no-remote worktrees
+ * are filtered out before this is called — but kept total for safety).
  */
-function fallbackStateFor(session: SessionRecord): "working" | "idle" {
-  if (sessionChannel(session) === "json") {
-    const agent = jsonAgentRegistry.get(session.id);
-    if (agent && agent.getMeta().turnState !== "idle") return "working";
-  }
-  return "idle";
-}
-
-/**
- * Set/clear `WorktreeRecord.prMergedAt` (dashboard-bucket-fixes) and
- * broadcast the change — same mutate-then-broadcast shape as the `/pin`
- * route (`routes/worktrees.ts`), just triggered by the poller instead of a
- * user action. `null` drops the field entirely rather than persisting an
- * explicit null, matching `pinnedAt`'s own unset convention.
- */
-async function setWorktreePrMergedAt(
-  projectId: string,
-  worktreeId: string,
-  value: string | null,
-): Promise<void> {
-  let updated: WorktreeRecord | undefined;
-  await mutateProject(projectId, (p) => ({
-    ...p,
-    worktrees: p.worktrees.map((w) => {
-      if (w.id !== worktreeId) return w;
-      if (value == null) {
-        const { prMergedAt: _drop, ...rest } = w;
-        void _drop;
-        updated = rest;
-        return rest;
-      }
-      const next = { ...w, prMergedAt: value };
-      updated = next;
-      return next;
-    }),
-  }));
-  if (updated) {
-    broadcastAll({ type: "worktree:updated", worktree: serializeWorktree(projectId, updated) });
-  }
-}
-
-async function pollWorktree(
-  projectId: string,
-  projectAbsolutePath: string,
-  worktreeId: string,
+function nextPrStatus(
+  current: PrStatus | undefined,
+  lookup: PrLookupResult,
+  now: string,
   branch: string,
-  mainSession: SessionRecord | undefined,
-  currentPrMergedAt: string | undefined,
-): Promise<void> {
-  if (!mainSession) return; // No agent session to attribute needs_review to.
-  // Terminal state — same as lifecycle.ts's own terminal-state early return.
-  if (mainSession.lifecycle.state === "done" || mainSession.lifecycle.state === "exited") return;
-
-  const remoteUrl = await getRemoteUrl(projectAbsolutePath);
-  const gh = remoteUrl ? parseGithubRepo(remoteUrl) : null;
-  if (!gh) return; // 1b.5 — non-GitHub remote, skip silently (matches GET /worktrees/:id/pr).
-
-  const pr = await fetchPrForBranch(gh.owner, gh.repo, branch);
-  const isReviewable = pr !== null && pr.state === "open" && !pr.draft;
-
-  if (isReviewable) {
-    if (mainSession.lifecycle.state !== "needs_review") {
-      await persistLifecycleState(projectId, worktreeId, mainSession.id, "needs_review");
+): PrStatus | null {
+  switch (lookup.kind) {
+    case "pr": {
+      const { pr } = lookup;
+      return { state: classifyPrState(pr), number: pr.number, url: pr.url, checkedAt: now, prBranch: branch };
     }
-    // A fresh reviewable PR on this branch is a new review cycle — any
-    // earlier merge we remembered no longer applies.
-    if (currentPrMergedAt != null) {
-      await setWorktreePrMergedAt(projectId, worktreeId, null);
+    case "no_pr":
+      return { state: "none", checkedAt: now, prBranch: branch };
+    case "no_credentials": {
+      if (!warnedNoCredentials) {
+        warnedNoCredentials = true;
+        console.warn(
+          "[prPoller] No credentialed GitHub account found (env vars / ~/.config/gh/hosts.yml / gh CLI) " +
+            "— PR status will not update until credentials are available.",
+        );
+      }
+      return {
+        state: current?.state ?? "none",
+        ...(current?.number != null ? { number: current.number } : {}),
+        ...(current?.url != null ? { url: current.url } : {}),
+        checkedAt: now,
+        error: "No credentialed GitHub account available",
+        prBranch: branch,
+      };
     }
-    return;
+    case "error": {
+      const last = lastErrorWarnAt.get(lookup.reason) ?? 0;
+      const nowMs = Date.now();
+      if (nowMs - last >= ERROR_WARN_THROTTLE_MS) {
+        lastErrorWarnAt.set(lookup.reason, nowMs);
+        console.warn(`[prPoller] GitHub lookup failed (${lookup.reason}): ${lookup.message}`);
+      }
+      return {
+        state: current?.state ?? "none",
+        ...(current?.number != null ? { number: current.number } : {}),
+        ...(current?.url != null ? { url: current.url } : {}),
+        checkedAt: now,
+        error: lookup.message,
+        prBranch: branch,
+      };
+    }
+    case "not_github":
+      // Never reached — filtered out before the batch call — but stays a
+      // no-op (untouched, no log, ever) if it ever is.
+      return null;
   }
+}
 
-  // PR merged/closed/gone — only act if WE are the one holding this session
-  // in needs_review; anything else (done/exited, handled above) wins as-is.
-  if (mainSession.lifecycle.state === "needs_review") {
-    // Distinguish "merged" (worth remembering — dashboard-bucket-fixes) from
-    // "closed without merging" / "gone entirely": only a genuine merge sets
-    // prMergedAt. `pr` can be null here (PR deleted/branch gone).
-    if (pr?.merged && currentPrMergedAt == null) {
-      await setWorktreePrMergedAt(projectId, worktreeId, new Date().toISOString());
-    }
-    await persistLifecycleState(projectId, worktreeId, mainSession.id, fallbackStateFor(mainSession));
-  }
+/** True iff `next` differs from `current` in nothing but `checkedAt` — B2:
+ *  `checkedAt` changes every tick, so without this every tick is a "change"
+ *  and there is no no-op case; skip the write AND the broadcast entirely in
+ *  that case (an unwritten `checkedAt` just goes stale in the DB, which is
+ *  the accepted tradeoff — see B2 in the pr-status-axis review). */
+function prStatusEquivalent(current: PrStatus | undefined, next: PrStatus): boolean {
+  if (!current) return false;
+  return (
+    current.state === next.state &&
+    current.number === next.number &&
+    current.url === next.url &&
+    current.error === next.error &&
+    current.prBranch === next.prBranch
+  );
+}
+
+async function setSessionPr(projectId: string, sessionId: string, pr: PrStatus): Promise<void> {
+  const changed = await updateSessionPr(projectId, sessionId, pr);
+  if (!changed) return;
+  broadcastAll({ type: "session:updated", sessionId, pr });
+}
+
+interface PollContext {
+  projectId: string;
+  worktreeId: string;
+  session: SessionRecord;
+  owner: string;
+  repo: string;
+  branch: string;
+}
+
+function entryKey(owner: string, repo: string, branch: string): string {
+  return `${owner}/${repo}#${branch}`;
 }
 
 /** Exported for deterministic daemon tests (single poll tick). */
 export async function pollAllPrs(): Promise<void> {
   const projects = getAllProjects();
 
-  // 1b.4 — warn once, only when it's actually going to matter (more than one
-  // worktree means we're already past the point a single continuously-polled
-  // worktree already exhausts the unauthenticated rate limit — see Decision 3b).
-  const worktreeCount = projects.reduce((n, p) => n + p.worktrees.length, 0);
-  if (!warnedNoToken && !hasGithubToken() && worktreeCount > 1) {
-    warnedNoToken = true;
-    console.warn(
-      `[prPoller] No GITHUB_TOKEN/GH_TOKEN set — polling ${worktreeCount} worktrees for PR status ` +
-        `against the unauthenticated GitHub rate limit (60 req/hr). Set GITHUB_TOKEN to avoid rate-limiting.`,
-    );
+  const contexts: PollContext[] = [];
+  for (const project of projects) {
+    if (project.worktrees.length === 0) continue;
+
+    // B2: `getRemoteUrl`/`resolveGithubRemote` resolve a PER-PROJECT value
+    // (the project's own `origin`, shared by every worktree in it) — calling
+    // them once per worktree here used to mean 147 `git remote get-url`
+    // child processes + 147 `~/.ssh/config` stats per tick on a real
+    // install. Hoisted to once per project per tick.
+    const remoteUrl = await getRemoteUrl(project.absolutePath);
+    if (!remoteUrl) continue; // R9/C5 — no remote at all, zero network, zero logs.
+    const gh = await resolveGithubRemote(remoteUrl);
+    if (!gh) continue; // not_github — zero network, zero logs, ever.
+
+    for (const worktree of project.worktrees) {
+      const mainSession = worktree.sessions.find((s) => s.isMain);
+      if (!mainSession) continue;
+
+      contexts.push({
+        projectId: project.id,
+        worktreeId: worktree.id,
+        session: mainSession,
+        owner: gh.owner,
+        repo: gh.repo,
+        branch: worktree.branch,
+      });
+    }
   }
 
-  await Promise.all(
-    projects.flatMap((project) =>
-      project.worktrees.map((worktree) => {
-        const mainSession = worktree.sessions.find((s) => s.isMain);
-        return pollWorktree(
-          project.id,
-          project.absolutePath,
-          worktree.id,
-          worktree.branch,
-          mainSession,
-          worktree.prMergedAt,
-        ).catch((err) => {
-          console.error(`[prPoller] Poll error for worktree ${worktree.id}:`, err);
-        });
-      }),
-    ),
+  if (contexts.length === 0) return;
+
+  // R3 — exactly one batched call per tick, regardless of worktree count.
+  const results = await fetchPrsForBranches(
+    contexts.map((c) => ({ owner: c.owner, repo: c.repo, branch: c.branch })),
   );
+
+  const now = new Date().toISOString();
+  await Promise.all(
+    contexts.map(async (c) => {
+      const lookup = results.get(entryKey(c.owner, c.repo, c.branch));
+      if (!lookup) return;
+      const nextPr = nextPrStatus(c.session.pr, lookup, now, c.branch);
+      if (!nextPr) return;
+      // B2: nothing but `checkedAt` changed — skip the write AND the
+      // broadcast entirely rather than doing a full DB write + a
+      // `session:updated` broadcast (which the web-ui rebuilds its whole
+      // `sessions` array in response to) every 10s for every worktree,
+      // forever, even when the PR status genuinely hasn't changed.
+      if (prStatusEquivalent(c.session.pr, nextPr)) return;
+      try {
+        await setSessionPr(c.projectId, c.session.id, nextPr);
+      } catch (err) {
+        console.error(`[prPoller] Failed to persist PR status for worktree ${c.worktreeId}:`, err);
+      }
+    }),
+  );
+}
+
+/**
+ * D10 startup self-check — logged once, at daemon boot, so a misconfigured
+ * environment (no resolvable remote, no credentials) is visible immediately
+ * rather than discovered by "PR status never updates" weeks later.
+ */
+async function logStartupSelfCheck(): Promise<void> {
+  try {
+    const projects = getAllProjects();
+    const accounts = await listAccounts();
+    const credentialSummary =
+      accounts.length > 0
+        ? `credentialed (${accounts.length} account${accounts.length === 1 ? "" : "s"}: ${accounts.map((a) => a.login).join(", ")})`
+        : "no credentials found";
+
+    for (const project of projects) {
+      if (project.worktrees.length === 0) continue;
+      const remoteUrl = await getRemoteUrl(project.absolutePath);
+      const gh = remoteUrl ? await resolveGithubRemote(remoteUrl) : null;
+      const remoteSummary = gh
+        ? `resolvable (${gh.owner}/${gh.repo})`
+        : remoteUrl
+          ? "remote is not GitHub"
+          : "no git remote";
+      console.log(`[prPoller] startup check — project ${project.id}: ${remoteSummary}, ${credentialSummary}`);
+    }
+  } catch (err) {
+    console.error("[prPoller] startup self-check failed:", err);
+  }
 }
 
 export function startPrPoller(): void {
   if (pollerHandle) return;
+  void logStartupSelfCheck();
   // Overlap guard — same rationale as lifecycle.ts's poller: a slow tick
   // (many worktrees, slow GitHub API) must not stack on the next one.
   let inFlight = false;
@@ -198,7 +259,8 @@ export function stopPrPoller(): void {
   }
 }
 
-/** Test helper — resets the once-per-lifetime token warning. */
+/** Test helper — resets the once-per-lifetime credentials warning + error throttle. */
 export function _resetPrPollerWarningForTest(): void {
-  warnedNoToken = false;
+  warnedNoCredentials = false;
+  lastErrorWarnAt.clear();
 }

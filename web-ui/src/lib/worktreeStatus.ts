@@ -2,7 +2,6 @@ import type { Session, SessionState } from "@/api/types";
 
 export type WorktreeRolledUpStatus =
   | "waiting_for_human"
-  | "needs_review"
   | "working"
   | "spawning"
   | "idle"
@@ -10,13 +9,12 @@ export type WorktreeRolledUpStatus =
   | "exited"
   | "none";
 
-// PRD R8 precedence: waiting_for_human outranks needs_review outranks
-// working — one session actively blocking on a human dominates the whole
-// worktree's displayed status; a ready-for-review PR is informational and
-// ranks just above ordinary activity, not above an active block.
+// PRD R8 precedence: waiting_for_human outranks working — one session
+// actively blocking on a human dominates the whole worktree's displayed
+// status. PR outcome is a separate axis layered on top by
+// `statusColor.ts#resolveStatusClass`, not part of this lifecycle rank.
 const rank: Record<WorktreeRolledUpStatus, number> = {
   waiting_for_human: 8,
-  needs_review: 7,
   working: 6,
   spawning: 5,
   idle: 4,
@@ -41,8 +39,6 @@ export function sessionStatus(state: SessionState): WorktreeRolledUpStatus {
       return "idle";
     case "waiting_for_human":
       return "waiting_for_human";
-    case "needs_review":
-      return "needs_review";
     case "done":
       return "done";
     case "exited":
@@ -76,7 +72,6 @@ export function worktreeRolledUpStatus(
     else if (st === "working") step = "working";
     else if (st === "idle") step = "idle";
     else if (st === "waiting_for_human") step = "waiting_for_human";
-    else if (st === "needs_review") step = "needs_review";
     else if (st === "done") step = "done";
     else if (st === "exited") step = "exited";
     else step = "none";
