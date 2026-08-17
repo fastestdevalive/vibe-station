@@ -5,6 +5,20 @@ import { z } from "zod";
  * Based on docs/API-CONTRACT.md WebSocket section.
  */
 
+/** Mirrors `PrStatus` (`daemon/src/types.ts`) — the VCS-outcome axis, written
+ *  only by `prPoller.ts`. Shared by `session:updated` here and the plain-JSON
+ *  `serializeSession` output. */
+const PrStatusSchema = z.object({
+  state: z.enum(["none", "draft", "open", "merged", "closed"]),
+  number: z.number().optional(),
+  url: z.string().optional(),
+  checkedAt: z.string(),
+  error: z.string().optional(),
+  // D20 — the branch this status was queried for; the UI only renders the
+  // PR colour when it matches the worktree's current branch.
+  prBranch: z.string().optional(),
+});
+
 const SubscribeMessage = z.object({
   type: z.literal("subscribe"),
   sessionIds: z.array(z.string()),
@@ -206,6 +220,11 @@ const SessionCreatedSnapshot = z.object({
   tmuxName: z.string(),
   useTmux: z.boolean().optional().default(true),
   channel: z.enum(["tmux", "pty", "json"]).optional(),
+  // `needs_review` is retained here as an accepted INPUT value only — it is
+  // never emitted by this daemon build (removed from `LifecycleState` in
+  // daemon/src/types.ts). Keeping it in the enum lets legacy persisted
+  // records and older clients still parse; back-compat mapping happens once,
+  // on read, in `sqliteRowMappers.ts` (`rowToSession`).
   state: z.enum([
     "not_started",
     "working",
@@ -215,6 +234,7 @@ const SessionCreatedSnapshot = z.object({
     "done",
     "exited",
   ]),
+  // See `needs_review` comment above — accepted input, never emitted.
   lifecycleState: z.enum([
     "not_started",
     "working",
@@ -250,6 +270,8 @@ const SessionCreatedEvent = z.object({
 const SessionStateEvent = z.object({
   type: z.literal("session:state"),
   sessionId: z.string(),
+  // `needs_review` accepted as input only (never emitted) — see comment on
+  // `SessionCreatedSnapshot.state` above.
   state: z.enum([
     "not_started",
     "working",
@@ -309,6 +331,8 @@ const SessionUpdatedEvent = z.object({
   archivedAt: z.string().optional(),
   /** After a reorder (PATCH .../reorder) — the session's new fractional display-order rank. */
   sortOrder: z.number().optional(),
+  /** After a `prPoller.ts` tick updates this session's VCS status (pr-status-axis). */
+  pr: PrStatusSchema.nullable().optional(),
 });
 
 /**

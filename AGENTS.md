@@ -142,6 +142,59 @@ The lock is scoped to one `WSConnection`. Two browser tabs legitimately hold two
 
 ---
 
+## Status indicators — `docs/STATUS-INDICATORS.md` is the source of truth, keep it in sync
+
+**Canonical matrix:** [`docs/STATUS-INDICATORS.md`](docs/STATUS-INDICATORS.md) — every
+lifecycle × PR combination, its dot colour, its glyph, and its dashboard bucket.
+
+### The invariant
+
+Session status is **two orthogonal axes**, never one enum:
+
+| Axis | Field | Written by, exclusively |
+|------|-------|------------------------|
+| Lifecycle (is the agent busy?) | `session.lifecycle.state` | `daemon/src/services/lifecycle.ts`, 1s poll |
+| PR (what happened to the branch?) | `session.pr` | `daemon/src/services/prPoller.ts`, 10s poll |
+
+Each poller writes **only** its own field. They previously shared one `LifecycleState` slot
+(`needs_review`) with three uncoordinated writers, which raced and silently destroyed the
+"PR created" signal — that is why the axes are split. Do not add a cross-write, and do not
+collapse them back into one enum.
+
+### Rule: a status change is a two-file change
+
+Touching **any** of these means updating `docs/STATUS-INDICATORS.md`'s matrix **in the same commit**:
+
+- `web-ui/src/lib/statusColor.ts` — `resolveStatusClass` / `worktreePrStatus`
+- `web-ui/src/components/layout/DashboardPanel.tsx` — `bucketForRollup`
+- `web-ui/src/components/layout/StatusDot.tsx` — glyphs
+- `web-ui/src/styles/tokens.css` — `--status-*` / `--pr-*` tokens
+- `LifecycleState` (`daemon/src/types.ts`) or `PrStatus` — adding/removing a value
+- `daemon/src/services/prPoller.ts` — which PR states map to which `pr.state`
+
+A PR that changes behaviour without changing the matrix should be sent back.
+
+### What to watch for
+
+- **Colour and bucket deliberately disagree for `done`/`exited`** — the dot keeps the PR colour
+  (blue/green) so you can see the branch landed, but the card stays in **Finished**, because
+  `done` is an explicit manual user action. This is intentional; don't "fix" it into agreement.
+- **`idle` buckets to Waiting, not Finished** — so the Waiting column mixes 🔴 `waiting_for_human`
+  (agent needs you) with neutral `○` `idle` (nothing happening). Known and intentional.
+- **`working` beats PR; PR beats `waiting_for_human`.** The second one is easy to get backwards:
+  an agent idles at its prompt right after opening a PR, so if red won you would almost never
+  see blue — which was the original bug's symptom all over again.
+- **Never render a PR colour without checking `pr.prBranch === worktree.branch`.** The PR is a
+  property of the branch, not the worktree; after a branch switch a stale PR must colour nothing.
+- **`draft` and `closed` are informational only** — they never drive colour or bucket.
+- **No bare hexes.** Status colours are per-theme tokens in `tokens.css`; a single hex fails
+  light-mode contrast. Non-colour cues (`spawning` dashed, `exited` dimmed) must survive recolours.
+- **Testing:** Ctrl+Shift+D opens the dev state simulator, which drives both axes with no daemon.
+  Prefer it over injecting SQLite rows — a container restart kills tmux, the lifecycle poller
+  then marks every session `exited`, and `exited` is terminal, so injected states never recover.
+
+---
+
 ## Docker dev sandboxes — two different tools, don't conflate them
 
 **Files:** `docker-compose.dev.yml` · `scripts/dev-sandbox.sh` · `scripts/dev-entrypoint.sh` · `docker-compose.screenshots.yml` · `Dockerfile.screenshots` · `scripts/demo-seed.sh` · `scripts/seed-file-search-demo.sh`

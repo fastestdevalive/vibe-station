@@ -8,8 +8,42 @@ import {
   worktreeToRow,
   rowToProject,
   projectToRow,
+  type SessionRow,
 } from "../state/sqliteRowMappers.js";
 import type { ProjectRecord, SessionRecord, WorktreeRecord } from "../types.js";
+
+/** Base fields shared by every `SessionRow` fixture below (Phase 4 back-compat tests). */
+const baseRow: SessionRow = {
+  id: "vs-1-a-abcd1234",
+  worktreeId: "vs-1",
+  projectId: "proj-1",
+  isMain: 1,
+  sortOrder: 1,
+  type: "agent",
+  modeId: null,
+  name: null,
+  nameSource: null,
+  tmuxName: "vst-vs-1-a-abcd1234",
+  useTmux: 1,
+  channel: null,
+  state: "working",
+  reason: null,
+  lastTransitionAt: "2024-01-01T00:00:00.000Z",
+  transcriptKind: null,
+  transcriptPath: null,
+  agentChatId: null,
+  modelOverride: null,
+  pinnedAt: null,
+  initialPrompt: null,
+  archivedAt: null,
+  handoffSummary: null,
+  spawnedFrom: null,
+  prState: null,
+  prNumber: null,
+  prUrl: null,
+  prCheckedAt: null,
+  prBranch: null,
+};
 
 describe("rowToBool / boolToRow", () => {
   it("1.T5 rowToBool(0) === false, rowToBool(1) === true", () => {
@@ -70,6 +104,81 @@ describe("session row <-> record round-trip", () => {
     expect(back).toEqual(minimal);
     expect(back.worktreeId).toBeUndefined();
     expect(back.transcriptRef).toBeUndefined();
+  });
+});
+
+describe("rowToSession — needs_review back-compat (R10, 4.T4)", () => {
+  it("maps a persisted needs_review state to idle lifecycle + an open PR", () => {
+    const row: SessionRow = { ...baseRow, state: "needs_review" };
+    const back = rowToSession(row);
+    expect(back.lifecycle.state).toBe("idle");
+    expect(back.pr).toEqual({ state: "open", checkedAt: "" });
+  });
+
+  it("does not clobber a real PR poller result already persisted for the row", () => {
+    const row: SessionRow = {
+      ...baseRow,
+      state: "needs_review",
+      prState: "merged",
+      prNumber: 42,
+      prUrl: "https://github.com/o/r/pull/42",
+      prCheckedAt: "2024-01-03T00:00:00.000Z",
+    };
+    const back = rowToSession(row);
+    expect(back.lifecycle.state).toBe("idle");
+    expect(back.pr).toEqual({
+      state: "merged",
+      number: 42,
+      url: "https://github.com/o/r/pull/42",
+      checkedAt: "2024-01-03T00:00:00.000Z",
+    });
+  });
+
+  it("leaves a non-legacy state untouched", () => {
+    const row: SessionRow = { ...baseRow, state: "working" };
+    const back = rowToSession(row);
+    expect(back.lifecycle.state).toBe("working");
+    expect(back.pr).toBeUndefined();
+  });
+});
+
+describe("pr-status-axis 5.T4 — prBranch row <-> record mapping", () => {
+  it("rowToSession includes prBranch when the column is set", () => {
+    const row: SessionRow = {
+      ...baseRow,
+      state: "working",
+      prState: "open",
+      prNumber: 7,
+      prUrl: "https://github.com/o/r/pull/7",
+      prCheckedAt: "2024-01-03T00:00:00.000Z",
+      prBranch: "feature-x",
+    };
+    const back = rowToSession(row);
+    expect(back.pr).toEqual({
+      state: "open",
+      number: 7,
+      url: "https://github.com/o/r/pull/7",
+      checkedAt: "2024-01-03T00:00:00.000Z",
+      prBranch: "feature-x",
+    });
+  });
+
+  it("sessionToRow writes prBranch from session.pr.prBranch, null when absent", () => {
+    const session: SessionRecord = {
+      id: "s1",
+      projectId: "proj-1",
+      isMain: true,
+      sortOrder: 0,
+      type: "agent",
+      tmuxName: "t1",
+      useTmux: true,
+      lifecycle: { state: "idle", lastTransitionAt: "2024-01-01T00:00:00.000Z" },
+      pr: { state: "open", checkedAt: "2024-01-01T00:00:00.000Z", prBranch: "feature-x" },
+    };
+    expect(sessionToRow(session, "proj-1", null).prBranch).toBe("feature-x");
+
+    const noPr: SessionRecord = { ...session, pr: undefined };
+    expect(sessionToRow(noPr, "proj-1", null).prBranch).toBeNull();
   });
 });
 

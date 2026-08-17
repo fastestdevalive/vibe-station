@@ -171,6 +171,185 @@ describe("project-store (SQL-backed)", () => {
     ).toBe(false);
   });
 
+  it("B2 — updateSessionPr writes one row (not a full project rewrite) and is reflected in the cached graph", async () => {
+    const { addProject, updateSessionPr, getProject } = await import("../state/project-store.js");
+    const project = makeProject("pr-fastpath-proj");
+    project.worktrees = [
+      {
+        id: "pr-fastpath-wt",
+        branch: "b",
+        baseBranch: "main",
+        baseSha: "a".repeat(40),
+        createdAt: new Date().toISOString(),
+        sortOrder: 0,
+        sessions: [
+          {
+            id: "pr-fastpath-sess",
+            type: "agent",
+            modeId: "m",
+            tmuxName: "pr-fastpath-pane",
+            useTmux: true,
+            isMain: true,
+            sortOrder: 0,
+            lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+          },
+        ],
+      },
+    ];
+    await addProject(project);
+
+    const { getDb } = await import("../state/db.js");
+    const db = getDb();
+    const spy = vi.spyOn(db, "prepare");
+    try {
+      const ok = await updateSessionPr("pr-fastpath-proj", "pr-fastpath-sess", {
+        state: "open",
+        number: 11,
+        url: "https://github.com/acme/widgets/pull/11",
+        checkedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(ok).toBe(true);
+      // The fast path must not go through `writeProjectFull` (which re-`db.prepare()`s
+      // its INSERT/DELETE statements every call) — only the one prepared UPDATE.
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(getProject("pr-fastpath-proj")!.worktrees[0]!.sessions[0]!.pr).toEqual({
+      state: "open",
+      number: 11,
+      url: "https://github.com/acme/widgets/pull/11",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    // Unknown session id is a no-op, not a throw.
+    expect(
+      await updateSessionPr("pr-fastpath-proj", "nope", { state: "none", checkedAt: new Date().toISOString() }),
+    ).toBe(false);
+  });
+
+  it("pr-status-axis 2.T5 — session.pr survives a write->read round-trip through project-store (guards the explicit INSERT column list)", async () => {
+    // The `sessions` table is written via an EXPLICIT column list in
+    // writeProjectFull — adding pr* columns to dbSchema.ts/sqliteRowMappers.ts
+    // alone is not enough; if the INSERT/VALUES lists aren't also extended,
+    // every write silently drops the new fields even though the mapper and
+    // schema both look correct in isolation.
+    const { addProject, mutateProject, getProject } = await import("../state/project-store.js");
+    const project = makeProject("pr-status-proj");
+    project.worktrees = [
+      {
+        id: "pr-wt",
+        branch: "b",
+        baseBranch: "main",
+        baseSha: "a".repeat(40),
+        createdAt: new Date().toISOString(),
+        sortOrder: 0,
+        sessions: [
+          {
+            id: "pr-sess",
+            type: "agent",
+            modeId: "m",
+            tmuxName: "pr-pane",
+            useTmux: true,
+            isMain: true,
+            sortOrder: 0,
+            lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+          },
+        ],
+      },
+    ];
+    await addProject(project);
+
+    await mutateProject("pr-status-proj", (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) => ({
+        ...w,
+        sessions: w.sessions.map((s) => ({
+          ...s,
+          pr: {
+            state: "open" as const,
+            number: 42,
+            url: "https://github.com/acme/widgets/pull/42",
+            checkedAt: "2026-01-01T00:00:00.000Z",
+          },
+        })),
+      })),
+    }));
+
+    const pr = getProject("pr-status-proj")!.worktrees[0]!.sessions[0]!.pr;
+    expect(pr).toEqual({
+      state: "open",
+      number: 42,
+      url: "https://github.com/acme/widgets/pull/42",
+      checkedAt: "2026-01-01T00:00:00.000Z",
+    });
+  });
+
+  it("pr-status-axis 5.T4 — prBranch survives a write->read round-trip through project-store (same INSERT-column trap as 2.T5)", async () => {
+    const { addProject, mutateProject, updateSessionPr, getProject } = await import("../state/project-store.js");
+    const project = makeProject("pr-branch-proj");
+    project.worktrees = [
+      {
+        id: "pr-branch-wt",
+        branch: "feature-x",
+        baseBranch: "main",
+        baseSha: "a".repeat(40),
+        createdAt: new Date().toISOString(),
+        sortOrder: 0,
+        sessions: [
+          {
+            id: "pr-branch-sess",
+            type: "agent",
+            modeId: "m",
+            tmuxName: "pr-branch-pane",
+            useTmux: true,
+            isMain: true,
+            sortOrder: 0,
+            lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+          },
+        ],
+      },
+    ];
+    await addProject(project);
+
+    // Via writeProjectFull's explicit INSERT column list.
+    await mutateProject("pr-branch-proj", (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) => ({
+        ...w,
+        sessions: w.sessions.map((s) => ({
+          ...s,
+          pr: {
+            state: "open" as const,
+            number: 9,
+            url: "https://github.com/acme/widgets/pull/9",
+            checkedAt: "2026-01-01T00:00:00.000Z",
+            prBranch: "feature-x",
+          },
+        })),
+      })),
+    }));
+    expect(getProject("pr-branch-proj")!.worktrees[0]!.sessions[0]!.pr?.prBranch).toBe("feature-x");
+
+    // Via the updateSessionPr fast path (B2).
+    const ok = await updateSessionPr("pr-branch-proj", "pr-branch-sess", {
+      state: "merged",
+      number: 9,
+      url: "https://github.com/acme/widgets/pull/9",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      prBranch: "feature-y",
+    });
+    expect(ok).toBe(true);
+    expect(getProject("pr-branch-proj")!.worktrees[0]!.sessions[0]!.pr).toEqual({
+      state: "merged",
+      number: 9,
+      url: "https://github.com/acme/widgets/pull/9",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      prBranch: "feature-y",
+    });
+  });
+
   it("2.T3 POST /worktrees -> GET /worktrees round-trips correctly through the SQL-backed store", async () => {
     const { buildServer } = await import("../server.js");
     const repoDir = join(tempDir, "repo");

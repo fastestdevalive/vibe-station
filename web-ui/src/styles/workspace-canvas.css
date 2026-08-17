@@ -396,29 +396,42 @@
   border-width: 0;
 }
 
-/* Colored rectangle around the whole tile, for the only TWO session states
-   that warrant one: `waiting_for_human` (red — needs you now) and
-   `needs_review` (green — a PR is ready, actionable but not urgent). Every
-   other status (`working`, `idle`, `done`, `exited`, `spawning`, none) is
-   deliberately left with the plain `--border-default` border from the base
-   rule above — a border on every state made the colored ones meaningless.
+/* Colored rectangle around the whole tile (D17, 2026-08-17 — supersedes the
+   narrower comment this replaces, which limited COLOR to waiting_for_human
+   only; re-broadened by user request to also cover `working`). Four states
+   now carry a border color: `working` (yellow — active), `pr-open` (blue),
+   `pr-merged` (green), `waiting_for_human` (red — needs you now). `idle`,
+   `done`, `exited`, `spawning`, none stay on the plain `--border-default`
+   border from the base rule above (D19 — `done`/`exited` are terminal and
+   are never re-colored by a PR). PR outcome is a separate, orthogonal axis
+   layered on top via `resolveStatusClass` — see the `--pr-*` rules below.
    StatusDot's `.status-dot--*` rules (workspace.css) still carry the full
    status range; this surface intentionally no longer mirrors them.
    Panel/tools tiles carry no `status` at all (WorkspaceCanvas only computes
    one for agent/terminal tiles), so they land on the same neutral default. */
-.workspace-canvas__tile--waiting_for_human {
-  border-color: #ef4444;
+.workspace-canvas__tile--working {
+  border-color: var(--status-working);
 }
 
-.workspace-canvas__tile--needs_review {
-  border-color: var(--success);
+.workspace-canvas__tile--waiting_for_human {
+  border-color: var(--status-waiting);
+}
+
+/* PR axis (orthogonal to lifecycle) — open renders blue (D17), merged
+   renders green, on the same colored-rectangle surface (R6). */
+.workspace-canvas__tile--pr-open {
+  border-color: var(--pr-open);
+}
+
+.workspace-canvas__tile--pr-merged {
+  border-color: var(--pr-merged);
 }
 
 /* Non-color cues, kept independent of the border-color scope-down above:
    an exited session's tile still dims (it's gone, not just "no border"),
    and a spawning one still gets a dashed edge (not started yet) — the user
-   asked to limit COLOR to waiting_for_human/needs_review, not to drop every
-   other visual distinction these two states had. */
+   asked to limit COLOR to waiting_for_human, not to drop every other
+   visual distinction these states had. */
 .workspace-canvas__tile--exited {
   opacity: 0.9;
 }

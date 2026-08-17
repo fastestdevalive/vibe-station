@@ -27,6 +27,7 @@ import {
 import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { resolveStatusClass } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
@@ -814,6 +815,12 @@ export function WorkspaceCanvas({
       tile.kind !== "tools" && session && showAgentStatusBorders
         ? sessionStatus(session.state)
         : null;
+    // D20 — the PR color only applies while the session's PR was last
+    // checked against the tile's CURRENT branch; a branch switch shouldn't
+    // show a stale PR color before the next 10s poll tick.
+    const tilePr =
+      session?.pr && tileWorktree && session.pr.prBranch === tileWorktree.branch ? session.pr : null;
+    const statusClass = status ? resolveStatusClass(status, tilePr) : null;
     const paneKey = paneKeyForTile(tile, worktreeId);
     const outletVisible =
       tile.kind === "tools" ? toolPanelVisible : tile.kind === "terminal" ? terminalDockVisible : true;
@@ -844,7 +851,7 @@ export function WorkspaceCanvas({
         }}
         className={`workspace-canvas__tile${
           draggingTileId === tile.id ? " workspace-canvas__tile--dragging" : ""
-        }${status ? ` workspace-canvas__tile--${status}` : ""}${
+        }${statusClass ? ` workspace-canvas__tile--${statusClass}` : ""}${
           isFullscreen ? " workspace-canvas__tile--fullscreen" : ""
         }`}
         style={tileStyle}
@@ -864,7 +871,7 @@ export function WorkspaceCanvas({
               : (e) => startTileDrag(e, tile.id)
           }
         >
-          {status ? <StatusDot status={status} /> : null}
+          {status ? <StatusDot status={status} pr={tilePr} /> : null}
           <span className="workspace-canvas__tile-label" title={label}>{label}</span>
           {tile.kind === "agent" && session ? (
             <button

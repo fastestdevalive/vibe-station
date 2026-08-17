@@ -862,18 +862,18 @@ describe("Worktree routes", () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it("Requirement 10 — GET /worktrees/:id/pr returns { pr: null } when the project repo has no origin remote", async () => {
+    it("Requirement 10 — GET /worktrees/:id/pr returns {kind:\"not_github\"} when the project repo has no origin remote", async () => {
       const wt = await createWorktree("vcs", "no-remote");
       const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/pr` });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ pr: null });
+      expect(res.json()).toEqual({ kind: "not_github" });
     });
 
     it("GET /worktrees/:id/pr wires owner/repo/branch through to fetchPrForBranch correctly and returns its result verbatim", async () => {
-      // Real git remote (getRemoteUrl + parseGithubRepo run for real); only
-      // the actual network call (fetchPrForBranch) is stubbed — this proves
-      // the route's argument pass-through, not just the trivial no-remote
-      // short-circuit that the test above covers.
+      // Real git remote (getRemoteUrl + resolveGithubRemote run for real);
+      // only the actual network call (fetchPrForBranch) is stubbed — this
+      // proves the route's argument pass-through, not just the trivial
+      // no-remote short-circuit that the test above covers.
       execSync(`git -C "${repoDir}" remote add origin git@github.com:acme/widgets.git`, {
         stdio: "ignore",
       });
@@ -887,18 +887,22 @@ describe("Worktree routes", () => {
 
       const github = await import("../services/github.js");
       const spy = vi.spyOn(github, "fetchPrForBranch").mockResolvedValue({
-        number: 55,
-        url: "https://github.com/acme/widgets/pull/55",
-        title: "Wired-through PR",
-        state: "open",
-        merged: false,
-        draft: false,
-        author: "someone",
+        kind: "pr",
+        pr: {
+          number: 55,
+          url: "https://github.com/acme/widgets/pull/55",
+          title: "Wired-through PR",
+          state: "open",
+          merged: false,
+          draft: false,
+          author: "someone",
+        },
       });
 
       const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/pr` });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
+        kind: "pr",
         pr: {
           number: 55,
           url: "https://github.com/acme/widgets/pull/55",
@@ -910,6 +914,28 @@ describe("Worktree routes", () => {
         },
       });
       expect(spy).toHaveBeenCalledWith("acme", "widgets", "wired-branch-name");
+      spy.mockRestore();
+    });
+
+    it("GET /worktrees/:id/pr returns 503 {kind:\"no_credentials\"} without treating it as no PR", async () => {
+      execSync(`git -C "${repoDir}" remote add origin git@github.com:acme/nocred.git`, {
+        stdio: "ignore",
+      });
+      const createRes = await app.inject({
+        method: "POST",
+        url: "/worktrees",
+        payload: { projectId, branch: "nocred-branch", modeId: "bug-fix" },
+      });
+      const wt = createRes.json<{ id: string }>();
+
+      const github = await import("../services/github.js");
+      const spy = vi
+        .spyOn(github, "fetchPrForBranch")
+        .mockResolvedValue({ kind: "no_credentials" });
+
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/pr` });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ kind: "no_credentials" });
       spy.mockRestore();
     });
 

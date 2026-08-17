@@ -10,7 +10,6 @@ export type LifecycleState =
   | "working"
   | "idle"
   | "waiting_for_human"
-  | "needs_review"
   | "done"
   | "exited";
 
@@ -18,6 +17,30 @@ export interface SessionLifecycle {
   state: LifecycleState;
   reason?: string;
   lastTransitionAt: string; // ISO8601
+}
+
+/**
+ * VCS outcome axis for a session's branch — orthogonal to `LifecycleState`
+ * (agent-activity axis). Written exclusively by `prPoller.ts` (see its module
+ * doc); nothing else ever mutates `SessionRecord.pr`.
+ */
+export interface PrStatus {
+  state: "none" | "draft" | "open" | "merged" | "closed";
+  /** Present iff a PR exists (i.e. `state !== "none"`). */
+  number?: number;
+  /** Present iff a PR exists (i.e. `state !== "none"`). */
+  url?: string;
+  /** ISO8601 — when this status was last (successfully or not) checked. */
+  checkedAt: string;
+  /** Set on `no_credentials`/`error` results; `state` is held, not guessed (R4). */
+  error?: string;
+  /**
+   * The branch `prPoller.ts` queried GitHub for when it produced this status
+   * (D20). The UI only renders the PR colour when this matches the
+   * worktree's CURRENT branch (`worktreePrStatus`) — otherwise a branch
+   * switch would show a stale PR colour until the next 10s poll tick.
+   */
+  prBranch?: string;
 }
 
 export type SessionType = "agent" | "terminal";
@@ -264,6 +287,12 @@ export interface SessionRecord {
    * simply finds no match, S5).
    */
   spawnedFrom?: string | null;
+  /**
+   * VCS status for this session's branch, written only by `prPoller.ts`.
+   * Absent ≡ never checked (e.g. session just created, or its worktree has
+   * no GitHub remote).
+   */
+  pr?: PrStatus;
 }
 
 export interface WorktreeRecord {
@@ -290,16 +319,6 @@ export interface WorktreeRecord {
    * (newest pinned first), so we don't need a separate sort field.
    */
   pinnedAt?: string; // ISO8601
-  /**
-   * When set, this worktree's PR was seen merged by `prPoller.ts` while its
-   * main session was `needs_review` — kept around (distinct from a PR that
-   * was merely closed without merging) so the dashboard can keep crediting
-   * "PR created" instead of silently reading as idle/working again. Cleared
-   * the moment `prPoller.ts` finds a fresh open, non-draft PR on the same
-   * branch (a new review cycle has started). Absent / undefined ≡ no
-   * remembered merge.
-   */
-  prMergedAt?: string; // ISO8601
   /** Fractional display-order rank among a project's worktrees (F9 — reordering itself is Part 03). */
   sortOrder: number;
   /**

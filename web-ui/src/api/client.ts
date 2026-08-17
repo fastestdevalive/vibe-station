@@ -7,6 +7,7 @@ import type {
   CliId,
   CommitLogEntry,
   PrInfo,
+  PrLookupResult,
   CreateDirectSessionBody,
   CreateModeBody,
   CreateProjectBody,
@@ -603,12 +604,16 @@ export function createClientApi() {
       return commits;
     },
 
-    /** Best-effort GitHub PR lookup for the worktree's branch; null if there is none. */
+    /** Best-effort GitHub PR lookup for the worktree's branch; null if there
+     *  is none, the remote isn't GitHub, or the lookup couldn't be checked
+     *  (transient failure, no credentials) — switches on `kind` rather than
+     *  blindly casting the response, so a shape change here fails loudly
+     *  instead of silently blanking the PR banner. */
     async getPr(worktreeId: string): Promise<PrInfo | null> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/pr`);
-      const { pr } = await parseJson<{ pr: PrInfo | null }>(res);
-      return pr;
+      const result = await parseJson<PrLookupResult>(res);
+      return result.kind === "pr" ? result.pr : null;
     },
 
     async listModes(): Promise<Mode[]> {

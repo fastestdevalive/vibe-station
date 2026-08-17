@@ -170,6 +170,7 @@ export function useServerSync(api: ApiInstance): void {
         if (ev.name !== undefined) patch.name = ev.name ?? null;
         if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
         if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
+        if (ev.pr !== undefined) patch.pr = ev.pr ?? undefined;
         applySessionUpdated(ev.sessionId, patch);
       }
     });

@@ -36,15 +36,6 @@ export interface Worktree {
    * default sort order (newest first).
    */
   pinnedAt: string | null;
-  /**
-   * ISO8601 timestamp set by the daemon's PR poller when this worktree's PR
-   * was seen merged while its main session was `needs_review` — lets the
-   * dashboard keep crediting "PR created" instead of reading as idle/working
-   * again once the poller falls the session back out of `needs_review`.
-   * Cleared once a fresh open, non-draft PR appears on the same branch.
-   * Optional for legacy/test fixtures predating this field (same as `sortOrder` below).
-   */
-  prMergedAt?: string | null;
   /** Fractional display-order rank among a project's worktrees (F9). Optional for legacy/test fixtures predating this field. */
   sortOrder?: number;
   /**
@@ -65,18 +56,20 @@ export type FileScope = "worktree" | "project";
 export type SessionType = "agent" | "terminal";
 
 /**
- * `waiting_for_human` (idle-after-having-worked, R3) and `needs_review` (open
- * PR poller) are both wired up daemon-side as of
- * .vibekit/feature-plans/wip/agent-interaction-workspaces/03-interaction-states —
- * real `session:state` events carry these values, not just the dev-only
+ * `waiting_for_human` (idle-after-having-worked, R3) is wired up daemon-side
+ * as of .vibekit/feature-plans/wip/agent-interaction-workspaces/03-interaction-states —
+ * real `session:state` events carry this value, not just the dev-only
  * state-simulation panel (components/dev/DevStatePanel.tsx).
+ *
+ * PR outcome is a separate, orthogonal axis (`Session.pr`, see `PrStatus`
+ * below) — it is no longer folded into this lifecycle union. See
+ * .vibekit/feature-plans/wip/pr-status-axis for the split.
  */
 export type SessionState =
   | "not_started"
   | "working"
   | "idle"
   | "waiting_for_human"
-  | "needs_review"
   | "done"
   | "exited";
 
@@ -121,6 +114,33 @@ export interface Session {
   /** SessionId this session was spawned from, or null (agent-interaction-
    *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
   spawnedFrom?: string | null;
+  /** VCS outcome axis — orthogonal to `state`/`lifecycleState` (mirrors
+   *  daemon `SessionRecord.pr`). Absent ≡ never checked. */
+  pr?: PrStatus;
+}
+
+/**
+ * VCS outcome axis for a session's branch (mirror of daemon `PrStatus`,
+ * `daemon/src/types.ts`) — orthogonal to `SessionState` (agent-activity
+ * axis). Written exclusively by the daemon's PR poller.
+ */
+export interface PrStatus {
+  state: "none" | "draft" | "open" | "merged" | "closed";
+  /** Present iff a PR exists (i.e. `state !== "none"`). */
+  number?: number;
+  /** Present iff a PR exists (i.e. `state !== "none"`). */
+  url?: string;
+  /** ISO8601 — when this status was last (successfully or not) checked. */
+  checkedAt: string;
+  /** Set on `no_credentials`/`error` results; `state` is held, not guessed (R4). */
+  error?: string;
+  /**
+   * The branch the daemon's `prPoller` queried GitHub for when it produced
+   * this status (D20). `worktreePrStatus` only returns this status when it
+   * matches the worktree's CURRENT branch — otherwise a branch switch would
+   * show a stale PR colour until the next poll tick.
+   */
+  prBranch?: string;
 }
 
 /** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
@@ -335,6 +355,8 @@ export type WSEvent =
       archivedAt?: string | null;
       /** After a reorder (PATCH .../reorder) — the session's new fractional display-order rank. */
       sortOrder?: number;
+      /** After a `prPoller.ts` tick updates this session's VCS status (pr-status-axis). */
+      pr?: PrStatus | null;
     }
   | {
       type: "session:error";
@@ -491,6 +513,21 @@ export interface PrInfo {
   draft: boolean;
   author: string | null;
 }
+
+/** Mirrors daemon `PrLookupResult` (`daemon/src/services/github.ts`) — the
+ *  body shape of `GET /worktrees/:id/pr`. A tagged union so "couldn't check"
+ *  is never confused with "definitely no PR" (the bug this replaced). */
+export type PrLookupResult =
+  | { kind: "pr"; pr: PrInfo }
+  | { kind: "no_pr" }
+  | { kind: "not_github" }
+  | { kind: "no_credentials" }
+  | {
+      kind: "error";
+      reason: "network" | "rate_limited" | "auth" | "api";
+      message: string;
+      retryAfterMs?: number;
+    };
 
 export interface ProjectBranchesResponse {
   branches: string[];

@@ -25,6 +25,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -140,7 +141,7 @@ function disambiguatedAbbrev(
 /** Map SessionState to WorktreeRolledUpStatus for StatusDot. */
 function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   if (state === "not_started") return "spawning";
-  return state; // working, idle, waiting_for_human, needs_review, done, exited all map directly
+  return state; // working, idle, waiting_for_human, done, exited all map directly
 }
 
 function worktreeIsInactive(sessions: Session[], live: Record<string, SessionState | undefined>): boolean {
@@ -935,8 +936,11 @@ export function LeftSidebar({
                               }}
                               tabIndex={-1}
                             />
-                            <span className="wt-leading-slot pinned-row__leading" aria-hidden>
-                              <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
+                            <span className="wt-leading-slot pinned-row__leading">
+                              <StatusDot
+                                status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
+                                pr={sess.pr ?? null}
+                              />
                             </span>
                             <div className="pinned-row__text">
                               {inlineRename?.kind === "session" &&
@@ -1061,9 +1065,10 @@ export function LeftSidebar({
                               }}
                               tabIndex={-1}
                             />
-                            <span className="wt-leading-slot pinned-row__leading" aria-hidden>
+                            <span className="wt-leading-slot pinned-row__leading">
                               <StatusDot
                                 status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
+                                pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
                               />
                             </span>
                             <div className="pinned-row__text">
@@ -1464,8 +1469,11 @@ export function LeftSidebar({
                                         }}
                                         tabIndex={-1}
                                       />
-                                      <span className="direct-session__icon" aria-hidden>
-                                        <StatusDot status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)} />
+                                      <span className="direct-session__icon">
+                                        <StatusDot
+                                          status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
+                                          pr={sess.pr ?? null}
+                                        />
                                       </span>
                                       {!collapsed &&
                                       inlineRename?.kind === "session" &&
@@ -1613,9 +1621,10 @@ export function LeftSidebar({
                                     />
                                     <div className="wt-row__expand">
                                       {!collapsed ? (
-                                        <span className="wt-leading-slot" aria-hidden>
+                                        <span className="wt-leading-slot">
                                           <StatusDot
                                             status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
+                                            pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
                                           />
                                         </span>
                                       ) : null}

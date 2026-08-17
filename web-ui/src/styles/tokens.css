@@ -102,6 +102,16 @@
   --warning: #ca8a04;
   --warning-muted: #713f12;
 
+  /* D17 (2026-08-17, superseding D14) — four-colour scheme: `working` gets
+     the yellow that `pr-open` used to have; `pr-open` moves to blue (now
+     free since `working` no longer uses the blue-purple accent). */
+  --status-working: #eab308;
+  --status-waiting: #ef4444;
+  --pr-open: #3b82f6;
+  --pr-merged: #22c55e;
+  --pr-draft: #8a8a8a;
+  --pr-closed: #6b6b6b;
+
   color-scheme: dark;
 }
 
@@ -134,6 +144,13 @@
   --success-muted: #bbf7d0;
   --warning: #ca8a04;
   --warning-muted: #fef08a;
+
+  --status-working: #a16207;
+  --status-waiting: #dc2626;
+  --pr-open: #1d4ed8;
+  --pr-merged: #15803d;
+  --pr-draft: #737373;
+  --pr-closed: #737373;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);

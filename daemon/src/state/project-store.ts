@@ -46,7 +46,7 @@
  * INCLUDING `mutateProject`'s `Promise<ProjectRecord>` return (not `void`).
  */
 import type { Database as DB, Statement } from "better-sqlite3";
-import type { ProjectRecord, SessionRecord, WorktreeRecord } from "../types.js";
+import type { ProjectRecord, PrStatus, SessionRecord, WorktreeRecord } from "../types.js";
 import { withProjectLock } from "../services/mutex.js";
 import { getDb } from "./db.js";
 import { migrateManifestsToSqlite } from "../services/dbMigration.js";
@@ -77,6 +77,7 @@ interface Prepared {
   selectWorktreeSessions: Statement;
   selectDirectSessions: Statement;
   updateSessionLifecycle: Statement;
+  updateSessionPr: Statement;
 }
 
 /** Per-handle cache: prepared statements + the assembled project graph. */
@@ -126,6 +127,9 @@ function store(): StoreCache {
       ),
       updateSessionLifecycle: db.prepare(
         "UPDATE sessions SET state = ?, reason = ?, lastTransitionAt = ? WHERE id = ?",
+      ),
+      updateSessionPr: db.prepare(
+        "UPDATE sessions SET prState = ?, prNumber = ?, prUrl = ?, prCheckedAt = ?, prBranch = ? WHERE id = ?",
       ),
     },
   };
@@ -250,12 +254,12 @@ function writeProjectFull(record: ProjectRecord): void {
     db.prepare("DELETE FROM worktrees WHERE projectId = ?").run(p.id);
 
     const insertWorktree = db.prepare(
-      `INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, prMergedAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
-       VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @prMergedAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)`,
+      `INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
+       VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)`,
     );
     const insertSession = db.prepare(
-      `INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom)
-       VALUES (@id, @worktreeId, @projectId, @isMain, @sortOrder, @type, @modeId, @name, @nameSource, @tmuxName, @useTmux, @channel, @state, @reason, @lastTransitionAt, @transcriptKind, @transcriptPath, @agentChatId, @modelOverride, @pinnedAt, @initialPrompt, @archivedAt, @handoffSummary, @spawnedFrom)`,
+      `INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, prState, prNumber, prUrl, prCheckedAt, prBranch)
+       VALUES (@id, @worktreeId, @projectId, @isMain, @sortOrder, @type, @modeId, @name, @nameSource, @tmuxName, @useTmux, @channel, @state, @reason, @lastTransitionAt, @transcriptKind, @transcriptPath, @agentChatId, @modelOverride, @pinnedAt, @initialPrompt, @archivedAt, @handoffSummary, @spawnedFrom, @prState, @prNumber, @prUrl, @prCheckedAt, @prBranch)`,
     );
 
     for (const w of p.worktrees) {
@@ -345,6 +349,42 @@ export async function updateSessionLifecycle(
     // Re-assemble just this project from the DB rather than patching the
     // frozen graph by hand — one project's worth of queries, only on an actual
     // transition, and it cannot drift from what was just written.
+    refreshProject(projectId);
+    return true;
+  });
+}
+
+/**
+ * Fast path for a PR-status write (B2 in the pr-status-axis review).
+ *
+ * Mirrors `updateSessionLifecycle`: without this, `prPoller`'s per-tick
+ * writes went through `mutateProject` -> `writeProjectFull`, which DELETEs
+ * and re-INSERTs every worktree and session row of the WHOLE PROJECT just to
+ * set one session's `pr`. On a real install (147 worktrees / 269 sessions in
+ * one project) that's ~43k SQL statements + 147 fsyncs every 10s poll tick,
+ * forever — even when nothing changed. This does the single UPDATE the
+ * change actually needs and patches the cached record in place.
+ *
+ * `pr.error` (transient, WS-only) is intentionally NOT persisted here —
+ * there's no `prError` column, matching `sessionToRow`'s existing contract.
+ *
+ * Returns false if the session isn't in the DB (caller treats it as a no-op).
+ */
+export async function updateSessionPr(projectId: string, sessionId: string, pr: PrStatus): Promise<boolean> {
+  return withProjectLock(projectId, async () => {
+    const s = store();
+    const res = s.stmts.updateSessionPr.run(
+      pr.state,
+      pr.number ?? null,
+      pr.url ?? null,
+      pr.checkedAt,
+      pr.prBranch ?? null,
+      sessionId,
+    );
+    if (res.changes === 0) return false;
+    // Re-assemble just this project from the DB rather than patching the
+    // frozen graph by hand — one project's worth of queries, only on an
+    // actual write, and it cannot drift from what was just written.
     refreshProject(projectId);
     return true;
   });
