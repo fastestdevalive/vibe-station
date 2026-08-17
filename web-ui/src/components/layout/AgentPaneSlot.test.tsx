@@ -182,6 +182,46 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(root?.className).not.toContain("agent-pane-slot--exited");
   });
 
+  // --- PR colour is resolved by the CALLER (Workspace.tsx), branch-guarded here ---
+  // BLOCKING-2 / cross-worktree pane test gap: Workspace.tsx's `renderWorktreePane`
+  // resolves `branch`/`pr` from the pane SESSION's own `worktreeId`
+  // (`worktrees.find((w) => w.id === paneSession.worktreeId)`), not the
+  // route's `activeWorktreeId` — because a pane can belong to a worktree
+  // other than whatever is currently active (a saved workspace doc's
+  // cross-worktree tile set). A regression back to `activeWorktreeId` would
+  // be invisible unless something asserts the pane colours correctly off of
+  // `branch`/`pr` props alone, independent of any notion of "active" —
+  // AgentPaneSlot itself has no such notion, so this is exactly that check.
+  it("colours the pane agent-pane-slot--pr-open when `pr`/`branch` are supplied, regardless of any 'active worktree' concept", () => {
+    const s: Session = { ...session("tty1", "tmux"), state: "idle" };
+    const { container } = render(
+      <AgentPaneSlot
+        api={api}
+        sessionId="tty1"
+        session={s}
+        branch="feature-x"
+        pr={{ state: "open", number: 9, checkedAt: "", prBranch: "feature-x" }}
+      />,
+    );
+    const root = container.querySelector(".agent-pane-slot");
+    expect(root?.className).toContain("agent-pane-slot--pr-open");
+  });
+
+  it("suppresses the PR colour when `pr.prBranch` does not match the supplied `branch` (D20 branch guard)", () => {
+    const s: Session = { ...session("tty1", "tmux"), state: "idle" };
+    const { container } = render(
+      <AgentPaneSlot
+        api={api}
+        sessionId="tty1"
+        session={s}
+        branch="new-branch"
+        pr={{ state: "open", number: 9, checkedAt: "", prBranch: "old-branch" }}
+      />,
+    );
+    const root = container.querySelector(".agent-pane-slot");
+    expect(root?.className).not.toContain("agent-pane-slot--pr-open");
+  });
+
   it("hides the status border entirely when the showAgentStatusBorders toggle is off", async () => {
     const { useWorkspaceStore } = await import("@/hooks/useStore");
     const prev = useWorkspaceStore.getState().showAgentStatusBorders;

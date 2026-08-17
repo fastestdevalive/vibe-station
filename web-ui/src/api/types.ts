@@ -115,8 +115,10 @@ export interface Session {
    *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
   spawnedFrom?: string | null;
   /** VCS outcome axis — orthogonal to `state`/`lifecycleState` (mirrors
-   *  daemon `SessionRecord.pr`). Absent ≡ never checked. */
-  pr?: PrStatus;
+   *  daemon `SessionRecord.pr`). Absent ≡ never checked (e.g. legacy/test
+   *  fixtures); REST (`sessions.ts`'s `serializeSession`) always sends an
+   *  explicit `null` when there's no PR yet, matching `spawnedFrom`. */
+  pr?: PrStatus | null;
 }
 
 /**

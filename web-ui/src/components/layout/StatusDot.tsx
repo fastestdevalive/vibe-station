@@ -36,7 +36,18 @@ interface StatusDotProps {
 export function StatusDot({ status, pr = null }: StatusDotProps) {
   const resolved = resolveStatusClass(status, pr);
   const isColoredDot = resolved === "working" || resolved === "pr-open" || resolved === "pr-merged";
-  const glyph = isColoredDot ? "●" : resolved === "waiting_for_human" ? "!" : GLYPH[status];
+  // Terminal lifecycle (done/exited) always keeps its own glyph, regardless
+  // of what colour the PR axis resolves to — D21 only ever meant to recolour
+  // the dot, never to destroy the ✓/× "this is finished" cue (see
+  // docs/STATUS-INDICATORS.md's non-colour-cues note).
+  const isTerminal = status === "done" || status === "exited";
+  const glyph = isTerminal
+    ? GLYPH[status]
+    : isColoredDot
+      ? "●"
+      : resolved === "waiting_for_human"
+        ? "!"
+        : GLYPH[status];
   const label = resolved ?? status;
   return (
     <span

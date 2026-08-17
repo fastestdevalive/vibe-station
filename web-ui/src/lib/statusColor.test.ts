@@ -78,6 +78,12 @@ describe("resolveStatusClass (D17/D18)", () => {
     expect(resolveStatusClass("none", null)).toBeNull();
     expect(resolveStatusClass("none", pr("draft"))).toBeNull();
   });
+
+  it("B2 — spawning wins over any PR, staying neutral + dashed (a not-yet-started session isn't 'landed')", () => {
+    expect(resolveStatusClass("spawning", pr("merged"))).toBe("spawning");
+    expect(resolveStatusClass("spawning", pr("open"))).toBe("spawning");
+    expect(resolveStatusClass("spawning", null)).toBe("spawning");
+  });
 });
 
 describe("worktreePrStatus (D20 — branch-keyed)", () => {

@@ -170,7 +170,7 @@ export interface WorkspaceState {
   hideInactiveWorktrees: boolean;
   /** Show the colored border around agent panes/workspace tiles keyed to
    *  interaction state (waiting_for_human red) plus the orthogonal PR axis
-   *  (open yellow, merged green — see resolveStatusClass in statusColor.ts).
+   *  (open blue, merged green — see resolveStatusClass in statusColor.ts).
    *  Client-side view preference (persisted); does not affect the sidebar's
    *  StatusDot, which always shows. Defaults on. */
   showAgentStatusBorders: boolean;

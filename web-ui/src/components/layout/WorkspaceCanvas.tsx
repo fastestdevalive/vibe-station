@@ -27,7 +27,7 @@ import {
 import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
-import { resolveStatusClass } from "@/lib/statusColor";
+import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
@@ -378,6 +378,20 @@ export function WorkspaceCanvas({
   for (const s of terminalSessions) sessionById.set(s.id, s);
   const worktreeById = new Map(worktrees.map((w) => [w.id, w]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
+  // PR is a property of the branch, not the session (BLOCKING-2 fix): the
+  // daemon writes `session.pr` only to a worktree's `isMain` session
+  // (`prPoller.ts`), so resolve it once per worktree via the shared
+  // `worktreePrStatus()` helper (same one the sidebar rollup uses) and apply
+  // it to whichever session's tile is showing, not just the `isMain` one.
+  const worktreePrById = new Map(
+    worktrees.map((w) => [
+      w.id,
+      worktreePrStatus(
+        allSessions.filter((s) => s.worktreeId === w.id),
+        w.branch,
+      ),
+    ]),
+  );
 
   const placedSessionIds = new Set(
     cv.tiles.filter((t) => t.sessionId).map((t) => t.sessionId as string),
@@ -796,7 +810,18 @@ export function WorkspaceCanvas({
     //     the cross-context picker never offers one, kept for correctness):
     //     "Project > Agent"
     //   tools tile: "Project > Tools" (no worktree segment, per design)
-    const tileWorktree = tile.worktreeId ? worktreeById.get(tile.worktreeId) : worktreeById.get(worktreeId);
+    // Prefer the SESSION's own worktree (stricter — matches Workspace.tsx's
+    // `renderWorktreePane`, which resolves branch from `paneSession.worktreeId`
+    // rather than the route's active worktree) so a cross-worktree tile in a
+    // detached workspace doc never gets attributed to whichever worktree
+    // happens to be active. `tile.worktreeId` covers session-less tiles
+    // (tools); the active `worktreeId` is only the last-resort fallback for a
+    // tile with neither.
+    const tileWorktree = session?.worktreeId
+      ? worktreeById.get(session.worktreeId)
+      : tile.worktreeId
+        ? worktreeById.get(tile.worktreeId)
+        : worktreeById.get(worktreeId);
     const tileProject = session
       ? projectById.get(session.projectId)
       : tileWorktree
@@ -815,12 +840,19 @@ export function WorkspaceCanvas({
       tile.kind !== "tools" && session && showAgentStatusBorders
         ? sessionStatus(session.state)
         : null;
-    // D20 — the PR color only applies while the session's PR was last
-    // checked against the tile's CURRENT branch; a branch switch shouldn't
-    // show a stale PR color before the next 10s poll tick.
-    const tilePr =
-      session?.pr && tileWorktree && session.pr.prBranch === tileWorktree.branch ? session.pr : null;
+    // BLOCKING-2 — PR is resolved per WORKTREE via `worktreePrById` (built
+    // from `worktreePrStatus()` above), not read off this tile's own
+    // `session.pr` — the daemon only ever writes `pr` to a worktree's
+    // `isMain` session, so a sibling session's tile must still pick up the
+    // branch's PR. `worktreePrStatus()` already branch-guards internally
+    // (D20): a branch switch shows nothing before the next 10s poll tick.
+    const tilePr = tileWorktree ? (worktreePrById.get(tileWorktree.id) ?? null) : null;
     const statusClass = status ? resolveStatusClass(status, tilePr) : null;
+    // `exited`'s dimming is a non-colour cue (B1/docs/STATUS-INDICATORS.md)
+    // that must survive being recoloured by a landed PR — `resolveStatusClass`
+    // returns "pr-open"/"pr-merged" in that case, not "exited", so the
+    // lifecycle class has to be added on top rather than read off `statusClass`.
+    const lifecycleClass = status === "exited" ? "exited" : null;
     const paneKey = paneKeyForTile(tile, worktreeId);
     const outletVisible =
       tile.kind === "tools" ? toolPanelVisible : tile.kind === "terminal" ? terminalDockVisible : true;
@@ -852,8 +884,8 @@ export function WorkspaceCanvas({
         className={`workspace-canvas__tile${
           draggingTileId === tile.id ? " workspace-canvas__tile--dragging" : ""
         }${statusClass ? ` workspace-canvas__tile--${statusClass}` : ""}${
-          isFullscreen ? " workspace-canvas__tile--fullscreen" : ""
-        }`}
+          lifecycleClass && lifecycleClass !== statusClass ? ` workspace-canvas__tile--${lifecycleClass}` : ""
+        }${isFullscreen ? " workspace-canvas__tile--fullscreen" : ""}`}
         style={tileStyle}
       >
         <div

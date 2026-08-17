@@ -279,6 +279,91 @@ describe("WorkspaceCanvas - saveAsWorkspace detachment", () => {
   });
 });
 
+describe("WorkspaceCanvas - tile status/PR class emission (D21 dedup)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({ layoutByWorktree: {}, workspaceDocs: {} });
+  });
+
+  const worktree = { id: W1, projectId: "proj-a", branch: "feature-x", name: "feature-x" } as never;
+
+  function renderOneAgentTile(session: Record<string, unknown>) {
+    const canvas: CanvasGeometry = {
+      mode: "free",
+      tiles: [{ id: "tile-a", kind: "agent", sessionId: "sess-a" }],
+      tree: null,
+      freeRects: { "tile-a": { x: 0, y: 0, w: 100, h: 100 } },
+    };
+    useWorkspaceStore.setState({
+      layoutByWorktree: { [W1]: { scratchCanvas: canvas } as never },
+      workspaceDocs: {},
+    });
+    return render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <WorkspaceCanvas
+            worktreeId={W1}
+            agentSessions={[session as never]}
+            terminalSessions={[]}
+            hasTools={false}
+            toolPanelVisible
+            terminalDockVisible
+            allSessions={[session as never]}
+            worktrees={[worktree]}
+            projects={[]}
+            canvasToolbarVisible
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("exited + merged PR emits exactly --pr-merged and --exited (D21: colour disagrees with the dimming cue on purpose)", () => {
+    const session = {
+      id: "sess-a",
+      worktreeId: W1,
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: true,
+      state: "exited",
+      lifecycleState: "exited",
+      tmuxName: "sess-a",
+      createdAt: "",
+      pr: { state: "merged", checkedAt: "", prBranch: "feature-x" },
+    };
+    const { container } = renderOneAgentTile(session);
+    const tile = container.querySelector(".workspace-canvas__tile") as HTMLElement;
+    expect(tile.className).toContain("workspace-canvas__tile--pr-merged");
+    expect(tile.className).toContain("workspace-canvas__tile--exited");
+    // Exactly one of each — no accidental duplicate class token.
+    expect(tile.className.match(/workspace-canvas__tile--pr-merged/g)).toHaveLength(1);
+    expect(tile.className.match(/workspace-canvas__tile--exited/g)).toHaveLength(1);
+  });
+
+  it("exited with no PR emits --exited only once (no duplicate from the lifecycleClass dedup)", () => {
+    const session = {
+      id: "sess-a",
+      worktreeId: W1,
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: true,
+      state: "exited",
+      lifecycleState: "exited",
+      tmuxName: "sess-a",
+      createdAt: "",
+    };
+    const { container } = renderOneAgentTile(session);
+    const tile = container.querySelector(".workspace-canvas__tile") as HTMLElement;
+    expect(tile.className).toContain("workspace-canvas__tile--exited");
+    expect(tile.className).not.toContain("pr-merged");
+    expect(tile.className).not.toContain("pr-open");
+    expect(tile.className.match(/workspace-canvas__tile--exited/g)).toHaveLength(1);
+  });
+});
+
 describe("WorkspaceCanvas - fullscreen reconciliation", () => {
   beforeEach(() => {
     localStorage.clear();

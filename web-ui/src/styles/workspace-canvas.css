@@ -398,17 +398,18 @@
 
 /* Colored rectangle around the whole tile (D17, 2026-08-17 — supersedes the
    narrower comment this replaces, which limited COLOR to waiting_for_human
-   only; re-broadened by user request to also cover `working`). Four states
-   now carry a border color: `working` (yellow — active), `pr-open` (blue),
-   `pr-merged` (green), `waiting_for_human` (red — needs you now). `idle`,
-   `done`, `exited`, `spawning`, none stay on the plain `--border-default`
-   border from the base rule above (D19 — `done`/`exited` are terminal and
-   are never re-colored by a PR). PR outcome is a separate, orthogonal axis
-   layered on top via `resolveStatusClass` — see the `--pr-*` rules below.
-   StatusDot's `.status-dot--*` rules (workspace.css) still carry the full
-   status range; this surface intentionally no longer mirrors them.
-   Panel/tools tiles carry no `status` at all (WorkspaceCanvas only computes
-   one for agent/terminal tiles), so they land on the same neutral default. */
+   only; re-broadened by user request to also cover `working`). States that
+   carry a border color: `working` (yellow — active), `pr-open` (blue),
+   `pr-merged` (green), `waiting_for_human` (red — needs you now). `done`/
+   `exited` DO get recoloured by a landed PR too (D21) — only a `done`/
+   `exited` session with NO PR (or `spawning`/`idle`/none) stays on the plain
+   `--border-default` border from the base rule above. PR outcome is a
+   separate, orthogonal axis layered on top via `resolveStatusClass` — see
+   the `--pr-*` rules below. StatusDot's `.status-dot--*` rules
+   (workspace.css) still carry the full status range; this surface
+   intentionally no longer mirrors them. Panel/tools tiles carry no `status`
+   at all (WorkspaceCanvas only computes one for agent/terminal tiles), so
+   they land on the same neutral default. */
 .workspace-canvas__tile--working {
   border-color: var(--status-working);
 }

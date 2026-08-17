@@ -22,6 +22,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
 import { sessionLabel } from "@/lib/sessionLabel";
+import { worktreePrStatus } from "@/lib/statusColor";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
@@ -319,7 +320,34 @@ export function Workspace() {
     (key: PaneKey): ReactNode => {
       if (key.startsWith("agent:")) {
         const id = key.slice("agent:".length);
-        return <AgentPaneSlot api={api} sessionId={id} session={sessions.find((s) => s.id === id)} />;
+        const paneSession = sessions.find((s) => s.id === id);
+        // D20 — resolve the branch from the SESSION's own worktree, not the
+        // route's `activeWorktreeId`: `renderWorktreePane` is also reused for
+        // a detached workspace doc's cross-worktree pane set (see
+        // `detachedWorkspacePaneKeys` below), so a pane's session can belong
+        // to a different worktree than whatever is "active".
+        const paneBranch = paneSession?.worktreeId
+          ? worktrees.find((w) => w.id === paneSession.worktreeId)?.branch ?? null
+          : null;
+        // BLOCKING-2 — resolve the PR from the pane SESSION's own worktree
+        // (its `isMain` session), not `paneSession.pr` directly: the daemon
+        // only ever writes `pr` to a worktree's `isMain` session, so a
+        // sibling agent's pane would otherwise never show the branch's PR.
+        const panePr = paneSession?.worktreeId
+          ? worktreePrStatus(
+              sessions.filter((s) => s.worktreeId === paneSession.worktreeId),
+              paneBranch ?? "",
+            )
+          : null;
+        return (
+          <AgentPaneSlot
+            api={api}
+            sessionId={id}
+            session={paneSession}
+            branch={paneBranch}
+            pr={panePr}
+          />
+        );
       }
       if (key.startsWith("terminal:")) {
         const id = key.slice("terminal:".length);
@@ -444,6 +472,9 @@ export function Workspace() {
       <div className="tabs-strip tabs-strip--tools-only" role="toolbar" aria-label="Terminal controls">
         <PaneTools fsTarget="agent" />
       </div>
+      {/* A direct session has no worktree, so no branch to guard a PR
+          against — `branch` defaults to null, which unconditionally
+          suppresses `session.pr` (a direct session can never show a PR). */}
       <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} />
     </div>
   ) : null;

@@ -7,7 +7,7 @@
  * with a real PATH lookup succeeding (PATH is cleared).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listAccounts, parseHostsYml } from "../services/githubAuth.js";
@@ -192,6 +192,52 @@ describe("listAccounts", () => {
     const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
     expect(byLogin.get("techwithnidhi")).toBe("gho_aaa");
     expect(byLogin.get("keyring-user")).toBe("gho_generic_fallback");
+  });
+
+  it("nit — `gh auth token --user X` (step 4) wins over the generic-token >=2-account fallback for a keyring-backed login", async () => {
+    // Regression for the ordering bug: the >=2-account generic-fill used to
+    // run BEFORE `gh auth token --user X`, so a keyring-backed second login
+    // (no plaintext token in hosts.yml) got stamped with the generic token
+    // and step 4 then saw it as "already resolved" and never ran — exactly
+    // the wrong-token->404 failure the fallback chain exists to avoid. Now
+    // that fill is deferred to run only after step 4.
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "hosts.yml"),
+      `github.com:
+    users:
+        techwithnidhi:
+            oauth_token: gho_aaa
+        keyring-user: {}
+`,
+    );
+    process.env.GITHUB_TOKEN = "gho_generic_should_lose";
+
+    // A fake `gh` on PATH that answers `gh auth token --user keyring-user`
+    // with a real per-user token, and fails `--version`/anything else so the
+    // isGhOnPath()/other-user checks behave predictably.
+    const binDir = await mkdtemp(join(tmpdir(), "vst-fakegh-"));
+    const ghPath = join(binDir, "gh");
+    await writeFile(
+      ghPath,
+      `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "gh version 0.0.0-fake"; exit 0; fi
+if [ "$1" = "auth" ] && [ "$2" = "token" ] && [ "$4" = "keyring-user" ]; then
+  echo "gho_from_gh_cli"
+  exit 0
+fi
+exit 1
+`,
+    );
+    await chmod(ghPath, 0o755);
+    process.env.PATH = binDir;
+
+    const accounts = await listAccounts();
+    const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
+    expect(byLogin.get("techwithnidhi")).toBe("gho_aaa");
+    expect(byLogin.get("keyring-user")).toBe("gho_from_gh_cli");
+
+    await rm(binDir, { recursive: true, force: true });
   });
 
   it("a keyring-backed login with no plaintext token and no gh on PATH is omitted, not thrown", async () => {
