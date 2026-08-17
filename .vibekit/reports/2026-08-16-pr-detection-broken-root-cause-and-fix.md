@@ -63,7 +63,7 @@ RULES — read before writing this report:
 | D4b | **Account→repo discovery by probe, cached** — order candidates by login-substring-of-alias, then login===owner; probe `repository(owner,name){id}` until one succeeds | Two accounts means the right token per repo can't be known statically; ~1 extra point per new owner, once |
 | D5 | **`needs_review` leaves `LifecycleState`; PR status becomes orthogonal `session.pr`** | Kills the 3-writer clobber by construction; closes both latent write-side bugs (unguarded `/done`, PR-blind `exited`) for free |
 | D6 | **Keep two pollers** — local tmux ~free @1s vs network billed | The defect was the shared *write target* (D5), never the two timers |
-| D7 | **Poll interval 60s → 10s**; no on-push trigger needed | 2 req/tick @10s = 720 pts/hr = 14% of 5000 |
+| D7 | **Poll interval 60s → 30s** (was briefly 10s); no on-push trigger needed | 2 req/tick @30s = 240 pts/hr = ~5% of 5000 |
 | D8 | **Typed `PrLookupResult` union** — `pr \| no_pr \| not_github \| no_credentials \| error{network\|rate_limited\|auth\|api}`. On `error`/`no_credentials` the poller **holds** current lifecycle state; only a definitive `no_pr` exits `needs_review` | The single `null` return is why this hid for weeks. Also fixes a latent bug: a transient fetch failure today kicks a session *out* of `needs_review` |
 | D9 | **Read GraphQL `errors[]` per alias; ignore `gh` exit code** | Verified: bad repo → `"bad": null` + `errors[{type:"NOT_FOUND"}]`, siblings still return data; `gh` exits non-zero anyway |
 | D10 | **Startup self-check log** — per project: resolvable? authed? | "Silently dead for 103 worktrees" must be visible day 1 |
@@ -79,7 +79,7 @@ RULES — read before writing this report:
 | **D17** | **Four-colour scheme (2026-08-17, user-specified):** `working` 🟡 yellow · `waiting_for_human` 🔴 red · `pr=open` 🔵 blue · `pr=merged` 🟢 green. Per-theme tokens | Yellow reads as "in progress", blue as "up for review". Blue is free now that `working` isn't the blue-purple accent |
 | **D18** | **Precedence:** `working` → `pr=merged` → `pr=open` → `waiting_for_human` → `idle` → `done`/`exited` | Active work is the freshest signal; a PR beats waiting because the agent idles at its prompt right after opening one, so red would otherwise mask blue permanently |
 | **D19** | **`done`/`exited` are terminal and always bucket to Finished, regardless of PR state** | `done` is a deliberate manual user action meaning finished. Reverses the earlier "done + merged → PR bucket" idea |
-| **D20** | **Blue/green are keyed to the *branch*, not the worktree** — persist `prBranch` and render the PR colour only when it matches the worktree's current branch | Without it, a branch switch shows a stale PR colour until the next 10s tick |
+| **D20** | **Blue/green are keyed to the *branch*, not the worktree** — persist `prBranch` and render the PR colour only when it matches the worktree's current branch | Without it, a branch switch shows a stale PR colour until the next 30s tick |
 | D14b | **Fix the `needs_review` split-brain** — currently violet `#b98cff` in `StatusDot` (`workspace.css:2129`) but green `var(--success)` on borders (`workspace-canvas.css:414`, `chat.css:30`) | Two surfaces disagree today; the PR axis replaces both, so the divergence disappears rather than needing a reconciliation |
 | D15 | **Tokenize all status colors in `tokens.css`; delete hard-coded hexes from `chat.css`, `workspace.css`, `workspace-canvas.css`** | Today the same values are duplicated in 3 files with comments begging them not to drift; per-theme values are impossible without tokens |
 | D16 | **Lifecycle keeps text glyphs; PR axis uses lucide-react** (`GitPullRequestArrow`, `GitMerge`, `GitPullRequestDraft`, `GitPullRequestClosed`) | `lucide-react@^0.468.0` already a dependency; git iconography is shape-distinct at 14px, so states never rely on color alone |
@@ -123,7 +123,7 @@ RULES — read before writing this report:
 |---|---|---|---|
 | Today (per-worktree REST) | 147 | 8,820 | **176% — blows even the authed limit** |
 | GraphQL per-account (D1) | **2** | **120** | **2.4%** |
-| GraphQL per-account @10s (D7) | 2 | 720 | 14% |
+| GraphQL per-account @30s (D7) | 2 | 240 | ~5% |
 
 ## Resolved since first draft
 | Was open | Resolution |

@@ -49,12 +49,14 @@ export function worktreePrStatus(sessions: Session[], currentBranch: string): Pr
  * deliberately disagree here — see `docs/STATUS-INDICATORS.md`. With no PR,
  * `done` resolves to `null` and `exited` to its own literal class, which
  * exists only for the pre-existing non-color dimming cue
- * (`workspace-canvas__tile--exited{opacity:.9}`). `spawning` (the rolled-up form
- * of `not_started`) is likewise left as its own literal, non-colored class
- * so its dashed-border cue survives — see the pr-status-axis Phase 5 report
- * for why this doesn't fold `not_started` into the `working` color the way
- * D17's table literally reads; flagged there as an open question rather
- * than guessed silently.
+ * (`workspace-canvas__tile--exited{opacity:.9}`).
+ *
+ * `spawning` (the rolled-up form of `not_started`) wins over the PR branches
+ * (checked before them, same as `working`) and stays its own literal,
+ * non-colored class so the dashed-border cue survives — decided: a session
+ * that hasn't started has done nothing, so colouring it by a PR that already
+ * exists on the branch would misleadingly read as "landed and finished" for
+ * a session that never ran.
  */
 export function resolveStatusClass(
   lifecycle: WorktreeRolledUpStatus,
@@ -68,10 +70,10 @@ export function resolveStatusClass(
     return lifecycle === "exited" ? "exited" : null;
   }
   if (lifecycle === "working") return "working";
+  if (lifecycle === "spawning") return "spawning";
   if (pr?.state === "merged") return "pr-merged";
   if (pr?.state === "open") return "pr-open";
   if (lifecycle === "waiting_for_human") return "waiting_for_human";
   if (lifecycle === "idle") return "idle";
-  if (lifecycle === "spawning") return "spawning";
   return null;
 }

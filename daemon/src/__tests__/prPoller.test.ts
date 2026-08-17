@@ -42,8 +42,8 @@ vi.mock("../broadcaster.js", () => ({
 }));
 
 describe("PR poller configuration", () => {
-  it("polls once every 10s (K8)", () => {
-    expect(PR_POLL_INTERVAL_MS).toBe(10_000);
+  it("polls once every 30s (K8)", () => {
+    expect(PR_POLL_INTERVAL_MS).toBe(30_000);
   });
 });
 
@@ -284,7 +284,12 @@ describe("PR poller behavior", () => {
   });
 
   it("2.T1 — a kind:\"error\" result holds session.pr.state AND leaves lifecycle unchanged (R4)", async () => {
-    await seedProject("waiting_for_human", { state: "open", number: 5, checkedAt: "2020-01-01T00:00:00.000Z" });
+    await seedProject("waiting_for_human", {
+      state: "open",
+      number: 5,
+      checkedAt: "2020-01-01T00:00:00.000Z",
+      prBranch: "feature-branch-0",
+    });
     github.fetchPrsForBranches.mockResolvedValue(
       new Map([
         [
@@ -313,7 +318,12 @@ describe("PR poller behavior", () => {
   });
 
   it("2.T1 — a kind:\"no_credentials\" result holds session.pr.state (R4)", async () => {
-    await seedProject("idle", { state: "open", number: 5, checkedAt: "2020-01-01T00:00:00.000Z" });
+    await seedProject("idle", {
+      state: "open",
+      number: 5,
+      checkedAt: "2020-01-01T00:00:00.000Z",
+      prBranch: "feature-branch-0",
+    });
     github.fetchPrsForBranches.mockResolvedValue(
       new Map([["acme/widgets#feature-branch-0", { kind: "no_credentials" as const }]]),
     );
@@ -329,6 +339,56 @@ describe("PR poller behavior", () => {
     );
     const session = await getSession();
     expect(session.pr?.state).toBe("open");
+  });
+
+  it("BLOCKING-1 — a kind:\"error\" result does NOT hold a PR from a different branch (D20)", async () => {
+    // Session's persisted PR was last checked against a branch the worktree
+    // has since left — `nextPrStatus` must not re-stamp it onto the CURRENT
+    // branch (`feature-branch-0`) just because a transient failure occurred.
+    await seedProject("idle", {
+      state: "open",
+      number: 10,
+      url: "https://github.com/acme/widgets/pull/10",
+      checkedAt: "2020-01-01T00:00:00.000Z",
+      prBranch: "old-branch",
+    });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          { kind: "error" as const, reason: "network" as const, message: "boom" },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    const session = await getSession();
+    expect(session.pr?.state).toBe("none");
+    expect(session.pr?.number).toBeUndefined();
+    expect(session.pr?.url).toBeUndefined();
+    expect(session.pr?.prBranch).toBe("feature-branch-0");
+  });
+
+  it("BLOCKING-1 — a kind:\"no_credentials\" result does NOT hold a PR from a different branch (D20)", async () => {
+    await seedProject("idle", {
+      state: "open",
+      number: 10,
+      url: "https://github.com/acme/widgets/pull/10",
+      checkedAt: "2020-01-01T00:00:00.000Z",
+      prBranch: "old-branch",
+    });
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([["acme/widgets#feature-branch-0", { kind: "no_credentials" as const }]]),
+    );
+
+    await pollAllPrs();
+
+    const session = await getSession();
+    expect(session.pr?.state).toBe("none");
+    expect(session.pr?.number).toBeUndefined();
+    expect(session.pr?.url).toBeUndefined();
+    expect(session.pr?.prBranch).toBe("feature-branch-0");
   });
 
   it("2.T3 — one tick, 3 worktrees → exactly one batched fetchPrsForBranches call", async () => {

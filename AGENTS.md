@@ -154,7 +154,7 @@ Session status is **two orthogonal axes**, never one enum:
 | Axis | Field | Written by, exclusively |
 |------|-------|------------------------|
 | Lifecycle (is the agent busy?) | `session.lifecycle.state` | `daemon/src/services/lifecycle.ts`, 1s poll |
-| PR (what happened to the branch?) | `session.pr` | `daemon/src/services/prPoller.ts`, 10s poll |
+| PR (what happened to the branch?) | `session.pr` | `daemon/src/services/prPoller.ts`, 30s poll |
 
 Each poller writes **only** its own field. They previously shared one `LifecycleState` slot
 (`needs_review`) with three uncoordinated writers, which raced and silently destroyed the
@@ -179,8 +179,23 @@ A PR that changes behaviour without changing the matrix should be sent back.
 - **Colour and bucket deliberately disagree for `done`/`exited`** — the dot keeps the PR colour
   (blue/green) so you can see the branch landed, but the card stays in **Finished**, because
   `done` is an explicit manual user action. This is intentional; don't "fix" it into agreement.
-- **`idle` buckets to Waiting, not Finished** — so the Waiting column mixes 🔴 `waiting_for_human`
-  (agent needs you) with neutral `○` `idle` (nothing happening). Known and intentional.
+- **`idle` buckets to its own Idle column, not Finished** — an idle session is open work, not done.
+  Idle and `waiting_for_human` are separate dashboard columns (**Idle** vs **Needs you**), not one
+  mixed "Waiting" column — mixing them read as a bug (idle sat under "Waiting" with a neutral dot
+  and no red `!`). Both are shown by default; only Finished hides behind the toggle.
+- **The dashboard is per-session for LIFECYCLE, per-worktree for PR** (Phase 6, PR resolution
+  corrected by BLOCKING-2) — every non-archived agent session gets its own card, bucketed by its
+  own lifecycle status. The daemon (`prPoller.ts`) writes `session.pr` **only** to a worktree's
+  `isMain` session — nothing else ever writes it — so PR colour/bucket is resolved once per
+  worktree (`worktreePrStatus()`, off the `isMain` session, branch-guarded) and the UI fans that
+  single value out to every non-archived agent session card of that worktree; the daemon never
+  writes `pr` to more than one session (that would reintroduce write amplification — one write, N
+  reads is the shape). The sidebar's worktree rows roll up per worktree via
+  `worktreeRolledUpStatus()`/`worktreePrStatus()` (unchanged). The canvas tile border and agent
+  pane border are per-session for lifecycle (each reads its own `session.state`) but per-worktree
+  for PR, same as the dashboard (via `worktreePrStatus()`, branch-guarded against the tile's/pane's
+  own worktree) — none of these surfaces ever read a sibling session's own `session.pr` directly.
+  See `docs/STATUS-INDICATORS.md` § Per-session vs per-worktree.
 - **`working` beats PR; PR beats `waiting_for_human`.** The second one is easy to get backwards:
   an agent idles at its prompt right after opening a PR, so if red won you would almost never
   see blue — which was the original bug's symptom all over again.
