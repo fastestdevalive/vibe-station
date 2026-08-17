@@ -17,7 +17,7 @@ import {
   listCommits,
   resolveBaseSha,
 } from "../services/git.js";
-import { getRemoteUrl, parseGithubRepo, fetchPrForBranch } from "../services/github.js";
+import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir } from "../services/paths.js";
@@ -137,9 +137,6 @@ export function serializeWorktree(projectId: string, w: WorktreeRecord) {
     createdAt: w.createdAt,
     // Always emit pinnedAt so the client doesn't have to special-case undefined.
     pinnedAt: w.pinnedAt ?? null,
-    // Same rationale — set by prPoller.ts when this worktree's PR is seen
-    // merged, so the dashboard can keep crediting "PR created" through it.
-    prMergedAt: w.prMergedAt ?? null,
     sortOrder: w.sortOrder,
     // Id of the worktree's main agent session (isMain === true — replaces the
     // old slot==="m" check, Decision 1). Lets the create-dialog JSON path
@@ -1154,10 +1151,11 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
   });
 
   // GET /worktrees/:id/pr
-  // Best-effort GitHub PR lookup for the worktree's branch, for the VCS tool
-  // tab's PR banner. Always 200s with `{ pr: null }` when there's no GitHub
-  // remote, no PR, or the lookup fails — this is an annotation, not a
-  // required resource.
+  // GitHub PR lookup for the worktree's branch, for the VCS tool tab's PR
+  // banner. Returns a `PrLookupResult`-shaped body (see
+  // `daemon/src/services/github.ts`) so a transient failure is distinguishable
+  // from "definitely no PR" — a blind `{ pr: null }` for every non-success
+  // case is exactly the silent-failure bug this replaced.
   app.get("/worktrees/:id/pr", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
 
@@ -1166,10 +1164,18 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
 
     const remoteUrl = await getRemoteUrl(project.absolutePath);
-    const gh = remoteUrl ? parseGithubRepo(remoteUrl) : null;
-    if (!gh) return reply.send({ pr: null });
+    const gh = remoteUrl ? await resolveGithubRemote(remoteUrl) : null;
+    if (!gh) return reply.send({ kind: "not_github" });
 
-    const pr = await fetchPrForBranch(gh.owner, gh.repo, worktree.branch);
-    return reply.send({ pr });
+    const result = await fetchPrForBranch(gh.owner, gh.repo, worktree.branch);
+    if (result.kind === "no_credentials") {
+      return reply.status(503).send({ kind: "no_credentials" });
+    }
+    if (result.kind === "error") {
+      return reply
+        .status(503)
+        .send({ kind: "error", reason: result.reason, message: result.message });
+    }
+    return reply.send(result);
   });
 }

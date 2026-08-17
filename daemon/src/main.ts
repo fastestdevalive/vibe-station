@@ -171,7 +171,8 @@ async function main() {
 
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
-  // Poll for PR review-readiness → needs_review (plan 03, Decision 3/3b)
+  // Poll for PR outcome (open/merged/closed) on the orthogonal `session.pr`
+  // axis — pr-status-axis plan, Phase 2. Never touches lifecycle state.
   startPrPoller();
 
   // Graceful shutdown

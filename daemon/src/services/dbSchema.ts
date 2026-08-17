@@ -108,12 +108,20 @@ export function ensureSchema(db: Database): void {
   // leaving a dangling id is harmless (Research: the client-side workspace
   // tile scan simply won't find a match, S5).
   addColumnIfMissing(db, "sessions", "spawnedFrom", "TEXT");
-  // prMergedAt (dashboard-bucket-fixes) — ISO8601 timestamp remembering that
-  // this worktree's PR was seen merged, so the dashboard can keep crediting
-  // "PR created" instead of reading as idle/working again once the poller
-  // falls the session back out of needs_review. NULL until a merge is seen;
-  // cleared once a fresh open+non-draft PR appears on the same branch.
-  addColumnIfMissing(db, "worktrees", "prMergedAt", "TEXT");
+  // pr* (pr-status-axis) — VCS status for this session's branch, written
+  // exclusively by prPoller.ts. NULL until the first poll tick checks this
+  // session's worktree. prState mirrors PrStatus.state ("none"|"draft"|
+  // "open"|"merged"|"closed"); prNumber/prUrl are set iff a PR exists;
+  // prCheckedAt is the ISO8601 timestamp of the last check (successful or not).
+  addColumnIfMissing(db, "sessions", "prState", "TEXT");
+  addColumnIfMissing(db, "sessions", "prNumber", "INTEGER");
+  addColumnIfMissing(db, "sessions", "prUrl", "TEXT");
+  addColumnIfMissing(db, "sessions", "prCheckedAt", "TEXT");
+  // prBranch (pr-status-axis Phase 5, D20) — the branch prPoller.ts queried
+  // GitHub for when it wrote prState/prNumber/prUrl/prCheckedAt. The UI
+  // renders the PR colour only when this matches the worktree's current
+  // branch, so a branch switch never shows a stale PR colour.
+  addColumnIfMissing(db, "sessions", "prBranch", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import type { SessionState } from "@/api/types";
+import type { PrStatus, SessionState } from "@/api/types";
 
 /**
  * Dev-only floating popup for faking `session:state` transitions on real
@@ -19,10 +19,18 @@ const STATES: SessionState[] = [
   "working",
   "idle",
   "waiting_for_human",
-  "needs_review",
   "done",
   "exited",
 ];
+
+/**
+ * PR-axis values, orthogonal to `SessionState` — the two combine via
+ * `resolveStatusClass` (see `lib/statusColor.ts`), so both dropdowns matter:
+ * e.g. `waiting_for_human` + `open` renders BLUE, not red.
+ * `"(unset)"` clears the field entirely (no PR ever checked).
+ */
+const PR_STATES = ["(unset)", "none", "draft", "open", "merged", "closed"] as const;
+type PrChoice = (typeof PR_STATES)[number];
 
 export function DevStatePanel(): ReactNode {
   const devEnabled =
@@ -32,8 +40,10 @@ export function DevStatePanel(): ReactNode {
   const [pos, setPos] = useState({ x: 24, y: 24 });
   const [sessionId, setSessionId] = useState<string>("");
   const [state, setState] = useState<SessionState>("working");
+  const [prState, setPrState] = useState<PrChoice>("(unset)");
 
   const sessions = useServerStore((s) => s.sessions);
+  const worktrees = useServerStore((s) => s.worktrees);
 
   const drag = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(
     null,
@@ -73,7 +83,28 @@ export function DevStatePanel(): ReactNode {
 
   function handleApply() {
     if (!sessionId) return;
-    useServerStore.getState().applySessionUpdated(sessionId, { state, lifecycleState: state });
+    const patch: { state: SessionState; lifecycleState: SessionState; pr?: PrStatus } = {
+      state,
+      lifecycleState: state,
+    };
+    if (prState !== "(unset)") {
+      // `prBranch` MUST match the session's worktree's current branch or
+      // `worktreePrStatus` filters the PR out by design (D20) — so mirror the
+      // real branch here, otherwise the colour silently won't render.
+      const session = sessions.find((s) => s.id === sessionId);
+      const branch = worktrees.find((w) => w.id === session?.worktreeId)?.branch;
+      patch.pr =
+        prState === "none"
+          ? { state: "none", checkedAt: new Date().toISOString(), prBranch: branch }
+          : {
+              state: prState,
+              number: 999,
+              url: "https://github.com/example/repo/pull/999",
+              checkedAt: new Date().toISOString(),
+              prBranch: branch,
+            };
+    }
+    useServerStore.getState().applySessionUpdated(sessionId, patch);
     useWorkspaceStore.getState().patchSessionState(sessionId, state);
   }
 
@@ -117,6 +148,8 @@ export function DevStatePanel(): ReactNode {
         }}
       >
         <span>DEV: State Simulator</span>
+        {/* Two orthogonal axes — lifecycle + PR. Precedence (D18):
+            working → pr=merged → pr=open → waiting_for_human → idle. */}
         <button
           onClick={() => setOpen(false)}
           style={{
@@ -170,6 +203,27 @@ export function DevStatePanel(): ReactNode {
             }}
           >
             {STATES.map((st) => (
+              <option key={st} value={st}>
+                {st}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          PR state (orthogonal axis)
+          <select
+            value={prState}
+            onChange={(e) => setPrState(e.target.value as PrChoice)}
+            style={{
+              background: "#111",
+              color: "#e0e0e0",
+              border: "1px solid #444",
+              borderRadius: 4,
+              padding: "4px 6px",
+            }}
+          >
+            {PR_STATES.map((st) => (
               <option key={st} value={st}>
                 {st}
               </option>

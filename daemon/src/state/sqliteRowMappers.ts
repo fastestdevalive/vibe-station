@@ -5,7 +5,7 @@
  * `true`/`false` — `rowToBool` is the single coercion point so this isn't
  * reimplemented ad hoc (and inevitably forgotten) at each call site.
  */
-import type { ProjectRecord, SessionRecord, WorktreeRecord, TranscriptRef } from "../types.js";
+import type { ProjectRecord, SessionRecord, WorktreeRecord, TranscriptRef, PrStatus } from "../types.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 
 export function rowToBool(v: number): boolean {
@@ -40,6 +40,11 @@ export interface SessionRow {
   archivedAt: string | null;
   handoffSummary: string | null;
   spawnedFrom: string | null;
+  prState: string | null;
+  prNumber: number | null;
+  prUrl: string | null;
+  prCheckedAt: string | null;
+  prBranch: string | null;
 }
 
 export function rowToSession(row: SessionRow): SessionRecord {
@@ -47,6 +52,25 @@ export function rowToSession(row: SessionRow): SessionRecord {
     row.transcriptKind != null
       ? { kind: row.transcriptKind as TranscriptRef["kind"], ...(row.transcriptPath != null ? { path: row.transcriptPath } : {}) }
       : undefined;
+
+  const pr: PrStatus | undefined =
+    row.prState != null
+      ? {
+          state: row.prState as PrStatus["state"],
+          ...(row.prNumber != null ? { number: row.prNumber } : {}),
+          ...(row.prUrl != null ? { url: row.prUrl } : {}),
+          checkedAt: row.prCheckedAt ?? "",
+          ...(row.prBranch != null ? { prBranch: row.prBranch } : {}),
+        }
+      : undefined;
+
+  // Back-compat (R10): a row persisted before the PR-status split with
+  // `state === "needs_review"` maps to `idle` lifecycle + an open PR, since
+  // that was the only thing `needs_review` ever meant. One-way — never
+  // written back as `needs_review`.
+  const isLegacyNeedsReview = row.state === "needs_review";
+  const lifecycleState = (isLegacyNeedsReview ? "idle" : row.state) as SessionRecord["lifecycle"]["state"];
+  const legacyPr: PrStatus | undefined = isLegacyNeedsReview && !pr ? { state: "open", checkedAt: "" } : pr;
 
   return {
     id: row.id,
@@ -62,7 +86,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     useTmux: rowToBool(row.useTmux),
     ...(row.channel != null ? { channel: row.channel as SessionRecord["channel"] } : {}),
     lifecycle: {
-      state: row.state as SessionRecord["lifecycle"]["state"],
+      state: lifecycleState,
       ...(row.reason != null ? { reason: row.reason } : {}),
       lastTransitionAt: row.lastTransitionAt,
     },
@@ -74,6 +98,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
     ...(row.handoffSummary != null ? { handoffSummary: row.handoffSummary } : {}),
     ...(row.spawnedFrom != null ? { spawnedFrom: row.spawnedFrom } : {}),
+    ...(legacyPr ? { pr: legacyPr } : {}),
   };
 }
 
@@ -118,6 +143,11 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     archivedAt: session.archivedAt ?? null,
     handoffSummary: session.handoffSummary ?? null,
     spawnedFrom: session.spawnedFrom ?? null,
+    prState: session.pr?.state ?? null,
+    prNumber: session.pr?.number ?? null,
+    prUrl: session.pr?.url ?? null,
+    prCheckedAt: session.pr?.checkedAt ?? null,
+    prBranch: session.pr?.prBranch ?? null,
   };
 }
 
@@ -130,7 +160,6 @@ export interface WorktreeRow {
   baseSha: string | null;
   createdAt: string;
   pinnedAt: string | null;
-  prMergedAt: string | null;
   sortOrder: number;
   terminalSeq: number;
   agentSeq: number;
@@ -147,7 +176,6 @@ export function rowToWorktree(row: WorktreeRow, sessions: SessionRecord[]): Work
     baseSha: row.baseSha ?? "",
     createdAt: row.createdAt,
     ...(row.pinnedAt != null ? { pinnedAt: row.pinnedAt } : {}),
-    ...(row.prMergedAt != null ? { prMergedAt: row.prMergedAt } : {}),
     sortOrder: row.sortOrder,
     terminalSeq: row.terminalSeq,
     agentSeq: row.agentSeq,
@@ -165,7 +193,6 @@ export function worktreeToRow(w: WorktreeRecord, projectId: string): WorktreeRow
     baseSha: w.baseSha ?? null,
     createdAt: w.createdAt,
     pinnedAt: w.pinnedAt ?? null,
-    prMergedAt: w.prMergedAt ?? null,
     sortOrder: w.sortOrder ?? 0,
     terminalSeq: w.terminalSeq ?? 0,
     agentSeq: w.agentSeq ?? 0,

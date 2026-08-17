@@ -4,13 +4,14 @@ import { Link } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { ConnectionState } from "@/api/client";
-import type { HealthResponse, Session, Worktree } from "@/api/types";
+import type { HealthResponse, PrStatus, Session, Worktree } from "@/api/types";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { type WorktreeRolledUpStatus, sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
+import { worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 
 interface DashboardPanelProps {
@@ -22,20 +23,32 @@ interface DashboardPanelProps {
 type DashboardItem = { kind: "worktree"; worktree: Worktree } | { kind: "direct"; session: Session };
 
 /**
- * Dashboard buckets, coarser than the full `WorktreeRolledUpStatus` set:
+ * Dashboard buckets, coarser than the full `WorktreeRolledUpStatus` set.
+ * `pr` is checked out-of-band from the lifecycle rollup (`r`) — it's the
+ * orthogonal PR axis (`statusColor.ts`), not a `WorktreeRolledUpStatus`
+ * value.
+ *
+ * Order (D19): `done`/`exited` are checked FIRST and unconditionally bucket
+ * to "finished" — a merged PR must never pull a done/exited worktree back
+ * into the PR column (this reverses the earlier "done + merged → PR
+ * bucket" behavior). Only then does live lifecycle activity
+ * (`working`/`spawning`) win over PR outcome, since active work is the more
+ * urgent signal; PR outcome in turn wins over a merely idle/waiting-for-human
+ * lifecycle, since a merged/open PR is a more meaningful summary than "idle".
+ *  - "finished": `done` or `exited` (D19, checked first) — or no
+ *    recognizable state at all. Hidden by default behind "Show finished".
  *  - "working": actively running, or not started yet (`spawning`).
+ *  - "pr": this session's branch has an open or merged PR (`session.pr`).
  *  - "waiting": stopped and needs a human — either explicitly flagged
  *    (`waiting_for_human`) or just idle after finishing a turn (`idle`).
  *    Idle deliberately lives here, NOT in "finished" — an idle worktree is
  *    still open work waiting on the user, not done.
- *  - "pr": the review poller found an open PR for this session (`needs_review`).
- *  - "finished": actually done or exited (or no recognizable state at all) —
- *    hidden by default behind the "Show finished" checkbox.
  */
-function bucketForRollup(r: WorktreeRolledUpStatus): "working" | "waiting" | "pr" | "finished" {
+export function bucketForRollup(r: WorktreeRolledUpStatus, pr: PrStatus | null): "working" | "waiting" | "pr" | "finished" {
+  if (r === "done" || r === "exited") return "finished";
   if (r === "working" || r === "spawning") return "working";
+  if (pr?.state === "open" || pr?.state === "merged") return "pr";
   if (r === "waiting_for_human" || r === "idle") return "waiting";
-  if (r === "needs_review") return "pr";
   return "finished";
 }
 
@@ -155,15 +168,9 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
         wtsWorking.push(wtItem);
         continue;
       }
-      // A remembered PR merge (see prPoller.ts) keeps reading as "PR
-      // created" instead of silently falling back to idle/waiting — as long
-      // as nothing here is actively working (checked above).
-      if (wt.prMergedAt) {
-        wtsPr.push(wtItem);
-        continue;
-      }
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
-      const b = bucketForRollup(rolled);
+      const pr = worktreePrStatus(agentSessions, wt.branch);
+      const b = bucketForRollup(rolled, pr);
       if (b === "waiting") wtsWaiting.push(wtItem);
       else if (b === "pr") wtsPr.push(wtItem);
       else if (b === "finished") wtsFinished.push(wtItem);
@@ -178,7 +185,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const item: DashboardItem = { kind: "direct", session: s };
       // No sibling sessions to prioritize over (one session = one card here),
       // so — unlike the worktree loop above — a plain rollup is sufficient.
-      const b = bucketForRollup(sessionStatus(sessionStates[s.id] ?? s.state));
+      const b = bucketForRollup(sessionStatus(sessionStates[s.id] ?? s.state), s.pr ?? null);
       if (b === "working") wtsWorking.push(item);
       else if (b === "waiting") wtsWaiting.push(item);
       else if (b === "pr") wtsPr.push(item);
@@ -202,7 +209,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               className="dashboard-card dashboard-card--session dashboard-card--worktree"
             >
               <span className="dashboard-card__dot dashboard-card__dot--status">
-                <StatusDot status={status} />
+                <StatusDot status={status} pr={s.pr ?? null} />
               </span>
               <span className="dashboard-card__session-main">
                 <span className="dashboard-card__primary">{sessionLabel(s)}</span>
@@ -216,6 +223,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const wt = item.worktree;
       const agentSessions = sessions.filter((s) => s.worktreeId === wt.id && s.type === "agent");
       const rolled = worktreeRolledUpStatus(agentSessions, sessionStates);
+      const pr = worktreePrStatus(agentSessions, wt.branch);
       const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
       const proj = projectById[wt.projectId];
       const showDismiss = rolled === "done" || rolled === "exited";
@@ -230,7 +238,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
             onClick={() => setActiveWorktree(wt.projectId, wt.id, sessionsForWt)}
           >
             <span className="dashboard-card__dot dashboard-card__dot--status">
-              <StatusDot status={rolled} />
+              <StatusDot status={rolled} pr={pr} />
             </span>
             <span className="dashboard-card__session-main">
               <span className="dashboard-card__primary">{wt.branch}</span>

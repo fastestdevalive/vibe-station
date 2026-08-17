@@ -2118,15 +2118,27 @@
   animation: spawning-pulse 1s ease-in-out infinite alternate;
 }
 
-/* waiting_for_human is the one non-negotiable color mapping (PRD R7/W7) —
-   always red, regardless of theme. needs_review is a distinct, less-urgent
-   violet so the two "needs attention" states never visually collide. */
-.status-dot--waiting_for_human {
-  color: #ef4444;
+/* D17/D18/5.8-5.9 (2026-08-17) — one indicator, not two: `StatusDot` folds
+   the lifecycle axis and the PR axis into a single resolved class via
+   `resolveStatusClass` (statusColor.ts), so these three colors cover both
+   axes at once (`working`, and the PR outcomes `pr-open`/`pr-merged` — the
+   latter can outrank `waiting_for_human`'s red, see resolveStatusClass's
+   doc comment for why). `waiting_for_human` stays the one shape-distinct
+   glyph (`!`) as well as a color, so it's still legible without color. */
+.status-dot--working {
+  color: var(--status-working);
 }
 
-.status-dot--needs_review {
-  color: #b98cff;
+.status-dot--pr-open {
+  color: var(--pr-open);
+}
+
+.status-dot--pr-merged {
+  color: var(--pr-merged);
+}
+
+.status-dot--waiting_for_human {
+  color: var(--status-waiting);
 }
 
 .preview-body {
@@ -3854,15 +3866,15 @@ a.dashboard-card.dashboard-card--session {
 }
 
 .vcs-pr--open .vcs-pr__icon {
-  color: #4ade80;
+  color: var(--pr-open);
 }
 
 .vcs-pr--merged .vcs-pr__icon {
-  color: #a78bfa;
+  color: var(--pr-merged);
 }
 
 .vcs-pr--closed .vcs-pr__icon {
-  color: #f87171;
+  color: var(--pr-closed);
 }
 
 .vcs-pr--draft .vcs-pr__icon {
@@ -3894,18 +3906,18 @@ a.dashboard-card.dashboard-card--session {
 }
 
 .vcs-pr__badge--open {
-  color: #4ade80;
-  background: rgba(74, 222, 128, 0.12);
+  color: var(--pr-open);
+  background: color-mix(in srgb, var(--pr-open) 12%, transparent);
 }
 
 .vcs-pr__badge--merged {
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
+  color: var(--pr-merged);
+  background: color-mix(in srgb, var(--pr-merged) 12%, transparent);
 }
 
 .vcs-pr__badge--closed {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.12);
+  color: var(--pr-closed);
+  background: color-mix(in srgb, var(--pr-closed) 12%, transparent);
 }
 
 .vcs-pr__badge--draft {

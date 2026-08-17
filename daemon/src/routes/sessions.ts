@@ -392,6 +392,7 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     sortOrder: s.sortOrder,
     handoffSummary: s.handoffSummary ?? null,
     spawnedFrom: s.spawnedFrom ?? null,
+    pr: s.pr ?? null,
   };
 }
 
