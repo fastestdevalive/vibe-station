@@ -179,15 +179,12 @@ export async function listAccounts(): Promise<GithubAccount[]> {
     if (token) tokens.set(login, token);
   }
 
-  // 2. Generic GITHUB_TOKEN/GH_TOKEN — env wins over hosts.yml, but ONLY when
-  //    there's a single account in play. Covers the common solo-account case
-  //    with no hosts.yml at all (synthetic login). With >=2 known logins a
-  //    single generic token cannot possibly be valid for all of them —
-  //    stamping it onto every login silently breaks whichever account(s) it
-  //    isn't actually for (that account's repos 404 under the wrong token,
-  //    which looks identical to "no PR" — the exact bug this fallback chain
-  //    exists to avoid). In that case only fill logins still missing a token
-  //    of their own.
+  // 2a. Generic GITHUB_TOKEN/GH_TOKEN — env wins over hosts.yml, but ONLY when
+  //    there's a single account in play (covers the common solo-account case
+  //    with no hosts.yml at all — synthetic "default" login). With >=2 known
+  //    logins a single generic token cannot possibly be valid for all of
+  //    them, so filling it in here is deferred to 2b below, AFTER step 4 has
+  //    had a chance to resolve each login's own real token — see 2b for why.
   const generic = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (generic) {
     if (knownLogins.size === 0) {
@@ -195,10 +192,6 @@ export async function listAccounts(): Promise<GithubAccount[]> {
       tokens.set("default", generic);
     } else if (knownLogins.size === 1) {
       for (const login of knownLogins) tokens.set(login, generic);
-    } else {
-      for (const login of knownLogins) {
-        if (!tokens.has(login)) tokens.set(login, generic);
-      }
     }
   }
 
@@ -209,12 +202,28 @@ export async function listAccounts(): Promise<GithubAccount[]> {
   }
 
   // 4. `gh auth token --user X` — only for logins still missing a token, and
-  //    only if `gh` happens to be on PATH. Never required.
+  //    only if `gh` happens to be on PATH. Never required. Must run BEFORE
+  //    2b below: a keyring-backed second login has no plaintext token in
+  //    hosts.yml, so if 2b's generic-token fill ran first it would stamp the
+  //    (wrong-for-this-login) generic token onto it and this step would then
+  //    see it as already resolved and skip it — the exact wrong-token->404
+  //    failure this fallback chain exists to avoid.
   const stillMissing = [...knownLogins].filter((login) => !tokens.has(login));
   if (stillMissing.length > 0 && (await isGhOnPath())) {
     for (const login of stillMissing) {
       const token = await ghAuthTokenForUser(login);
       if (token) tokens.set(login, token);
+    }
+  }
+
+  // 2b. Generic GITHUB_TOKEN/GH_TOKEN, >=2-account fallback — only NOW, for
+  //    logins that even `gh auth token --user` couldn't resolve a real token
+  //    for. Still a guess (one token for every remaining login), but it's a
+  //    last resort after every login-specific source has been tried, not a
+  //    pre-emptive stamp that blocks a better source from running.
+  if (generic && knownLogins.size >= 2) {
+    for (const login of knownLogins) {
+      if (!tokens.has(login)) tokens.set(login, generic);
     }
   }
 

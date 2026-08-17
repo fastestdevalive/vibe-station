@@ -256,7 +256,7 @@ export function resolveStatusClass(
 > Supersedes D14 and parts of 3.1/3.4/4.8. Requested after seeing Phase 1–4 in the sandbox.
 
 - [x] **5.1** `tokens.css`: `--status-working` 🟡 `#eab308`/`#a16207` (new); `--pr-open` yellow→🔵 blue `#3b82f6`/`#1d4ed8`; `--pr-merged` 🟢 unchanged; `--status-waiting` 🔴 unchanged. Both theme blocks.
-- [x] **5.2** `statusColor.ts` `resolveStatusClass`: precedence becomes `working|not_started` → `pr=merged` → `pr=open` → `waiting_for_human` → `idle` → `null`. **`done`/`exited` always return `null`** (neutral).
+- [x] **5.2** `statusColor.ts` `resolveStatusClass`: precedence becomes `working|not_started` → `pr=merged` → `pr=open` → `waiting_for_human` → `idle` → `null`. **`done`/`exited` always return `null`** (neutral). _Superseded by D21 (done/exited inherit PR colour) and B2 (spawning/not_started wins over PR, checked ahead of the PR branches, not folded into `working`) — see `docs/STATUS-INDICATORS.md`._
 - [x] **5.3** CSS: add `--working` border rules to `workspace-canvas.css` + `chat.css` (re-broadens what `6f020b6` scoped down — deliberate, user-requested). Recolour `--pr-open` rules to blue.
 - [x] **5.4** **Branch-keyed PR (D20):** add `prBranch` to `PrStatus` + a `prBranch` SQLite column (`dbSchema.ts`, `sqliteRowMappers.ts`, `project-store.ts` INSERT list, `serializeSession`, `protocol.ts`, web-ui `PrStatus`). `prPoller` records the branch it queried.
 - [x] **5.5** `statusColor.ts`: `worktreePrStatus(sessions, currentBranch)` returns `null` when `pr.prBranch !== currentBranch` — stale PR colour never renders. Update both call sites (`WorkspaceCanvas`, `DashboardPanel`, `LeftSidebar`).
@@ -265,7 +265,7 @@ export function resolveStatusClass(
 - [x] **5.8** **One indicator, not two (user request 2026-08-17):** the primary marker is the existing `●` dot from `StatusDot`, recoloured by `resolveStatusClass` — yellow (working), blue (PR open), green (PR merged). `waiting_for_human` keeps its shape-distinct red `!`; `idle` `○`, `done` `✓`, `exited` `×` stay neutral.
 - [x] **5.9** **Retire `PrBadge` from the sidebar, canvas tiles and dashboard cards** — the coloured dot replaces it. Keep `PrBadge.tsx` + its test only if the VCS panel adopts it; otherwise delete both files and their imports. Simpler than maintaining two indicators per row.
   - Trade-off accepted: blue/green/yellow dots differ by colour alone. Mitigation — `aria-label` and `title` already carry the state name, and `waiting_for_human` (the urgent one) stays shape-distinct.
-- [x] **5.T1** Unit — `resolveStatusClass`: `working`+`pr=open` → `"working"`; `waiting_for_human`+`pr=open` → `"pr-open"`; `idle`+`pr=open` → `"pr-open"`; `done`+`pr=merged` → `null`; `waiting_for_human`+no PR → `"waiting_for_human"`.
+- [x] **5.T1** Unit — `resolveStatusClass`: `working`+`pr=open` → `"working"`; `waiting_for_human`+`pr=open` → `"pr-open"`; `idle`+`pr=open` → `"pr-open"`; `done`+`pr=merged` → `null`; `waiting_for_human`+no PR → `"waiting_for_human"`. _`done`+`pr=merged` → `null` superseded by D21 (now `"pr-merged"`) — see `statusColor.test.ts`'s D21 cases._
 - [x] **5.T2** Unit — `worktreePrStatus`: returns `null` when `prBranch` ≠ current branch; returns the status when equal.
 - [x] **5.T3** Unit — `bucketForRollup`: `done`+`pr=merged` → `"finished"` (D19 regression — the previously-wrong case).
 - [x] **5.T4** Integration — `prBranch` round-trips through `project-store` (same INSERT-column trap as 2.T5).
@@ -312,3 +312,23 @@ export function resolveStatusClass(
 | `web-ui/src/lib/statusColor.test.ts` | **New** | 3.T1–3.T2 | Unit — precedence + rollup |
 | `web-ui/src/components/layout/PrBadge.test.tsx` | **New** | 3.T3 | Unit — rendering + a11y labels |
 | `web-ui/src/components/layout/DashboardPanel.test.tsx` | Modified | 4.T1–4.T6 | Two-axis bucketing coverage |
+
+### Phase 6 — Agents as the dashboard unit (amendment, 2026-08-17)
+> User decision: a worktree is normally single-agent; multi-agent is rare (large features /
+> parallel work). That removes the PR-duplication objection to per-agent cards, and deletes the
+> lossy rollup that caused `966b676`'s hidden-working-sibling bug.
+
+- [x] **6.1** `DashboardPanel.tsx`: replace the `DashboardItem` union with **one card per non-archived agent session** — worktree-attached and direct alike. Drops the two card types and the `kind: "worktree" | "direct"` special-casing.
+- [x] **6.2** Bucket per session via `bucketForRollup(sessionStatus(liveState), pr)` — **delete the `hasLiveActivity` short-circuit** and the `worktreeRolledUpStatus` call from this file; both existed only to paper over the rollup.
+- [x] **6.3** PR per session = `session.pr`, branch-guarded against its worktree's `branch` (direct sessions have no worktree → no PR).
+- [x] **6.4** **Dropped by user decision (2026-08-17), not implemented.** No multi-agent PR guard: every non-archived agent session's card shows its own PR colour/bucket independently, with no `isMain` special-casing in `DashboardPanel.tsx`. Same-branch duplication across sibling sessions is expected/intended ("it's fine for 2 agents to transition through states together"). `worktreePrStatus()`'s `isMain` preference is unchanged and still used by the sidebar/canvas rollup — only the dashboard dropped the guard.
+- [x] **6.5** Card content: agent/session name as the title, with worktree + branch as the subtitle so worktree context isn't lost. Link to `/session/:id` for direct sessions, `/worktree/:id` for worktree-attached (preserve existing nav).
+- [x] **6.6** Split the Waiting column: `waiting_for_human` → **"Needs you"** (red), `idle` → **"Idle"**. Fixes the observed "in Waiting with no red exclamation" confusion. Idle is shown by default (not hidden behind "Show finished") — idle is open work, not done.
+- [x] **6.7** Update `docs/STATUS-INDICATORS.md` (bucket table + § Per-session vs per-worktree, which no longer applies to the dashboard) and the AGENTS.md trigger list if bucket names changed.
+- [x] **6.T1** Unit — `bucketForRollup`: unchanged semantics, plus the new `idle` → `"idle"` bucket; `waiting_for_human` → `"needs-you"`.
+- [x] **6.T2** Integration — a worktree with 2 agent sessions renders 2 cards; **both** carry the PR colour/bucket when both match the branch (6.4 dropped — no `isMain` guard).
+- [x] **6.T3** Integration — a direct (worktree-less) agent session renders one card and buckets by its own state.
+- [x] **6.T4** Regression — archived sessions (`archivedAt != null`) still produce no card.
+- [x] **6.T5** Regression — a `working` session and a `waiting_for_human` session in the same worktree now appear as two separate cards in two columns (the `966b676` bug becomes structurally impossible).
+
+**Verify phase 6:** `pnpm typecheck` + `pnpm lint` clean; both suites green; sandbox at :5184 shows one card per agent across five columns.

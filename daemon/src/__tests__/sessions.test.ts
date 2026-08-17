@@ -544,6 +544,39 @@ describe("Session routes", () => {
     expect(fetched.state).toBe("not_started");
   });
 
+  it("serializeSession carries `pr` through the REST GET — the initial-load carrier a reload depends on", async () => {
+    // `prStatusEquivalent` (prPoller.ts) means a steady-state PR never
+    // re-broadcasts over WS — the REST fetch on page load is the ONLY path
+    // that would ever surface it. If `serializeSession` ever dropped `pr`,
+    // a reload would show nothing indefinitely with no test catching it.
+    const created = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const { id: sessionId } = created.json<SessionRecord>();
+
+    // No PR yet — REST must send an explicit `pr: null`, not an omitted key
+    // (web-ui's `Session.pr` type is `PrStatus | null | undefined`, but the
+    // wire contract here is always an explicit `null`).
+    const beforeRes = await app.inject({ method: "GET", url: `/sessions/${sessionId}` });
+    expect(beforeRes.json<{ pr: unknown }>().pr).toBeNull();
+
+    const { updateSessionPr } = await import("../state/project-store.js");
+    const pr = {
+      state: "open" as const,
+      number: 42,
+      url: "https://github.com/acme/widgets/pull/42",
+      checkedAt: new Date().toISOString(),
+      prBranch: "main",
+    };
+    const changed = await updateSessionPr(projectId, sessionId, pr);
+    expect(changed).toBe(true);
+
+    const afterRes = await app.inject({ method: "GET", url: `/sessions/${sessionId}` });
+    expect(afterRes.json<{ pr: typeof pr }>().pr).toEqual(pr);
+  });
+
   it("skipAutoTurn — worktree-scoped channel:json + prompt names the session but does NOT auto-enqueue turn 1", async () => {
     const jsonAgentChat = await import("../services/jsonAgentChat.js");
     const startJsonCreateTurnMock = vi.mocked(jsonAgentChat.startJsonCreateTurn);

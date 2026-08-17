@@ -9,7 +9,7 @@ import { DashboardPanel, bucketForRollup } from "./DashboardPanel";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
 
-describe("bucketForRollup (4.T1, inverted by 5.T3/D19)", () => {
+describe("bucketForRollup (4.T1, inverted by 5.T3/D19, split by 6.T1/6.6)", () => {
   it("5.T3 — done + pr=merged lands in finished, NOT the pr bucket (D19 — done is terminal)", () => {
     expect(bucketForRollup("done", { state: "merged", checkedAt: "" })).toBe("finished");
   });
@@ -26,11 +26,15 @@ describe("bucketForRollup (4.T1, inverted by 5.T3/D19)", () => {
     expect(bucketForRollup("idle", { state: "open", checkedAt: "" })).toBe("pr");
   });
 
-  it("idle + pr=draft/closed/none does not land in the pr bucket", () => {
-    expect(bucketForRollup("idle", { state: "draft", checkedAt: "" })).toBe("waiting");
-    expect(bucketForRollup("idle", { state: "closed", checkedAt: "" })).toBe("waiting");
-    expect(bucketForRollup("idle", { state: "none", checkedAt: "" })).toBe("waiting");
-    expect(bucketForRollup("idle", null)).toBe("waiting");
+  it("6.T1 — waiting_for_human maps to needs-you", () => {
+    expect(bucketForRollup("waiting_for_human", null)).toBe("needs-you");
+  });
+
+  it("6.T1 — idle + pr=draft/closed/none/null maps to idle, not needs-you", () => {
+    expect(bucketForRollup("idle", { state: "draft", checkedAt: "" })).toBe("idle");
+    expect(bucketForRollup("idle", { state: "closed", checkedAt: "" })).toBe("idle");
+    expect(bucketForRollup("idle", { state: "none", checkedAt: "" })).toBe("idle");
+    expect(bucketForRollup("idle", null)).toBe("idle");
   });
 
   it("done + no pr lands in finished", () => {
@@ -67,7 +71,7 @@ describe("DashboardPanel", () => {
     });
   });
 
-  it("renders working and waiting-for-user sections, with finished hidden until toggled", async () => {
+  it("renders working and idle sections (6.6 split), with finished hidden until toggled", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -80,8 +84,11 @@ describe("DashboardPanel", () => {
       expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
     });
     expect(screen.getByText("working")).toBeInTheDocument();
-    // wt-3's idle session buckets under "waiting for user", not "finished".
-    expect(screen.getByText("waiting for user")).toBeInTheDocument();
+    // wt-1's sess-agent2 and wt-3's sess-wt3-main are idle sessions — bucket
+    // to "idle" (6.6 split), not "finished" and not "needs you" (no session
+    // is waiting_for_human in the default fixture).
+    expect(screen.getByText("idle")).toBeInTheDocument();
+    expect(screen.queryByText("needs you")).toBeNull();
     // wt-2's "done" session is finished — hidden by default.
     expect(screen.queryByText("finished")).toBeNull();
 
@@ -89,7 +96,7 @@ describe("DashboardPanel", () => {
     expect(screen.getByText("finished")).toBeInTheDocument();
   });
 
-  it("dashboard-direct-agents — shows a direct (worktree-less) agent session, bucketed and linking to /session/:id", async () => {
+  it("6.T3 — dashboard-direct-agents — shows a direct (worktree-less) agent session, bucketed by its own state and linking to /session/:id", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -131,7 +138,7 @@ describe("DashboardPanel", () => {
     });
   });
 
-  it("updates worktree row bucket when session:state fires", async () => {
+  it("updates a session's card bucket when session:state fires", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -145,6 +152,7 @@ describe("DashboardPanel", () => {
     });
     const workingSection = screen.getByText("working").closest("section");
     expect(workingSection).not.toBeNull();
+    // Only sess-main is working at this point — one card in this section.
     expect(within(workingSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
       "href",
       "/worktree/wt-1",
@@ -156,17 +164,19 @@ describe("DashboardPanel", () => {
       // Bucket hides entirely when empty — old section refs would point at stale detached DOM.
       expect(screen.queryByText("working")).toBeNull();
     });
-    const idleSection = screen.getByText("waiting for user").closest("section");
+    const idleSection = screen.getByText("idle").closest("section");
     expect(idleSection).not.toBeNull();
     await waitFor(() => {
-      expect(within(idleSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
-        "href",
-        "/worktree/wt-1",
-      );
+      // sess-main now joins sess-agent2 (idle since fixture setup) — two
+      // separate cards, both linking to /worktree/wt-1 (one per session,
+      // 6.1 — no rollup to a single worktree card anymore).
+      const links = within(idleSection!).getAllByRole("link", { name: /Proj A/i });
+      expect(links.length).toBe(2);
+      for (const link of links) expect(link).toHaveAttribute("href", "/worktree/wt-1");
     });
   });
 
-  it("dashboard-bucket-fixes — a sibling session actively working keeps the worktree bucketed as working, even if another session is waiting_for_human", async () => {
+  it("6.T5 — a working session and a waiting_for_human sibling now render as two separate cards in two different columns (966b676 regression, structurally impossible now)", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -179,10 +189,11 @@ describe("DashboardPanel", () => {
       expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
     });
 
-    // wt-1: sess-main stays "working"; sess-agent2 flips to waiting_for_human
-    // (rank 8, would normally outrank "working" rank 6 in the single-winner
-    // rollup) — the worktree must still read as "working" because SOME
-    // session is actively working right now.
+    // wt-1: sess-main stays "working"; sess-agent2 flips to waiting_for_human.
+    // Under the old rollup, one worktree card had to pick a single winner —
+    // that's the 966b676 bug (waiting_for_human, rank 8, hid working, rank
+    // 6). Per-session cards (6.1) make that structurally impossible: each
+    // session gets its own card in its own column.
     api.__test.emit({ type: "session:state", sessionId: "sess-agent2", state: "waiting_for_human" });
 
     await waitFor(() => {
@@ -192,10 +203,62 @@ describe("DashboardPanel", () => {
         "href",
         "/worktree/wt-1",
       );
+      const needsYouSection = screen.getByText("needs you").closest("section");
+      expect(needsYouSection).not.toBeNull();
+      expect(within(needsYouSection!).getByRole("link", { name: /Proj A/i })).toHaveAttribute(
+        "href",
+        "/worktree/wt-1",
+      );
     });
   });
 
-  it("dashboard-bucket-fixes — excludes an archived session from bucketing", async () => {
+  it("6.T2 — PR set on the `isMain` session ALONE still colours the sibling (non-main) session's card too — the real daemon write shape (BLOCKING-2 fix)", async () => {
+    // The daemon's prPoller writes `session.pr` ONLY to a worktree's `isMain`
+    // session (prPoller.ts:164) — nothing else ever writes it. So this test
+    // must NOT hand-emit a `pr` payload for the sibling (`sess-agent2`); that
+    // was masking the real gap (the daemon can never produce a `pr` write for
+    // a non-main session). Seeding the PR on `sess-main` only and asserting
+    // the sibling's card ALSO shows it is the guarantee that actually matters
+    // — PR is resolved per WORKTREE (`worktreePrStatus()` off the `isMain`
+    // session), then fanned out in the UI to every non-archived agent session
+    // card of that worktree, per docs/STATUS-INDICATORS.md § Per-session vs
+    // per-worktree.
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    // Both wt-1 sessions go idle; only the isMain session (`sess-main`) gets
+    // the matching-branch open PR — exactly what the real daemon does.
+    api.__test.emit({ type: "session:state", sessionId: "sess-main", state: "idle" });
+    api.__test.emit({
+      type: "session:updated",
+      sessionId: "sess-main",
+      pr: { state: "open", checkedAt: new Date().toISOString(), prBranch: "wt-1" },
+    });
+
+    await waitFor(() => {
+      const prSection = screen.getByText("pr created").closest("section");
+      expect(prSection).not.toBeNull();
+      const links = within(prSection!).getAllByRole("link", { name: /Proj A/i });
+      expect(links).toHaveLength(2);
+      for (const link of links) expect(link).toHaveAttribute("href", "/worktree/wt-1");
+      // Both cards' dots resolve to pr-open — no isMain preference on which
+      // CARD shows the branch's PR, even though only the isMain session's
+      // own `.pr` field was ever written.
+      const dots = within(prSection!).getAllByLabelText(/status: pr-open/i);
+      expect(dots).toHaveLength(2);
+    });
+  });
+
+  it("6.T4 — dashboard-bucket-fixes — excludes an archived session from bucketing", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -208,9 +271,8 @@ describe("DashboardPanel", () => {
       expect(document.querySelector('a[href="/worktree/wt-3"]')).not.toBeNull();
     });
 
-    // wt-3's only agent session (idle) gets archived — with no non-archived
-    // agent sessions left, the worktree must drop out of every bucket
-    // entirely rather than keep poisoning "waiting for user".
+    // wt-3's only agent session (idle) gets archived — an archived session
+    // produces no card at all (6.T4).
     api.__test.emit({
       type: "session:updated",
       sessionId: "sess-wt3-main",
@@ -288,7 +350,7 @@ describe("DashboardPanel", () => {
     });
   });
 
-  it("4.T6 — a direct session with pr.state==='open' lands in the PR bucket", async () => {
+  it("6.3 — a direct session's PR is never rendered/bucketed (no worktree to branch-guard against), superseding 4.T6", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -324,11 +386,16 @@ describe("DashboardPanel", () => {
     api.__test.emit({ type: "session:updated", sessionId: "sess-direct-pr", pr: { state: "open", checkedAt: new Date().toISOString() } });
 
     await waitFor(() => {
-      const prSection = screen.getByText("pr created").closest("section");
-      expect(prSection).not.toBeNull();
-      const link = within(prSection!).getByRole("link", { name: /Direct PR Agent/i });
+      // Direct sessions have no worktree, so `session.pr` can never be
+      // branch-guarded and is never shown — the card stays lifecycle-only,
+      // bucketed under "idle" (its own state), not "pr created".
+      const link = screen.getByRole("link", { name: /Direct PR Agent/i });
       expect(link).toHaveAttribute("href", "/session/sess-direct-pr");
     });
+    expect(screen.queryByText("pr created")).toBeNull();
+    const idleSection = screen.getByText("idle").closest("section");
+    expect(idleSection).not.toBeNull();
+    expect(within(idleSection!).getByRole("link", { name: /Direct PR Agent/i })).toBeInTheDocument();
   });
 
   it("4.T6 — an archivedAt-set session in waiting_for_human does not place its worktree in the Waiting bucket", async () => {
@@ -396,5 +463,69 @@ describe("DashboardPanel", () => {
     expect(screen.queryByText("Proj A")).toBeNull();
     // A visible project's worktree (proj-b / wt-3) is unaffected.
     expect(document.querySelector('a[href="/worktree/wt-3"]')).not.toBeNull();
+  });
+
+  it("excludes a direct (worktree-less) session's card when its project is hidden", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    api.__test.emit({
+      type: "session:created",
+      sessionId: "sess-direct-hide",
+      worktreeId: null,
+      projectId: "proj-a",
+      sessionType: "agent",
+      snapshot: {
+        id: "sess-direct-hide",
+        worktreeId: null,
+        projectId: "proj-a",
+        modeId: "mode-1",
+        type: "agent",
+        name: "Direct Hide Agent",
+        isMain: false,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "sess-direct-hide",
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    await waitFor(() => {
+      const workingSection = screen.getByText("working").closest("section");
+      expect(workingSection).not.toBeNull();
+      expect(
+        within(workingSection!).getByRole("link", { name: /Direct Hide Agent/i }),
+      ).toBeInTheDocument();
+    });
+
+    // Hiding the direct session's project (proj-a, the `s.projectId` branch
+    // of the filter at DashboardPanel.tsx's hidden-project check) must drop
+    // its card too, the same as a worktree-attached session's card.
+    api.__test.emit({
+      type: "project:updated",
+      project: {
+        id: "proj-a",
+        name: "Proj A",
+        path: "/home/dev/proj-a",
+        prefix: "pa",
+        isGit: true,
+        defaultBranch: "main",
+        createdAt: new Date().toISOString(),
+        hidden: true,
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: /Direct Hide Agent/i })).toBeNull();
+    });
   });
 });

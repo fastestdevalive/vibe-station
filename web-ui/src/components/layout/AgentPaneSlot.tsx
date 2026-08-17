@@ -1,5 +1,5 @@
 import type { ApiInstance } from "@/api";
-import type { Session } from "@/api/types";
+import type { PrStatus, Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
@@ -13,6 +13,23 @@ interface AgentPaneSlotProps {
   /** Active agent session for this slot (worktree main/additional or direct). */
   sessionId: string | null;
   session?: Session;
+  /**
+   * The session's worktree's CURRENT branch (D20), or `null`/`undefined` for
+   * a direct (worktree-less) session. Required to branch-guard `pr` the same
+   * way `WorkspaceCanvas.tsx`/`LeftSidebar.tsx` do — without it, a stale PR
+   * from a branch the worktree has since switched off of would still colour
+   * the pane border.
+   */
+  branch?: string | null;
+  /**
+   * The worktree's PR (BLOCKING-2 fix), already resolved by the caller via
+   * `worktreePrStatus()` — the daemon writes `session.pr` only to a
+   * worktree's `isMain` session, so a sibling agent's pane must NOT read
+   * `session.pr` directly (it's always empty there). `worktreePrStatus()`
+   * already branch-guards internally (D20), so this is `null` whenever the
+   * PR was last checked against a branch the worktree has since left.
+   */
+  pr?: PrStatus | null;
 }
 
 /**
@@ -26,7 +43,7 @@ interface AgentPaneSlotProps {
  * never unmounts the terminal, so it cannot recreate the ghost-stream remount
  * bug fixed in 9dc10ef.
  */
-export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
+export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
   // The channel toggle is handed to `TerminalPane` so a single owner decides its
   // placement: a top-right overlay while the terminal is live, but rendered
@@ -56,9 +73,17 @@ export function AgentPaneSlot({ api, sessionId, session }: AgentPaneSlotProps) {
   // sessions (no tile header to host a StatusDot dot in either case), so a
   // border is the only "colored rectangle" surface available here.
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
+  // D20 — branch-guard the PR the same way WorkspaceCanvas/LeftSidebar do: a
+  // PR only colours the border while it was last checked against this
+  // session's worktree's CURRENT branch. `branch` is null for a direct
+  // (worktree-less) session, which correctly suppresses the PR unconditionally.
+  // `pr` is already resolved per-worktree by the caller (BLOCKING-2 fix) —
+  // NOT read off `session.pr` directly, since the daemon only ever writes
+  // `pr` to a worktree's `isMain` session and this pane may host a sibling.
+  const sessionPr = pr && branch && pr.prBranch === branch ? pr : null;
   const status =
     session && showAgentStatusBorders
-      ? resolveStatusClass(sessionStatus(session.state), session.pr ?? null)
+      ? resolveStatusClass(sessionStatus(session.state), sessionPr)
       : null;
   return (
     <div className={`agent-pane-slot${status ? ` agent-pane-slot--${status}` : ""}`}>

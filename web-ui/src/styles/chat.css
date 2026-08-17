@@ -13,13 +13,13 @@
 
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
    narrower comment this replaces, which limited COLOR to waiting_for_human
-   only; re-broadened by user request to also cover `working`). Four states
-   now carry a border color: `working` (yellow — active), `pr-open` (blue),
-   `pr-merged` (green), `waiting_for_human` (red — needs you now). `idle`,
-   `done`, `exited`, `spawning`, none stay on the base rule's `transparent`
-   border (D19 — `done`/`exited` are terminal and are never re-colored by a
-   PR). PR outcome is a separate, orthogonal axis layered on top via
-   `resolveStatusClass` — see the `--pr-*` rules below. Mirrors
+   only; re-broadened by user request to also cover `working`). States that
+   carry a border color: `working` (yellow — active), `pr-open` (blue),
+   `pr-merged` (green), `waiting_for_human` (red — needs you now). `done`/
+   `exited` DO get recoloured by a landed PR too (D21) — only a `done`/
+   `exited` session with NO PR (or `spawning`/`idle`/none) stays on the base
+   rule's `transparent` border. PR outcome is a separate, orthogonal axis
+   layered on top via `resolveStatusClass` — see the `--pr-*` rules below. Mirrors
    WorkspaceCanvas's `.workspace-canvas__tile--*` rules exactly
    (workspace-canvas.css); note StatusDot's `.status-dot--*` rules
    (workspace.css) still carry the full status range and no longer match

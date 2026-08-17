@@ -26,11 +26,13 @@ import type { PrInfo, PrLookupResult } from "./github.js";
 import type { PrStatus, SessionRecord } from "../types.js";
 
 /**
- * 10s (K8) — matches `github.ts`'s own 5s cache TTL closely enough that the
- * cache never defeats the interval, while staying well under the authed
- * GitHub rate limit (5,000 req/hr) given the batching above.
+ * 30s — comfortably above `github.ts`'s 5s cache TTL, so the cache never
+ * defeats the interval, and ~240 req/hr (≈5% of the authed 5,000/hr limit)
+ * given `fetchPrsForBranches` batches to one aliased GraphQL query per
+ * ACCOUNT rather than one per worktree. Worst-case latency for a newly
+ * opened PR to surface is one interval.
  */
-export const PR_POLL_INTERVAL_MS = 10_000;
+export const PR_POLL_INTERVAL_MS = 30_000;
 
 let pollerHandle: ReturnType<typeof setInterval> | null = null;
 
@@ -75,10 +77,16 @@ function nextPrStatus(
             "— PR status will not update until credentials are available.",
         );
       }
+      // Only hold `current` forward when it was last checked against THIS
+      // branch — otherwise a worktree that switched branches since the last
+      // successful check would get a stale PR re-stamped onto its new branch
+      // (defeats the D20 branch guard). See BLOCKING-1 in the review this
+      // fixes.
+      const held = current?.prBranch === branch ? current : undefined;
       return {
-        state: current?.state ?? "none",
-        ...(current?.number != null ? { number: current.number } : {}),
-        ...(current?.url != null ? { url: current.url } : {}),
+        state: held?.state ?? "none",
+        ...(held?.number != null ? { number: held.number } : {}),
+        ...(held?.url != null ? { url: held.url } : {}),
         checkedAt: now,
         error: "No credentialed GitHub account available",
         prBranch: branch,
@@ -91,10 +99,12 @@ function nextPrStatus(
         lastErrorWarnAt.set(lookup.reason, nowMs);
         console.warn(`[prPoller] GitHub lookup failed (${lookup.reason}): ${lookup.message}`);
       }
+      // Same same-branch hold as `no_credentials` above.
+      const held = current?.prBranch === branch ? current : undefined;
       return {
-        state: current?.state ?? "none",
-        ...(current?.number != null ? { number: current.number } : {}),
-        ...(current?.url != null ? { url: current.url } : {}),
+        state: held?.state ?? "none",
+        ...(held?.number != null ? { number: held.number } : {}),
+        ...(held?.url != null ? { url: held.url } : {}),
         checkedAt: now,
         error: lookup.message,
         prBranch: branch,
@@ -192,7 +202,7 @@ export async function pollAllPrs(): Promise<void> {
       // B2: nothing but `checkedAt` changed — skip the write AND the
       // broadcast entirely rather than doing a full DB write + a
       // `session:updated` broadcast (which the web-ui rebuilds its whole
-      // `sessions` array in response to) every 10s for every worktree,
+      // `sessions` array in response to) every 30s for every worktree,
       // forever, even when the PR status genuinely hasn't changed.
       if (prStatusEquivalent(c.session.pr, nextPr)) return;
       try {

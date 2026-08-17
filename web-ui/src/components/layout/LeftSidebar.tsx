@@ -939,7 +939,9 @@ export function LeftSidebar({
                             <span className="wt-leading-slot pinned-row__leading">
                               <StatusDot
                                 status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
-                                pr={sess.pr ?? null}
+                                // Direct session — no worktree to branch-guard a PR against, so
+                                // it can never show one (docs/STATUS-INDICATORS.md).
+                                pr={null}
                               />
                             </span>
                             <div className="pinned-row__text">
@@ -1472,7 +1474,10 @@ export function LeftSidebar({
                                       <span className="direct-session__icon">
                                         <StatusDot
                                           status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
-                                          pr={sess.pr ?? null}
+                                          // Direct session — no worktree to branch-guard a PR
+                                          // against, so it can never show one
+                                          // (docs/STATUS-INDICATORS.md).
+                                          pr={null}
                                         />
                                       </span>
                                       {!collapsed &&
