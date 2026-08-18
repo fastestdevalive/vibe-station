@@ -25,7 +25,7 @@ interface StatusDotProps {
 /**
  * One indicator, not two (D17/D18/5.8-5.9, superseding the separate
  * `PrBadge`) — the same `●` dot is recolored by `resolveStatusClass` for
- * `working` (yellow), `pr-open` (blue), `pr-merged` (green). Because D18
+ * `working` (yellow), `pr-open` (green), `pr-merged` (purple). Because D18
  * lets an open/merged PR outrank `waiting_for_human`, the resolved state can
  * differ from the raw `status` prop — e.g. `waiting_for_human` + an open PR
  * resolves to `pr-open` and renders the round dot, not the waiting `!`

@@ -44,7 +44,7 @@ export function worktreePrStatus(sessions: Session[], currentBranch: string): Pr
  *
  * `done`/`exited` are terminal for BUCKETING (D19 — `bucketForRollup` sends
  * them to "finished" unconditionally) but **do inherit the PR color** (D21):
- * a landed branch should still read as blue/green so you can see the work
+ * a landed branch should still read as green/purple so you can see the work
  * shipped, even though the card sits in Finished. Colour and bucket
  * deliberately disagree here — see `docs/STATUS-INDICATORS.md`. With no PR,
  * `done` resolves to `null` and `exited` to its own literal class, which
