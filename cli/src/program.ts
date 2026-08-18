@@ -22,7 +22,7 @@ import { registerSessionLs } from "./commands/session/ls.js";
 import { registerSessionInfo } from "./commands/session/info.js";
 import { registerSessionTranscript } from "./commands/session/transcript.js";
 import { registerSessionMeta } from "./commands/session/meta.js";
-import { registerSessionKill } from "./commands/session/kill.js";
+import { registerSessionTerminate } from "./commands/session/terminate.js";
 import { registerSessionAttach } from "./commands/session/attach.js";
 import { registerSessionRestore } from "./commands/session/restore.js";
 import { registerSessionOutput } from "./commands/session/output.js";
@@ -98,7 +98,7 @@ export function buildProgram(): Command {
   registerSessionCreate(session);
   registerSessionLs(session);
   registerSessionInfo(session);
-  registerSessionKill(session);
+  registerSessionTerminate(session);
   registerSessionAttach(session);
   registerSessionRestore(session);
   registerSessionOutput(session);

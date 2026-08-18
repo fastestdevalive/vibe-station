@@ -164,7 +164,7 @@ Body: `{ projectId, modeId, branch, baseBranch?, prompt? }` (see §4).
 ```
 
 ### DELETE /worktrees/:id?purge=true
-Kill all sessions and remove the worktree from the manifest.
+Terminate all sessions and remove the worktree from the manifest.
 With `?purge=true`, also deletes the git worktree checkout from disk.
 ```
 → 200 { ok: true }
@@ -206,7 +206,7 @@ Create an additional agent or terminal session inside an existing worktree.
 ```
 
 ### DELETE /sessions/:id
-Kill a non-main session.
+Terminate a non-main session.
 ```
 → 200 { ok: true }
 → 400 { error: "Cannot delete the main session. Use DELETE /worktrees/:id instead." }
@@ -398,24 +398,24 @@ curl -X PATCH http://127.0.0.1:7421/sessions/<id>/rename \
 ## 11. Tear down
 
 ```bash
-# Kill a specific session (non-main only)
+# Terminate a specific session (non-main only; omit the id to terminate the caller's own session via $VST_SESSION)
 curl -X DELETE "http://127.0.0.1:7421/sessions/<sessionId>"
 
-# Remove a worktree (kills all sessions, removes from manifest)
+# Remove a worktree (terminates all sessions, removes from manifest)
 curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>"
 
 # Also delete the git worktree checkout from disk
 curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>?purge=true"
 
 # CLI equivalents
-vst session kill <sessionId>
+vst session terminate [sessionId]
 vst worktree rm <worktreeId>
 vst worktree rm <worktreeId> --purge
 ```
 
 When to use each:
 - `DELETE /sessions/:id` — stop an individual non-main agent or terminal tab while keeping the worktree alive.
-- `DELETE /worktrees/:id` — tear down the whole worktree (all sessions killed, branch preserved on disk unless `purge=true`).
+- `DELETE /worktrees/:id` — tear down the whole worktree (all sessions terminated, branch preserved on disk unless `purge=true`).
 
 ---
 
@@ -423,7 +423,7 @@ When to use each:
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
 - **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
-- **Sessions are co-tenants** — only kill sessions or worktrees that your integration created. Never call `DELETE /worktrees/:id` on worktrees owned by the developer's interactive session.
+- **Sessions are co-tenants** — only terminate sessions or worktrees that your integration created. Never call `DELETE /worktrees/:id` on worktrees owned by the developer's interactive session.
 - **Set a meaningful `prompt`** when spawning sessions. The clearer the task description, the better the agent's output.
 - **Poll `state`, don't spin.** Check `GET /sessions/:id` every 5–10 s rather than hammering the endpoint.
 

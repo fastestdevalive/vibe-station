@@ -175,7 +175,7 @@ Session slots are named `m` (main agent), `a2`, `a3` (extra agents), `t1`, `t2` 
 ```bash
 vst session ls --worktree=<worktree-id>
 vst session info <session-id>
-vst session kill <session-id>       # any session except the main slot
+vst session terminate [session-id]  # defaults to your own session ($VST_SESSION); any session except the main slot
 vst session attach <session-id>     # drop into the raw tmux session
 ```
 
@@ -368,13 +368,13 @@ flowchart LR
   webui -->|HTTP| rest
   webui <-->|WebSocket| ws
   rest --- state
-  rest -->|spawn / kill| tmux
+  rest -->|spawn / terminate| tmux
   ws -.->|attach| tmux
   tmux --> pty --> agent
   agent --> repo
 ```
 
-- **CLI and Web UI** are thin clients — every action (create worktree, send message, kill session) is an HTTP call to the daemon.
+- **CLI and Web UI** are thin clients — every action (create worktree, send message, terminate session) is an HTTP call to the daemon.
 - **The daemon** is the only stateful component. It owns the manifest, spawns agents into tmux, and broadcasts terminal output + lifecycle changes over WebSocket.
 - **Each worktree** is an isolated `git worktree` checkout on its own branch, with one or more tmux sessions running an AI CLI inside it. Agents in different worktrees never see each other.
 - **Persistence**: tmux sessions outlive the daemon, so a daemon restart reattaches without losing agent state. Claude sessions additionally resume their conversation history via `claude --resume`.
@@ -419,7 +419,7 @@ The project is a monorepo with three sibling directories at the root:
 ```
 vst project   add | rm | ls | info
 vst worktree  create | rm | ls | info
-vst session   create | kill | ls | info | attach | restore | output
+vst session   create | terminate | ls | info | attach | restore | output
 vst mode      add | rm | ls
 vst send      <session-id> [message] [--file] [--wait]
 vst status    [--project] [--json]
