@@ -40,6 +40,7 @@ export interface SessionRow {
   archivedAt: string | null;
   handoffSummary: string | null;
   spawnedFrom: string | null;
+  supersededBy: string | null;
   prState: string | null;
   prNumber: number | null;
   prUrl: string | null;
@@ -98,6 +99,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
     ...(row.handoffSummary != null ? { handoffSummary: row.handoffSummary } : {}),
     ...(row.spawnedFrom != null ? { spawnedFrom: row.spawnedFrom } : {}),
+    ...(row.supersededBy != null ? { supersededBy: row.supersededBy } : {}),
     ...(legacyPr ? { pr: legacyPr } : {}),
   };
 }
@@ -143,6 +145,7 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     archivedAt: session.archivedAt ?? null,
     handoffSummary: session.handoffSummary ?? null,
     spawnedFrom: session.spawnedFrom ?? null,
+    supersededBy: session.supersededBy ?? null,
     prState: session.pr?.state ?? null,
     prNumber: session.pr?.number ?? null,
     prUrl: session.pr?.url ?? null,

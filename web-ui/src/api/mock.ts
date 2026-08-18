@@ -601,21 +601,23 @@ export function createMockApi() {
 
       const archivedAt = nowIso();
       const handoffSummary = body?.handoff ? "Mock handoff summary." : null;
+      const newId = `sess-${Date.now()}`; // moved up from below the emit — supersededBy needs this before the emit
       s.archivedAt = archivedAt;
       s.handoffSummary = handoffSummary;
-      emit({ type: "session:updated", sessionId: id, archivedAt });
+      s.supersededBy = newId;
+      emit({ type: "session:updated", sessionId: id, archivedAt, supersededBy: newId });
 
-      const newId = `sess-${Date.now()}`;
       const newSession: Session = {
-        ...structuredClone(s),
-        id: newId,
-        state: "working",
-        lifecycleState: "working",
-        tmuxName: `tmux-${Date.now()}`,
+        ...structuredClone(s), // NOTE: this spreads `s`, which now HAS supersededBy: newId set above —
+        id: newId,             // the override below is load-bearing, not redundant, or the replacement
+        state: "working",      // session ends up superseding ITSELF and gets filtered out by TabsStrip's
+        lifecycleState: "working", // new supersededBy != null check, the exact bug this fix is supposed
+        tmuxName: `tmux-${Date.now()}`, // to remove, just moved onto the new session.
         createdAt: nowIso(),
         archivedAt: null,
         handoffSummary: null,
         pinnedAt: null,
+        supersededBy: null, // MUST override the spread, see NOTE above
       };
       sessions.push(newSession);
       emit({

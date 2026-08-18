@@ -108,6 +108,11 @@ export function ensureSchema(db: Database): void {
   // leaving a dangling id is harmless (Research: the client-side workspace
   // tile scan simply won't find a match, S5).
   addColumnIfMissing(db, "sessions", "spawnedFrom", "TEXT");
+  // supersededBy (present-tickmark-replacement/02-reset-relink) — the
+  // replacement session's id, set on the archived row by the reset route.
+  // NULL for sessions never reset (the common case) or archived by other
+  // means (/done, plain archive). No FK enforcement, mirrors spawnedFrom.
+  addColumnIfMissing(db, "sessions", "supersededBy", "TEXT");
   // pr* (pr-status-axis) — VCS status for this session's branch, written
   // exclusively by prPoller.ts. NULL until the first poll tick checks this
   // session's worktree. prState mirrors PrStatus.state ("none"|"draft"|
