@@ -214,6 +214,11 @@
   flex-shrink: 0;
 }
 
+.workspace-canvas__picker-check {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
 /* Cross-context picker sections (saved workspaces only): project > worktree. */
 .workspace-canvas__picker-group {
   border-top: var(--border-width) solid var(--border-default);
