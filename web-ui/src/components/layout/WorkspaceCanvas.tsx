@@ -399,19 +399,16 @@ export function WorkspaceCanvas({
   const placedToolWorktrees = new Set(
     cv.tiles.filter((t) => t.kind === "tools").map((t) => t.worktreeId ?? worktreeId),
   );
-  const canAddTools = hasTools && !placedToolWorktrees.has(worktreeId);
+  const showTools = hasTools;
+  const toolsPlaced = placedToolWorktrees.has(worktreeId);
 
   const pickerQuery = pickerSearch.trim().toLowerCase();
   function matchesSearch(label: string): boolean {
     return !pickerQuery || label.toLowerCase().includes(pickerQuery);
   }
 
-  const availableAgents = agentSessions.filter(
-    (s) => !placedSessionIds.has(s.id) && matchesSearch(sessionLabel(s)),
-  );
-  const availableTerminals = terminalSessions.filter(
-    (s) => !placedSessionIds.has(s.id) && matchesSearch(sessionLabel(s)),
-  );
+  const availableAgents = agentSessions.filter((s) => matchesSearch(sessionLabel(s)));
+  const availableTerminals = terminalSessions.filter((s) => matchesSearch(sessionLabel(s)));
 
   /**
    * A worktree counts as "done" the same way the dashboard's "Finished"
@@ -471,13 +468,13 @@ export function WorkspaceCanvas({
                   (s) =>
                     s.worktreeId === w.id &&
                     (s.type === "agent" || s.type === "terminal") &&
-                    !placedSessionIds.has(s.id) &&
                     (wtNameMatches || matchesSearch(sessionLabel(s))),
                 ),
-                canAddTools: !placedToolWorktrees.has(w.id) && wtNameMatches,
+                showTools: wtNameMatches,
+                toolsPlaced: placedToolWorktrees.has(w.id),
               };
             })
-            .filter((entry) => entry.sessions.length > 0 || entry.canAddTools),
+            .filter((entry) => entry.sessions.length > 0 || entry.showTools),
           // Direct (worktree-less) sessions of the SAME project — no
           // worktree to nest under, so they get their own subheading instead
           // of a `{worktree, sessions}` entry above.
@@ -486,7 +483,6 @@ export function WorkspaceCanvas({
               s.projectId === project.id &&
               s.worktreeId == null &&
               (s.type === "agent" || s.type === "terminal") &&
-              !placedSessionIds.has(s.id) &&
               matchesSearch(sessionLabel(s)),
           ),
         }))
@@ -499,7 +495,7 @@ export function WorkspaceCanvas({
     isDetachedView &&
     availableAgents.length === 0 &&
     availableTerminals.length === 0 &&
-    !canAddTools &&
+    !showTools &&
     otherContextGroups.length === 0;
 
   function handleModeChange(next: "tiled" | "free") {
@@ -564,6 +560,24 @@ export function WorkspaceCanvas({
     // reconciliation effect above, not inline here, so it also covers
     // removals this component didn't itself trigger.
     patchCanvas(removeTileFromCanvas(cv, tileId));
+  }
+
+  // Single toggle for every picker item — session-backed (agent/terminal) or
+  // worktree-scoped (tools). Mirrors the tile-close button's semantics: this only
+  // touches canvas geometry, never the underlying session/data.
+  // `t.sessionId != null` guards a "tools" call site (sessionId undefined) from
+  // ever matching a tools tile, whose own `sessionId` field is also undefined.
+  function togglePickerItem(kind: TileKind, sessionId?: string, tileWorktreeId?: string) {
+    const existing =
+      kind === "tools"
+        ? cv.tiles.find((t) => t.kind === "tools" && (t.worktreeId ?? worktreeId) === (tileWorktreeId ?? worktreeId))
+        : cv.tiles.find((t) => t.sessionId != null && t.sessionId === sessionId);
+    if (existing) {
+      removeTile(existing.id);
+      setPickerOpen(false);
+    } else {
+      addTile(kind, sessionId, tileWorktreeId);
+    }
   }
 
   /**
@@ -1129,7 +1143,7 @@ export function WorkspaceCanvas({
                   />
                 </div>
                 {pickerEmpty ? (
-                  <div className="workspace-canvas__picker-empty">Everything's already on the canvas</div>
+                  <div className="workspace-canvas__picker-empty">Nothing to add</div>
                 ) : null}
                 {!isDetachedView && matchesSearch("New agent") ? (
                   <button
@@ -1146,45 +1160,69 @@ export function WorkspaceCanvas({
                     </span>
                   </button>
                 ) : null}
-                {availableAgents.map((s) => (
+                {availableAgents.map((s) => {
+                  const placed = placedSessionIds.has(s.id);
+                  return (
                   <button
                     key={s.id}
                     type="button"
                     className="workspace-canvas__picker-item"
-                    onClick={() => addTile("agent", s.id)}
+                    aria-pressed={placed}
+                    title={placed ? "Remove from canvas" : "Add to canvas"}
+                    onClick={() => togglePickerItem("agent", s.id)}
                   >
                     <span className="workspace-canvas__picker-item-main">
                       <Bot size={13} className="workspace-canvas__picker-icon" />
                       {sessionLabel(s)}
                     </span>
-                    <span className="workspace-canvas__picker-kind">agent</span>
+                    {placed ? (
+                      <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                    ) : (
+                      <span className="workspace-canvas__picker-kind">agent</span>
+                    )}
                   </button>
-                ))}
-                {availableTerminals.map((s) => (
+                  );
+                })}
+                {availableTerminals.map((s) => {
+                  const placed = placedSessionIds.has(s.id);
+                  return (
                   <button
                     key={s.id}
                     type="button"
                     className="workspace-canvas__picker-item"
-                    onClick={() => addTile("terminal", s.id)}
+                    aria-pressed={placed}
+                    title={placed ? "Remove from canvas" : "Add to canvas"}
+                    onClick={() => togglePickerItem("terminal", s.id)}
                   >
                     <span className="workspace-canvas__picker-item-main">
                       <SquareTerminal size={13} className="workspace-canvas__picker-icon" />
                       {sessionLabel(s)}
                     </span>
-                    <span className="workspace-canvas__picker-kind">terminal</span>
+                    {placed ? (
+                      <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                    ) : (
+                      <span className="workspace-canvas__picker-kind">terminal</span>
+                    )}
                   </button>
-                ))}
-                {canAddTools && matchesSearch("Tools") ? (
+                  );
+                })}
+                {showTools && matchesSearch("Tools") ? (
                   <button
                     type="button"
                     className="workspace-canvas__picker-item"
-                    onClick={() => addTile("tools")}
+                    aria-pressed={toolsPlaced}
+                    title={toolsPlaced ? "Remove from canvas" : "Add to canvas"}
+                    onClick={() => togglePickerItem("tools")}
                   >
                     <span className="workspace-canvas__picker-item-main">
                       <PanelRight size={13} className="workspace-canvas__picker-icon" />
                       Tools
                     </span>
-                    <span className="workspace-canvas__picker-kind">tools</span>
+                    {toolsPlaced ? (
+                      <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                    ) : (
+                      <span className="workspace-canvas__picker-kind">tools</span>
+                    )}
                   </button>
                 ) : null}
                 {/* Cross-context panes — saved workspaces only (see otherContextGroups). */}
@@ -1211,7 +1249,7 @@ export function WorkspaceCanvas({
                     </button>
                     {expanded ? (
                       <>
-                        {group.worktrees.map(({ worktree, sessions, canAddTools: wtTools }) => (
+                        {group.worktrees.map(({ worktree, sessions, showTools: wtShowTools, toolsPlaced: wtToolsPlaced }) => (
                           <div key={worktree.id}>
                             <div className="workspace-canvas__picker-subheading">
                               <GitBranch size={12} className="workspace-canvas__picker-icon" />
@@ -1219,12 +1257,16 @@ export function WorkspaceCanvas({
                             </div>
                             <div className="workspace-canvas__picker-subitems">
                               <span className="workspace-canvas__picker-indent-line" aria-hidden />
-                              {sessions.map((s) => (
+                              {sessions.map((s) => {
+                                const placed = placedSessionIds.has(s.id);
+                                return (
                                 <button
                                   key={s.id}
                                   type="button"
                                   className="workspace-canvas__picker-item"
-                                  onClick={() => addTile(s.type as TileKind, s.id, worktree.id)}
+                                  aria-pressed={placed}
+                                  title={placed ? "Remove from canvas" : "Add to canvas"}
+                                  onClick={() => togglePickerItem(s.type as TileKind, s.id, worktree.id)}
                                 >
                                   <span className="workspace-canvas__picker-item-main">
                                     {s.type === "agent" ? (
@@ -1234,20 +1276,31 @@ export function WorkspaceCanvas({
                                     )}
                                     {sessionLabel(s)}
                                   </span>
-                                  <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                  {placed ? (
+                                    <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                                  ) : (
+                                    <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                  )}
                                 </button>
-                              ))}
-                              {wtTools ? (
+                                );
+                              })}
+                              {wtShowTools ? (
                                 <button
                                   type="button"
                                   className="workspace-canvas__picker-item"
-                                  onClick={() => addTile("tools", undefined, worktree.id)}
+                                  aria-pressed={wtToolsPlaced}
+                                  title={wtToolsPlaced ? "Remove from canvas" : "Add to canvas"}
+                                  onClick={() => togglePickerItem("tools", undefined, worktree.id)}
                                 >
                                   <span className="workspace-canvas__picker-item-main">
                                     <PanelRight size={13} className="workspace-canvas__picker-icon" />
                                     Tools
                                   </span>
-                                  <span className="workspace-canvas__picker-kind">tools</span>
+                                  {wtToolsPlaced ? (
+                                    <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                                  ) : (
+                                    <span className="workspace-canvas__picker-kind">tools</span>
+                                  )}
                                 </button>
                               ) : null}
                             </div>
@@ -1258,12 +1311,16 @@ export function WorkspaceCanvas({
                             <div className="workspace-canvas__picker-subheading">Direct</div>
                             <div className="workspace-canvas__picker-subitems">
                               <span className="workspace-canvas__picker-indent-line" aria-hidden />
-                              {group.directSessions.map((s) => (
+                              {group.directSessions.map((s) => {
+                                const placed = placedSessionIds.has(s.id);
+                                return (
                                 <button
                                   key={s.id}
                                   type="button"
                                   className="workspace-canvas__picker-item"
-                                  onClick={() => addTile(s.type as TileKind, s.id)}
+                                  aria-pressed={placed}
+                                  title={placed ? "Remove from canvas" : "Add to canvas"}
+                                  onClick={() => togglePickerItem(s.type as TileKind, s.id)}
                                 >
                                   <span className="workspace-canvas__picker-item-main">
                                     {s.type === "agent" ? (
@@ -1273,9 +1330,14 @@ export function WorkspaceCanvas({
                                     )}
                                     {sessionLabel(s)}
                                   </span>
-                                  <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                  {placed ? (
+                                    <Check size={13} className="workspace-canvas__picker-check" aria-hidden />
+                                  ) : (
+                                    <span className="workspace-canvas__picker-kind">{s.type}</span>
+                                  )}
                                 </button>
-                              ))}
+                                );
+                              })}
                             </div>
                           </div>
                         ) : null}
