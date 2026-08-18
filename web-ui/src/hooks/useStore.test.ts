@@ -5,6 +5,8 @@ import {
   insertTileIntoCanvas,
   removeTileFromCanvas,
   findWorkspacesTilingSession,
+  relinkSessionInCanvas,
+  resolveSupersededChains,
   DEFAULT_WORKTREE_LAYOUT,
   type CanvasGeometry,
 } from "@/hooks/useStore";
@@ -401,6 +403,129 @@ describe("removeTileFromCanvas", () => {
     const withTile = insertTileIntoCanvas(empty, "agent", "sess-1");
     const next = removeTileFromCanvas(withTile, "nonexistent");
     expect(next.tiles).toHaveLength(1);
+  });
+});
+
+// --- relinkSessionInCanvas / relinkSessionTiles / resolveSupersededChains
+// (present-tickmark-replacement/02-reset-relink) ---
+describe("relinkSessionInCanvas", () => {
+  it("repoints a matching tile's sessionId, keeping the same tile id", () => {
+    const empty: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };
+    const withTile = insertTileIntoCanvas(empty, "agent", "sess-old");
+    const tileId = withTile.tiles[0]!.id;
+    const next = relinkSessionInCanvas(withTile, "sess-old", "sess-new");
+    expect(next.tiles).toHaveLength(1);
+    expect(next.tiles[0]!.id).toBe(tileId);
+    expect(next.tiles[0]!.sessionId).toBe("sess-new");
+  });
+
+  it("returns the SAME canvas reference when no tile matches", () => {
+    const empty: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };
+    const withTile = insertTileIntoCanvas(empty, "agent", "sess-other");
+    const next = relinkSessionInCanvas(withTile, "sess-old", "sess-new");
+    expect(next).toBe(withTile);
+  });
+});
+
+describe("useWorkspaceStore - relinkSessionTiles", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      layoutByWorktree: {},
+      workspaceDocs: {},
+    });
+  });
+
+  it("repoints a scratch-canvas tile referencing the old session to the new session", () => {
+    const scratch = insertTileIntoCanvas(
+      { mode: "free", tiles: [], tree: null, freeRects: {} },
+      "agent",
+      "sess-old",
+    );
+    useWorkspaceStore.setState({
+      layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, scratchCanvas: scratch } },
+    });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    const tiles = useWorkspaceStore.getState().layoutByWorktree[W1]!.scratchCanvas!.tiles;
+    expect(tiles[0]!.sessionId).toBe("sess-new");
+  });
+
+  it("repoints a tile in a saved workspace doc", () => {
+    const doc = {
+      id: "doc-1",
+      name: "doc-1",
+      contextKey: W1,
+      mode: "free" as const,
+      tiles: [{ id: "tile-1", kind: "agent" as const, sessionId: "sess-old" }],
+      tree: null,
+      freeRects: {},
+    };
+    useWorkspaceStore.setState({ workspaceDocs: { "doc-1": doc } });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    expect(useWorkspaceStore.getState().workspaceDocs["doc-1"]!.tiles[0]!.sessionId).toBe("sess-new");
+  });
+
+  it("repoints a tile present in TWO saved docs at once, in the same call", () => {
+    const mkDoc = (id: string) => ({
+      id,
+      name: id,
+      contextKey: W1,
+      mode: "free" as const,
+      tiles: [{ id: `${id}-tile`, kind: "agent" as const, sessionId: "sess-old" }],
+      tree: null,
+      freeRects: {},
+    });
+    useWorkspaceStore.setState({ workspaceDocs: { a: mkDoc("a"), b: mkDoc("b") } });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    const docs = useWorkspaceStore.getState().workspaceDocs;
+    expect(docs.a!.tiles[0]!.sessionId).toBe("sess-new");
+    expect(docs.b!.tiles[0]!.sessionId).toBe("sess-new");
+  });
+
+  it("is a no-op (no state churn) when nothing matches", () => {
+    const doc = {
+      id: "doc-1",
+      name: "doc-1",
+      contextKey: W1,
+      mode: "free" as const,
+      tiles: [{ id: "tile-1", kind: "agent" as const, sessionId: "sess-other" }],
+      tree: null,
+      freeRects: {},
+    };
+    useWorkspaceStore.setState({ workspaceDocs: { "doc-1": doc } });
+    const before = useWorkspaceStore.getState().workspaceDocs;
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    expect(useWorkspaceStore.getState().workspaceDocs).toBe(before);
+  });
+});
+
+describe("resolveSupersededChains", () => {
+  it("resolves a multi-hop chain to the FINAL live id, not the intermediate hop", () => {
+    const sessions = [
+      { id: "A", supersededBy: "B" },
+      { id: "B", supersededBy: "C" },
+      { id: "C", supersededBy: null },
+    ];
+    const pairs = resolveSupersededChains(sessions);
+    // A must resolve all the way to C, never stopping at the intermediate B.
+    expect(pairs).toContainEqual({ oldId: "A", finalId: "C" });
+    expect(pairs.find((p) => p.oldId === "A")!.finalId).not.toBe("B");
+  });
+
+  it("produces no pair for a session with no supersededBy", () => {
+    const sessions = [{ id: "A", supersededBy: null }];
+    expect(resolveSupersededChains(sessions)).toEqual([]);
+  });
+
+  it("terminates instead of looping forever on a cyclic chain", () => {
+    const sessions = [
+      { id: "A", supersededBy: "B" },
+      { id: "B", supersededBy: "A" },
+    ];
+    expect(() => resolveSupersededChains(sessions)).not.toThrow();
   });
 });
 

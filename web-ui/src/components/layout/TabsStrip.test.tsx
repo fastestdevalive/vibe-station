@@ -685,7 +685,11 @@ describe("TabsStrip", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("3.T3 — after a real reset, the old tab shows archived styling and the new tab appears live, no manual refresh needed", async () => {
+  it("3.T3 — after a real reset, the old tab disappears entirely and the new tab appears live, no manual refresh needed", async () => {
+    // present-tickmark-replacement/02-reset-relink: a reset-superseded
+    // session is filtered out of the tab strip entirely (Decision 4), not
+    // shown alongside its replacement as a permanent "archived" duplicate —
+    // that duplicate-tab behavior was the bug this plan fixes.
     const localApi = createMockApi();
     render(
       <MemoryRouter>
@@ -697,22 +701,74 @@ describe("TabsStrip", () => {
     expect(tabsBefore).toHaveLength(2); // main + agent-2
 
     // Directly exercise the daemon call (mocked here) — the mock emits
-    // session:updated (archivedAt) + session:created (new session) over WS,
-    // mirroring what a real daemon does for POST /sessions/:id/reset.
+    // session:updated (archivedAt, supersededBy) + session:created (new
+    // session) over WS, mirroring what a real daemon does for
+    // POST /sessions/:id/reset.
     await act(async () => {
       await localApi.resetSession("sess-agent2", { handoff: false });
     });
 
-    // Both the old tab's archived styling AND the freshly spawned replacement
-    // session arrive live from the same WS round-trip — no manual refresh.
+    // The old tab is gone (filtered by supersededBy) and the freshly spawned
+    // replacement session takes its place — still exactly 2 tabs, no
+    // duplicate, no manual refresh needed.
     await waitFor(() => {
-      expect(screen.getAllByRole("tab")).toHaveLength(3);
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs).toHaveLength(2);
+      expect(tabs.some((t) => t.getAttribute("data-archived") === "true")).toBe(false);
     });
-    const archivedTab = screen
-      .getAllByRole("tab")
-      .find((t) => t.getAttribute("data-archived") === "true");
-    expect(archivedTab).toBeTruthy();
-    expect(within(archivedTab!).getByText(/archived/i)).toBeInTheDocument();
+  });
+
+  it("a session with supersededBy set is absent from the rendered tab list", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-agent2",
+        archivedAt: new Date().toISOString(),
+        supersededBy: "sess-agent2-new",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it("when the active tab's session receives a session:updated event with supersededBy, the active tab switches to that id", async () => {
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const agent2Tab = await screen.findByRole("tab", { name: /agent-2/i });
+    await act(async () => {
+      fireEvent.click(agent2Tab);
+    });
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
+    });
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:updated",
+        sessionId: "sess-agent2",
+        archivedAt: new Date().toISOString(),
+        supersededBy: "sess-agent2-new",
+      });
+    });
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2-new");
+    });
   });
 
   it("reflects a rename in real time from session:updated's name field, without a refetch", async () => {

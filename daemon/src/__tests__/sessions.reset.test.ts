@@ -212,6 +212,17 @@ describe("POST /sessions/:id/reset", () => {
     expect(newRow.initialPrompt).toBe("Handoff: finished the refactor, tests pending.");
   });
 
+  it("reset sets supersededBy on the archived row to the new session's id", async () => {
+    const res = await app.inject({ method: "POST", url: `/sessions/${mainSessionId}/reset`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    const { archivedSessionId, newSessionId } = res.json<{ archivedSessionId: string; newSessionId: string }>();
+
+    const getRes = await app.inject({ method: "GET", url: `/sessions/${archivedSessionId}` });
+    expect(getRes.statusCode).toBe(200);
+    const archived = getRes.json<{ supersededBy: string | null }>();
+    expect(archived.supersededBy).toBe(newSessionId);
+  });
+
   it("4.T6 a handoff timeout/failure still completes the reset with handoffSummary: null", async () => {
     const handoffModule = await import("../services/handoff.js");
     vi.mocked(handoffModule.runHandoffTurn).mockResolvedValueOnce(false); // simulated timeout

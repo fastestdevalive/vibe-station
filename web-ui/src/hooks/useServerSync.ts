@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useServerStore } from "./useServerStore";
-import { useWorkspaceStore, findWorkspacesTilingSession } from "./useStore";
+import { useWorkspaceStore, findWorkspacesTilingSession, resolveSupersededChains } from "./useStore";
 
 /**
  * Module-level in-flight guard. Collapses three refresh triggers that all
@@ -67,6 +67,12 @@ export function useServerSync(api: ApiInstance): void {
           // while we were offline never overrides our cached "working"/
           // "idle" entry, and the rollup keeps showing the worktree active.
           syncSessionsFromApi(sessions);
+          // Resolve any supersededBy chain this client missed the broadcast
+          // for (offline during a reset, or the reset came from the CLI with
+          // no browser connected).
+          for (const { oldId, finalId } of resolveSupersededChains(sessions)) {
+            useWorkspaceStore.getState().relinkSessionTiles(oldId, finalId);
+          }
         } finally {
           inFlightRefresh = null;
         }
@@ -171,7 +177,16 @@ export function useServerSync(api: ApiInstance): void {
         if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
         if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
         if (ev.pr !== undefined) patch.pr = ev.pr ?? undefined;
+        if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
         applySessionUpdated(ev.sessionId, patch);
+        // A reset's replacement takes the archived session's place in every
+        // canvas it was tiled in — same tile id/position, just repointed.
+        // Fires for every connected client (the broadcast, not the
+        // initiator's own response), so a reset triggered from the CLI/
+        // another tab relinks here too.
+        if (ev.supersededBy) {
+          useWorkspaceStore.getState().relinkSessionTiles(ev.sessionId, ev.supersededBy);
+        }
       }
     });
     return () => {
