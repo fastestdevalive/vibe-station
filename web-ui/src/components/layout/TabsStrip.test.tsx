@@ -87,7 +87,7 @@ describe("TabsStrip", () => {
       expect(screen.getByRole("tab", { name: /^main$/i })).toBeInTheDocument();
     });
     const mainTab = screen.getByRole("tab", { name: /^main$/i });
-    expect(mainTab.querySelector('[aria-label^="Close"]')).toBeNull();
+    expect(mainTab.querySelector('[aria-label^="Terminate"]')).toBeNull();
   });
 
   it("non-main tab exposes close via aria-label", async () => {
@@ -97,7 +97,7 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Close agent-2/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Terminate agent-2/i })).toBeInTheDocument();
     });
   });
 
@@ -108,8 +108,8 @@ describe("TabsStrip", () => {
         <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await screen.findByRole("button", { name: /Close agent-2/i });
-    await user.click(screen.getByRole("button", { name: /Close agent-2/i }));
+    await screen.findByRole("button", { name: /Terminate agent-2/i });
+    await user.click(screen.getByRole("button", { name: /Terminate agent-2/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
@@ -231,9 +231,9 @@ describe("TabsStrip", () => {
 
     // Closing the last tab must leave the dock empty — auto-create is a
     // dock-open behaviour, not an "always keep one terminal alive" rule.
-    await user.click(screen.getByRole("button", { name: /Close Terminal 1/i }));
+    await user.click(screen.getByRole("button", { name: /Terminate Terminal 1/i }));
     await user.click(
-      within(screen.getByRole("dialog")).getByRole("button", { name: /^Close$/i }),
+      within(screen.getByRole("dialog")).getByRole("button", { name: /^Terminate$/i }),
     );
     await waitFor(() => {
       expect(tab).not.toBeInTheDocument();
@@ -450,7 +450,7 @@ describe("TabsStrip", () => {
     const tab = await screen.findByRole("tab", { name: /agent-2/i });
     const nestedButtons = within(tab).queryAllByRole("button");
     expect(nestedButtons).toHaveLength(1);
-    expect(nestedButtons[0]).toHaveAttribute("aria-label", "Close agent-2");
+    expect(nestedButtons[0]).toHaveAttribute("aria-label", "Terminate agent-2");
   });
 
   it("2.T2b — right-clicking the SAME tab twice in a row throws no error (impure-updater crash regression)", async () => {

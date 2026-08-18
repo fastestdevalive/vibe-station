@@ -284,7 +284,7 @@ composeLaunchPrompt(prompt: { systemPrompt: string; taskPrompt?: string }):
 
 ## 5. Tmux Strategy
 
-- **One tmux session per tab** (not per worktree). Tabs are independent — kill/resume one without affecting siblings.
+- **One tmux session per tab** (not per worktree). Tabs are independent — terminate/resume one without affecting siblings.
 - Naming: `vr-{projectPrefix}-{worktreeNum}-{tabSlot}`
   - main: `vr-vibe-1-m`
   - agent N: `vr-vibe-1-a2`
@@ -348,7 +348,7 @@ The branch name is **immutable for the worktree's lifetime** in v1 — to rename
 A worktree **always** has exactly one main session (slot `m`).
 
 - **Creation is atomic**: `POST /worktrees` (and `vst worktree create`) always provisions the git worktree AND spawns the main session in the same operation. There is no "worktree without sessions" state.
-- The main session cannot be killed via `DELETE /sessions/:id` — that's rejected with `400`. The only way to end a main session is `DELETE /worktrees/:id`, which terminates all sessions including main and removes the checkout.
+- The main session cannot be terminated via `DELETE /sessions/:id` — that's rejected with `400`. The only way to end a main session is `DELETE /worktrees/:id`, which terminates all sessions including main and removes the checkout.
 - After tmux death, the main session moves to `exited` state but the record persists; the worktree still has its main session, just paused. Resume re-spawns the tmux session in place.
 
 **Rollback on creation failure** (atomicity guarantee):
@@ -462,7 +462,7 @@ In addition to the inline prompt, the skill file is dropped on disk in the workt
 The complete contract — CLI commands, REST endpoints, WebSocket events — lives in **`docs/API-CONTRACT.md`**. Single source of truth.
 
 Summary of shape:
-- **CLI** (noun-verb groups): `vst project {add,rm,ls,info}`, `vst worktree {create,rm,ls,info}`, `vst session {create,ls,info,kill,attach,restore,output}`, `vst send`, `vst mode {ls,add,rm}`, `vst daemon {start,stop,status,restart}`, `vst open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VST_PROJECT`/`VST_WORKTREE`/`VST_SESSION`/`VST_DAEMON_URL` env vars; non-destructive commands default to those.
+- **CLI** (noun-verb groups): `vst project {add,rm,ls,info}`, `vst worktree {create,rm,ls,info}`, `vst session {create,ls,info,terminate,attach,restore,output}`, `vst send`, `vst mode {ls,add,rm}`, `vst daemon {start,stop,status,restart}`, `vst open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VST_PROJECT`/`VST_WORKTREE`/`VST_SESSION`/`VST_DAEMON_URL` env vars; non-destructive commands default to those, and `session terminate` is the one destructive exception, defaulting to `$VST_SESSION`.
 - **REST** (localhost, no auth in v1): CRUD for `/projects`, `/worktrees`, `/sessions`, `/modes`; file/diff/tree under `/worktrees/:id/...`; resume + full-message-send on `/sessions/:id/...`.
 - **WebSocket** (`/ws`): three multiplexed channels — state subscription (`subscribe`), output stream (`session:open/input/resize/close`), file/tree watching (`file:watch`, `tree:watch`). Server pushes per-session lifecycle, output, file/tree mutations, and broadcast structural events.
 

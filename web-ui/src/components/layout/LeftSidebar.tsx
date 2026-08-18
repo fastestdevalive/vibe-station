@@ -563,7 +563,7 @@ export function LeftSidebar({
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
-  const [pendingDismissSession, setPendingDismissSession] = useState<Session | null>(null);
+  const [pendingTerminateSession, setPendingTerminateSession] = useState<Session | null>(null);
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = useState<WorkspaceDoc | null>(null);
 
   // Subscribe to live session output for every session we know about so the
@@ -732,11 +732,11 @@ export function LeftSidebar({
     }
   }
 
-  async function confirmDismissSession() {
-    if (!pendingDismissSession) return;
-    const sess = pendingDismissSession;
-    setPendingDismissSession(null);
-    // If we're viewing the session being dismissed, leave for the dashboard
+  async function confirmTerminateSession() {
+    if (!pendingTerminateSession) return;
+    const sess = pendingTerminateSession;
+    setPendingTerminateSession(null);
+    // If we're viewing the session being terminated, leave for the dashboard
     // BEFORE deletion so we don't briefly render a dead session.
     if (location.pathname === `/session/${sess.id}`) {
       navigate("/", { replace: true });
@@ -744,7 +744,7 @@ export function LeftSidebar({
     try {
       // Removes the session record + kills the process + removes its data dir.
       // The daemon NEVER deletes the project's own files (guarded server-side).
-      await api.deleteSession(sess.id);
+      await api.terminateSession(sess.id);
     } catch {
       /* surface errors later */
     }
@@ -1827,16 +1827,16 @@ export function LeftSidebar({
       />
 
       <ConfirmDialog
-        open={pendingDismissSession !== null}
-        title="Dismiss agent?"
+        open={pendingTerminateSession !== null}
+        title="Terminate agent?"
         message={
-          pendingDismissSession
-            ? `Remove “${sessionLabel(pendingDismissSession)}” from vst? The agent process is stopped. Your project files are NOT touched.`
+          pendingTerminateSession
+            ? `Terminate “${sessionLabel(pendingTerminateSession)}”? The agent process is stopped. Your project files are NOT touched.`
             : ""
         }
-        confirmLabel="Dismiss"
-        onConfirm={() => void confirmDismissSession()}
-        onCancel={() => setPendingDismissSession(null)}
+        confirmLabel="Terminate"
+        onConfirm={() => void confirmTerminateSession()}
+        onCancel={() => setPendingTerminateSession(null)}
       />
 
       <ConfirmDialog
@@ -2023,11 +2023,11 @@ export function LeftSidebar({
                 className="menu-pop__item"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setPendingDismissSession(sessMenu.session);
+                  setPendingTerminateSession(sessMenu.session);
                   setSessMenu(null);
                 }}
               >
-                Dismiss
+                Terminate
               </button>
             </div>,
             document.body,

@@ -478,7 +478,7 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
-    async deleteSession(id: string): Promise<{ ok: true }> {
+    async terminateSession(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}`, {
         method: "DELETE",

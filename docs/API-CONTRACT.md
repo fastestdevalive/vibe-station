@@ -33,7 +33,7 @@ User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst 
 | `vst session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--json]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). `--json` selects the JSON agent-chat channel (`channel: "json"`). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
 | `vst session ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions. `--worktree` defaults to `$VST_WORKTREE`. |
 | `vst session info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
-| `vst session kill` | `<session-id>` | Terminate session. Rejected for `m` slot. |
+| `vst session terminate` | `[session-id]` | Terminate session. Rejected for `m` slot. `<session-id>` defaults to `$VST_SESSION` — the one destructive command that self-targets by default. |
 | `vst session attach` | `<session-id>` | Drop into the tmux session interactively. |
 | `vst session restore` | `<session-id>` | Resume an `exited` session (calls plugin's restore). |
 | `vst session output` | `<session-id> [--lines=<n>] [--follow]` | Print recent pty output (default last 100 lines). `--follow` streams new bytes until Ctrl-C. |
@@ -94,10 +94,10 @@ When the daemon spawns an agent into a session, it sets these env vars in the ag
 |---|---|---|
 | `VST_PROJECT` | project id of the agent's worktree | `--project` flags |
 | `VST_WORKTREE` | worktree id | `--worktree` flags + `<worktree-id>` arg in `session create` |
-| `VST_SESSION` | the agent's own session id | (informational; not used as a default to avoid self-targeting bugs) |
+| `VST_SESSION` | the agent's own session id | `session terminate`'s `[session-id]` arg — the one deliberate self-targeting exception, see below |
 | `VST_DAEMON_URL` | `http://localhost:<port>` | daemon endpoint for the CLI to talk to |
 
-**Destructive commands** (`project rm`, `worktree rm`, `session kill`, `mode rm`) **require explicit ids** — no env-var defaults — to prevent agents accidentally nuking their own context.
+**Destructive commands** (`project rm`, `worktree rm`, `mode rm`) **require explicit ids** — no env-var defaults — to prevent agents accidentally nuking their own context. `session terminate` is the one deliberate exception: it defaults to `$VST_SESSION` so an agent can end itself; the daemon's `isMain` guard (`DELETE /sessions/:id`) still rejects a worktree's main-slot session regardless of how the id was supplied.
 
 ### Conventions
 
@@ -167,7 +167,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | GET | `/modes` | — | `Mode[]` | Max 10 per user. |
 | POST | `/modes` | `{ name, cli, context, presetId? }` | `Mode` | 409 on duplicate name. |
 | PUT | `/modes/:id` | `{ name?, context? }` | `Mode` | `cli` is **immutable** post-create (cli switch would invalidate every session that's already running this mode). |
-| DELETE | `/modes/:id` | — | `{ ok }` | 409 if any session currently references this mode. Caller must kill those sessions first. |
+| DELETE | `/modes/:id` | — | `{ ok }` | 409 if any session currently references this mode. Caller must terminate those sessions first. |
 
 ### Error codes
 

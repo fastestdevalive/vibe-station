@@ -1398,20 +1398,20 @@ export function WorkspaceCanvas({
         }}
       />
       {/* Mirrors the agent tab bar's "×" close — same confirm copy, same
-          `deleteSession` call. Also drops the tile from THIS canvas (the tab
+          `terminateSession` call. Also drops the tile from THIS canvas (the tab
           bar has no canvas to reconcile) so a terminated session doesn't
           linger as a dead tile. */}
       <ConfirmDialog
         open={!!terminateTarget}
-        title="Close agent"
-        message="Close this agent session?"
-        confirmLabel="Close"
+        title="Terminate agent?"
+        message="Terminate this agent session?"
+        confirmLabel="Terminate"
         onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
           const target = terminateTarget;
           setTerminateTarget(null);
           if (target) {
-            void api.deleteSession(target.session.id).then(() => removeTile(target.tileId));
+            void api.terminateSession(target.session.id).then(() => removeTile(target.tileId));
           }
         }}
       />

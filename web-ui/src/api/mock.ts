@@ -555,7 +555,7 @@ export function createMockApi() {
       return `Terminal ${n}`;
     },
 
-    async deleteSession(id: string): Promise<{ ok: true }> {
+    async terminateSession(id: string): Promise<{ ok: true }> {
       const idx = sessions.findIndex((s) => s.id === id);
       if (idx === -1) throw new ApiError("not found", 404);
       const victim = sessions[idx];

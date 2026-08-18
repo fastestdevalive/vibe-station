@@ -134,10 +134,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   /** Worktree list finished (project scope is always ready from the server store). */
   const [sessionsLoaded, setSessionsLoaded] = useState(isProject);
   const [newOpen, setNewOpen] = useState(false);
-  const [closeTarget, setCloseTarget] = useState<Session | null>(null);
+  const [terminateTarget, setTerminateTarget] = useState<Session | null>(null);
 
   // --- Reset (+handoff) with confirmation (Part 03 Phase 3) ---
-  // Mirrors `closeTarget`'s existing pattern exactly: a "pending destructive
+  // Mirrors `terminateTarget`'s existing pattern exactly: a "pending destructive
   // action" target that gates a shared `ConfirmDialog`, only firing the real
   // API call on confirm, never on the initial click/menu-item selection.
   const [resetMenu, setResetMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
@@ -681,11 +681,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       {closeable ? (
                         <span
                           role="button"
-                          aria-label={`Close ${label}`}
+                          aria-label={`Terminate ${label}`}
                           className="tab__close"
-                          onClick={(e) => { e.stopPropagation(); setCloseTarget(s); }}
+                          onClick={(e) => { e.stopPropagation(); setTerminateTarget(s); }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setCloseTarget(s); } }}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setTerminateTarget(s); } }}
                           tabIndex={-1}
                           style={{ position: "relative", zIndex: 1 }}
                         >
@@ -730,14 +730,14 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       )}
 
       <ConfirmDialog
-        open={!!closeTarget}
-        title={isAgent ? "Close agent" : "Close terminal"}
-        message={isAgent ? "Close this agent session?" : "Close this terminal?"}
-        confirmLabel="Close"
-        onCancel={() => setCloseTarget(null)}
+        open={!!terminateTarget}
+        title={isAgent ? "Terminate agent?" : "Terminate terminal?"}
+        message={isAgent ? "Terminate this agent session?" : "Terminate this terminal?"}
+        confirmLabel="Terminate"
+        onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
-          if (closeTarget) void api.deleteSession(closeTarget.id).then(() => void refreshTabs());
-          setCloseTarget(null);
+          if (terminateTarget) void api.terminateSession(terminateTarget.id).then(() => void refreshTabs());
+          setTerminateTarget(null);
         }}
       />
 
@@ -793,7 +793,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           )
         : null}
 
-      {/* Mirrors `closeTarget`'s ConfirmDialog above (Decision 3) — same
+      {/* Mirrors `terminateTarget`'s ConfirmDialog above (Decision 3) — same
           shared component, reset-specific copy. `resetSession` is only ever
           called from `onConfirm`, never from the menu-item click above. */}
       <ConfirmDialog
