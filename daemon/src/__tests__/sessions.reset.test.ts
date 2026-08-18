@@ -41,16 +41,26 @@ vi.mock("../services/spawn.js", async (importOriginal) => {
 // {type: "terminal"}` in 4.T1 calls the route's own direct `newSession` call
 // (routes/sessions.ts bypasses the mocked spawn.js for terminal sessions),
 // leaking a real orphaned tmux session on every test run.
-vi.mock("../services/tmux.js", () => ({
-  newSession: vi.fn().mockResolvedValue(undefined),
-  hasSession: vi.fn().mockResolvedValue(true),
-  killSession: vi.fn().mockResolvedValue(undefined),
-  capturePane: vi.fn().mockResolvedValue(""),
-  pasteBuffer: vi.fn().mockResolvedValue(undefined),
-  sendKeys: vi.fn().mockResolvedValue(undefined),
-  listSessionNames: vi.fn().mockResolvedValue(new Set()),
-  listSessions: vi.fn().mockResolvedValue([]),
-}));
+vi.mock("../services/tmux.js", () => {
+  // `hasSession` defaults to `true` (a freshly spawned pane exists) so spawn's
+  // own post-launch verification keeps passing, but tracks names `killSession`
+  // has actually killed so `releaseSessionRuntime`'s post-kill verification
+  // (sessionRuntime.ts) sees the correct `false` for THAT name instead of
+  // spuriously warning "survived two kill-session attempts" on every reset.
+  const killed = new Set<string>();
+  return {
+    newSession: vi.fn().mockResolvedValue(undefined),
+    hasSession: vi.fn(async (name: string) => !killed.has(name)),
+    killSession: vi.fn(async (name: string) => {
+      killed.add(name);
+    }),
+    capturePane: vi.fn().mockResolvedValue(""),
+    pasteBuffer: vi.fn().mockResolvedValue(undefined),
+    sendKeys: vi.fn().mockResolvedValue(undefined),
+    listSessionNames: vi.fn().mockResolvedValue(new Set()),
+    listSessions: vi.fn().mockResolvedValue([]),
+  };
+});
 
 vi.mock("../services/handoff.js", () => ({
   runHandoffTurn: vi.fn(async () => false),

@@ -2,7 +2,7 @@ import type { SessionRecord } from "../types.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { clearSessionAttachments } from "../state/attachmentRegistry.js";
-import { killSession } from "./tmux.js";
+import { killSession, hasSession } from "./tmux.js";
 import { clearIdleTracking } from "./lifecycle.js";
 
 /**
@@ -53,10 +53,17 @@ export async function releaseSessionRuntime(
     // there, since json sessions spawn per turn and hold no long-lived pty).
     directPtyRegistry.get(session.id)?.kill?.();
   } else {
-    try {
+    await killSession(session.tmuxName);
+    if (await hasSession(session.tmuxName)) {
+      // First kill-session didn't take — try exactly once more before giving up
+      // loudly. Never throws, never blocks the caller past this one retry.
       await killSession(session.tmuxName);
-    } catch {
-      // Pane already gone — nothing to reclaim.
+      if (await hasSession(session.tmuxName)) {
+        console.warn(
+          `[sessionRuntime] tmux session '${session.tmuxName}' (session ${session.id}) ` +
+            `survived two kill-session attempts — it may still be running.`,
+        );
+      }
     }
   }
 

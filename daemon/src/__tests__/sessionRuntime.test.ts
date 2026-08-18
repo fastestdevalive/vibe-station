@@ -4,6 +4,7 @@ import type { SessionRecord } from "../types.js";
 // Mock tmux so no real tmux server is needed.
 vi.mock("../services/tmux.js", () => ({
   killSession: vi.fn().mockResolvedValue(undefined),
+  hasSession: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("../services/lifecycle.js", () => ({
@@ -15,7 +16,7 @@ vi.mock("../state/attachmentRegistry.js", () => ({
 }));
 
 import { releaseSessionRuntime } from "../services/sessionRuntime.js";
-import { killSession } from "../services/tmux.js";
+import { killSession, hasSession } from "../services/tmux.js";
 import { clearIdleTracking } from "../services/lifecycle.js";
 import { clearSessionAttachments } from "../state/attachmentRegistry.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
@@ -103,7 +104,11 @@ describe("releaseSessionRuntime", () => {
   });
 
   it("1.T2c — a missing pane / unregistered pty is not an error", async () => {
-    vi.mocked(killSession).mockRejectedValueOnce(new Error("can't find session"));
+    // `killSession` never throws in production (it swallows internally,
+    // `tmux.ts:27-33`); `hasSession` resolving `false` here is what a
+    // "pane already gone" kill looks like from `releaseSessionRuntime`'s
+    // perspective.
+    vi.mocked(hasSession).mockResolvedValue(false);
     await expect(releaseSessionRuntime(makeSession({ id: "s-gone" }))).resolves.toBeUndefined();
   });
 
@@ -118,5 +123,44 @@ describe("releaseSessionRuntime", () => {
   it("1.T3b — always clears the lifecycle poller's idle-hash entry", async () => {
     await releaseSessionRuntime(makeSession({ id: "s-idle" }));
     expect(clearIdleTracking).toHaveBeenCalledWith("s-idle");
+  });
+
+  it("2.T1 — kill succeeds, hasSession resolves false immediately: killSession called once, no retry, no warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(hasSession).mockResolvedValue(false);
+
+    await releaseSessionRuntime(makeSession({ id: "s-kill-ok", tmuxName: "vr-kill-ok" }));
+
+    expect(killSession).toHaveBeenCalledTimes(1);
+    expect(hasSession).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("2.T2 — hasSession resolves true once then false: killSession called twice, hasSession called twice, no warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(hasSession).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await releaseSessionRuntime(makeSession({ id: "s-kill-retry", tmuxName: "vr-kill-retry" }));
+
+    expect(killSession).toHaveBeenCalledTimes(2);
+    expect(hasSession).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("2.T3 — hasSession resolves true both times: killSession called twice, warn called once with session id + tmux name", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.mocked(hasSession).mockResolvedValue(true);
+
+    await releaseSessionRuntime(makeSession({ id: "s-kill-stuck", tmuxName: "vr-kill-stuck" }));
+
+    expect(killSession).toHaveBeenCalledTimes(2);
+    expect(hasSession).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0];
+    expect(message).toContain("s-kill-stuck");
+    expect(message).toContain("vr-kill-stuck");
+    warn.mockRestore();
   });
 });
