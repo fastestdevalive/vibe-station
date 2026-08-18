@@ -119,14 +119,14 @@ over it — all three now check for it explicitly:
 | User action | Endpoint | Releases runtime? | Record kept? |
 |---|---|---|---|
 | Session menu → **Mark as done** (agents, worktree AND direct) | `POST /sessions/:id/done` | yes | yes — resumable |
-| Session menu → **Dismiss (keep files)** | `DELETE /sessions/:id` | yes | no — record + data dir removed ("files" = your checkout) |
+| Session menu → **Terminate** | `DELETE /sessions/:id` | yes | no — record + data dir removed |
 | Worktree menu → **Mark as done** | `POST /worktrees/:id/done` | yes, every agent + terminal | yes |
 | Worktree menu / dashboard → **Dismiss (keep files)** | `DELETE /worktrees/:id` | yes, every session | no — checkout stays on disk |
 | Worktree menu → **Delete worktree…** | `DELETE /worktrees/:id?purge=true` | yes | no — checkout removed too |
-| Terminal tab **×** | `DELETE /sessions/:id` | yes | no |
+| Terminal/agent tab **×** (Terminate) | `DELETE /sessions/:id` | yes | no |
 | Project menu → **Hide project** | `PATCH /projects/:id` | **NO** — everything keeps running | yes |
 
-- "Dismiss" is never client-side — both variants are real daemon deletes.
+- "Terminate"/"Dismiss" are never client-side — every variant is a real daemon delete.
 - `POST /sessions/:id/done` works for direct (project-level) sessions too: `findSessionContext` resolves both, and `releaseSessionRuntime` branches on `useTmux`, not on worktree-ness.
 - There is no bulk retire for a project's direct sessions (no `POST /projects/:id/done`) — the only bulk path is the worktree one.
 

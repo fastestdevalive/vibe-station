@@ -1,7 +1,7 @@
 # vibe-station Agent Skill
 
 You are a coding agent managed by **vibe-station** (`vst`).
-You run inside an isolated git worktree. Your job is to complete the task described in your initial prompt, then stop cleanly.
+Depending on how you were spawned, you are either working in an isolated git worktree on your own branch, or directly in the project directory (a "direct session") — check the **Context** section injected below this file for which one you are. Your job is to complete the task described in your initial prompt, then stop cleanly.
 
 ---
 
@@ -10,12 +10,12 @@ You run inside an isolated git worktree. Your job is to complete the task descri
 | Variable | What it is |
 |---|---|
 | `VST_PROJECT` | Project id you belong to |
-| `VST_WORKTREE` | Your worktree id (your isolated git checkout) |
+| `VST_WORKTREE` | Your worktree id (your isolated git checkout) — **worktree sessions only**, absent for direct sessions |
 | `VST_SESSION` | Your own session id |
 | `VST_DATA_DIR` | `~/.vibe-station/projects/<project-id>` — daemon data dir |
 | `VST_DAEMON_URL` | `http://localhost:<port>` — daemon REST API |
 
-Your working directory is the worktree checkout. All file edits happen here. Your branch was already created for you — do not switch branches.
+If you have a `$VST_WORKTREE` (see Context below), your working directory is that worktree checkout and your branch was already created for you — do not switch branches. If you don't, you're a direct session working in the project directory itself, on whatever branch is already checked out — edit files there directly.
 
 ---
 
@@ -25,16 +25,16 @@ Follow this sequence for every task unless the initial prompt says otherwise:
 
 1. **Read context** — check for `AGENTS.md` or `.vibe-station/rules.md` in the project root. If present, follow all rules there first.
 2. **Understand the task** — re-read your initial prompt. If it is ambiguous, make a conservative interpretation and proceed; note assumptions in your commit message.
-3. **Make changes** — edit files in the worktree. Run tests as you go.
+3. **Make changes** — edit files in your working directory (the worktree checkout, or the project directory for a direct session). Run tests as you go.
 4. **Verify** — run the project's test suite and linter. Fix failures before committing.
 5. **Commit** — commit with a clear, descriptive message. Reference the task or issue if known.
-6. **Signal done** — when complete, your process exits. The UI will show your session as `done`.
+6. **Stop when done** — when complete, your process exits, which marks the session `exited` in the UI (not `done` — `done` is a separate explicit action; see "Ending your session" below). For a worktree agent whose task is fully finished, letting the process exit naturally is still the normal way to stop.
 
 Do not open a PR unless the task explicitly asks for one or the project's `AGENTS.md` requires it.
 
 ---
 
-## Git rules
+## Git rules (worktree sessions only — skip this section if you're a direct session)
 
 - Work only on your assigned branch (`git branch --show-current` to confirm).
 - Commit frequently — small, focused commits are better than one large one.
@@ -48,7 +48,7 @@ Do not open a PR unless the task explicitly asks for one or the project's `AGENT
 
 Use `vst` to inspect state and coordinate with sibling sessions.
 
-### Inspect
+### Inspect (worktree sessions only, unless noted)
 
 ```bash
 # Your worktree details (branch, baseBranch, sessions)
@@ -69,7 +69,7 @@ vst session output <session-id> --follow
 
 ### Spawn more work
 
-There are two distinct operations. Pick the right one — they are not interchangeable.
+There are two distinct operations. Pick the right one — they are not interchangeable. Direct sessions cannot spawn sibling sessions via the CLI today (`vst session create` requires a worktree id) — see Case B.
 
 #### Case A — a NEW worktree (separate branch, isolated checkout)
 
@@ -85,7 +85,7 @@ vst worktree create $VST_PROJECT --mode=<modeId> --branch=<name> --prompt="the t
 `$VST_PROJECT` is your own project id. To target a different project, list them
 with `vst project ls --json`.
 
-#### Case B — an extra session in the PROVIDED worktree (same branch/checkout)
+#### Case B — an extra session in the PROVIDED worktree (same branch/checkout; worktree sessions only)
 
 ```bash
 # Adds a sibling agent tab to the given worktree (slots a1, a2, …).
@@ -121,19 +121,26 @@ vst doctor        # checks tmux, git, claude/cursor/opencode on PATH
 
 - All relevant tests pass.
 - Lint is clean (if the project uses a linter).
-- Changes are committed on your branch.
+- Changes are committed on your branch (worktree sessions — a direct session edits the project's checked-out branch directly, there is no separate branch to commit to).
 - If a PR was requested: opened with a clear title and description.
 - Your process exits with code 0.
 
-If you hit a blocker you cannot resolve (missing credentials, ambiguous requirements, broken environment), write a `BLOCKED.md` file in the worktree root describing the blocker, commit it, and exit. The human reviewer will see it.
+If you hit a blocker you cannot resolve (missing credentials, ambiguous requirements, broken environment), write a `BLOCKED.md` file in your working directory root (worktree checkout, or the project directory for a direct session) describing the blocker, commit it, and exit. The human reviewer will see it.
+
+---
+
+## Ending your session
+
+- `vst session terminate` — ends **this** session (defaults to `$VST_SESSION` when no id is given); deletes the session record and its data dir. Use this when asked to end/finish/stop yourself, or when you spawned a sibling/child session that's no longer needed.
+- Caveat: if you are a worktree's **main** agent, this is rejected (400) — the daemon requires `vst worktree rm` for that case instead. This is out of scope for a mid-task agent to run unprompted; surface the 400 to the user rather than escalating to a worktree removal.
 
 ---
 
 ## Things you must NOT do
 
-- Modify files outside your worktree directory.
+- Modify files outside your working directory (the worktree checkout, or the project directory for a direct session).
 - Push to `main`, `master`, or the base branch.
 - Delete or modify another session's work without explicit coordination.
-- Run `vst worktree rm` or `vst session kill` on sessions you did not create.
+- Run `vst worktree rm` or `vst session terminate` on sessions you did not create.
 - Ignore test failures and commit anyway.
 - After `vst worktree create`, do NOT run `vst session create` for the same worktree — the main session already exists.
