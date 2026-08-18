@@ -114,6 +114,10 @@ export interface Session {
   /** SessionId this session was spawned from, or null (agent-interaction-
    *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
   spawnedFrom?: string | null;
+  /** Set once a reset archives this session — the replacement session's id.
+   *  Distinct from `archivedAt` (`/done` also sets that; only a reset sets
+   *  this). */
+  supersededBy?: string | null;
   /** VCS outcome axis — orthogonal to `state`/`lifecycleState` (mirrors
    *  daemon `SessionRecord.pr`). Absent ≡ never checked (e.g. legacy/test
    *  fixtures); REST (`sessions.ts`'s `serializeSession`) always sends an
@@ -359,6 +363,8 @@ export type WSEvent =
       sortOrder?: number;
       /** After a `prPoller.ts` tick updates this session's VCS status (pr-status-axis). */
       pr?: PrStatus | null;
+      /** Set on the archived session by a reset — the replacement session's id. */
+      supersededBy?: string | null;
     }
   | {
       type: "session:error";

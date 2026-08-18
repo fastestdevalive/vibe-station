@@ -392,6 +392,7 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     sortOrder: s.sortOrder,
     handoffSummary: s.handoffSummary ?? null,
     spawnedFrom: s.spawnedFrom ?? null,
+    supersededBy: s.supersededBy ?? null,
     pr: s.pr ?? null,
   };
 }
@@ -1412,7 +1413,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // guard) resolve to the dead archived row instead of the live new one —
       // a permanent unclosable dead "main" tab.
       const archiveSession = (s: SessionRecord): SessionRecord =>
-        s.id === session.id ? { ...s, archivedAt, handoffSummary: handoffText, isMain: false } : s;
+        s.id === session.id
+          ? { ...s, archivedAt, handoffSummary: handoffText, isMain: false, supersededBy: newId }
+          : s;
       if (ctx.kind === "worktree") {
         return {
           ...p,
@@ -1427,7 +1430,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     });
 
     const wtIdForSerialize = ctx.kind === "worktree" ? ctx.worktree.id : null;
-    broadcastAll({ type: "session:updated", sessionId: session.id, archivedAt });
+    broadcastAll({ type: "session:updated", sessionId: session.id, archivedAt, supersededBy: newId });
     broadcastAll({
       type: "session:created",
       sessionId: newId,

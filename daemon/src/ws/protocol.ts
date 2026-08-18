@@ -333,6 +333,9 @@ const SessionUpdatedEvent = z.object({
   sortOrder: z.number().optional(),
   /** After a `prPoller.ts` tick updates this session's VCS status (pr-status-axis). */
   pr: PrStatusSchema.nullable().optional(),
+  /** Set on the archived session by a reset (POST .../reset) — the
+   *  replacement session's id (present-tickmark-replacement/02-reset-relink). */
+  supersededBy: z.string().nullable().optional(),
 });
 
 /**

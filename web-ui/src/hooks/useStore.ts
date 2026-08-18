@@ -264,6 +264,13 @@ export interface WorkspaceState {
     sessionId?: string,
     tileWorktreeId?: string,
   ) => void;
+  /**
+   * Repoint every tile (scratch canvas + every saved workspace doc)
+   * referencing `fromSessionId` to `toSessionId` — a reset's replacement
+   * taking the archived session's exact place, same tile id/position.
+   * A no-op (identity-preserving) for canvases with no matching tile.
+   */
+  relinkSessionTiles: (fromSessionId: string, toSessionId: string) => void;
   reorderWorkspace: (scopeKey: string, orderedIds: string[]) => void;
   setActiveWorkspace: (worktreeId: string, workspaceId: string | null) => void;
   setLayoutMode: (worktreeId: string, mode: "classic" | "workspace") => void;
@@ -342,6 +349,50 @@ export function removeTileFromCanvas(canvas: CanvasGeometry, tileId: string): Ca
     nextTree = leafId ? removePane(canvas.tree, leafId) : canvas.tree;
   }
   return { ...canvas, tiles: nextTiles, freeRects: nextFreeRects, tree: nextTree };
+}
+
+/**
+ * Repoint every tile referencing `fromSessionId` to `toSessionId` — same tile
+ * id, same position/geometry, just a different session behind it (a reset's
+ * replacement taking the archived session's exact place). Returns the SAME
+ * `canvas` reference when nothing matched, so callers can skip a `set()` for
+ * canvases this reset didn't touch.
+ */
+export function relinkSessionInCanvas(
+  canvas: CanvasGeometry,
+  fromSessionId: string,
+  toSessionId: string,
+): CanvasGeometry {
+  if (!canvas.tiles.some((t) => t.sessionId === fromSessionId)) return canvas;
+  return {
+    ...canvas,
+    tiles: canvas.tiles.map((t) => (t.sessionId === fromSessionId ? { ...t, sessionId: toSessionId } : t)),
+  };
+}
+
+/**
+ * Every {oldId, finalId} pair still needing a relink, from a flat sessions
+ * list. Walks multi-hop chains (a double reset while offline produces
+ * A.supersededBy=B, B.supersededBy=C) to the FINAL live id — relinking to an
+ * intermediate hop that is itself archived would just move the bug.
+ */
+export function resolveSupersededChains(
+  sessions: Array<{ id: string; supersededBy?: string | null }>,
+): Array<{ oldId: string; finalId: string }> {
+  const supersededBy = new Map(
+    sessions.filter((s) => s.supersededBy != null).map((s) => [s.id, s.supersededBy as string]),
+  );
+  const result: Array<{ oldId: string; finalId: string }> = [];
+  for (const oldId of supersededBy.keys()) {
+    const seen = new Set<string>();
+    let finalId = oldId;
+    while (supersededBy.has(finalId) && !seen.has(finalId)) {
+      seen.add(finalId);
+      finalId = supersededBy.get(finalId)!;
+    }
+    if (finalId !== oldId) result.push({ oldId, finalId });
+  }
+  return result;
 }
 
 /**
@@ -701,6 +752,33 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const next = insertTileIntoCanvas(doc, kind, sessionId, tileWorktreeId, doc.contextKey);
             return {
               workspaceDocs: { ...s.workspaceDocs, [docId]: { ...doc, ...next } },
+            };
+          }),
+        relinkSessionTiles: (fromSessionId, toSessionId) =>
+          set((s) => {
+            let layoutChanged = false;
+            const nextLayoutByWorktree = { ...s.layoutByWorktree };
+            for (const [worktreeId, layout] of Object.entries(s.layoutByWorktree)) {
+              if (!layout.scratchCanvas) continue;
+              const relinked = relinkSessionInCanvas(layout.scratchCanvas, fromSessionId, toSessionId);
+              if (relinked !== layout.scratchCanvas) {
+                nextLayoutByWorktree[worktreeId] = { ...layout, scratchCanvas: relinked };
+                layoutChanged = true;
+              }
+            }
+            let docsChanged = false;
+            const nextWorkspaceDocs = { ...s.workspaceDocs };
+            for (const [docId, doc] of Object.entries(s.workspaceDocs)) {
+              const relinked = relinkSessionInCanvas(doc, fromSessionId, toSessionId);
+              if (relinked !== doc) {
+                nextWorkspaceDocs[docId] = { ...doc, ...relinked };
+                docsChanged = true;
+              }
+            }
+            if (!layoutChanged && !docsChanged) return s;
+            return {
+              ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
+              ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
             };
           }),
         reorderWorkspace: (scopeKey, orderedIds) =>

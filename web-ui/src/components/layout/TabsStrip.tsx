@@ -251,12 +251,14 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   // below, so this never causes a remount of anything (and TabsStrip doesn't
   // render TerminalPane/ChatPane itself anyway — see SortableTab's doc comment).
   const orderedSessions = useMemo(() => {
-    return sessions.slice().sort((a, b) => {
-      const ao = a.sortOrder ?? 0;
-      const bo = b.sortOrder ?? 0;
-      if (ao !== bo) return ao - bo;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    });
+    return sessions
+      .filter((s) => s.supersededBy == null)
+      .sort((a, b) => {
+        const ao = a.sortOrder ?? 0;
+        const bo = b.sortOrder ?? 0;
+        if (ao !== bo) return ao - bo;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
   }, [sessions]);
 
   /** Optimistically patch a session's `sortOrder` in whichever local store
@@ -420,6 +422,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           if (ev.archivedAt !== undefined) patch.archivedAt = ev.archivedAt ?? null;
           if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
           if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
+          if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
           if (ev.channel !== undefined) {
             patch.channel = ev.channel;
             patch.useTmux = ev.channel === "tmux";
@@ -427,6 +430,15 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           return { ...s, ...patch };
         }),
       );
+      // The superseded session's tab is about to disappear from
+      // orderedSessions — if it was the active one, follow it to its
+      // replacement instead of leaving the strip with no selected tab
+      // (mirrors the session:deleted handler above).
+      if (ev.supersededBy) {
+        const st = useWorkspaceStore.getState();
+        const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
+        if (cur === ev.sessionId) setActiveSession(ev.supersededBy);
+      }
     });
 
     return () => {

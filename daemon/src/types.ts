@@ -288,6 +288,13 @@ export interface SessionRecord {
    */
   spawnedFrom?: string | null;
   /**
+   * Set once a reset (`/vst reset --handoff`) archives this session — the
+   * replacement session's id. Distinct from `archivedAt` (`/done` also sets
+   * that; only a reset sets this). No FK enforcement — same rationale as
+   * `spawnedFrom` above.
+   */
+  supersededBy?: string | null;
+  /**
    * VCS status for this session's branch, written only by `prPoller.ts`.
    * Absent ≡ never checked (e.g. session just created, or its worktree has
    * no GitHub remote).
