@@ -14,8 +14,8 @@
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
    narrower comment this replaces, which limited COLOR to waiting_for_human
    only; re-broadened by user request to also cover `working`). States that
-   carry a border color: `working` (yellow — active), `pr-open` (blue),
-   `pr-merged` (green), `waiting_for_human` (red — needs you now). `done`/
+   carry a border color: `working` (yellow — active), `pr-open` (green),
+   `pr-merged` (purple), `waiting_for_human` (red — needs you now). `done`/
    `exited` DO get recoloured by a landed PR too (D21) — only a `done`/
    `exited` session with NO PR (or `spawning`/`idle`/none) stays on the base
    rule's `transparent` border. PR outcome is a separate, orthogonal axis

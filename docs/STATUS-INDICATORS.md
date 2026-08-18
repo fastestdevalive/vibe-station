@@ -30,17 +30,17 @@ Bucket resolved by `bucketForRollup()` — `web-ui/src/components/layout/Dashboa
 |---|---|---|---|---|
 | `working` | any (`open`/`merged`/`draft`/`closed`/`none`) | 🟡 yellow | `●` | **Working** |
 | `not_started` | any | neutral, dashed | `◐` | **Working** |
-| `waiting_for_human` | `open` | 🔵 blue | `●` | **PR** |
-| `waiting_for_human` | `merged` | 🟢 green | `●` | **PR** |
+| `waiting_for_human` | `open` | 🟢 green | `●` | **PR** |
+| `waiting_for_human` | `merged` | 🟣 purple | `●` | **PR** |
 | `waiting_for_human` | `draft` / `closed` / `none` / unset | 🔴 red | `!` | **Needs you** |
-| `idle` | `open` | 🔵 blue | `●` | **PR** |
-| `idle` | `merged` | 🟢 green | `●` | **PR** |
+| `idle` | `open` | 🟢 green | `●` | **PR** |
+| `idle` | `merged` | 🟣 purple | `●` | **PR** |
 | `idle` | `draft` / `closed` / `none` / unset | neutral | `○` | **Idle** |
-| `done` | `open` | 🔵 blue | `✓` | **Finished** |
-| `done` | `merged` | 🟢 green | `✓` | **Finished** |
+| `done` | `open` | 🟢 green | `✓` | **Finished** |
+| `done` | `merged` | 🟣 purple | `✓` | **Finished** |
 | `done` | `draft` / `closed` / `none` / unset | neutral | `✓` | **Finished** |
-| `exited` | `open` | 🔵 blue | `×` | **Finished** |
-| `exited` | `merged` | 🟢 green | `×` | **Finished** |
+| `exited` | `open` | 🟢 green | `×` | **Finished** |
+| `exited` | `merged` | 🟣 purple | `×` | **Finished** |
 | `exited` | `draft` / `closed` / `none` / unset | neutral, dimmed | `×` | **Finished** |
 
 **Home bucket union (Phase 6, 6.6):** `"working" | "needs-you" | "idle" | "pr" | "finished"`.
@@ -55,8 +55,8 @@ done.
 1. done | exited                    → PR colour if any, else neutral   (D21)
 2. working                          → "working"            🟡
 3. not_started | spawning           → neutral, dashed       ◐          (B2)
-4. pr = merged   (branch-matched)   → "pr-merged"          🟢
-5. pr = open     (branch-matched)   → "pr-open"            🔵
+4. pr = merged   (branch-matched)   → "pr-merged"          🟣
+5. pr = open     (branch-matched)   → "pr-open"            🟢
 6. waiting_for_human                → "waiting_for_human"  🔴
 7. idle                             → "idle"                neutral
 ```
@@ -97,13 +97,13 @@ done.
 |---|---|---|
 | `--status-working` | `#eab308` | `#a16207` |
 | `--status-waiting` | `#ef4444` | `#dc2626` |
-| `--pr-open` | `#3b82f6` | `#1d4ed8` |
-| `--pr-merged` | `#22c55e` | `#15803d` |
+| `--pr-open` | `#22c55e` | `#15803d` |
+| `--pr-merged` | `#8250df` | `#6e40c9` |
 | `--pr-draft` | `#8a8a8a` | `#737373` |
 | `--pr-closed` | `#6b6b6b` | `#737373` |
 
-- Per-theme is mandatory: a single hex fails light-mode contrast (`#22c55e` on white ≈ 2.1:1 vs
-  the ≥3:1 bar for non-text UI).
+- Per-theme is mandatory: a single hex fails light-mode contrast (dark-theme `#22c55e` on white ≈
+  2.1:1 vs the ≥3:1 bar for non-text UI).
 - Non-colour cues that must survive any recolour: `tile--spawning { border-style: dashed }`,
   `tile--exited { opacity: .9 }`.
 
