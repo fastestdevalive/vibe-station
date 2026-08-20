@@ -4,7 +4,7 @@
  */
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { access, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const execFile = promisify(execFileCb);
@@ -16,6 +16,19 @@ const execFile = promisify(execFileCb);
 async function runGit(args: string[], cwd?: string): Promise<string> {
   const { stdout } = await execFile("git", args, { cwd, env: { ...process.env } });
   return stdout.trim();
+}
+
+/**
+ * Like `runGit`, but returns raw untrimmed stdout. `runGit`'s `.trim()`
+ * strips leading/trailing whitespace off the WHOLE string, not per line —
+ * harmless for most commands, but `git submodule status`'s clean-status
+ * lines start with a significant leading space (the status flag column),
+ * which `.trim()` would silently eat off the first line only, corrupting
+ * just that one line's parse. Used by `listSubmodules`.
+ */
+async function runGitRaw(args: string[], cwd?: string): Promise<string> {
+  const { stdout } = await execFile("git", args, { cwd, env: { ...process.env } });
+  return stdout;
 }
 
 /** Returns true if `dir` is inside a git repository. */
@@ -433,4 +446,152 @@ export async function isGitAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Info about one top-level submodule (`.gitmodules` entry), joined with its
+ * pinned commit and `git submodule status` state. Deliberately top-level
+ * only — nested submodules-of-submodules aren't walked (`--recursive` is NOT
+ * used), since a nested path can't be mapped back to a `.gitmodules` branch
+ * entry without recursive parsing, and that's out of scope for this view.
+ */
+export interface SubmoduleInfo {
+  path: string;
+  sha: string | null;
+  shortSha: string | null;
+  branch: string | null;
+  subject: string | null;
+  status: "clean" | "modified" | "out-of-date" | "uninitialized";
+}
+
+/**
+ * Parses `.gitmodules`' `path`/`branch` pairs into `path -> branch`
+ * (`branch` is `null` when a submodule section doesn't set one). Returns an
+ * empty map when there's no `.gitmodules` file at all — most repos don't
+ * have submodules, and that's not an error.
+ */
+async function parseGitmodulesBranches(repoPath: string): Promise<Map<string, string | null>> {
+  const branchByPath = new Map<string, string | null>();
+  let text: string;
+  try {
+    text = await readFile(join(repoPath, ".gitmodules"), "utf8");
+  } catch {
+    return branchByPath;
+  }
+
+  let curPath: string | null = null;
+  let curBranch: string | null = null;
+  const flush = () => {
+    if (curPath) branchByPath.set(curPath, curBranch);
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (/^\[submodule\b/.test(line)) {
+      flush();
+      curPath = null;
+      curBranch = null;
+      continue;
+    }
+    const kv = line.match(/^(\w+)\s*=\s*(.*)$/);
+    if (!kv) continue;
+    const [, key, value] = kv;
+    if (key === "path") curPath = value!.trim();
+    else if (key === "branch") curBranch = value!.trim();
+  }
+  flush();
+  return branchByPath;
+}
+
+/** One parsed `git submodule status` line: leading status flag, the pinned
+ *  40-hex SHA, and the submodule's path (relative to the repo root). */
+function parseSubmoduleStatusLine(line: string): { flag: string; sha: string; path: string } | null {
+  if (line.length < 42) return null;
+  const flag = line[0]!;
+  const sha = line.slice(1, 41);
+  if (!/^[0-9a-f]{40}$/.test(sha)) return null;
+  // `path (describe)` or bare `path` — the describe suffix (when present) is
+  // never needed here, only the path.
+  const rest = line.slice(42);
+  const path = rest.replace(/\s+\([^)]*\)\s*$/, "").trim();
+  return { flag, sha, path };
+}
+
+/**
+ * Lists this repo's top-level submodules (`.gitmodules` entries), each
+ * joined with `git submodule status`'s pinned SHA/dirty-state and — for
+ * initialized submodules — the pinned commit's subject line (read from the
+ * submodule's own working tree via a nested `git log`). Used by the VCS tool
+ * tab's "Submodules" section.
+ *
+ * - No `.gitmodules` (most repos): `[]`, no throw (Requirement 3a).
+ * - An uninitialized submodule (`git submodule status`'s `-` prefix — no
+ *   checked-out working tree) has no local repo to read a subject from:
+ *   `sha` comes straight off the status line, `subject: null`,
+ *   `status: "uninitialized"` (Requirement 3c).
+ * - Any `git` invocation failure (corrupted repo, git error) fails open to
+ *   `[]` rather than throwing — same contract as `listCommits`'s empty-repo
+ *   case (Requirement 3d).
+ */
+export async function listSubmodules(repoPath: string): Promise<SubmoduleInfo[]> {
+  const branchByPath = await parseGitmodulesBranches(repoPath);
+  if (branchByPath.size === 0) return [];
+
+  let stdout: string;
+  try {
+    stdout = await runGitRaw(["-C", repoPath, "submodule", "status"], repoPath);
+  } catch {
+    return [];
+  }
+
+  const result: SubmoduleInfo[] = [];
+  for (const rawLine of stdout.split("\n")) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) continue;
+    const parsed = parseSubmoduleStatusLine(line);
+    if (!parsed) continue;
+    const { flag, sha, path } = parsed;
+    const shortSha = sha.slice(0, 7);
+    const branch = branchByPath.get(path) ?? null;
+
+    if (flag === "-") {
+      result.push({ path, sha, shortSha, branch, subject: null, status: "uninitialized" });
+      continue;
+    }
+
+    const submodulePath = join(repoPath, path);
+    let subject: string | null = null;
+    try {
+      const s = await runGit(["-C", submodulePath, "log", "-1", "--format=%s"], submodulePath);
+      subject = s || null;
+    } catch {
+      subject = null;
+    }
+
+    let status: SubmoduleInfo["status"];
+    if (flag === "U") {
+      status = "modified";
+    } else {
+      // `+` alone only means "checked-out SHA differs from the
+      // superproject's pinned SHA" — it says nothing about the submodule's
+      // working tree. A submodule sitting exactly at the pinned commit but
+      // with uncommitted local edits gets flag `" "`, so the dirty check has
+      // to run for that case too, not just `+` — otherwise a dirty
+      // in-place submodule is wrongly reported "clean".
+      let dirty = false;
+      try {
+        const porcelain = await runGit(["-C", submodulePath, "status", "--porcelain"], submodulePath);
+        dirty = porcelain.trim().length > 0;
+      } catch {
+        dirty = false;
+      }
+      // `+` (out-of-date vs. the pin) takes precedence over a dirty working
+      // tree when both are true — the mismatched SHA is the more urgent fact.
+      if (flag === "+") status = "out-of-date";
+      else if (dirty) status = "modified";
+      else status = "clean";
+    }
+
+    result.push({ path, sha, shortSha, branch, subject, status });
+  }
+  return result;
 }

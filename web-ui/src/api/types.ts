@@ -512,6 +512,17 @@ export interface CommitLogEntry {
   isOnBranch: boolean;
 }
 
+/** One top-level `.gitmodules` submodule, joined with `git submodule
+ *  status`'s pinned SHA/dirty-state — see `GET /worktrees/:id/submodules`. */
+export interface SubmoduleInfo {
+  path: string;
+  sha: string | null;
+  shortSha: string | null;
+  branch: string | null;
+  subject: string | null;
+  status: "clean" | "modified" | "out-of-date" | "uninitialized";
+}
+
 export interface PrInfo {
   number: number;
   url: string;

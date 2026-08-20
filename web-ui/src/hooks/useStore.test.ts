@@ -6,6 +6,7 @@ import {
   removeTileFromCanvas,
   findWorkspacesTilingSession,
   relinkSessionInCanvas,
+  removeTilesForSessionInCanvas,
   resolveSupersededChains,
   DEFAULT_WORKTREE_LAYOUT,
   type CanvasGeometry,
@@ -144,6 +145,70 @@ describe("useWorkspaceStore - setActiveWorktree", () => {
     useWorkspaceStore.getState().setActiveWorktree(P1, W1, sessions);
     const state = useWorkspaceStore.getState();
     expect(state.activeFilePath).toBeNull();
+  });
+
+  it("Requirement 4a — a last-known agent session that's now exited falls back to main, not the dead session", () => {
+    const sessions = mockSessions(W1);
+    sessions[1]!.state = "exited"; // the "-alt" session died naturally, never explicitly deleted
+    useWorkspaceStore.setState({
+      lastSessionByWorktree: { [W1]: `${W1}-alt` },
+    });
+    useWorkspaceStore.getState().setActiveWorktree(P1, W1, sessions);
+    const state = useWorkspaceStore.getState();
+    expect(state.activeSessionId).toBe(`${W1}-main`);
+  });
+
+  it("Requirement 4a (negative) — a last-known agent session that's still alive still wins the fallback", () => {
+    const sessions = mockSessions(W1); // "-alt" is state: "idle" — alive
+    useWorkspaceStore.setState({
+      lastSessionByWorktree: { [W1]: `${W1}-alt` },
+    });
+    useWorkspaceStore.getState().setActiveWorktree(P1, W1, sessions);
+    const state = useWorkspaceStore.getState();
+    expect(state.activeSessionId).toBe(`${W1}-alt`);
+  });
+
+  it("Requirement 4b — a last-known terminal session that's now exited falls back to the first terminal, same bug class as 4a", () => {
+    // `term-live` listed first — the fallback (once the dead last-known id
+    // is correctly rejected) is "first terminal in the list", same
+    // unfiltered semantics as the existing agent fallback chain (Requirement
+    // 4a's "falls through to mainSlot → agents[0] → null" shape) — only the
+    // last-known-id check itself gains the `state !== "exited"` guard.
+    const sessions: Session[] = [
+      ...mockSessions(W1),
+      {
+        id: `${W1}-term-live`,
+        worktreeId: W1,
+        projectId: P1,
+        modeId: null,
+        type: "terminal",
+        state: "idle",
+        lifecycleState: "idle",
+        isMain: false,
+        tmuxName: "term-live",
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: `${W1}-term-old`,
+        worktreeId: W1,
+        projectId: P1,
+        modeId: null,
+        type: "terminal",
+        state: "exited",
+        lifecycleState: "exited",
+        isMain: false,
+        tmuxName: "term-old",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    useWorkspaceStore.setState({
+      lastTerminalByWorktree: { [W1]: `${W1}-term-old` },
+    });
+    useWorkspaceStore.getState().setActiveWorktree(P1, W1, sessions);
+    const state = useWorkspaceStore.getState();
+    // The exited last-known id is rejected, not carried through — it falls
+    // back to the first terminal, not the dead one.
+    expect(state.activeTerminalSessionId).toBe(`${W1}-term-live`);
   });
 });
 
@@ -499,6 +564,131 @@ describe("useWorkspaceStore - relinkSessionTiles", () => {
     const before = useWorkspaceStore.getState().workspaceDocs;
     useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
     expect(useWorkspaceStore.getState().workspaceDocs).toBe(before);
+  });
+});
+
+describe("removeTilesForSessionInCanvas", () => {
+  it("removes a matching tile, leaving unrelated tiles untouched", () => {
+    const empty: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };
+    const withOne = insertTileIntoCanvas(empty, "agent", "sess-doomed");
+    const withTwo = insertTileIntoCanvas(withOne, "agent", "sess-keep");
+    const next = removeTilesForSessionInCanvas(withTwo, "sess-doomed");
+    expect(next.tiles).toHaveLength(1);
+    expect(next.tiles[0]!.sessionId).toBe("sess-keep");
+  });
+
+  it("returns the SAME canvas reference when no tile matches", () => {
+    const empty: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };
+    const withTile = insertTileIntoCanvas(empty, "agent", "sess-other");
+    const next = removeTilesForSessionInCanvas(withTile, "sess-doomed");
+    expect(next).toBe(withTile);
+  });
+});
+
+describe("useWorkspaceStore - removeTilesForSession", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      activeSessionId: null,
+      activeTerminalSessionId: null,
+      layoutByWorktree: {},
+      workspaceDocs: {},
+      lastSessionByWorktree: {},
+      lastTerminalByWorktree: {},
+    });
+  });
+
+  it("Requirement 5a — removes a scratch-canvas tile referencing the deleted session", () => {
+    const scratch = insertTileIntoCanvas(
+      { mode: "free", tiles: [], tree: null, freeRects: {} },
+      "agent",
+      "sess-doomed",
+    );
+    useWorkspaceStore.setState({
+      layoutByWorktree: { [W1]: { ...DEFAULT_WORKTREE_LAYOUT, scratchCanvas: scratch } },
+    });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.scratchCanvas!.tiles).toHaveLength(0);
+  });
+
+  it("Requirement 5a — removes a tile from a saved workspace doc", () => {
+    const doc = {
+      id: "doc-1",
+      name: "doc-1",
+      contextKey: W1,
+      mode: "free" as const,
+      tiles: [{ id: "tile-1", kind: "agent" as const, sessionId: "sess-doomed" }],
+      tree: null,
+      freeRects: {},
+    };
+    useWorkspaceStore.setState({ workspaceDocs: { "doc-1": doc } });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    expect(useWorkspaceStore.getState().workspaceDocs["doc-1"]!.tiles).toHaveLength(0);
+  });
+
+  it("Requirement 5c — is a no-op (same reference) when nothing matched", () => {
+    const doc = {
+      id: "doc-1",
+      name: "doc-1",
+      contextKey: W1,
+      mode: "free" as const,
+      tiles: [{ id: "tile-1", kind: "agent" as const, sessionId: "sess-other" }],
+      tree: null,
+      freeRects: {},
+    };
+    useWorkspaceStore.setState({ workspaceDocs: { "doc-1": doc } });
+    const beforeDocs = useWorkspaceStore.getState().workspaceDocs;
+    const beforeState = useWorkspaceStore.getState();
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    expect(useWorkspaceStore.getState().workspaceDocs).toBe(beforeDocs);
+    expect(useWorkspaceStore.getState()).toBe(beforeState);
+  });
+
+  it("Requirement 5d — clears activeSessionId/activeTerminalSessionId when they equal the deleted id", () => {
+    useWorkspaceStore.setState({
+      activeSessionId: "sess-doomed",
+      activeTerminalSessionId: "term-doomed",
+    });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+    // Different id — untouched by this call.
+    expect(useWorkspaceStore.getState().activeTerminalSessionId).toBe("term-doomed");
+  });
+
+  it("Regression — falls back to the worktree's main-slot session when the deleted session was active, given the worktree's remaining sessions", () => {
+    const [main, alt] = mockSessions(W1);
+    useWorkspaceStore.setState({ activeSessionId: alt!.id });
+    // `alt` was deleted — the caller passes the worktree's remaining
+    // sessions (post-deletion), which still contains the main-slot session.
+    useWorkspaceStore.getState().removeTilesForSession(alt!.id, [main!]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBe(main!.id);
+  });
+
+  it("Regression — falls back to null (not left dangling on the deleted id) when no remaining sessions are passed", () => {
+    useWorkspaceStore.setState({ activeSessionId: "sess-doomed" });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("Regression — falls back to null when the remaining sessions have no main-slot session", () => {
+    const [, alt] = mockSessions(W1);
+    useWorkspaceStore.setState({ activeSessionId: "sess-doomed" });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed", [alt!]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+
+  it("Requirement 5d — deletes lastSessionByWorktree/lastTerminalByWorktree entries pointing at the deleted id", () => {
+    useWorkspaceStore.setState({
+      lastSessionByWorktree: { [W1]: "sess-doomed", [W2]: "sess-other" },
+      lastTerminalByWorktree: { [W1]: "sess-doomed" },
+    });
+    useWorkspaceStore.getState().removeTilesForSession("sess-doomed");
+    const state = useWorkspaceStore.getState();
+    expect(state.lastSessionByWorktree).toEqual({ [W2]: "sess-other" });
+    expect(state.lastTerminalByWorktree).toEqual({});
   });
 });
 

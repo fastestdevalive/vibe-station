@@ -271,6 +271,24 @@ export interface WorkspaceState {
    * A no-op (identity-preserving) for canvases with no matching tile.
    */
   relinkSessionTiles: (fromSessionId: string, toSessionId: string) => void;
+  /**
+   * Removes every tile (scratch canvas + every saved workspace doc)
+   * referencing `sessionId` — the explicit-deletion counterpart to
+   * `relinkSessionTiles` above (a session that's gone for good, not
+   * superseded by a replacement). Also clears `activeSessionId`/
+   * `activeTerminalSessionId` and any `lastSessionByWorktree`/
+   * `lastTerminalByWorktree` entry equal to `sessionId` — the same
+   * reactive-sync-gap bug class as `setActiveWorktree`'s exited-session
+   * fallback fix, cheap to fix alongside the tile cleanup this action
+   * already does. A no-op (identity-preserving) when nothing matched.
+   *
+   * When `activeSessionId` is cleared because it pointed at the deleted
+   * session, `remainingSessions` (the deleted session's worktree's other
+   * sessions, if the caller has them) is used to fall back to that
+   * worktree's main-slot agent session — same fallback shape as
+   * `setActiveWorktree`'s main-slot step — rather than leaving the pane bare.
+   */
+  removeTilesForSession: (sessionId: string, remainingSessions?: Session[]) => void;
   reorderWorkspace: (scopeKey: string, orderedIds: string[]) => void;
   setActiveWorkspace: (worktreeId: string, workspaceId: string | null) => void;
   setLayoutMode: (worktreeId: string, mode: "classic" | "workspace") => void;
@@ -368,6 +386,23 @@ export function relinkSessionInCanvas(
     ...canvas,
     tiles: canvas.tiles.map((t) => (t.sessionId === fromSessionId ? { ...t, sessionId: toSessionId } : t)),
   };
+}
+
+/**
+ * Removes every tile referencing `sessionId` from `canvas` — the
+ * explicit-deletion counterpart to `relinkSessionInCanvas` above. Returns
+ * the SAME `canvas` reference when nothing matched, mirroring
+ * `relinkSessionInCanvas`'s no-op shape so callers can skip a `set()` for
+ * canvases this deletion didn't touch.
+ */
+export function removeTilesForSessionInCanvas(canvas: CanvasGeometry, sessionId: string): CanvasGeometry {
+  const matching = canvas.tiles.filter((t) => t.sessionId === sessionId);
+  if (matching.length === 0) return canvas;
+  let next = canvas;
+  for (const tile of matching) {
+    next = removeTileFromCanvas(next, tile.id);
+  }
+  return next;
 }
 
 /**
@@ -567,22 +602,31 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               return s;
             }
 
-            // Compute default agent session: lastSessionByWorktree → main slot → first agent → null
+            // Compute default agent session: lastSessionByWorktree → main slot → first agent → null.
+            // The last-known id only "wins" if it's still a LIVE session —
+            // `state !== "exited"` — not merely still present in the list: a
+            // session that died naturally (never explicitly deleted) stays
+            // in `sessions` with `state: "exited"` forever, and without this
+            // guard it would permanently win the fallback over the main
+            // agent (Requirement 4a). `archivedAt`/`supersededBy` staleness
+            // is a separate class already handled by `relinkSessionTiles`'s
+            // chain resolution — deliberately untouched here (Requirement 4c).
             let defaultSessionId: string | null = null;
             const lastInWorktree = s.lastSessionByWorktree[worktreeId];
             const agents = sessions?.filter((ss) => ss.type === "agent");
-            if (lastInWorktree && agents?.some((ss) => ss.id === lastInWorktree)) {
+            if (lastInWorktree && agents?.some((ss) => ss.id === lastInWorktree && ss.state !== "exited")) {
               defaultSessionId = lastInWorktree;
             } else if (agents) {
               const mainSlot = agents.find((ss) => ss.isMain);
               defaultSessionId = mainSlot?.id ?? agents[0]?.id ?? null;
             }
 
-            // Compute default terminal session: lastTerminalByWorktree → first terminal → null
+            // Compute default terminal session: lastTerminalByWorktree → first terminal → null.
+            // Same `state !== "exited"` guard, same bug class (Requirement 4b).
             let defaultTerminalId: string | null = null;
             const terminals = sessions?.filter((ss) => ss.type === "terminal");
             const lastTerm = s.lastTerminalByWorktree[worktreeId];
-            if (lastTerm && terminals?.some((ss) => ss.id === lastTerm)) {
+            if (lastTerm && terminals?.some((ss) => ss.id === lastTerm && ss.state !== "exited")) {
               defaultTerminalId = lastTerm;
             } else if (terminals) {
               defaultTerminalId = terminals[0]?.id ?? null;
@@ -779,6 +823,80 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return {
               ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
               ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
+            };
+          }),
+        removeTilesForSession: (sessionId, remainingSessions) =>
+          set((s) => {
+            let layoutChanged = false;
+            const nextLayoutByWorktree = { ...s.layoutByWorktree };
+            for (const [worktreeId, layout] of Object.entries(s.layoutByWorktree)) {
+              if (!layout.scratchCanvas) continue;
+              const next = removeTilesForSessionInCanvas(layout.scratchCanvas, sessionId);
+              if (next !== layout.scratchCanvas) {
+                nextLayoutByWorktree[worktreeId] = { ...layout, scratchCanvas: next };
+                layoutChanged = true;
+              }
+            }
+            let docsChanged = false;
+            const nextWorkspaceDocs = { ...s.workspaceDocs };
+            for (const [docId, doc] of Object.entries(s.workspaceDocs)) {
+              const next = removeTilesForSessionInCanvas(doc, sessionId);
+              if (next !== doc) {
+                nextWorkspaceDocs[docId] = { ...doc, ...next };
+                docsChanged = true;
+              }
+            }
+
+            // Requirement 5d — same staleness class as #4: clear any pointer
+            // that referenced the now-deleted session, rather than leaving it
+            // dangling until the next unrelated `setActiveWorktree` call
+            // happens to reconcile it.
+            const activeSessionChanged = s.activeSessionId === sessionId;
+            const activeTerminalChanged = s.activeTerminalSessionId === sessionId;
+            // Re-derive rather than leaving the pane bare null: fall back to
+            // the worktree's main-slot agent session, same fallback shape as
+            // `setActiveWorktree`'s main-slot step (mirrors it, doesn't
+            // duplicate the whole lastSession→mainSlot→firstAgent chain,
+            // since a deletion has no "last known good" session to prefer).
+            let fallbackSessionId: string | null = null;
+            if (activeSessionChanged && remainingSessions) {
+              const mainSlot = remainingSessions.find((ss) => ss.type === "agent" && ss.isMain);
+              fallbackSessionId = mainSlot?.id ?? null;
+            }
+            let lastSessionChanged = false;
+            const nextLastSessionByWorktree = { ...s.lastSessionByWorktree };
+            for (const [worktreeId, id] of Object.entries(s.lastSessionByWorktree)) {
+              if (id === sessionId) {
+                delete nextLastSessionByWorktree[worktreeId];
+                lastSessionChanged = true;
+              }
+            }
+            let lastTerminalChanged = false;
+            const nextLastTerminalByWorktree = { ...s.lastTerminalByWorktree };
+            for (const [worktreeId, id] of Object.entries(s.lastTerminalByWorktree)) {
+              if (id === sessionId) {
+                delete nextLastTerminalByWorktree[worktreeId];
+                lastTerminalChanged = true;
+              }
+            }
+
+            if (
+              !layoutChanged &&
+              !docsChanged &&
+              !activeSessionChanged &&
+              !activeTerminalChanged &&
+              !lastSessionChanged &&
+              !lastTerminalChanged
+            ) {
+              return s;
+            }
+            return {
+              ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
+              ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
+              ...(activeSessionChanged ? { activeSessionId: fallbackSessionId } : {}),
+              ...(activeTerminalChanged ? { activeTerminalSessionId: null } : {}),
+              ...(lastSessionChanged ? { lastSessionByWorktree: nextLastSessionByWorktree } : {}),
+              ...(lastTerminalChanged ? { lastTerminalByWorktree: nextLastTerminalByWorktree } : {}),
             };
           }),
         reorderWorkspace: (scopeKey, orderedIds) =>
