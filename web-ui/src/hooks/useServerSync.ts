@@ -160,7 +160,26 @@ export function useServerSync(api: ApiInstance): void {
       }
     });
     const offSessDeleted = api.on("session:deleted", (ev) => {
-      if (ev.type === "session:deleted") applySessionDeleted(ev.sessionId);
+      if (ev.type === "session:deleted") {
+        // Captured before `applySessionDeleted` removes it from the list —
+        // needed below to scope the fallback-session lookup to the deleted
+        // session's own worktree.
+        const deletedWorktreeId = useServerStore
+          .getState()
+          .sessions.find((sess) => sess.id === ev.sessionId)?.worktreeId;
+        applySessionDeleted(ev.sessionId);
+        // Explicit deletion (not a natural exit — a session can resume from
+        // that) is the "this is gone" signal: drop any canvas/workspace tile
+        // still referencing it, live, without a reload (Requirement 5). Pass
+        // along the worktree's remaining sessions (post-deletion) so a
+        // cleared `activeSessionId` can fall back to that worktree's main
+        // agent instead of going bare (Requirement 5d follow-up).
+        const remainingSessions =
+          deletedWorktreeId != null
+            ? useServerStore.getState().sessions.filter((sess) => sess.worktreeId === deletedWorktreeId)
+            : undefined;
+        useWorkspaceStore.getState().removeTilesForSession(ev.sessionId, remainingSessions);
+      }
     });
     const offSessUpdated = api.on("session:updated", (ev) => {
       if (ev.type === "session:updated") {

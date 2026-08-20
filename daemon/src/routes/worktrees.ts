@@ -15,6 +15,7 @@ import {
   fetchOrigin,
   branchExists,
   listCommits,
+  listSubmodules,
   resolveBaseSha,
 } from "../services/git.js";
 import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
@@ -1147,6 +1148,25 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       return reply.send({ commits });
     } catch (err) {
       return reply.status(500).send({ error: `commits failed: ${String(err)}` });
+    }
+  });
+
+  // GET /worktrees/:id/submodules
+  // Top-level `.gitmodules` submodules for the VCS tool tab's "Submodules"
+  // section — no nested (submodule-of-submodule) walking, see
+  // `listSubmodules`'s doc comment.
+  app.get("/worktrees/:id/submodules", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const wtPath = getWorktreePath(project.id, wtId);
+    try {
+      const submodules = await listSubmodules(wtPath);
+      return reply.send({ submodules });
+    } catch (err) {
+      return reply.status(500).send({ error: `submodules failed: ${String(err)}` });
     }
   });
 
