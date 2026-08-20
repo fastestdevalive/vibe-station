@@ -390,6 +390,47 @@ describe("fetchPrForBranch / fetchPrsForBranches", () => {
     expect((init as { headers: Record<string, string> }).headers.Authorization).toBe("Bearer tok");
   });
 
+  it("Requirement 2b — a branch with an older closed PR and a newer open PR resolves to the newer one, and the query slices with first: 1 (not last: 1)", async () => {
+    // GitHub returns nodes ordered per the query's own `orderBy: CREATED_AT
+    // DESC` — newest first. If the outgoing query ever regresses to
+    // `last: 1`, a Relay connection sorted DESC and sliced from the tail
+    // returns the OLDEST entry, not the newest — this response shape alone
+    // can't distinguish that regression (a single-node response would pass
+    // under either `first`/`last`), so the query-string assertion below is
+    // what actually locks in the fix.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers(),
+      json: async () => ({
+        data: {
+          repo0: {
+            pullRequests: {
+              // Ordered as GitHub would return them for `orderBy: CREATED_AT
+              // DESC` — newest first. Code takes `nodes[0]`, so `first: 1`
+              // correctly returns this newer/open PR; `last: 1` would instead
+              // slice the tail of this DESC-sorted list, returning the older
+              // closed one.
+              nodes: [
+                fakeNode({ number: 55, title: "Newer open PR", state: "OPEN", merged: false }),
+                fakeNode({ number: 40, title: "Older closed PR", state: "CLOSED", merged: false }),
+              ],
+            },
+          },
+        },
+      }),
+    });
+    global.fetch = fetchMock as unknown as typeof fetch;
+    mockedListAccounts.mockResolvedValue([{ login: "owner-relatch", token: "tok" }]);
+
+    const result = await fetchPrForBranch("owner-relatch", "repo-relatch", "some-branch");
+    expect(result).toMatchObject({ kind: "pr", pr: { number: 55, state: "open" } });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse((init as { body: string }).body) as { query: string };
+    expect(body.query).toContain("first: 1");
+    expect(body.query).not.toContain("last: 1");
+  });
+
   it("Requirement 8 — a merged PR sets merged: true and state: closed", async () => {
     global.fetch = mockGraphQLResponse([
       fakeNode({

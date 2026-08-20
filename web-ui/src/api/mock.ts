@@ -27,6 +27,7 @@ import type {
   Session,
   SessionMeta,
   Settings,
+  SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
   TranscriptPage,
@@ -863,6 +864,31 @@ export function createMockApi() {
         };
       }
       return null;
+    },
+
+    async listSubmodules(worktreeId: string): Promise<SubmoduleInfo[]> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      if (worktreeId === "wt-1") {
+        return [
+          {
+            path: "vendor/widgets",
+            sha: "a1b2c3d4e5f6789012345678901234567890abcd",
+            shortSha: "a1b2c3d",
+            branch: "main",
+            subject: "Bump widget renderer to v2",
+            status: "clean",
+          },
+          {
+            path: "vendor/legacy",
+            sha: "0011223344556677889900112233445566778899",
+            shortSha: "0011223",
+            branch: null,
+            subject: null,
+            status: "uninitialized",
+          },
+        ];
+      }
+      return [];
     },
 
     async listModes(): Promise<Mode[]> {

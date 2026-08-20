@@ -312,7 +312,7 @@ async function queryAccountGraphQL(
   const fields = entries
     .map(
       (e, i) => `${alias(i)}: repository(owner: ${JSON.stringify(e.owner)}, name: ${JSON.stringify(e.repo)}) {
-    pullRequests(headRefName: ${JSON.stringify(e.branch)}, last: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
+    pullRequests(headRefName: ${JSON.stringify(e.branch)}, first: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
       nodes { number url title state isDraft merged author { login } }
     }
   }`,

@@ -959,4 +959,19 @@ describe("Worktree routes", () => {
       expect(top.insertions).toBe(2);
     });
   });
+
+  // ─── GET /worktrees/:id/submodules ──────────────────────────────────────
+  describe("GET /worktrees/:id/submodules", () => {
+    it("Requirement 3e — 404s for an unknown worktree", async () => {
+      const res = await app.inject({ method: "GET", url: "/worktrees/does-not-exist/submodules" });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("Requirement 3e — a known worktree with no submodules returns 200 { submodules: [] }", async () => {
+      const wt = await createWorktree("vcs", "no-submodules");
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/submodules` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ submodules: [] });
+    });
+  });
 });

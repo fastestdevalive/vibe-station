@@ -26,6 +26,7 @@ import type {
   Session,
   SessionMeta,
   Settings,
+  SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
   TranscriptPage,
@@ -614,6 +615,15 @@ export function createClientApi() {
       const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/pr`);
       const result = await parseJson<PrLookupResult>(res);
       return result.kind === "pr" ? result.pr : null;
+    },
+
+    /** Top-level `.gitmodules` submodules for the worktree, for the VCS tool
+     *  tab's "Submodules" section. */
+    async listSubmodules(worktreeId: string): Promise<SubmoduleInfo[]> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/submodules`);
+      const { submodules } = await parseJson<{ submodules: SubmoduleInfo[] }>(res);
+      return submodules;
     },
 
     async listModes(): Promise<Mode[]> {
