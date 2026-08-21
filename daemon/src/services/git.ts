@@ -144,10 +144,38 @@ export async function revParse(repoPath: string, ref: string): Promise<string> {
 }
 
 /**
+ * Returns true if `ancestor` is an ancestor of (or equal to) `descendant`,
+ * via `git merge-base --is-ancestor` (exit code 0 = true, 1 = false). Used by
+ * `resolveBaseSha` to pick the more-advanced of two merge-base candidates.
+ * Throws (propagates) on any other failure — e.g. one of the shas doesn't
+ * resolve in this repo — so callers can distinguish "definitely not an
+ * ancestor" from "couldn't tell".
+ */
+async function isAncestor(repoPath: string, ancestor: string, descendant: string): Promise<boolean> {
+  try {
+    await execFile("git", ["-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant], {
+      cwd: repoPath,
+      env: { ...process.env },
+    });
+    return true;
+  } catch (err) {
+    // `execFile` rejects with `err.code` set to the child's exit code.
+    // Exit code 1 means "definitively not an ancestor" — a normal, expected
+    // result, not a failure. Any other exit code (or no code at all, e.g. the
+    // process was killed) means the check itself failed, so rethrow.
+    if (err && typeof err === "object" && "code" in err && (err as { code: unknown }).code === 1) {
+      return false;
+    }
+    throw err;
+  }
+}
+
+/**
  * Resolves the *current* fork point between `HEAD` and `baseBranch` in the
- * given worktree (`git merge-base HEAD <baseBranch>`), falling back to
- * `fallbackBaseSha` (the worktree's stored, creation-time `baseSha`) if
- * `baseBranch` doesn't resolve — e.g. it was deleted/renamed upstream.
+ * given worktree, preferring the remote-tracking ref (`origin/<baseBranch>`)
+ * over the local branch name, and falling back to `fallbackBaseSha` (the
+ * worktree's stored, creation-time `baseSha`) if neither resolves — e.g.
+ * `baseBranch` was deleted/renamed upstream.
  *
  * A worktree's stored `baseSha` is captured once, at creation time, and
  * never updated. If the branch is later synced/rebased onto an advancing
@@ -155,8 +183,27 @@ export async function revParse(repoPath: string, ref: string): Promise<string> {
  * true fork point moves forward but the stored value doesn't — every commit
  * the base branch picked up since creation then reads as "unique to this
  * branch" wherever `baseSha` is used for branch-scoped diffs/commit lists.
- * Recomputing the merge-base live avoids that drift. Returns null if neither
- * `baseBranch` nor the fallback resolves (e.g. a corrupted/pruned repo).
+ * Recomputing the merge-base live avoids that drift.
+ *
+ * The local `<baseBranch>` ref itself is also only ever updated once (at
+ * worktree-creation time, by `worktrees.ts`'s call to `fetchOrigin`) — after
+ * that it silently drifts stale for as long as the daemon runs, even though
+ * `origin/<baseBranch>` may be kept fresh by a caller that fetches it (see
+ * `GET /worktrees/:id/commits`). So when both `origin/<baseBranch>` and the
+ * local `baseBranch` resolve, their merge-bases are compared and the more
+ * advanced one (the one that is a *descendant* of the other) wins — NOT
+ * origin unconditionally. Origin is usually the fresher one (that's the
+ * common case this whole mechanism exists for), but not always: someone may
+ * have committed directly to the local branch in the primary clone bypassing
+ * GitHub, or `origin/<baseBranch>`'s tracking ref may simply not have been
+ * fetched yet this daemon session while the local branch was manually pulled
+ * more recently. Blindly preferring origin in that situation would make
+ * already-merged-locally commits misread as "unique to this branch" — the
+ * exact bug this mechanism exists to prevent, just triggered from the other
+ * direction. The local branch name is still the sole fallback for repos with
+ * no remote, or where a fetch has never succeeded. Returns null if none of
+ * `origin/<baseBranch>`, `baseBranch`, nor the fallback resolves (e.g. a
+ * corrupted/pruned repo).
  */
 export async function resolveBaseSha(
   repoPath: string,
@@ -164,11 +211,48 @@ export async function resolveBaseSha(
   fallbackBaseSha?: string | null,
 ): Promise<string | null> {
   if (baseBranch) {
+    let originMergeBase: string | null = null;
+    let localMergeBase: string | null = null;
     try {
-      return await runGit(["-C", repoPath, "merge-base", "HEAD", baseBranch], repoPath);
+      originMergeBase = await runGit(
+        ["-C", repoPath, "merge-base", "HEAD", `origin/${baseBranch}`],
+        repoPath,
+      );
+    } catch {
+      // origin/<baseBranch> doesn't resolve (no remote, never fetched) —
+      // fall through to the local branch name.
+    }
+    try {
+      localMergeBase = await runGit(["-C", repoPath, "merge-base", "HEAD", baseBranch], repoPath);
     } catch {
       // baseBranch ref doesn't resolve (deleted/renamed) — fall through.
     }
+
+    if (originMergeBase && localMergeBase) {
+      if (originMergeBase === localMergeBase) return originMergeBase;
+      // Whichever merge-base is the more-advanced fork point is the one that
+      // is NOT an ancestor of the other (i.e. the other one IS an ancestor of
+      // it). Check both directions explicitly rather than assuming either
+      // side wins by default.
+      try {
+        const localIsAncestorOfOrigin = await isAncestor(repoPath, localMergeBase, originMergeBase);
+        if (localIsAncestorOfOrigin) return originMergeBase;
+      } catch {
+        // fall through to the other direction check
+      }
+      try {
+        const originIsAncestorOfLocal = await isAncestor(repoPath, originMergeBase, localMergeBase);
+        if (originIsAncestorOfLocal) return localMergeBase;
+      } catch {
+        // fall through
+      }
+      // Neither is an ancestor of the other — divergent histories with no
+      // ancestor relationship. Should be rare/impossible for two merge-base
+      // results against the same HEAD, but fall back to origin defensively.
+      return originMergeBase;
+    }
+    if (originMergeBase) return originMergeBase;
+    if (localMergeBase) return localMergeBase;
   }
   if (fallbackBaseSha) {
     try {
@@ -204,12 +288,51 @@ export async function deleteBranch(repoPath: string, branch: string): Promise<vo
   await runGit(["-C", repoPath, "branch", "-D", branch]);
 }
 
-/** Fetch a ref from origin (best-effort — swallows errors if no remote). */
-export async function fetchOrigin(repoPath: string, ref: string): Promise<void> {
+/**
+ * Bounded timeout for `fetchOrigin`'s underlying `execFile` call — a hung or
+ * slow network fetch must not hang whatever request triggered it (e.g.
+ * `GET /worktrees/:id/commits`, which calls this synchronously on every
+ * tab-open/refresh). Scoped to this one call, not a blanket change to
+ * `runGit`/`execFile` elsewhere in this file.
+ */
+const FETCH_ORIGIN_TIMEOUT_MS = 8_000;
+
+/**
+ * Fetch a ref from origin (best-effort — swallows errors if no remote,
+ * network failure, or timeout).
+ *
+ * `GIT_TERMINAL_PROMPT: "0"` and a `BatchMode`/bounded-`ConnectTimeout`
+ * `GIT_SSH_COMMAND` keep this from ever blocking on an interactive
+ * credential/host-key prompt — without them, a remote that needs credentials
+ * can hang for the *entire* `timeoutMs` on every single call (e.g. every
+ * `/commits` request) if the daemon process has a TTY attached, and an
+ * SSH-side hang in particular wouldn't even be bounded by `timeoutMs` until
+ * SSH itself gives up. The 5s SSH connect timeout is comfortably inside the
+ * default 8s outer timeout so the outer bound is still what actually fires in
+ * the common case.
+ *
+ * `timeoutMs` defaults to the production value (`FETCH_ORIGIN_TIMEOUT_MS`);
+ * it exists as a parameter solely so `git.fetchOrigin.test.ts` can prove the
+ * timeout is enforced against a fake, slow `git` without waiting out the
+ * full 8s in every test run. Production call sites should not pass it.
+ */
+export async function fetchOrigin(
+  repoPath: string,
+  ref: string,
+  timeoutMs: number = FETCH_ORIGIN_TIMEOUT_MS,
+): Promise<void> {
   try {
-    await runGit(["-C", repoPath, "fetch", "origin", ref]);
+    await execFile("git", ["-C", repoPath, "fetch", "origin", ref], {
+      cwd: repoPath,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
+      },
+      timeout: timeoutMs,
+    });
   } catch {
-    // no remote or network error — callers treat this as best-effort
+    // no remote, network error, or timeout — callers treat this as best-effort
   }
 }
 
