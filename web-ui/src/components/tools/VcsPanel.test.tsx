@@ -397,4 +397,72 @@ describe("VcsPanel", () => {
     rerender(<VcsPanel api={api} worktreeId="wt-2" />);
     await waitFor(() => expect(screen.queryByText("Submodules")).not.toBeInTheDocument());
   });
+
+  it("Requirement 2c — the true first load (commits === null) shows the full 'Loading commits…' empty state, no syncing indicator", async () => {
+    const api = createMockApi();
+    const listCommitsDeferred = deferred<CommitLogEntry[]>();
+    vi.spyOn(api, "listCommits").mockImplementation(() => listCommitsDeferred.promise);
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+
+    await screen.findByText("Loading commits…");
+    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
+
+    listCommitsDeferred.resolve(makeCommits(3));
+    await screen.findByText("Commits (3)");
+  });
+
+  it("Requirement 2a/2b — a manual refresh keeps the previous commit list visible and shows a syncing indicator, which clears on completion", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const refreshDeferred = deferred<CommitLogEntry[]>();
+    vi.spyOn(api, "listCommits")
+      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(5) })) // initial load
+      .mockImplementationOnce(() => refreshDeferred.promise); // refresh, held open
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("Commits (5)");
+    expect(screen.getByText("commit #0")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /refresh commits/i }));
+
+    // Requirement 2a: the previous list stays rendered, not blanked to
+    // "Loading commits…", while the refresh is in flight.
+    expect(screen.getByText("commit #0")).toBeInTheDocument();
+    expect(screen.queryByText("Loading commits…")).not.toBeInTheDocument();
+    // Requirement 2b: a visible syncing indicator is shown, distinct from
+    // the empty-state text.
+    expect(screen.getByText(/syncing/i)).toBeInTheDocument();
+
+    refreshDeferred.resolve(makeCommits(5));
+    await waitFor(() => expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument());
+    expect(screen.getByText("commit #0")).toBeInTheDocument();
+  });
+
+  it("Regression — clicking Load more does NOT show the Syncing… indicator (loadingMore is distinct from loading)", async () => {
+    const user = userEvent.setup();
+    const api = createMockApi();
+    const loadMoreDeferred = deferred<CommitLogEntry[]>();
+    vi.spyOn(api, "listCommits")
+      .mockImplementationOnce(limitAwareListCommits({ "wt-1": makeCommits(80) })) // initial load
+      .mockImplementationOnce(() => loadMoreDeferred.promise); // "Load more", held open
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+
+    render(<VcsPanel api={api} worktreeId="wt-1" />);
+    await screen.findByText("Commits (50)");
+
+    await user.click(screen.getByRole("button", { name: /load 50 more/i }));
+
+    // The "Load more" button shows its own "Loading…" label, but the
+    // top-bar "Syncing…" indicator is reserved for `loading` (initial
+    // load/refresh) — `loadingMore` must not trigger it, pinning down that
+    // the two states stay separate.
+    expect(screen.getByRole("button", { name: /loading/i })).toBeInTheDocument();
+    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
+
+    loadMoreDeferred.resolve(makeCommits(80).slice(0, 101));
+    await screen.findByText("Commits (80)");
+  });
 });

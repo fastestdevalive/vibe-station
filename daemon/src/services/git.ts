@@ -298,6 +298,41 @@ export async function deleteBranch(repoPath: string, branch: string): Promise<vo
 const FETCH_ORIGIN_TIMEOUT_MS = 8_000;
 
 /**
+ * Cooldown after a `(repoPath, ref)` fetch completes, mirroring `github.ts`'s
+ * `CACHE_TTL_MS = 5_000` precedent: `GET /worktrees/:id/commits` calls
+ * `fetchOrigin` on every request (mount, worktree switch, manual refresh,
+ * "Load more"), so a rapid re-trigger for the same repo+ref within this
+ * window resolves immediately instead of spawning another `git fetch`. Not a
+ * permanent cache — once the window elapses, the next call fetches for real
+ * again.
+ */
+const FETCH_ORIGIN_COOLDOWN_MS = 5_000;
+
+/**
+ * In-flight dedupe for `fetchOrigin`: concurrent callers for the same
+ * `(repoPath, ref)` key share ONE underlying `git fetch` promise instead of
+ * each starting their own subprocess (see this file's `fetchOrigin` doc
+ * comment and the `vcs-fetch-debounce` plan for why — toggling between two
+ * worktrees of the same project, or refreshing twice quickly, can otherwise
+ * race two `git fetch`es into the same repo path).
+ *
+ * This map (and `fetchOriginCooldownUntil` below) intentionally grow
+ * unbounded for the daemon's lifetime — one entry per distinct
+ * `(repoPath, ref)` pair ever fetched — and are never pruned when a
+ * worktree/project is deleted. Negligible at realistic scale (tens of
+ * projects × a handful of branches each), matching the same non-eviction
+ * precedent already used by `github.ts`'s PR cache.
+ */
+const fetchOriginInFlight = new Map<string, Promise<void>>();
+
+/** Last-completed timestamp per key, used by the cooldown above. */
+const fetchOriginCooldownUntil = new Map<string, number>();
+
+function fetchOriginKey(repoPath: string, ref: string): string {
+  return `${repoPath}::${ref}`;
+}
+
+/**
  * Fetch a ref from origin (best-effort — swallows errors if no remote,
  * network failure, or timeout).
  *
@@ -315,25 +350,69 @@ const FETCH_ORIGIN_TIMEOUT_MS = 8_000;
  * it exists as a parameter solely so `git.fetchOrigin.test.ts` can prove the
  * timeout is enforced against a fake, slow `git` without waiting out the
  * full 8s in every test run. Production call sites should not pass it.
+ *
+ * In-flight calls for the same `(repoPath, ref)` are deduped — a second
+ * concurrent caller awaits the first's actual promise rather than starting
+ * its own subprocess — and a short cooldown after completion (see
+ * `FETCH_ORIGIN_COOLDOWN_MS`) makes a rapid same-key re-call resolve
+ * immediately with no subprocess at all. Neither mechanism changes what a
+ * successful fetch does to the repo's refs, only how often the underlying
+ * `git fetch` actually runs. Note that a deduped (second, concurrent) caller's
+ * own `timeoutMs` argument is silently ignored — it just awaits the
+ * already-running first caller's promise, so whatever timeout the FIRST
+ * caller passed is the one that actually applies. This is expected/fine; it
+ * only matters for callers (like tests) that pass a non-default `timeoutMs`.
  */
 export async function fetchOrigin(
   repoPath: string,
   ref: string,
   timeoutMs: number = FETCH_ORIGIN_TIMEOUT_MS,
 ): Promise<void> {
+  const key = fetchOriginKey(repoPath, ref);
+
+  const cooldownUntil = fetchOriginCooldownUntil.get(key);
+  if (cooldownUntil != null && cooldownUntil > Date.now()) return;
+
+  const inFlight = fetchOriginInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      await execFile("git", ["-C", repoPath, "fetch", "origin", ref], {
+        cwd: repoPath,
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
+        },
+        timeout: timeoutMs,
+      });
+      // Only stamp the cooldown on a SUCCESSFUL fetch. A failed fetch (no
+      // remote, network blip, timeout) must NOT block a subsequent real
+      // attempt within the window — e.g. worktree creation calling
+      // `fetchOrigin` for a branch that isn't local yet needs a real retry,
+      // not a silent no-op inherited from an unrelated tab's swallowed
+      // failure moments earlier.
+      fetchOriginCooldownUntil.set(key, Date.now() + FETCH_ORIGIN_COOLDOWN_MS);
+    } catch {
+      // no remote, network error, or timeout — callers treat this as
+      // best-effort. Deliberately NOT entering the cooldown here (see above).
+    }
+  })();
+  fetchOriginInFlight.set(key, promise);
   try {
-    await execFile("git", ["-C", repoPath, "fetch", "origin", ref], {
-      cwd: repoPath,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-        GIT_SSH_COMMAND: "ssh -o BatchMode=yes -o ConnectTimeout=5",
-      },
-      timeout: timeoutMs,
-    });
-  } catch {
-    // no remote, network error, or timeout — callers treat this as best-effort
+    await promise;
+  } finally {
+    fetchOriginInFlight.delete(key);
   }
+}
+
+/** Test-only: clears `fetchOrigin`'s in-flight-dedupe and cooldown maps.
+ *  Matches the `_clearPrCacheForTest`/`_clearStoreForTest` convention used
+ *  elsewhere in this codebase for module-level test state. */
+export function _clearFetchOriginStateForTest(): void {
+  fetchOriginInFlight.clear();
+  fetchOriginCooldownUntil.clear();
 }
 
 /** Initialize a new git repository in the given directory. */

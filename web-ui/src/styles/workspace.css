@@ -3834,6 +3834,7 @@ a.dashboard-card.dashboard-card--session {
 .vcs-panel__bar-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 
@@ -3853,6 +3854,28 @@ a.dashboard-card.dashboard-card--session {
 
 .vcs-panel__spin {
   animation: vcs-spin 0.8s linear infinite;
+}
+
+/* Requirement 2b: a visible "syncing" affordance while a refresh is in
+   flight over an already-loaded commit list — distinct from the bare
+   spinning refresh-button icon, which is easy to miss.
+   Rendered unconditionally in the DOM (see VcsPanel.tsx) so it always
+   reserves its own width — `visibility: hidden` (not `display: none`) when
+   idle keeps the refresh button from jumping sideways as syncing starts and
+   stops. */
+.vcs-panel__syncing {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 4.5em;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.vcs-panel__syncing--idle {
+  visibility: hidden;
 }
 
 @keyframes vcs-spin {
