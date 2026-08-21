@@ -958,6 +958,45 @@ describe("Worktree routes", () => {
       expect(top.subject).toBe("add feature.txt");
       expect(top.insertions).toBe(2);
     });
+
+    it("vcs-stale-base-branch Requirement 1a/1.5 — GET /worktrees/:id/commits fetches origin/<baseBranch> before resolving the base sha", async () => {
+      const wt = await createWorktree("vcs", "fetch-before-resolve");
+      const wtWithBase = wt as unknown as { id: string; baseBranch: string };
+
+      const git = await import("../services/git.js");
+      const callOrder: string[] = [];
+      const fetchSpy = vi.spyOn(git, "fetchOrigin").mockImplementation(async () => {
+        callOrder.push("fetchOrigin");
+      });
+      const originalResolve = git.resolveBaseSha;
+      const resolveSpy = vi
+        .spyOn(git, "resolveBaseSha")
+        .mockImplementation(async (...args: Parameters<typeof git.resolveBaseSha>) => {
+          callOrder.push("resolveBaseSha");
+          return originalResolve(...args);
+        });
+
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/commits` });
+      expect(res.statusCode).toBe(200);
+
+      expect(fetchSpy).toHaveBeenCalledWith(repoDir, wtWithBase.baseBranch);
+      expect(callOrder).toEqual(["fetchOrigin", "resolveBaseSha"]);
+
+      fetchSpy.mockRestore();
+      resolveSpy.mockRestore();
+    });
+
+    it("vcs-stale-base-branch Requirement 1a — GET /worktrees/:id/commits still succeeds when fetchOrigin throws (best-effort)", async () => {
+      const wt = await createWorktree("vcs", "fetch-throws");
+
+      const git = await import("../services/git.js");
+      const fetchSpy = vi.spyOn(git, "fetchOrigin").mockRejectedValue(new Error("network down"));
+
+      const res = await app.inject({ method: "GET", url: `/worktrees/${wt.id}/commits` });
+      expect(res.statusCode).toBe(200);
+
+      fetchSpy.mockRestore();
+    });
   });
 
   // ─── GET /worktrees/:id/submodules ──────────────────────────────────────
