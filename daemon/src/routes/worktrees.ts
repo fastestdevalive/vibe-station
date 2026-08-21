@@ -1143,6 +1143,22 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const wtPath = getWorktreePath(project.id, wtId);
     try {
+      // Best-effort refresh of `origin/<baseBranch>` before recomputing the
+      // fork point — the local `<baseBranch>` ref is only ever updated once,
+      // at worktree-creation time, and otherwise drifts stale for as long as
+      // the daemon runs (see `resolveBaseSha`'s doc comment). Runs exactly
+      // once per `/commits` request, on tab-open/refresh/load-more — never on
+      // a timer. `fetchOrigin` already swallows its own errors/timeouts, so
+      // this can't fail the request even if it throws unexpectedly; the
+      // `.catch` below only logs at debug (not warn/error, to avoid
+      // per-request noise on a merely-flaky network) so a permanently-failing
+      // fetch is at least visible somewhere instead of being silently
+      // indistinguishable from a healthy one.
+      if (worktree.baseBranch) {
+        await fetchOrigin(project.absolutePath, worktree.baseBranch).catch((err) => {
+          req.log.debug({ err }, "fetchOrigin failed before resolveBaseSha, proceeding with local refs");
+        });
+      }
       const baseSha = await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha);
       const commits = await listCommits(wtPath, limit, baseSha ?? undefined);
       return reply.send({ commits });
