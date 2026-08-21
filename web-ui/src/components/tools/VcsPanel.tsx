@@ -380,6 +380,13 @@ export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
     // reset it here so an auto-toggle-off (Requirement 1f) or a manual flip
     // on a previous worktree doesn't carry over to this one.
     setDiffFromMain(true);
+    // Requirement 3: a worktree switch must fall back to the "Loading
+    // commits…" empty state, not briefly show the PREVIOUS worktree's stale
+    // commits under a "Syncing…" label (which reads as "these are your
+    // commits, just refreshing" instead of "wrong worktree, please wait").
+    // Deliberately scoped to this effect only — manual `refresh()` of the
+    // SAME worktree should keep showing old data while it reloads.
+    setCommits(null);
     void load(PAGE_SIZE, "initial");
     return () => activeLoad.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is redefined every render (reads current api/worktreeId via closure); depending on worktreeId/api alone matches the pre-existing effect's deps.
@@ -426,6 +433,34 @@ export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
           >
             <RefreshCw size={13} className={loading ? "vcs-panel__spin" : undefined} />
           </button>
+          {/* Requirement 2b: a visible "syncing" indicator distinct from the
+              refresh button's spin animation, shown only while a refresh is
+              in flight over a commit list already on screen (never during
+              the true first load — Requirement 2c's "Loading commits…"
+              empty state covers that case instead).
+              Rendered UNCONDITIONALLY (only its text/icon content toggles) —
+              a `role="status"` live region needs to already exist in the DOM
+              before its content changes, or some screen readers won't
+              announce it. Paired with `aria-live="polite"` per the existing
+              convention in `TerminalPane.tsx`/`ConnectionStatus.tsx`. Sits
+              AFTER the refresh button (not before) and reserves its own
+              width via CSS (`visibility: hidden` when idle, not
+              `display: none`) so its appearance/disappearance never shifts
+              the button's position. */}
+          <span
+            className={`vcs-panel__syncing${loading && commits != null ? "" : " vcs-panel__syncing--idle"}`}
+            role="status"
+            aria-live="polite"
+          >
+            {loading && commits != null ? (
+              <>
+                <RefreshCw size={11} className="vcs-panel__spin" aria-hidden />
+                Syncing…
+              </>
+            ) : (
+              ""
+            )}
+          </span>
         </div>
       </div>
       {pr ? <PrBanner pr={pr} /> : null}
