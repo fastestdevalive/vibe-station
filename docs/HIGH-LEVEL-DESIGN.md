@@ -345,10 +345,12 @@ The branch name is **immutable for the worktree's lifetime** in v1 — to rename
 
 ### Worktree ↔ main-session invariant
 
-A worktree **always** has exactly one main session (slot `m`).
+A worktree **always** has exactly one main session, though *which* session holds that
+role can change at runtime (see promotion below) — it is not pinned to the session
+created alongside the worktree.
 
 - **Creation is atomic**: `POST /worktrees` (and `vst worktree create`) always provisions the git worktree AND spawns the main session in the same operation. There is no "worktree without sessions" state.
-- The main session cannot be terminated via `DELETE /sessions/:id` — that's rejected with `400`. The only way to end a main session is `DELETE /worktrees/:id`, which terminates all sessions including main and removes the checkout.
+- The main session CAN be terminated via `DELETE /sessions/:id` when another eligible agent session exists in the worktree: that sibling is atomically promoted to main (its own name preserved) before the old main is deleted. It is rejected with `400` only when the main session is the worktree's sole session — the only way to end a main session with no siblings is `DELETE /worktrees/:id`, which terminates all sessions including main and removes the checkout.
 - After tmux death, the main session moves to `exited` state but the record persists; the worktree still has its main session, just paused. Resume re-spawns the tmux session in place.
 
 **Rollback on creation failure** (atomicity guarantee):

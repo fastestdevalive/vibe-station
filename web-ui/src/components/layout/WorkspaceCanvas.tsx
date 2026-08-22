@@ -1473,7 +1473,17 @@ export function WorkspaceCanvas({
           const target = terminateTarget;
           setTerminateTarget(null);
           if (target) {
-            void api.terminateSession(target.session.id).then(() => removeTile(target.tileId));
+            void api
+              .terminateSession(target.session.id)
+              .then(() => removeTile(target.tileId))
+              .catch((err: unknown) => {
+                // Only remaining failure: "main session, no eligible sibling
+                // to promote" (Fix 1). No toast/error-banner mechanism exists
+                // anywhere in web-ui — see TabsStrip.tsx's identical catch for
+                // the full rationale — so this uses the browser-native
+                // alert() rather than inventing new UI infra.
+                window.alert(err instanceof Error ? err.message : "Failed to terminate session.");
+              });
           }
         }}
       />

@@ -336,6 +336,9 @@ const SessionUpdatedEvent = z.object({
   /** Set on the archived session by a reset (POST .../reset) — the
    *  replacement session's id (present-tickmark-replacement/02-reset-relink). */
   supersededBy: z.string().nullable().optional(),
+  /** Set true when a main-session promotion (DELETE /sessions/:id on the old
+   *  main, Fix 1) flips this session to the worktree's new main. */
+  isMain: z.boolean().optional(),
 });
 
 /**

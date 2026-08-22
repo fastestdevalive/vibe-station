@@ -365,6 +365,9 @@ export type WSEvent =
       pr?: PrStatus | null;
       /** Set on the archived session by a reset — the replacement session's id. */
       supersededBy?: string | null;
+      /** Set true when a main-session promotion (DELETE /sessions/:id on the
+       *  old main) flips this session to the worktree's new main. */
+      isMain?: boolean;
     }
   | {
       type: "session:error";

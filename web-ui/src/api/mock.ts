@@ -561,7 +561,34 @@ export function createMockApi() {
       if (idx === -1) throw new ApiError("not found", 404);
       const victim = sessions[idx];
       if (!victim) throw new ApiError("not found", 404);
-      if (victim.isMain) throw new ApiError("cannot delete main", 400);
+      if (victim.isMain) {
+        // Mirrors the daemon's promotion behavior (Fix 1): promote the
+        // eligible (type "agent", not archived) sibling with the lowest
+        // sortOrder in the same worktree, carrying the old main's `pr`
+        // forward, instead of always rejecting.
+        const siblings = sessions
+          .filter(
+            (s) =>
+              s.id !== victim.id &&
+              s.worktreeId === victim.worktreeId &&
+              s.type === "agent" &&
+              s.archivedAt == null,
+          )
+          .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        const promoted = siblings[0];
+        if (!promoted) throw new ApiError("cannot delete main", 400);
+        promoted.isMain = true;
+        promoted.pr = victim.pr;
+        sessions.splice(idx, 1);
+        // Unlike the daemon, this mock emits NO event for the delete itself
+        // (matches its existing convention — no `emit(...)` call here today).
+        // It DOES emit for the promoted sibling's isMain flip: other open
+        // surfaces (sidebar rollup, other tabs) have no other way to learn
+        // about it in mock/dev mode, since the caller's own refetch only
+        // refreshes its own worktree-scoped list, not every mounted component.
+        emit({ type: "session:updated", sessionId: promoted.id, isMain: true, pr: promoted.pr ?? undefined });
+        return { ok: true };
+      }
       sessions.splice(idx, 1);
       return { ok: true };
     },

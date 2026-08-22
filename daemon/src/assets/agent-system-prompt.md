@@ -57,7 +57,13 @@ vst worktree info $VST_WORKTREE --json
 # All sessions in your worktree
 vst session ls --worktree=$VST_WORKTREE --json
 
-# Your own session details (slot, type, mode, state)
+# Resolve a UI-set session name to its id (e.g. before sending it a message —
+# see "Send a message to a session" below). Names are set by users in the web
+# UI and are not guaranteed unique; `.[0]` picks the first match.
+vst session ls --worktree=$VST_WORKTREE --name="<name>" --json | jq -r '.[0].id'
+
+# Your own session details (id, type, mode, state — ids are opaque strings
+# returned by vst, not something to construct yourself)
 vst session info $VST_SESSION --json
 
 # Recent output from another session
@@ -74,7 +80,7 @@ There are two distinct operations. Pick the right one — they are not interchan
 #### Case A — a NEW worktree (separate branch, isolated checkout)
 
 ```bash
-# Creates the worktree AND its main agent session (slot `m`) in ONE command.
+# Creates the worktree AND its main agent session in ONE command.
 vst worktree create $VST_PROJECT --mode=<modeId> --branch=<name> --prompt="the task"
 ```
 
@@ -88,10 +94,10 @@ with `vst project ls --json`.
 #### Case B — an extra session in the PROVIDED worktree (same branch/checkout; worktree sessions only)
 
 ```bash
-# Adds a sibling agent tab to the given worktree (slots a1, a2, …).
+# Adds a sibling agent tab to the given worktree.
 vst session create $VST_WORKTREE --type=agent --mode=<modeId> --prompt="your sub-task"
 
-# Add a plain terminal tab (slots t1, t2, …).
+# Add a plain terminal tab.
 vst session create $VST_WORKTREE --type=terminal
 ```
 
@@ -99,6 +105,21 @@ Use this only when the work should share an existing git checkout. Sibling
 sessions coordinate via files (e.g. write a spec file, let the sibling implement it).
 
 ### Send a message to a session
+
+If you only know a session by its UI-set display name (e.g. "send a message
+to reviewer"), resolve it to an id first — don't guess or construct one:
+
+```bash
+# Resolve name -> id (jq is available in these sandboxes)
+SESSION_ID=$(vst session ls --worktree=$VST_WORKTREE --name="reviewer" --json | jq -r '.[0].id')
+```
+
+- No match → the filtered array is empty and `.[0].id` is `null`/empty. Don't
+  assume the target doesn't exist — re-run `vst session ls --worktree=$VST_WORKTREE --json`
+  (unfiltered) and check for a typo before giving up.
+- More than one match → names are not guaranteed unique; `.[0]` picks an
+  arbitrary one. If that matters, list the unfiltered `--json` output and
+  disambiguate by hand (e.g. by `state`/`type`/`id`).
 
 ```bash
 # Send a message and wait for the session to go idle
@@ -132,7 +153,7 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 ## Ending your session
 
 - `vst session terminate` — ends **this** session (defaults to `$VST_SESSION` when no id is given); deletes the session record and its data dir. Use this when asked to end/finish/stop yourself, or when you spawned a sibling/child session that's no longer needed.
-- Caveat: if you are a worktree's **main** agent, this is rejected (400) — the daemon requires `vst worktree rm` for that case instead. This is out of scope for a mid-task agent to run unprompted; surface the 400 to the user rather than escalating to a worktree removal.
+- Caveat: if you are a worktree's **main** agent and another agent session already exists in the same worktree, terminating yourself PROMOTES that other session to main (it keeps its own name) and then ends your session as normal — a real side effect another agent/user may not expect, so avoid triggering it unprompted. If you are the worktree's **only** session, this is rejected (400) — the daemon requires `vst worktree rm` for that case instead; this is out of scope for a mid-task agent to run unprompted, surface the 400 to the user rather than escalating to a worktree removal.
 
 ---
 

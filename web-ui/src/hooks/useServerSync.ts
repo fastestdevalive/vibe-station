@@ -197,6 +197,7 @@ export function useServerSync(api: ApiInstance): void {
         if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
         if (ev.pr !== undefined) patch.pr = ev.pr ?? undefined;
         if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
+        if (ev.isMain !== undefined) patch.isMain = ev.isMain;
         applySessionUpdated(ev.sessionId, patch);
         // A reset's replacement takes the archived session's place in every
         // canvas it was tiled in — same tile id/position, just repointed.
