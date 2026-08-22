@@ -703,6 +703,66 @@ describe("LeftSidebar", () => {
       expect(row).toHaveAttribute("data-archived", "true");
       expect(within(row).getByText(/archived/i)).toBeInTheDocument();
     });
+
+    it("A2.T4 — a failed terminate surfaces the daemon's error instead of failing silently", async () => {
+      // NOTE: LeftSidebar's session-actions menu only ever operates on
+      // DIRECT sessions (filtered via `worktreeId === null`, LeftSidebar.tsx
+      // :213) — a direct session can never be `isMain` (daemon CHECK
+      // constraint), so the specific "worktree's only session" 400 that Fix 1
+      // introduces cannot be reproduced through THIS file's UI. This test
+      // instead verifies the actual code change generically: any
+      // `terminateSession` failure now surfaces to the user via `window.alert`
+      // rather than the previous bare `catch { /* surface errors later */ }`.
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      vi.spyOn(localApi, "terminateSession").mockRejectedValue(
+        new Error("Cannot delete the main session: no other agent session exists in this worktree to promote to main."),
+      );
+      try {
+        render(
+          <MemoryRouter>
+            <Harness api={localApi}>
+              <LeftSidebar api={localApi} />
+            </Harness>
+          </MemoryRouter>,
+        );
+        await screen.findByText("Proj A");
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "proj-a-d4",
+          worktreeId: null,
+          projectId: "proj-a",
+          sessionType: "agent",
+          snapshot: {
+            id: "proj-a-d4",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: "mode-1",
+            type: "agent",
+            name: "sole direct agent",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "tm-proj-a-d4",
+            createdAt: new Date().toISOString(),
+          },
+        });
+
+        const trigger = await screen.findByRole("button", { name: /Session actions for sole direct agent/i });
+        await user.click(trigger);
+        await user.click(await screen.findByRole("menuitem", { name: /^Terminate$/i }));
+        await user.click(await screen.findByRole("button", { name: /^Terminate$/i }));
+
+        await waitFor(() => {
+          expect(alertSpy).toHaveBeenCalledWith(
+            expect.stringContaining("no other agent session exists in this worktree"),
+          );
+        });
+      } finally {
+        alertSpy.mockRestore();
+      }
+    });
   });
 
   // ─── Inline rename (Part 03 Phase 3 — double-click, no modal fallback) ──

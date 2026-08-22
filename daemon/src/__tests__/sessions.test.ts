@@ -235,6 +235,221 @@ describe("Session routes", () => {
     expect(sessions.find((s) => s.id === sessionId)).toBeUndefined();
   });
 
+  it("DELETE /sessions/:id on main session with an eligible agent sibling promotes it and deletes the old main", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const siblingId = createRes.json<SessionRecord>().id;
+
+    const delRes = await app.inject({ method: "DELETE", url: `/sessions/${mainId}` });
+    expect(delRes.statusCode).toBe(200);
+    expect(delRes.json().ok).toBe(true);
+
+    const afterRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const after = afterRes.json<SessionRecord[]>();
+    expect(after).toHaveLength(1);
+    expect(after[0]?.id).toBe(siblingId);
+    expect(after[0]?.isMain).toBe(true);
+    expect(after.find((s) => s.id === mainId)).toBeUndefined();
+  });
+
+  it("M1 — promotion carries the old main's pr forward immediately, no 30s gap", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id as string;
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const siblingId = createRes.json<SessionRecord>().id as string;
+
+    // Seed a `pr` on the main session directly via the store, simulating a
+    // prior prPoller write, before triggering promotion.
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id === mainId
+                  ? {
+                      ...s,
+                      pr: {
+                        state: "open" as const,
+                        number: 42,
+                        url: "https://github.com/acme/widgets/pull/42",
+                        checkedAt: new Date().toISOString(),
+                        prBranch: "feat-sessions",
+                      },
+                    }
+                  : s,
+              ),
+            }
+          : w,
+      ),
+    }));
+
+    await app.inject({ method: "DELETE", url: `/sessions/${mainId}` });
+
+    // No delay, no waiting for a poll tick — the promoted session must
+    // already carry the old main's `pr` in the very next read.
+    const afterRes = await app.inject({ method: "GET", url: `/sessions/${siblingId}` });
+    const after = afterRes.json<SessionRecord>();
+    expect(after.isMain).toBe(true);
+    expect(after.pr?.state).toBe("open");
+    expect(after.pr?.number).toBe(42);
+  });
+
+  it("DELETE /sessions/:id on main session with only a terminal sibling still 400s (terminal ineligible)", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+
+    await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "terminal" },
+    });
+
+    const delRes = await app.inject({ method: "DELETE", url: `/sessions/${mainId}` });
+    expect(delRes.statusCode).toBe(400);
+    expect(delRes.json().error).toContain("no other agent session");
+  });
+
+  it("DELETE /sessions/:id on main session with only an archived agent sibling still 400s (archived ineligible)", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const siblingId = createRes.json<SessionRecord>().id;
+
+    // Archive the sibling directly via the store so it's excluded from
+    // promotion eligibility, without depending on the reset-flow route.
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id === worktreeId
+          ? {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id === siblingId ? { ...s, archivedAt: new Date().toISOString() } : s,
+              ),
+            }
+          : w,
+      ),
+    }));
+
+    const delRes = await app.inject({ method: "DELETE", url: `/sessions/${mainId}` });
+    expect(delRes.statusCode).toBe(400);
+    expect(delRes.json().error).toContain("no other agent session");
+  });
+
+  it("DELETE /sessions/:id promotion leaves the promoted sibling's name/nameSource unchanged", async () => {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const sibling = createRes.json<SessionRecord>();
+    expect(sibling.name).toBe("Agent 1");
+
+    await app.inject({ method: "DELETE", url: `/sessions/${mainId}` });
+
+    const afterRes = await app.inject({ method: "GET", url: `/sessions/${sibling.id}` });
+    const after = afterRes.json<SessionRecord>();
+    expect(after.name).toBe("Agent 1");
+    expect(after.nameSource).toBe(sibling.nameSource);
+    expect(after.isMain).toBe(true);
+  });
+
+  // M3 (reviewer): tightened from a single loosely-asserted race test into
+  // two deterministic sub-tests. `app.inject()` calls dispatch (and their
+  // `mutateProject` callbacks acquire the per-project lock) in the order
+  // they're invoked in this test harness — confirmed empirically (10 runs
+  // each direction, zero flakes) — so listing one request before the other
+  // in the `Promise.all` array deterministically makes that one's commit win
+  // the race, letting each ordering be asserted exactly rather than loosely.
+  //
+  // This test previously exposed a REAL bug during this revision: the plain
+  // (non-main) delete path used to filter a session out by id unconditionally,
+  // using only the `session.isMain` snapshot captured at the top of the
+  // handler (BEFORE the lock). When session B raced session A's promotion —
+  // B was not main when B's handler started, but became main via A's commit
+  // before B's own commit ran — B's stale-snapshot-driven plain delete still
+  // fired, removing the worktree's only main session and leaving ZERO live
+  // sessions. Fixed by re-deriving "is this session main, and if so is there
+  // an eligible sibling" fresh inside B's own locked `mutateProject`
+  // callback too (`daemon/src/routes/sessions.ts`), not just inside the
+  // already-flagged-as-main request's callback.
+  async function seedMainPlusOneSibling(): Promise<{ mainId: string; siblingId: string }> {
+    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const mainId = listRes.json<SessionRecord[]>()[0]?.id as string;
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const siblingId = createRes.json<SessionRecord>().id as string;
+    return { mainId, siblingId };
+  }
+
+  it("A1.T7 — concurrent DELETE, main-delete's commit wins: main promotes+deletes (200), sibling-delete then 400s (no sibling of its own)", async () => {
+    const { mainId, siblingId } = await seedMainPlusOneSibling();
+
+    const [mainDel, siblingDel] = await Promise.all([
+      app.inject({ method: "DELETE", url: `/sessions/${mainId}` }),
+      app.inject({ method: "DELETE", url: `/sessions/${siblingId}` }),
+    ]);
+
+    expect(mainDel.statusCode).toBe(200);
+    expect(mainDel.json().ok).toBe(true);
+    expect(siblingDel.statusCode).toBe(400);
+    expect(siblingDel.json().error).toContain("no other agent session");
+
+    const finalRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const final = finalRes.json<SessionRecord[]>();
+    const live = final.filter((s) => s.archivedAt == null);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.id).toBe(siblingId);
+    expect(live[0]?.isMain).toBe(true);
+  });
+
+  it("A1.T7 — concurrent DELETE, sibling-delete's commit wins: sibling deletes plainly (200), main-delete then 400s (its sibling is already gone)", async () => {
+    const { mainId, siblingId } = await seedMainPlusOneSibling();
+
+    const [siblingDel, mainDel] = await Promise.all([
+      app.inject({ method: "DELETE", url: `/sessions/${siblingId}` }),
+      app.inject({ method: "DELETE", url: `/sessions/${mainId}` }),
+    ]);
+
+    expect(siblingDel.statusCode).toBe(200);
+    expect(siblingDel.json().ok).toBe(true);
+    expect(mainDel.statusCode).toBe(400);
+    expect(mainDel.json().error).toContain("no other agent session");
+
+    const finalRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const final = finalRes.json<SessionRecord[]>();
+    const live = final.filter((s) => s.archivedAt == null);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.id).toBe(mainId);
+    expect(live[0]?.isMain).toBe(true);
+  });
+
   it("3.T6 — PATCH /sessions/:id/rename { name: \"\" } clears to null", async () => {
     const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
     const mainId = listRes.json<SessionRecord[]>()[0]?.id;

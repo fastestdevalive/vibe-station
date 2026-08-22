@@ -803,44 +803,120 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const { project, session } = ctx;
 
-    // Main session cannot be killed (worktree sessions only)
-    if (session.isMain) {
-      return reply.status(400).send({
-        error: "Cannot delete the main session. Use DELETE /worktrees/:id instead.",
-      });
-    }
-
-    // Release every live resource BEFORE purge (Decision 13): the JSON turn's
-    // process group (so no orphaned child keeps mutating the checkout), its
-    // SQLite handle, the tmux pane / direct-pty child, and the idle tracker.
-    // Delete is destructive, so staged attachments go too.
-    await releaseSessionRuntime(session, { clearAttachments: true });
-
-    if (ctx.kind === "worktree") {
-      // Worktree session: cleanup worktree-scoped data dir
-      cleanupSessionDataDir(project.id, ctx.worktree.id, id);
-      // Remove from worktree's sessions array. `agentSeq` no longer needs any
-      // recomputation here (Decision 5): now that ids are independently
-      // generated (not slot-derived), the counter only ever needs to
-      // monotonically increase for the NEXT default "Agent N" label — it's
-      // bumped once at agent creation and never touched again, so a deleted
-      // agent's number is naturally never reused without any high-water scan.
-      await mutateProject(project.id, (p) => ({
-        ...p,
-        worktrees: p.worktrees.map((w) =>
-          w.id === ctx.worktree.id ? { ...w, sessions: w.sessions.filter((s) => s.id !== id) } : w,
-        ),
-      }));
-    } else {
-      // Direct session: cleanup project-scoped data dir
+    if (ctx.kind !== "worktree") {
+      // Direct session: isMain is impossible (DB CHECK), so no promotion
+      // logic applies — plain delete only.
+      await releaseSessionRuntime(session, { clearAttachments: true });
       cleanupDirectSessionDataDir(project.id, id);
-      // Remove from project's directSessions array
       await mutateProject(project.id, (p) => ({
         ...p,
         directSessions: p.directSessions.filter((s) => s.id !== id),
       }));
+      broadcastAll({ type: "session:deleted", sessionId: id });
+      return reply.send({ ok: true });
     }
 
+    const NO_SIBLING_ERROR =
+      "Cannot delete the main session: no other agent session exists in this worktree " +
+      "to promote to main. Use DELETE /worktrees/:id to remove the whole worktree.";
+
+    // Fast-path pre-check OUTSIDE the lock — pure optimization so the common
+    // "main session, sole session in the worktree" case 400s immediately
+    // without an extra DB round trip. Based on `session`/`ctx.worktree`
+    // captured at the very top of the handler, so NOT authoritative: it can
+    // only ever short-circuit to the SAME outcome the in-lock check below
+    // would reach anyway (a false negative here just skips the optimization,
+    // never skips the real check) — see the unified in-lock logic for why.
+    if (session.isMain) {
+      const hasAnyEligibleSibling = ctx.worktree.sessions.some(
+        (s) => s.id !== session.id && s.type === "agent" && s.archivedAt == null,
+      );
+      if (!hasAnyEligibleSibling) {
+        return reply.status(400).send({ error: NO_SIBLING_ERROR });
+      }
+    }
+
+    class SessionGoneAtCommit extends Error {}
+    class NoEligibleSiblingAtCommit extends Error {}
+    let promotedId: string | undefined;
+    let promotedPr: SessionRecord["pr"];
+    let promotedAtCommit = false;
+
+    try {
+      // Whether THIS delete is "the main session, needs promotion" or "just
+      // remove it" is decided fresh, INSIDE this one locked callback, off the
+      // `p`/`w` mutateProject hands in — never off `session`/`ctx.worktree`
+      // captured before this call. This closes the race in BOTH directions
+      // (not just "promotion candidate went stale," Decision 1's original
+      // scope): a concurrent request can also PROMOTE this exact session to
+      // main between this handler's start and the lock being acquired — a
+      // stale `session.isMain === false` read would otherwise let a plain
+      // unconditional-filter delete remove the worktree's only main session
+      // out from under a racing promotion, leaving zero live sessions
+      // (confirmed empirically before this fix — see M3/A1.T7's test).
+      await mutateProject(project.id, (p) => {
+        const w = p.worktrees.find((x) => x.id === ctx.worktree.id);
+        if (!w) throw new Error(`Worktree '${ctx.worktree.id}' not found`);
+        const fresh = w.sessions.find((s) => s.id === id);
+        if (!fresh) throw new SessionGoneAtCommit(); // a concurrent request already removed it
+        if (!fresh.isMain) {
+          // Not main at commit time (whether or not it looked main at
+          // request start) — plain delete.
+          return {
+            ...p,
+            worktrees: p.worktrees.map((ww) =>
+              ww.id === ctx.worktree.id ? { ...ww, sessions: ww.sessions.filter((s) => s.id !== id) } : ww,
+            ),
+          };
+        }
+        const siblings = w.sessions
+          .filter((s) => s.id !== id && s.type === "agent" && s.archivedAt == null)
+          .sort((a, b) => a.sortOrder - b.sortOrder);
+        const promoted = siblings[0];
+        if (!promoted) throw new NoEligibleSiblingAtCommit();
+        promotedId = promoted.id;
+        // Carry the OLD main's `pr` onto the promoted session so PR-colored
+        // surfaces don't blank for up to 30s until the next prPoller tick.
+        promotedPr = fresh.pr;
+        promotedAtCommit = true;
+        return {
+          ...p,
+          worktrees: p.worktrees.map((ww) =>
+            ww.id === ctx.worktree.id
+              ? {
+                  ...ww,
+                  sessions: ww.sessions
+                    .filter((s) => s.id !== id)
+                    .map((s) => (s.id === promoted.id ? { ...s, isMain: true, pr: fresh.pr } : s)),
+                }
+              : ww,
+          ),
+        };
+      });
+    } catch (err) {
+      if (err instanceof SessionGoneAtCommit) {
+        return reply.status(404).send({ error: `Session '${id}' not found` });
+      }
+      if (err instanceof NoEligibleSiblingAtCommit) {
+        // Lost a race: every eligible sibling was removed/reset between the
+        // fast-path check above (or this session becoming main after it)
+        // and this locked commit. mutateProject never called
+        // writeProjectFull (fn is invoked BEFORE the try/writeProjectFull
+        // block), so nothing persisted and the cache is untouched.
+        return reply.status(400).send({ error: NO_SIBLING_ERROR });
+      }
+      throw err; // genuine unexpected failure — surfaces as a 500, not swallowed
+    }
+
+    // Persisted state now has the delete (and, if applicable, the promotion)
+    // committed. Runtime teardown uses the `session` object fetched at the
+    // top of the handler, which is still valid regardless of DB state.
+    await releaseSessionRuntime(session, { clearAttachments: true });
+    cleanupSessionDataDir(project.id, ctx.worktree.id, id);
+
+    if (promotedAtCommit) {
+      broadcastAll({ type: "session:updated", sessionId: promotedId!, isMain: true, pr: promotedPr ?? null });
+    }
     broadcastAll({ type: "session:deleted", sessionId: id });
     return reply.send({ ok: true });
   });

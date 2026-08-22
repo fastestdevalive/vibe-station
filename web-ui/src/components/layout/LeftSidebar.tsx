@@ -745,8 +745,16 @@ export function LeftSidebar({
       // Removes the session record + kills the process + removes its data dir.
       // The daemon NEVER deletes the project's own files (guarded server-side).
       await api.terminateSession(sess.id);
-    } catch {
-      /* surface errors later */
+    } catch (err) {
+      // The only remaining failure for this call is "main session, no
+      // eligible sibling to promote" (Fix 1) — the one case a user must be
+      // told about, since it's no longer the default outcome for every
+      // main-session terminate. No toast/error-banner mechanism exists
+      // anywhere in web-ui (grepped this file, WorkspaceCanvas.tsx,
+      // DashboardPanel.tsx — all use the same bare "surface errors later"
+      // catch), so this uses the browser-native alert() rather than
+      // inventing new UI infra, per the plan's explicit instruction.
+      window.alert(err instanceof Error ? err.message : "Failed to terminate session.");
     }
   }
 

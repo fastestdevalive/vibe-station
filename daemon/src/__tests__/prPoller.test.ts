@@ -492,4 +492,101 @@ describe("PR poller behavior", () => {
     await expect(pollAllPrs()).resolves.toBeUndefined();
     expect(github.fetchPrsForBranches).not.toHaveBeenCalled();
   });
+
+  it("A1.T6 — after a main-session promotion, polling resolves PR against the NEW isMain session, not a former/non-main sibling", async () => {
+    // Simulates the post-promotion state a Fix 1 `DELETE /sessions/:id`
+    // would leave behind: the old main is gone (deleted), and the promoted
+    // sibling already carries the old main's `pr` forward (M1 fix, asserted
+    // structurally in sessions.test.ts) — here we only need to confirm
+    // `prPoller` needs no code change: it must re-derive `isMain` fresh and
+    // target whichever session holds it now, regardless of array position
+    // or prior role, and must never write to a non-main sibling.
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    const carriedPr: PrStatus = {
+      state: "open",
+      number: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      prBranch: "feature-branch-0",
+      checkedAt: new Date(0).toISOString(),
+    };
+    const record: ProjectRecord = {
+      id: "proj-pr",
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pfx",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [],
+      worktrees: [
+        {
+          id: "wt-pr-0",
+          branch: "feature-branch-0",
+          baseBranch: "main",
+          baseSha: "a".repeat(40),
+          createdAt: new Date().toISOString(),
+          sortOrder: 0,
+          sessions: [
+            // A non-main sibling (never touched by prPoller — the OLD main
+            // is gone entirely post-promotion, but a second, ineligible
+            // sibling like a terminal could still be present).
+            {
+              id: "sess-pr-sibling",
+              isMain: false,
+              sortOrder: 1,
+              type: "terminal" as const,
+              tmuxName: "pane-pr-sibling",
+              useTmux: true,
+              lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+            },
+            // The PROMOTED session — isMain now, already carrying the old
+            // main's `pr` forward, and NOT at array index 0.
+            {
+              id: "sess-pr-promoted",
+              isMain: true,
+              sortOrder: 0,
+              type: "agent" as const,
+              modeId: "mode",
+              tmuxName: "pane-pr-promoted",
+              useTmux: true,
+              lifecycle: { state: "idle", lastTransitionAt: new Date().toISOString() },
+              pr: carriedPr,
+            },
+          ],
+        },
+      ],
+    };
+    await addProject(record);
+
+    // Next 30s tick finds a newer PR state — must land on the promoted
+    // session's id, never the (nonexistent) old main or the terminal sibling.
+    github.fetchPrsForBranches.mockResolvedValue(
+      new Map([
+        [
+          "acme/widgets#feature-branch-0",
+          {
+            kind: "pr" as const,
+            pr: {
+              number: 7,
+              url: "https://github.com/acme/widgets/pull/7",
+              title: "Add widget",
+              state: "closed" as const,
+              merged: true,
+              draft: false,
+              author: "octocat",
+            },
+          },
+        ],
+      ]),
+    );
+
+    await pollAllPrs();
+
+    const { getProject } = await import("../state/project-store.js");
+    const worktree = getProject("proj-pr")!.worktrees[0]!;
+    const promoted = worktree.sessions.find((s) => s.id === "sess-pr-promoted")!;
+    const sibling = worktree.sessions.find((s) => s.id === "sess-pr-sibling")!;
+    expect(promoted.pr?.state).toBe("merged");
+    expect(sibling.pr).toBeUndefined();
+  });
 });
