@@ -146,6 +146,14 @@ done.
   - A direct (worktree-less) session has no worktree to resolve a PR against, so it can **never**
     show a PR — its card is always lifecycle-only, regardless of what `session.pr` holds.
   - Archived sessions (`archivedAt != null`) produce no card at all.
+  - **Which session holds `isMain` for a worktree can change at runtime** (main-session
+    promotion — `DELETE /sessions/:id` on the main session promotes an eligible sibling to
+    `isMain` before deleting the old main, `daemon/src/routes/sessions.ts`). This does not weaken
+    the invariant above: at every instant exactly one session is `isMain` and `prPoller`/
+    `worktreePrStatus()` still read/write only that one — promotion just means "that one" can be a
+    different session than a moment ago. The promotion itself carries the old main's `pr` forward
+    onto the promoted session in the same atomic step, so there is no gap where the worktree's PR
+    colour blanks while waiting for the next poll tick.
 - **The sidebar's worktree rows roll up per worktree** (unchanged by Phase 6) — see
   `worktreeRolledUpStatus()` in `web-ui/src/lib/worktreeStatus.ts`, used by `LeftSidebar.tsx`'s
   worktree-row `<StatusDot>` sites. There, the rolled-up worktree PR colour comes from

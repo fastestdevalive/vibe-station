@@ -77,17 +77,30 @@ describe("TabsStrip", () => {
     });
   });
 
-  it("main tab has no close control", async () => {
+  it("A2.T2 — main tab has no close control when it is the only agent session (wt-2, sole session)", async () => {
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-2" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
+    });
+    const mainTab = screen.getByRole("tab", { name: /^main\b/i });
+    expect(mainTab.querySelector('[aria-label^="Terminate"]')).toBeNull();
+  });
+
+  it("A2.T1 — main tab shows a closeable '×' when a sibling agent session exists (wt-1)", async () => {
     render(
       <MemoryRouter>
         <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^main$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
     });
-    const mainTab = screen.getByRole("tab", { name: /^main$/i });
-    expect(mainTab.querySelector('[aria-label^="Terminate"]')).toBeNull();
+    const mainTab = screen.getByRole("tab", { name: /^main\b/i });
+    expect(mainTab.querySelector('[aria-label^="Terminate"]')).not.toBeNull();
   });
 
   it("non-main tab exposes close via aria-label", async () => {
@@ -113,6 +126,73 @@ describe("TabsStrip", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("A2.T3 — confirm dialog for a main-session terminate names the predicted promoted sibling", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
+    });
+    const mainTab = screen.getByRole("tab", { name: /^main\b/i });
+    const closeButton = mainTab.querySelector('[aria-label^="Terminate"]') as HTMLElement;
+    expect(closeButton).not.toBeNull();
+    await user.click(closeButton);
+    const dialog = screen.getByRole("dialog");
+    // wt-1's only other non-archived agent session is "agent-2"
+    // (sortOrder 2, the lowest among eligible siblings) — same rule the
+    // daemon uses for authoritative selection (Decision 1).
+    expect(within(dialog).getByText(/agent-2.*will become the new main session/i)).toBeInTheDocument();
+  });
+
+  it("M4 — a session:updated{isMain:true} WS event propagates through TabsStrip's local reconciliation (A2.3) and is read by dependent UI (A2.5's dialog naming)", async () => {
+    // Direct test of the isMain patch added at TabsStrip.tsx's own
+    // `session:updated` handler (`:415-432`) — NOT routed through the global
+    // `useServerSync`/`useServerStore` (A2.2, covered separately), since this
+    // component reads its OWN local `sessions` state for `closeable` and the
+    // confirm-dialog message. Reassigns "main" to "agent-2" purely via WS
+    // events (isMain flips on both, no session added/removed) and confirms
+    // the dialog naming (which reads `s.isMain` from local state) reflects
+    // the swap — proving the patch actually took effect, not just that no
+    // error was thrown. (Note: this cannot exercise a "closeable → not
+    // closeable" transition purely from an isMain flip while holding
+    // membership fixed — `closeable` is `!s.isMain || siblingCount > 1`, so a
+    // main tab is only ever non-closeable when it's the SOLE session, a case
+    // already covered by A2.T2; the isMain field itself doesn't gate
+    // closeability when a sibling exists, in either direction.)
+    const user = userEvent.setup();
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /^main\b/i });
+    await screen.findByRole("tab", { name: /agent-2/i });
+
+    await act(async () => {
+      localApi.__test.emit({ type: "session:updated", sessionId: "sess-main", isMain: false });
+      localApi.__test.emit({ type: "session:updated", sessionId: "sess-agent2", isMain: true });
+    });
+
+    // "agent-2" is now the main session — click ITS terminate control and
+    // confirm the predicted promotion candidate is sess-main (sortOrder 1,
+    // the only other eligible non-archived agent sibling). sess-main has no
+    // explicit `name`, and `sessionLabel()` only falls back to "main" while
+    // `isMain` is true — since our event just flipped it to `false`, its
+    // computed label is now "Agent" (the type-based default), which is
+    // itself further proof the isMain patch took effect on THIS session too
+    // (not just sess-agent2).
+    const agentTwoTab = screen.getByRole("tab", { name: /agent-2/i });
+    const closeButton = agentTwoTab.querySelector('[aria-label^="Terminate"]') as HTMLElement;
+    expect(closeButton).not.toBeNull();
+    await user.click(closeButton);
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/Agent.*will become the new main session/i)).toBeInTheDocument();
+  });
+
   it("click + opens NewTab dialog", async () => {
     const user = userEvent.setup();
     render(
@@ -131,7 +211,7 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByRole("tab", { name: /^main$/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: /Close terminal dock/i })).toBeNull();
   });
@@ -278,7 +358,7 @@ describe("TabsStrip", () => {
         <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await screen.findByRole("tab", { name: /^main$/i });
+    await screen.findByRole("tab", { name: /^main\b/i });
     expect(capturedOnDragEnd).toBeTypeOf("function");
 
     // Mock fixtures: sess-main sortOrder=1, sess-agent2 sortOrder=2. Dragging
@@ -300,7 +380,7 @@ describe("TabsStrip", () => {
         <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await screen.findByRole("tab", { name: /^main$/i });
+    await screen.findByRole("tab", { name: /^main\b/i });
     act(() => {
       capturedOnDragEnd!({
         active: { id: "sess-agent2" },
@@ -393,7 +473,7 @@ describe("TabsStrip", () => {
         <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await screen.findByRole("tab", { name: /^main$/i });
+    await screen.findByRole("tab", { name: /^main\b/i });
     act(() => {
       capturedOnDragEnd!({
         active: { id: "sess-agent2" },
@@ -435,7 +515,7 @@ describe("TabsStrip", () => {
         <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
       </MemoryRouter>,
     );
-    await screen.findByRole("tab", { name: /^main$/i });
+    await screen.findByRole("tab", { name: /^main\b/i });
     expect(document.querySelector("[data-tab-menu-trigger]")).toBeNull();
     expect(screen.queryByRole("button", { name: /Session actions for/i })).toBeNull();
   });

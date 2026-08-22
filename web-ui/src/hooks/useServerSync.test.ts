@@ -68,6 +68,24 @@ describe("useServerSync — session:updated reconciliation", () => {
     });
   });
 
+  it("M4 (A2.2) — applies isMain from a session:updated event (main-session promotion, Fix 1)", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    const before = useServerStore.getState().sessions.find((x) => x.id === "sess-agent2");
+    expect(before?.isMain).toBeFalsy();
+
+    act(() => {
+      api.__test.emit({ type: "session:updated", sessionId: "sess-agent2", isMain: true });
+    });
+
+    await waitFor(() => {
+      const s = useServerStore.getState().sessions.find((x) => x.id === "sess-agent2");
+      expect(s?.isMain).toBe(true);
+    });
+  });
+
   it("leaves unrelated fields untouched when only pinnedAt is present", async () => {
     const api = createMockApi();
     renderHook(() => useServerSync(api));

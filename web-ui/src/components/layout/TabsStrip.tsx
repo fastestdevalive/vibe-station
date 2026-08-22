@@ -423,6 +423,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           if (ev.sortOrder !== undefined) patch.sortOrder = ev.sortOrder;
           if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
           if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
+          if (ev.isMain !== undefined) patch.isMain = ev.isMain;
           if (ev.channel !== undefined) {
             patch.channel = ev.channel;
             patch.useTmux = ev.channel === "tmux";
@@ -551,7 +552,13 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           >
             {orderedSessions.map((s) => {
               const active = s.id === activeSessionId;
-              const closeable = !s.isMain;
+              // A main session can be terminated too, as long as another
+              // live agent session in this worktree exists to be promoted
+              // (Fix 1) — `orderedSessions` here is already scoped to this
+              // bar's kind ("agent"), so counting non-archived siblings
+              // mirrors the daemon's own eligibility check exactly.
+              const closeable =
+                !s.isMain || orderedSessions.filter((x) => x.archivedAt == null).length > 1;
               const label = sessionLabel(s);
               const isRenaming = renamingId === s.id;
               const archived = s.archivedAt != null;
@@ -744,11 +751,41 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       <ConfirmDialog
         open={!!terminateTarget}
         title={isAgent ? "Terminate agent?" : "Terminate terminal?"}
-        message={isAgent ? "Terminate this agent session?" : "Terminate this terminal?"}
+        message={
+          isAgent && terminateTarget?.isMain
+            ? // Client-side prediction only (display purposes) — mirrors the
+              // daemon's own eligibility rule (lowest sortOrder, type "agent",
+              // not archived); the daemon's own selection at commit time is
+              // authoritative and may differ in a rare race (Risk 3).
+              (() => {
+                const candidate = orderedSessions
+                  .filter((s) => s.id !== terminateTarget.id && s.archivedAt == null)
+                  .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
+                return candidate
+                  ? `Terminate this agent session? "${sessionLabel(candidate)}" will become the new main session.`
+                  : "Terminate this agent session?";
+              })()
+            : isAgent
+              ? "Terminate this agent session?"
+              : "Terminate this terminal?"
+        }
         confirmLabel="Terminate"
         onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
-          if (terminateTarget) void api.terminateSession(terminateTarget.id).then(() => void refreshTabs());
+          if (terminateTarget) {
+            void api
+              .terminateSession(terminateTarget.id)
+              .then(() => void refreshTabs())
+              .catch((err: unknown) => {
+                // No existing toast/error-banner mechanism was found anywhere
+                // in web-ui (grepped LeftSidebar.tsx, WorkspaceCanvas.tsx,
+                // DashboardPanel.tsx — all use the same bare
+                // `catch { /* surface errors later */ }`), so this uses the
+                // browser-native alert() rather than inventing new UI infra,
+                // per the plan's explicit "don't invent a new mechanism" rule.
+                window.alert(err instanceof Error ? err.message : "Failed to terminate session.");
+              });
+          }
           setTerminateTarget(null);
         }}
       />

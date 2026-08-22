@@ -93,11 +93,23 @@ curl -X POST http://127.0.0.1:7421/worktrees \
 
 **Modes** (`GET /modes` returns the list) bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. Use `vst mode ls --json` to discover available modes.
 
-**Slots** — the main session is slot `m`; additional sessions in the same worktree get slots `a2`, `a3`, … for agents and `t2`, `t3`, … for terminals.
+**Session identity** — each session has an opaque `id` (returned by `vst worktree create`/`vst session create`, or looked up via `vst session ls`) and an `isMain` flag marking the worktree's single main agent session. Session ids are not something to construct yourself — always look them up.
 
 ---
 
 ## 5. Send a message and wait
+
+If you only have a session's UI-set display name (not its id), resolve it first:
+
+```bash
+# Resolve a UI-set name to its id within a worktree (jq is available)
+vst session ls --worktree=<worktreeId> --name="<name>" --json | jq -r '.[0].id'
+```
+
+No match → the filtered array is empty; re-check with the unfiltered
+`vst session ls --worktree=<worktreeId> --json` before assuming the session
+doesn't exist. Names aren't guaranteed unique — `.[0]` picks an arbitrary
+match among duplicates.
 
 ```bash
 # CLI — send message and wait for agent to go idle
@@ -180,8 +192,10 @@ Returns sessions for a worktree (omit query to return all).
 ### GET /sessions/:id
 ```
 → 200 {
-    id, worktreeId, slot, type, modeId,
-    label, tmuxName, state, lifecycleState, createdAt
+    id, worktreeId, isMain, sortOrder, type, modeId,
+    name, nameSource, channel, tmuxName, state, lifecycleState,
+    createdAt, pinnedAt, archivedAt, handoffSummary, spawnedFrom,
+    supersededBy, pr
   }
 → 404 { error: "Session '…' not found" }
 ```
@@ -206,10 +220,14 @@ Create an additional agent or terminal session inside an existing worktree.
 ```
 
 ### DELETE /sessions/:id
-Terminate a non-main session.
+Terminate a session. A worktree's main session is terminated by promoting an eligible
+sibling agent session to main (its own name is preserved); rejected only when it is the
+worktree's sole session.
 ```
 → 200 { ok: true }
-→ 400 { error: "Cannot delete the main session. Use DELETE /worktrees/:id instead." }
+→ 400 { error: "Cannot delete the main session: no other agent session exists in this
+                 worktree to promote to main. Use DELETE /worktrees/:id to remove the
+                 whole worktree." }
 → 404 { error: "Session '…' not found" }
 ```
 
@@ -273,7 +291,7 @@ WORKTREE=$(curl -s -X POST http://127.0.0.1:7421/worktrees \
     \"modeId\":    \"<your-claude-modeId>\",
     \"prompt\":    \"Review the diff at /tmp/pr.diff and summarise findings.\"
   }")
-SESSION_ID=$(echo "$WORKTREE" | jq -r '.id')-m
+SESSION_ID=$(echo "$WORKTREE" | jq -r '.mainSessionId')
 
 # 4. Poll until session is idle or exited
 while true; do
@@ -372,13 +390,15 @@ Do not ask the user for the current id — you already have it. Do not ask wheth
 Both arguments are required. The first is the existing id, the second is the new name:
 
 ```bash
-vst worktree rename vs-19 my-feature   # rename worktree vs-19 → my-feature
-vst session rename vs-19-m my-session  # rename session vs-19-m → my-session
+vst worktree rename vs-19 my-feature               # rename worktree vs-19 → my-feature
+vst session rename vs-19-a-3f9c2b7a my-session      # rename a session by its id → my-session
 ```
 
 **ID patterns** (to distinguish existing ids from new names):
 - **Worktree IDs** — `<prefix>-<number>`, e.g. `direct-2`, `myap-1`, `vs-19`
-- **Session IDs** — `<worktreeId>-<slot>`, e.g. `direct-2-m`, `vs-19-a2`, `vs-19-t3`
+- **Session IDs** — `<worktreeId>-<a|t>-<random>`, e.g. `vs-19-a-3f9c2b7a` (generated
+  independently per session, not from a slot/position — don't construct one by hand;
+  look it up via `vst session ls` or `vst session info $VST_SESSION`)
 
 **Via HTTP:**
 ```bash

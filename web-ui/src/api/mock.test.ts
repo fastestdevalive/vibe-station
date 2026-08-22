@@ -213,4 +213,55 @@ describe("mock api contract", () => {
     const api = createMockApi();
     await expect(api.handoffSession("sess-term1")).rejects.toThrow();
   });
+
+  // M4 (A2.8) — mock's terminateSession promotion-selection logic. wt-1
+  // seeds sess-main (isMain, sortOrder 1), sess-agent2 (agent, sortOrder 2),
+  // sess-term1 (terminal, sortOrder 3) — the terminal must never be picked.
+  it("terminateSession on a main session with an eligible sibling promotes it (isMain flips, pr carried) instead of throwing", async () => {
+    const api = createMockApi();
+    const updated = vi.fn();
+    const off = api.on("session:updated", updated);
+
+    const res = await api.terminateSession("sess-main");
+    expect(res).toEqual({ ok: true });
+
+    const sessions = await api.listSessions("wt-1");
+    expect(sessions.find((s) => s.id === "sess-main")).toBeUndefined();
+    const promoted = sessions.find((s) => s.id === "sess-agent2");
+    expect(promoted?.isMain).toBe(true);
+    // The terminal sibling (sortOrder 3, ineligible) must never be promoted
+    // even though it's still "closer" in id/creation order than nothing.
+    const terminal = sessions.find((s) => s.id === "sess-term1");
+    expect(terminal?.isMain).toBeFalsy();
+
+    expect(updated).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "session:updated", sessionId: "sess-agent2", isMain: true }),
+    );
+    off();
+  });
+
+  it("terminateSession on a main session with only a terminal sibling still throws (no eligible agent to promote)", async () => {
+    const api = createMockApi();
+    // wt-2's only session is its main agent (sess-wt2-main) — no sibling at
+    // all, agent or otherwise, so this must still reject.
+    await expect(api.terminateSession("sess-wt2-main")).rejects.toThrow();
+  });
+
+  it("terminateSession promotion emits the carried pr value on the session:updated event", async () => {
+    // No public/test hook seeds a `pr` onto the base fixture's sess-main
+    // (it's a pure lifecycle-only fixture, no PR state), so this asserts the
+    // carry-forward CODE PATH runs and emits a defined `pr` key on the event
+    // (present, even if `undefined`-valued) rather than omitting it — proving
+    // `victim.pr` is read and threaded through, not silently dropped. The
+    // real (daemon-side, non-empty) carry-forward value is covered by
+    // `daemon/src/__tests__/sessions.test.ts`'s "M1 — promotion carries the
+    // old main's pr forward immediately" test.
+    const api = createMockApi();
+    const updated = vi.fn();
+    const off = api.on("session:updated", updated);
+    await api.terminateSession("sess-main");
+    const call = updated.mock.calls.find((c) => c[0]?.sessionId === "sess-agent2");
+    expect(call?.[0]).toHaveProperty("pr");
+    off();
+  });
 });
