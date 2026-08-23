@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { NormalizedEvent } from "@/api/types";
 import { MessageList, groupEvents, mergeToolRuns } from "./MessageList";
 
@@ -157,5 +157,133 @@ describe("MessageList thinking hint (Change 3)", () => {
     );
     expect(screen.getByText("just sent")).toBeTruthy();
     expect(screen.getByText("Thinking…")).toBeTruthy();
+  });
+});
+
+describe("MessageList persistent working indicator", () => {
+  it("renders as the last item in the feed while a turn is active", () => {
+    const { container } = render(
+      <MessageList events={[userEvent("t1", "do the thing")]} pending={[]} turnActive />,
+    );
+    const indicator = screen.getByRole("status", { name: "Agent is working" });
+    expect(indicator).toBeTruthy();
+    // Last item in the list's DOM order (only the invisible bottom-scroll
+    // sentinel div may follow it).
+    const list = container.querySelector(".chat-message-list")!;
+    const lastMeaningfulChild = list.children[list.children.length - 2];
+    expect(lastMeaningfulChild).toBe(indicator);
+  });
+
+  it("does not render while idle", () => {
+    render(<MessageList events={[userEvent("t1", "do the thing")]} pending={[]} />);
+    expect(screen.queryByRole("status", { name: "Agent is working" })).toBeNull();
+  });
+
+  it("cycles dot count 1 -> 2 -> 3 -> 1 on an interval", () => {
+    vi.useFakeTimers();
+    try {
+      render(<MessageList events={[]} pending={[]} turnActive />);
+      const dotOf = () => document.querySelectorAll(".chat-working-indicator__dot--on").length;
+      expect(dotOf()).toBe(1);
+      act(() => vi.advanceTimersByTime(450));
+      expect(dotOf()).toBe(2);
+      act(() => vi.advanceTimersByTime(450));
+      expect(dotOf()).toBe(3);
+      act(() => vi.advanceTimersByTime(450));
+      expect(dotOf()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not render during the thinking sub-state (ThinkingHint already covers it)", () => {
+    render(<MessageList events={[userEvent("t1", "do the thing")]} pending={[]} turnActive thinking />);
+    expect(screen.getByText("Thinking…")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Agent is working" })).toBeNull();
+  });
+
+  it("does not start its dot interval when the user prefers reduced motion", () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    vi.useFakeTimers();
+    try {
+      render(<MessageList events={[]} pending={[]} turnActive />);
+      const dotOf = () => document.querySelectorAll(".chat-working-indicator__dot--on").length;
+      expect(dotOf()).toBe(1);
+      act(() => vi.advanceTimersByTime(2000));
+      expect(dotOf()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+});
+
+describe("MessageList footer-resize-aware auto-scroll", () => {
+  // `render()`'s own mount div is the direct parent of MessageList's root
+  // (`.chat-message-list`) — exactly the "scroll container" MessageList reads
+  // via `listRef.current.parentElement`, so no extra DOM wiring is needed to
+  // simulate it here.
+  function mockResizeObserver() {
+    let captured: (() => void) | null = null;
+    class MockResizeObserver {
+      constructor(cb: () => void) {
+        captured = cb;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+    return {
+      trigger: () => captured?.(),
+      restore: () => {
+        globalThis.ResizeObserver = original;
+      },
+    };
+  }
+
+  // The distance-to-bottom is computed FRESH inside the ResizeObserver
+  // callback (not from a cached scroll-listener flag — see the source
+  // comment), so these tests stub `scrollHeight`/`clientHeight` directly on
+  // the container and assert on `container.scrollTop`, not `scrollIntoView`
+  // (which the implementation deliberately does not use for this path, to
+  // avoid walking ancestor scrollables).
+  it("re-scrolls to bottom when the container resizes while currently near the bottom", () => {
+    const ro = mockResizeObserver();
+    try {
+      const { container } = render(<MessageList events={[userEvent("t1", "hi")]} pending={[]} />);
+      Object.defineProperty(container, "scrollHeight", { value: 500, configurable: true });
+      Object.defineProperty(container, "clientHeight", { value: 480, configurable: true });
+      container.scrollTop = 0; // distance = 500 - 0 - 480 = 20, < 80 → near bottom
+      act(() => ro.trigger());
+      expect(container.scrollTop).toBe(500);
+    } finally {
+      ro.restore();
+    }
+  });
+
+  it("does not force-scroll on resize when the user is currently scrolled away from the bottom", () => {
+    const ro = mockResizeObserver();
+    try {
+      const { container } = render(<MessageList events={[userEvent("t1", "hi")]} pending={[]} />);
+      Object.defineProperty(container, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(container, "clientHeight", { value: 300, configurable: true });
+      container.scrollTop = 0; // distance = 1000 - 0 - 300 = 700, >= 80 → not near bottom
+      act(() => ro.trigger());
+      expect(container.scrollTop).toBe(0);
+    } finally {
+      ro.restore();
+    }
   });
 });

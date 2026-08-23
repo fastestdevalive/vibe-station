@@ -725,6 +725,30 @@
   .chat-thinking-hint__dot { animation: none; }
 }
 
+/* ── Persistent working indicator (last item in the feed while busy) ───────── */
+
+.chat-working-indicator {
+  display: flex;
+  align-self: flex-start;
+  padding: var(--space-1) 0;
+}
+.chat-working-indicator__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-working-indicator__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--chat-accent);
+  opacity: 0.15;
+  transition: opacity 0.15s ease;
+}
+.chat-working-indicator__dot--on {
+  opacity: 1;
+}
+
 /* ── Inline queued-turn editor ─────────────────────────────────────────────── */
 
 .chat-queued-editor {
@@ -938,8 +962,12 @@
 .chat-composer__textarea {
   flex: 1;
   min-height: 40px;
-  max-height: 200px;
-  resize: vertical;
+  /* Height above this is fully JS-driven (autosizeComposerTextarea) up to a
+     ~10-line cap, then internal scroll — no manual resize handle, since a
+     user-dragged height would otherwise be fought/overwritten on every
+     keystroke by the auto-grow effect. */
+  overflow-y: hidden;
+  resize: none;
   background: var(--bg-input);
   color: var(--fg-primary);
   border: var(--border-width) solid var(--border-default);
