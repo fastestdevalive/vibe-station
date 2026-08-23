@@ -1,0 +1,19 @@
+feature: chat-working-indicator-scroll-grow
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-54
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "4.T2"
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null

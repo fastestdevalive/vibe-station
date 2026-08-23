@@ -93,3 +93,54 @@ describe("Composer draft persistence (RA1)", () => {
     expect(localStorage.getItem("vst-chat-draft-s2")).toBe("session two draft");
   });
 });
+
+describe("Composer textarea auto-grow", () => {
+  // jsdom has no real layout, so `scrollHeight` is stubbed per-assertion.
+  // `getComputedStyle`'s line-height/padding/border resolve to jsdom's UA
+  // defaults, NOT this project's CSS (vitest doesn't apply stylesheets) —
+  // read the same computed style the component reads, rather than assuming a
+  // specific pixel cap, so this test isn't coupled to jsdom's UA defaults.
+  function expectedCapPx(textarea: HTMLTextAreaElement): number {
+    const style = window.getComputedStyle(textarea);
+    const lineHeight = parseFloat(style.lineHeight) || 20;
+    const extra =
+      (parseFloat(style.paddingTop) || 0) +
+      (parseFloat(style.paddingBottom) || 0) +
+      (parseFloat(style.borderTopWidth) || 0) +
+      (parseFloat(style.borderBottomWidth) || 0);
+    return lineHeight * 10 + extra;
+  }
+
+  it("grows to fit content up to the ~10-line cap, then caps and scrolls", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-grow" onSend={vi.fn()} />);
+    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    const cap = expectedCapPx(textarea);
+
+    Object.defineProperty(textarea, "scrollHeight", { value: 90, configurable: true });
+    fireEvent.change(textarea, { target: { value: "line1\nline2\nline3" } });
+    expect(textarea.style.height).toBe("90px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    Object.defineProperty(textarea, "scrollHeight", { value: cap + 300, configurable: true });
+    fireEvent.change(textarea, { target: { value: "a\n".repeat(20) } });
+    expect(textarea.style.height).toBe(`${cap}px`);
+    expect(textarea.style.overflowY).toBe("auto");
+  });
+
+  it("shrinks back down as content is deleted", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-shrink" onSend={vi.fn()} />);
+    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    const cap = expectedCapPx(textarea);
+
+    Object.defineProperty(textarea, "scrollHeight", { value: cap + 100, configurable: true });
+    fireEvent.change(textarea, { target: { value: "a\n".repeat(15) } });
+    expect(textarea.style.height).toBe(`${cap}px`);
+
+    Object.defineProperty(textarea, "scrollHeight", { value: 40, configurable: true });
+    fireEvent.change(textarea, { target: { value: "short" } });
+    expect(textarea.style.height).toBe("40px");
+    expect(textarea.style.overflowY).toBe("hidden");
+  });
+});
