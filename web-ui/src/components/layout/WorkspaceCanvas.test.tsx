@@ -86,7 +86,7 @@ describe("WorkspaceCanvas - canvas toolbar disclosure", () => {
   });
 });
 
-describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
+describe("WorkspaceCanvas - Windows picker cross-worktree note", () => {
   beforeEach(() => {
     localStorage.clear();
     useWorkspaceStore.persist.clearStorage?.();
@@ -96,7 +96,7 @@ describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
   it("shows the cross-worktree note on an unsaved (scratch) canvas", async () => {
     const user = userEvent.setup();
     renderCanvas();
-    await user.click(screen.getByText("Add tile"));
+    await user.click(screen.getByText("Windows"));
     expect(
       screen.getByText("To add panes from other worktrees, save this canvas as a workspace."),
     ).toBeInTheDocument();
@@ -128,7 +128,7 @@ describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
         </PaneOutletProvider>
       </MemoryRouter>,
     );
-    await user.click(screen.getByText("Add tile"));
+    await user.click(screen.getByText("Windows"));
     expect(
       screen.queryByText("To add panes from other worktrees, save this canvas as a workspace."),
     ).not.toBeInTheDocument();
@@ -182,7 +182,7 @@ describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
         </PaneOutletProvider>
       </MemoryRouter>,
     );
-    await user.click(screen.getByText("Add tile"));
+    await user.click(screen.getByText("Windows"));
     expect(screen.getByText("Direct")).toBeInTheDocument();
     const item = screen.getByText("My Direct Agent");
     expect(item).toBeInTheDocument();
@@ -210,10 +210,98 @@ describe("WorkspaceCanvas - Add tile picker cross-worktree note", () => {
     renderCanvas();
     expect(screen.getByText("Unsaved canvas")).toBeInTheDocument();
     expect(screen.queryByText("Doc")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Add tile"));
+    await user.click(screen.getByText("Windows"));
     expect(
       screen.getByText("To add panes from other worktrees, save this canvas as a workspace."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("WorkspaceCanvas - Windows picker stays open", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [W1]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          scratchCanvas: { mode: "free", tiles: [], tree: null, freeRects: {} },
+        },
+      },
+      workspaceDocs: {},
+    });
+  });
+
+  it("keeps the popup open after adding AND after removing a tile", async () => {
+    const user = userEvent.setup();
+    const { container } = renderCanvas();
+    await user.click(screen.getByText("Windows"));
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+
+    // "Tools" is always offered (hasTools). Add → popup stays open, tile added.
+    await user.click(screen.getByRole("menu").querySelector("button:last-of-type")!);
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+    expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.scratchCanvas!.tiles).toHaveLength(1);
+
+    // Same item again → removes, popup STILL open (symmetric with add).
+    await user.click(screen.getByRole("menu").querySelector("button:last-of-type")!);
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+    expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.scratchCanvas!.tiles).toHaveLength(0);
+  });
+
+  it("still closes on an outside click", async () => {
+    const user = userEvent.setup();
+    const { container } = renderCanvas();
+    await user.click(screen.getByText("Windows"));
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+    await user.click(document.body);
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeFalsy();
+  });
+});
+
+describe("WorkspaceCanvas - free-mode click-to-front z-order", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+  });
+
+  it("raises the tapped tile above the others without reordering the tiles array", () => {
+    const canvas: CanvasGeometry = {
+      mode: "free",
+      tiles: [
+        { id: "tile-a", kind: "tools" },
+        { id: "tile-b", kind: "agent", sessionId: "sess-b" },
+        { id: "tile-c", kind: "terminal", sessionId: "sess-c" },
+      ],
+      tree: null,
+      freeRects: {
+        "tile-a": { x: 0, y: 0, w: 40, h: 40 },
+        "tile-b": { x: 10, y: 10, w: 40, h: 40, z: 5 },
+        "tile-c": { x: 20, y: 20, w: 40, h: 40, z: 9 },
+      },
+    };
+    useWorkspaceStore.setState({
+      layoutByWorktree: { [W1]: { scratchCanvas: canvas } as never },
+      workspaceDocs: {},
+    });
+    const { container } = renderCanvas();
+
+    // tile-a starts at the back (z undefined → 0). Click anywhere inside it.
+    const tiles = container.querySelectorAll(".workspace-canvas__tile");
+    const tileA = tiles[0] as HTMLElement;
+    act(() => {
+      tileA
+        .querySelector(".workspace-canvas__tile-body")!
+        .dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+
+    const after = useWorkspaceStore.getState().layoutByWorktree[W1]!.scratchCanvas!;
+    expect(after.freeRects["tile-a"]!.z).toBe(10);
+    // Every other tile keeps its own z — no relative reshuffle.
+    expect(after.freeRects["tile-b"]!.z).toBe(5);
+    expect(after.freeRects["tile-c"]!.z).toBe(9);
+    // Array order is untouched.
+    expect(after.tiles.map((t) => t.id)).toEqual(["tile-a", "tile-b", "tile-c"]);
   });
 });
 

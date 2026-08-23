@@ -2,7 +2,12 @@ import { useEffect } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useServerStore } from "./useServerStore";
-import { useWorkspaceStore, findWorkspacesTilingSession, resolveSupersededChains } from "./useStore";
+import {
+  useWorkspaceStore,
+  findScratchCanvasesTilingSession,
+  findWorkspacesTilingSession,
+  resolveSupersededChains,
+} from "./useStore";
 
 /**
  * Module-level in-flight guard. Collapses three refresh triggers that all
@@ -103,7 +108,13 @@ export function useServerSync(api: ApiInstance): void {
       if (ev.type === "worktree:created") applyWorktreeCreated(ev.worktree);
     });
     const offWtDeleted = api.on("worktree:deleted", (ev) => {
-      if (ev.type === "worktree:deleted") applyWorktreeDeleted(ev.worktreeId);
+      if (ev.type !== "worktree:deleted") return;
+      applyWorktreeDeleted(ev.worktreeId);
+      // The worktree's SESSION tiles are cleaned up by the per-session
+      // `session:deleted` events the daemon now cascades ahead of this one.
+      // Its `tools:<worktreeId>` tiles have no sessionId, so they need their
+      // own sweep or they linger as empty ghost windows.
+      useWorkspaceStore.getState().removeToolsTilesForWorktree(ev.worktreeId);
     });
     const offWtUpdated = api.on("worktree:updated", (ev) => {
       if (ev.type === "worktree:updated") applyWorktreeUpdated(ev.worktree);
@@ -119,24 +130,31 @@ export function useServerSync(api: ApiInstance): void {
       // splitting the source's own tile (S4/S6/Decision 8). `spawnedFrom`
       // absent or null (CUJ 6 — no source, the common case today) skips this
       // entirely — no scan, no behavior change from before Phase 4.
+      //
+      // Fan-out is "insert everywhere the source is tiled" (Risk #9/#10
+      // resolved): EVERY scratch canvas and EVERY saved workspace doc that
+      // currently tiles the source gets the child. No skip-on-multi-match —
+      // a session tiled in two places is tiled deliberately, and skipping
+      // silently produced no tile at all, which read as the feature being
+      // broken.
       if (ev.spawnedFrom) {
         const store = useWorkspaceStore.getState();
-        const matches = findWorkspacesTilingSession(ev.spawnedFrom, store.workspaceDocs);
-        if (matches.length === 1) {
-          store.insertTileIntoWorkspaceDoc(
-            matches[0]!.id,
+        // The everyday canvas mode is a scratch canvas; scanning only saved
+        // docs meant this almost never fired in normal use.
+        for (const wtId of findScratchCanvasesTilingSession(ev.spawnedFrom, store.layoutByWorktree)) {
+          store.insertTileIntoScratchCanvas(
+            wtId,
             ev.sessionType,
             ev.sessionId,
             ev.worktreeId ?? undefined,
           );
-        } else if (matches.length > 1) {
-          // Multi-workspace fan-out (S4's proposed "insert into all") is
-          // still pending user confirmation (plan Risk #9/#10) — log and
-          // skip rather than guessing which of "all" / "the active one" /
-          // "none" is correct.
-          console.warn(
-            `[workspaces] session ${ev.spawnedFrom} is tiled in ${matches.length} workspaces at once; ` +
-              `auto-insert for new session ${ev.sessionId} skipped pending Risk #9/#10 confirmation.`,
+        }
+        for (const doc of findWorkspacesTilingSession(ev.spawnedFrom, store.workspaceDocs)) {
+          store.insertTileIntoWorkspaceDoc(
+            doc.id,
+            ev.sessionType,
+            ev.sessionId,
+            ev.worktreeId ?? undefined,
           );
         }
       }

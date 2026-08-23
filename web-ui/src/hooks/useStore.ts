@@ -87,6 +87,15 @@ export interface FreeRect {
   y: number;
   w: number;
   h: number;
+  /**
+   * Free-mode stacking order (higher = nearer the viewer). Optional: tiles
+   * predating this field, and tiles that have never been focused, fall back to
+   * 0. Tapping a tile raises it to `max(all z) + 1` — a per-tile number rather
+   * than an array reorder, so raising one tile never reshuffles the others
+   * relative to each other (macOS/Windows window behaviour). Meaningless in
+   * "tiled" mode, where tiles never overlap.
+   */
+  z?: number;
 }
 
 /**
@@ -265,6 +274,31 @@ export interface WorkspaceState {
     tileWorktreeId?: string,
   ) => void;
   /**
+   * `insertTileIntoWorkspaceDoc`'s scratch-canvas twin — insert into
+   * `layoutByWorktree[worktreeId].scratchCanvas`. A no-op if that worktree has
+   * no scratch canvas yet (nothing to insert next to; the seed effect in
+   * WorkspaceCanvas will build one from live panes when the canvas is opened).
+   *
+   * `tileWorktreeId` MAY differ from `worktreeId`: a child agent spawned into a
+   * NEW worktree (`vst worktree create`) still auto-inserts next to its parent's
+   * tile, in the parent's canvas. That deliberately relaxes the scratch canvas's
+   * "single-worktree only" convention for auto-inserted children, using the
+   * same cross-worktree tile rendering saved workspaces already support.
+   */
+  insertTileIntoScratchCanvas: (
+    worktreeId: string,
+    kind: TileKind,
+    sessionId?: string,
+    tileWorktreeId?: string,
+  ) => void;
+  /**
+   * Removes every `tools` tile targeting `worktreeId` from every scratch canvas
+   * and every saved workspace doc. The worktree-deletion counterpart to
+   * `removeTilesForSession` — tools tiles carry no `sessionId`, so the
+   * session-keyed sweep can never reach them.
+   */
+  removeToolsTilesForWorktree: (worktreeId: string) => void;
+  /**
    * Repoint every tile (scratch canvas + every saved workspace doc)
    * referencing `fromSessionId` to `toSessionId` — a reset's replacement
    * taking the archived session's exact place, same tile id/position.
@@ -361,11 +395,14 @@ export function removeTileFromCanvas(canvas: CanvasGeometry, tileId: string): Ca
   const nextTiles = canvas.tiles.filter((t) => t.id !== tileId);
   const nextFreeRects = { ...canvas.freeRects };
   delete nextFreeRects[tileId];
-  let nextTree = canvas.tree;
-  if (canvas.mode === "tiled") {
-    const leafId = findLeafId(canvas.tree, tileId);
-    nextTree = leafId ? removePane(canvas.tree, leafId) : canvas.tree;
-  }
+  // Prune the layout tree UNCONDITIONALLY, not just in "tiled" mode: a canvas
+  // in "free" mode can still carry a tree (from a previous tiled session), and
+  // `tiles`/`tree` are expected to stay mutually consistent regardless of
+  // current mode — anything that reads `tree` (e.g. `insertTileIntoCanvas`'s
+  // `findLeafId` lookup) shouldn't have to special-case "mode was free when
+  // this tile was removed" to avoid resolving a leaf for an already-gone tile.
+  const leafId = findLeafId(canvas.tree, tileId);
+  const nextTree = leafId ? removePane(canvas.tree, leafId) : canvas.tree;
   return { ...canvas, tiles: nextTiles, freeRects: nextFreeRects, tree: nextTree };
 }
 
@@ -442,6 +479,50 @@ export function findWorkspacesTilingSession(
   workspaceDocs: Record<string, WorkspaceDoc>,
 ): WorkspaceDoc[] {
   return Object.values(workspaceDocs).filter((doc) => doc.tiles.some((t) => t.sessionId === sessionId));
+}
+
+/**
+ * The scratch-canvas counterpart to `findWorkspacesTilingSession` — every
+ * worktree whose TRANSIENT canvas currently tiles `sessionId`. Returns
+ * worktree ids (the scratch canvas's key), not canvases.
+ *
+ * The everyday canvas mode is a scratch canvas, not a saved doc, so without
+ * this the `spawnedFrom` auto-insert only ever fired for saved workspaces —
+ * i.e. essentially never in normal use.
+ */
+export function findScratchCanvasesTilingSession(
+  sessionId: string,
+  layoutByWorktree: Record<string, WorktreeLayout>,
+): string[] {
+  const ids: string[] = [];
+  for (const [worktreeId, layout] of Object.entries(layoutByWorktree)) {
+    if (layout.scratchCanvas?.tiles.some((t) => t.sessionId === sessionId)) ids.push(worktreeId);
+  }
+  return ids;
+}
+
+/**
+ * Removes every `tools` tile targeting `worktreeId` from `canvas`. The
+ * worktree-scoped analogue of `removeTilesForSessionInCanvas` — a tools tile
+ * has no `sessionId`, so session-keyed cleanup can never reach it, and a
+ * deleted worktree's tools tile would otherwise linger as an empty ghost.
+ *
+ * `viewedWorktreeId` supplies the same `tile.worktreeId ?? <canvas's own
+ * worktree>` fallback WorkspaceCanvas uses to resolve a tools tile's pane key.
+ * Returns the SAME `canvas` reference when nothing matched.
+ */
+export function removeToolsTilesForWorktreeInCanvas(
+  canvas: CanvasGeometry,
+  worktreeId: string,
+  viewedWorktreeId: string,
+): CanvasGeometry {
+  const matching = canvas.tiles.filter(
+    (t) => t.kind === "tools" && (t.worktreeId ?? viewedWorktreeId) === worktreeId,
+  );
+  if (matching.length === 0) return canvas;
+  let next = canvas;
+  for (const tile of matching) next = removeTileFromCanvas(next, tile.id);
+  return next;
 }
 
 /**
@@ -793,9 +874,59 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => {
             const doc = s.workspaceDocs[docId];
             if (!doc) return s;
+            // Idempotency guard: a duplicate `session:created` delivery (or two
+            // auto-insert triggers racing) must not tile the same session twice
+            // in one canvas — `togglePickerItem`'s existing-tile lookup can only
+            // ever find/remove the first of a duplicate pair.
+            if (sessionId != null && doc.tiles.some((t) => t.sessionId === sessionId)) return s;
             const next = insertTileIntoCanvas(doc, kind, sessionId, tileWorktreeId, doc.contextKey);
             return {
               workspaceDocs: { ...s.workspaceDocs, [docId]: { ...doc, ...next } },
+            };
+          }),
+        insertTileIntoScratchCanvas: (worktreeId, kind, sessionId, tileWorktreeId) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId];
+            const canvas = cur?.scratchCanvas;
+            if (!cur || !canvas) return s;
+            if (sessionId != null && canvas.tiles.some((t) => t.sessionId === sessionId)) return s;
+            const next = insertTileIntoCanvas(canvas, kind, sessionId, tileWorktreeId, worktreeId);
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, scratchCanvas: next },
+              },
+            };
+          }),
+        removeToolsTilesForWorktree: (worktreeId) =>
+          set((s) => {
+            let layoutChanged = false;
+            const nextLayoutByWorktree = { ...s.layoutByWorktree };
+            for (const [viewedWorktreeId, layout] of Object.entries(s.layoutByWorktree)) {
+              if (!layout.scratchCanvas) continue;
+              const next = removeToolsTilesForWorktreeInCanvas(
+                layout.scratchCanvas,
+                worktreeId,
+                viewedWorktreeId,
+              );
+              if (next !== layout.scratchCanvas) {
+                nextLayoutByWorktree[viewedWorktreeId] = { ...layout, scratchCanvas: next };
+                layoutChanged = true;
+              }
+            }
+            let docsChanged = false;
+            const nextWorkspaceDocs = { ...s.workspaceDocs };
+            for (const [docId, doc] of Object.entries(s.workspaceDocs)) {
+              const next = removeToolsTilesForWorktreeInCanvas(doc, worktreeId, doc.contextKey);
+              if (next !== doc) {
+                nextWorkspaceDocs[docId] = { ...doc, ...next };
+                docsChanged = true;
+              }
+            }
+            if (!layoutChanged && !docsChanged) return s;
+            return {
+              ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
+              ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
             };
           }),
         relinkSessionTiles: (fromSessionId, toSessionId) =>
@@ -921,6 +1052,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 ...s.layoutByWorktree,
                 [worktreeId]: { ...cur, layoutMode: mode },
               },
+              // Classic-mode viewport fullscreen has no meaning in canvas mode
+              // (the canvas has its own per-tile fullscreen). Leaving it set
+              // meant switching to canvas mode kept a stale classic overlay
+              // claiming the same pane key as a canvas tile → empty ghost
+              // window. Mirrors how `toggleToolPanel` clears it on hide.
+              ...(s.workspacePaneFullscreen != null ? { workspacePaneFullscreen: null } : {}),
             };
           }),
         updateScratchCanvas: (worktreeId, patch) =>

@@ -816,6 +816,15 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       worktrees: p.worktrees.filter((w) => w.id !== wtId),
     }));
 
+    // Per-session deletes BEFORE the worktree delete: the client's tile
+    // cleanup (`removeTilesForSession`) keys off `session:deleted`, and these
+    // sessions are gone for good. Without them, tiles for this worktree's
+    // sessions survived in every canvas as empty ghost windows — a worktree
+    // delete is exactly the same event, from the client's point of view, as N
+    // individual session deletes plus the worktree itself.
+    for (const session of worktree.sessions) {
+      broadcastAll({ type: "session:deleted", sessionId: session.id });
+    }
     broadcastAll({ type: "worktree:deleted", worktreeId: wtId });
     return reply.send({ ok: true });
   });

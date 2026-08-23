@@ -297,19 +297,53 @@ export function Workspace() {
     [sessions, activeWorktreeId],
   );
   // A worktree's classic per-worktree canvas placement is ALWAYS its own
-  // transient scratch canvas now — it never binds to a saved WorkspaceDoc
-  // (see WorkspaceCanvas.tsx's module doc), so its pane-key set is just its
-  // own sessions + tools, no cross-worktree union needed. A saved doc's
-  // cross-worktree panes are handled entirely by `detachedWorkspacePaneKeys`
-  // below, for the doc's own `/workspaces/:id` route.
+  // transient scratch canvas (it never binds to a saved WorkspaceDoc — see
+  // WorkspaceCanvas.tsx's module doc), so the base of its pane-key set is its
+  // own sessions + tools.
+  //
+  // Plus any FOREIGN tile its scratch canvas happens to carry: a child agent
+  // auto-inserted next to its spawning parent (`spawnedFrom`, useServerSync)
+  // can belong to a different worktree entirely (`vst worktree create`). Those
+  // tiles render live content only if their pane is mounted here — otherwise
+  // they're empty ghost windows. Mirrors `detachedWorkspacePaneKeys` below.
+  // Select only `tiles`, not the whole canvas: `freeRects`/`tree` change on
+  // every drag/resize frame but never affect which panes should be mounted,
+  // and `updateScratchCanvas` preserves the `tiles` array reference when a
+  // patch doesn't touch it — subscribing to the whole object would re-render
+  // this route (and everything under it) on every mousemove of a drag.
+  const activeScratchCanvasTiles = useWorkspaceStore(
+    (s) => (activeWorktreeId ? (s.layoutByWorktree[activeWorktreeId]?.scratchCanvas?.tiles ?? null) : null),
+  );
   const worktreePaneKeys = useMemo<PaneKey[]>(() => {
     if (!activeWorktreeId || isDirectSession) return [];
     const keys: PaneKey[] = [];
-    for (const s of worktreeAgentSessions) keys.push(`agent:${s.id}`);
-    for (const s of worktreeTerminalSessions) keys.push(`terminal:${s.id}`);
-    keys.push(`tools:${activeWorktreeId}`);
+    const seen = new Set<string>();
+    const push = (k: PaneKey) => {
+      if (seen.has(k)) return;
+      seen.add(k);
+      keys.push(k);
+    };
+    for (const s of worktreeAgentSessions) push(`agent:${s.id}`);
+    for (const s of worktreeTerminalSessions) push(`terminal:${s.id}`);
+    push(`tools:${activeWorktreeId}`);
+    for (const tile of activeScratchCanvasTiles ?? []) {
+      if (tile.kind === "tools") {
+        const twt = tile.worktreeId ?? activeWorktreeId;
+        if (worktrees.some((w) => w.id === twt)) push(`tools:${twt}`);
+      } else if (tile.sessionId && sessions.some((s) => s.id === tile.sessionId)) {
+        push(`${tile.kind}:${tile.sessionId}`);
+      }
+    }
     return keys;
-  }, [activeWorktreeId, isDirectSession, worktreeAgentSessions, worktreeTerminalSessions]);
+  }, [
+    activeWorktreeId,
+    isDirectSession,
+    worktreeAgentSessions,
+    worktreeTerminalSessions,
+    activeScratchCanvasTiles,
+    sessions,
+    worktrees,
+  ]);
   // Whether ToolPanel instances rendered via this pane-key registry are
   // CURRENTLY live inside a workspace-canvas tile (either the classic
   // per-worktree canvas, or the detached /workspaces/:id view — both use
@@ -378,15 +412,22 @@ export function Workspace() {
   const detachedWorkspacePaneKeys = useMemo<PaneKey[]>(() => {
     if (!viewedWorkspace) return [];
     const keys: PaneKey[] = [];
+    const seen = new Set<string>();
+    const push = (k: PaneKey) => {
+      if (seen.has(k)) return;
+      seen.add(k);
+      keys.push(k);
+    };
     for (const tile of viewedWorkspace.tiles) {
       if (tile.kind === "tools") {
-        keys.push(`tools:${tile.worktreeId ?? viewedWorkspace.contextKey}`);
+        const twt = tile.worktreeId ?? viewedWorkspace.contextKey;
+        if (worktrees.some((w) => w.id === twt)) push(`tools:${twt}`);
       } else if (tile.sessionId && sessions.some((s) => s.id === tile.sessionId)) {
-        keys.push(`${tile.kind}:${tile.sessionId}`);
+        push(`${tile.kind}:${tile.sessionId}`);
       }
     }
     return keys;
-  }, [viewedWorkspace, sessions]);
+  }, [viewedWorkspace, sessions, worktrees]);
   const detachedWorkspacePaneHostLayer = (
     <PaneHostLayer paneKeys={detachedWorkspacePaneKeys} renderPane={renderWorktreePane} />
   );

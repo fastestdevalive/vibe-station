@@ -80,6 +80,32 @@ function clone<T>(node: T): T {
 }
 
 /**
+ * Fallback insert when no usable target leaf exists: join `root`'s top-level
+ * split if the axis matches, otherwise wrap `root` in a fresh 2-child split.
+ * `root` must already be a clone — this mutates it.
+ */
+function appendAtRoot(root: LayoutNode, newLeaf: LeafNode, side: Side): LayoutNode {
+  const axis = axisForSide(side);
+  const before = side === "left" || side === "top";
+  if (root.type === "split" && root.axis === axis) {
+    const insertAt = before ? 0 : root.children.length;
+    const share = 1 / (root.children.length + 1);
+    const scale = 1 - share;
+    root.sizes = root.sizes.map((s) => s * scale);
+    root.sizes.splice(insertAt, 0, share);
+    root.children.splice(insertAt, 0, newLeaf);
+    return root;
+  }
+  return {
+    id: nextId("split"),
+    type: "split",
+    axis,
+    children: before ? [newLeaf, root] : [root, newLeaf],
+    sizes: [0.5, 0.5],
+  };
+}
+
+/**
  * Insert a new leaf next to `targetLeafId`, on `side`. If the target's
  * parent already splits along the matching axis, the new leaf joins as a
  * sibling (halving the target's size). Otherwise the target leaf is
@@ -92,7 +118,10 @@ export function insertPane(
   newTileId: string,
 ): LayoutNode {
   const newLeaf: LeafNode = { id: nextId("leaf"), type: "leaf", tileId: newTileId };
-  if (!root || !targetLeafId) return newLeaf;
+  if (!root) return newLeaf;
+  // A missing/unknown target must NOT discard the existing tree (that silently
+  // dropped every other tile). Degrade to appending at the root instead.
+  if (!targetLeafId) return appendAtRoot(clone(root), newLeaf, side);
 
   const next = clone(root);
   const axis = axisForSide(side);
@@ -110,7 +139,9 @@ export function insertPane(
 
   // Replace the target leaf itself with a new split container.
   const target = findNode(next, targetLeafId);
-  if (!target) return next; // target vanished — no-op, caller should re-render from fresh state
+  // Target vanished (stale leaf id from a concurrent removal): still insert
+  // the new leaf, at the root, rather than dropping it on the floor.
+  if (!target) return appendAtRoot(next, newLeaf, side);
   const replacement: SplitNode = {
     id: nextId("split"),
     type: "split",

@@ -122,6 +122,12 @@
   cursor: pointer;
 }
 
+/* Dropdown disclosure affordance on the "Windows" picker trigger. */
+.workspace-canvas__add-btn-chevron {
+  margin-left: calc(var(--space-1) * -0.5);
+  opacity: 0.6;
+}
+
 .workspace-canvas__picker {
   position: absolute;
   top: calc(100% + var(--space-1));
@@ -301,6 +307,11 @@
   min-height: 0;
   position: relative;
   overflow: hidden;
+  /* New stacking context: free-mode tiles' per-tile `z-index` (raised on
+     click-to-front, unbounded and persisted — see raiseTile) must never be
+     able to climb above sibling chrome like `.workspace-canvas__picker`
+     (z-index: 20), which lives outside this element. */
+  isolation: isolate;
 }
 
 .workspace-canvas__empty {

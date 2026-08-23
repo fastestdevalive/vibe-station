@@ -2,7 +2,7 @@ import "@/styles/workspace-canvas.css";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { Bot, Check, Folder, FolderOpen, GitBranch, Minimize2, MoreVertical, PanelRight, Plus, Save, Search, SquareTerminal, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronUp, Folder, FolderOpen, GitBranch, Minimize2, MoreVertical, PanelRight, Plus, Save, Search, SquareTerminal, X } from "lucide-react";
 import type { Project, Session, Worktree } from "@/api/types";
 import {
   buildBalancedTree,
@@ -366,6 +366,56 @@ export function WorkspaceCanvas({
     }
   }, [canvas, fullscreenTileId]);
 
+  // Orphaned-tile sweep — cheap defense in depth against a tile whose backing
+  // object is gone from ANY source (a missed `session:deleted`, a worktree
+  // deleted while this client was offline, a hand-edited persisted canvas).
+  // Such a tile can't render content, so it shows up as an empty ghost window.
+  // Guarded on a non-empty `worktrees` list so the pre-bundle-load empty state
+  // never wipes a canvas.
+  useEffect(() => {
+    if (!canvas || worktrees.length === 0) return;
+    const liveSessionIds = new Set(allSessions.map((s) => s.id));
+    const liveWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const orphans = canvas.tiles.filter((t) =>
+      t.kind === "tools"
+        ? !liveWorktreeIds.has(t.worktreeId ?? worktreeId)
+        : t.sessionId != null && !liveSessionIds.has(t.sessionId),
+    );
+    if (orphans.length === 0) return;
+    let next = canvas;
+    for (const tile of orphans) next = removeTileFromCanvas(next, tile.id);
+    const store = useWorkspaceStore.getState();
+    if (savedDocId) store.updateWorkspaceDoc(savedDocId, next);
+    else store.updateScratchCanvas(worktreeId, next);
+  }, [canvas, allSessions, worktrees, worktreeId, savedDocId]);
+
+  // Free-mode click-to-front. A NATIVE capture-phase listener on the canvas
+  // body, not a React `onMouseDownCapture` on the tile: pane content is
+  // PORTALED into the tile's outlet, so its React tree position is
+  // PaneHostLayer — React synthetic events from inside a pane never reach the
+  // tile's own handlers. Native DOM events do bubble through the real DOM,
+  // where the pane genuinely IS inside the tile, so this catches clicks into
+  // pane content (terminal, chat) as well as tile chrome. Capture phase so a
+  // `stopPropagation()` inside a pane can't suppress it.
+  useEffect(() => {
+    const el = canvasBodyRef.current;
+    if (!el) return;
+    const onDown = (ev: MouseEvent) => {
+      const target = ev.target as HTMLElement | null;
+      const tileEl = target?.closest?.(".workspace-canvas__tile");
+      if (!tileEl) return;
+      const entry = Object.entries(tileRefs.current).find(([, node]) => node === tileEl);
+      if (entry) raiseTile(entry[0]);
+    };
+    el.addEventListener("mousedown", onDown, true);
+    return () => el.removeEventListener("mousedown", onDown, true);
+    // `raiseTile` closes over `readCanvas`/`patchCanvas`, which close over
+    // `worktreeId`/`savedDocId` — without those in the deps, switching the
+    // viewed worktree/doc without unmounting (no `key` on this component)
+    // leaves the listener raising tiles in the PREVIOUS canvas.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvas != null, worktreeId, savedDocId]);
+
   if (!canvas) {
     return <div className="workspace-canvas workspace-canvas--loading" />;
   }
@@ -501,11 +551,16 @@ export function WorkspaceCanvas({
   function handleModeChange(next: "tiled" | "free") {
     if (cv.mode === next) return;
     if (next === "tiled") {
-      const order = [...cv.tiles].sort((a, b) => {
-        const ra = cv.freeRects[a.id];
-        const rb = cv.freeRects[b.id];
-        const ay = ra?.y ?? 0;
-        const by = rb?.y ?? 0;
+      // Fresh read, same discipline as addTile/removeTile: a concurrent
+      // WS-driven insert (spawned-child auto-tile) landing between this
+      // render and the click must not be rebuilt out of the tree — it has no
+      // DOM rect to sort by yet, so it sorts last rather than being dropped.
+      const freshCanvas = readCanvas() ?? cv;
+      const order = [...freshCanvas.tiles].sort((a, b) => {
+        const ra = freshCanvas.freeRects[a.id];
+        const rb = freshCanvas.freeRects[b.id];
+        const ay = ra?.y ?? Number.MAX_SAFE_INTEGER;
+        const by = rb?.y ?? Number.MAX_SAFE_INTEGER;
         if (ay !== by) return ay - by;
         return (ra?.x ?? 0) - (rb?.x ?? 0);
       });
@@ -548,9 +603,36 @@ export function WorkspaceCanvas({
   function addTile(kind: TileKind, sessionId?: string, tileWorktreeId?: string) {
     // Shared with the Phase 4c auto-insert (Decision 8) — see
     // `insertTileIntoCanvas`'s own doc comment in useStore.ts.
-    const next = insertTileIntoCanvas(cv, kind, sessionId, tileWorktreeId, worktreeId);
-    patchCanvas(next);
-    setPickerOpen(false);
+    //
+    // Read FRESH state (same discipline as startDrag/startResize below) — the
+    // render-time `cv` snapshot can already be stale by the time a click lands
+    // (a WS-driven `session:created` auto-insert, a tools-tile toggle from
+    // TopBar), and `patchCanvas` writes whole objects, so mutating off the
+    // snapshot silently reverts those concurrent updates.
+    const cur = readCanvas();
+    if (!cur) return;
+    patchCanvas(insertTileIntoCanvas(cur, kind, sessionId, tileWorktreeId, worktreeId));
+    // NOTE: deliberately does NOT close the picker — adding several tiles in a
+    // row is the common case, so the popup stays open (symmetric with remove).
+  }
+
+  /**
+   * Free-mode click-to-front: give `tileId` the highest z of any tile. Only the
+   * tapped tile's `z` changes — every other tile keeps its own number, so the
+   * rest of the stack never reshuffles relative to itself (macOS/Windows
+   * behaviour, and the reason this is a per-tile number rather than a reorder
+   * of `tiles`, which would also churn tab/render order). No-op in tiled mode
+   * (tiles can't overlap there) and when the tile is already on top.
+   */
+  function raiseTile(tileId: string) {
+    const cur = readCanvas();
+    if (!cur || cur.mode !== "free") return;
+    const rect = cur.freeRects[tileId];
+    if (!rect) return;
+    let maxZ = 0;
+    for (const r of Object.values(cur.freeRects)) maxZ = Math.max(maxZ, r.z ?? 0);
+    if ((rect.z ?? 0) === maxZ && maxZ > 0) return;
+    patchCanvas({ freeRects: { ...cur.freeRects, [tileId]: { ...rect, z: maxZ + 1 } } });
   }
 
   function removeTile(tileId: string) {
@@ -559,7 +641,9 @@ export function WorkspaceCanvas({
     // implementation. `fullscreenTileId` cleanup is handled by the
     // reconciliation effect above, not inline here, so it also covers
     // removals this component didn't itself trigger.
-    patchCanvas(removeTileFromCanvas(cv, tileId));
+    const cur = readCanvas();
+    if (!cur) return;
+    patchCanvas(removeTileFromCanvas(cur, tileId));
   }
 
   // Single toggle for every picker item — session-backed (agent/terminal) or
@@ -568,16 +652,17 @@ export function WorkspaceCanvas({
   // `t.sessionId != null` guards a "tools" call site (sessionId undefined) from
   // ever matching a tools tile, whose own `sessionId` field is also undefined.
   function togglePickerItem(kind: TileKind, sessionId?: string, tileWorktreeId?: string) {
+    // Fresh read, same reason as addTile/removeTile above.
+    const cur = readCanvas();
+    if (!cur) return;
     const existing =
       kind === "tools"
-        ? cv.tiles.find((t) => t.kind === "tools" && (t.worktreeId ?? worktreeId) === (tileWorktreeId ?? worktreeId))
-        : cv.tiles.find((t) => t.sessionId != null && t.sessionId === sessionId);
-    if (existing) {
-      removeTile(existing.id);
-      setPickerOpen(false);
-    } else {
-      addTile(kind, sessionId, tileWorktreeId);
-    }
+        ? cur.tiles.find((t) => t.kind === "tools" && (t.worktreeId ?? worktreeId) === (tileWorktreeId ?? worktreeId))
+        : cur.tiles.find((t) => t.sessionId != null && t.sessionId === sessionId);
+    // Neither branch closes the picker — toggling several panes on/off in one
+    // pass is the common case.
+    if (existing) removeTile(existing.id);
+    else addTile(kind, sessionId, tileWorktreeId);
   }
 
   /**
@@ -632,8 +717,14 @@ export function WorkspaceCanvas({
       const nextY = clamp(startRect.y + dyPct, 0, Math.max(0, 100 - startRect.h));
       const cur = readCanvas();
       if (!cur) return;
+      // `z` is read live, not from `startRect`: the click-to-front listener
+      // (mousedown, capture phase) raises `z` before this handler's own
+      // mousedown-triggered `startRect` snapshot is taken, but React hasn't
+      // re-rendered yet, so `startRect.z` is already stale — using it here
+      // would silently undo the raise on the very first drag frame.
+      const liveZ = cur.freeRects[tileId]?.z ?? startRect.z;
       patchCanvas({
-        freeRects: { ...cur.freeRects, [tileId]: { ...startRect, x: nextX, y: nextY } },
+        freeRects: { ...cur.freeRects, [tileId]: { ...startRect, x: nextX, y: nextY, z: liveZ } },
       });
     }
     function onUp() {
@@ -663,8 +754,9 @@ export function WorkspaceCanvas({
       const nextH = clamp(startRect.h + dhPct, 10, Math.max(10, 100 - startRect.y));
       const cur = readCanvas();
       if (!cur) return;
+      const liveZ = cur.freeRects[tileId]?.z ?? startRect.z;
       patchCanvas({
-        freeRects: { ...cur.freeRects, [tileId]: { ...startRect, w: nextW, h: nextH } },
+        freeRects: { ...cur.freeRects, [tileId]: { ...startRect, w: nextW, h: nextH, z: liveZ } },
       });
     }
     function onUp() {
@@ -1125,7 +1217,12 @@ export function WorkspaceCanvas({
               onClick={() => setPickerOpen((v) => !v)}
               aria-expanded={pickerOpen}
             >
-              <Plus size={14} /> Add tile
+              <Plus size={14} /> Windows
+              {pickerOpen ? (
+                <ChevronUp size={12} className="workspace-canvas__add-btn-chevron" aria-hidden />
+              ) : (
+                <ChevronDown size={12} className="workspace-canvas__add-btn-chevron" aria-hidden />
+              )}
             </button>
             {pickerOpen ? (
               <div className="workspace-canvas__picker" role="menu" data-workspace-canvas-picker-panel>
@@ -1502,6 +1599,8 @@ export function WorkspaceCanvas({
                 top: `${rect.y}%`,
                 width: `${rect.w}%`,
                 height: `${rect.h}%`,
+                // Per-tile stacking order — see FreeRect.z / raiseTile.
+                zIndex: rect.z ?? 0,
               });
             })}
           </div>

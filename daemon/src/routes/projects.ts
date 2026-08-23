@@ -855,6 +855,20 @@ export function registerProjectRoutes(app: FastifyInstance): void {
       return reply.status(500).send({ error: `Failed to delete project: ${String(err)}` });
     }
 
+    // Same gap as `DELETE /worktrees/:id`: client tile cleanup keys off
+    // `session:deleted`, so cascade a per-session delete for every session
+    // (direct + per-worktree) this project owned, plus a per-worktree delete,
+    // before the project-level event. Otherwise tiles referencing them survive
+    // in canvases as empty ghost windows.
+    for (const session of project.directSessions) {
+      broadcastAll({ type: "session:deleted", sessionId: session.id });
+    }
+    for (const wt of project.worktrees) {
+      for (const session of wt.sessions) {
+        broadcastAll({ type: "session:deleted", sessionId: session.id });
+      }
+      broadcastAll({ type: "worktree:deleted", worktreeId: wt.id });
+    }
     broadcastAll({ type: "project:deleted", projectId: id });
     return reply.send({ ok: true });
   });

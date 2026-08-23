@@ -510,6 +510,31 @@ describe("Worktree routes", () => {
     expect(listRes.json<WorktreeRecord[]>()).toHaveLength(0);
   });
 
+  it("DELETE /worktrees/:id broadcasts session:deleted per session BEFORE worktree:deleted", async () => {
+    // Client-side tile cleanup keys off `session:deleted`; without the cascade
+    // a deleted worktree's tiles survived in every canvas as empty ghosts.
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `cascade-${Date.now()}`, modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string; mainSessionId: string }>();
+
+    const broadcast = await import("../broadcaster.js");
+    const spy = vi.spyOn(broadcast, "broadcastAll");
+
+    const delRes = await app.inject({ method: "DELETE", url: `/worktrees/${wt.id}` });
+    expect(delRes.statusCode).toBe(200);
+
+    const msgs = spy.mock.calls.map((c) => c[0] as { type: string; sessionId?: string });
+    const sessionDeletes = msgs.filter((m) => m.type === "session:deleted");
+    expect(sessionDeletes.map((m) => m.sessionId)).toContain(wt.mainSessionId);
+    expect(msgs.findIndex((m) => m.type === "session:deleted")).toBeLessThan(
+      msgs.findIndex((m) => m.type === "worktree:deleted"),
+    );
+    spy.mockRestore();
+  });
+
   it("DELETE /worktrees/:id 404 for unknown worktree", async () => {
     const res = await app.inject({ method: "DELETE", url: "/worktrees/wt-nonexistent-99" });
     expect(res.statusCode).toBe(404);
