@@ -3,7 +3,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { useServerSync } from "./useServerSync";
 import { useServerStore } from "./useServerStore";
-import { useWorkspaceStore } from "./useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "./useStore";
 
 /**
  * 1.T4 — the daemon already broadcasts `name`/`archivedAt` (and now
@@ -129,9 +129,26 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     });
   }
 
+  /** The everyday canvas: a per-worktree TRANSIENT canvas, not a saved doc. */
+  function seedScratch(worktreeId: string) {
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [worktreeId]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          scratchCanvas: {
+            mode: "free",
+            tiles: [{ id: "tile-source", kind: "agent", sessionId: SOURCE_ID }],
+            tree: null,
+            freeRects: { "tile-source": { x: 0, y: 0, w: 40, h: 40 } },
+          },
+        },
+      },
+    });
+  }
+
   beforeEach(() => {
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
-    useWorkspaceStore.setState({ workspaceDocs: {} });
+    useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {} });
   });
 
   it("4c.T1 — a session:created with spawnedFrom matching exactly one workspace's tile auto-inserts a new tile there", async () => {
@@ -200,7 +217,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     expect(doc.tiles).toHaveLength(1);
   });
 
-  it("logs and skips (no insert into either) when the source is tiled in MORE THAN ONE workspace (Risk #9/#10, not yet confirmed)", async () => {
+  it("inserts into EVERY workspace tiling the source — no skip-on-multi-match (Risk #9/#10 resolved)", async () => {
     seedOneMatchingDoc();
     useWorkspaceStore.setState((s) => ({
       workspaceDocs: {
@@ -231,10 +248,128 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
       });
     });
 
-    await new Promise((r) => setTimeout(r, 50));
-    expect(useWorkspaceStore.getState().workspaceDocs[DOC_ID]!.tiles).toHaveLength(1);
-    expect(useWorkspaceStore.getState().workspaceDocs["doc-2"]!.tiles).toHaveLength(1);
-    expect(warnSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().workspaceDocs[DOC_ID]!.tiles).toHaveLength(2);
+      expect(useWorkspaceStore.getState().workspaceDocs["doc-2"]!.tiles).toHaveLength(2);
+    });
+    expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+
+  it("auto-inserts a SAME-worktree child into the source worktree's scratch canvas", async () => {
+    seedScratch("wt-1");
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "sess-new",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+        spawnedFrom: SOURCE_ID,
+      });
+    });
+
+    await waitFor(() => {
+      const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+      expect(canvas.tiles).toHaveLength(2);
+      const added = canvas.tiles.find((t) => t.sessionId === "sess-new")!;
+      expect(added.kind).toBe("agent");
+      // Same worktree as the canvas → left undefined, matching the existing
+      // same-context tile shape.
+      expect(added.worktreeId).toBeUndefined();
+    });
+  });
+
+  it("auto-inserts a CROSS-worktree child into the source worktree's scratch canvas, stamped with its own worktreeId", async () => {
+    seedScratch("wt-1");
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "sess-new",
+        // `vst worktree create` — the child lives in a DIFFERENT worktree, but
+        // still lands next to its parent's tile.
+        worktreeId: "wt-2",
+        sessionType: "agent",
+        spawnedFrom: SOURCE_ID,
+      });
+    });
+
+    await waitFor(() => {
+      const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+      expect(canvas.tiles).toHaveLength(2);
+      expect(canvas.tiles.find((t) => t.sessionId === "sess-new")!.worktreeId).toBe("wt-2");
+    });
+  });
+
+  it("inserts into the scratch canvas AND every matching saved doc at once", async () => {
+    seedScratch("wt-1");
+    seedOneMatchingDoc();
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "sess-new",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+        spawnedFrom: SOURCE_ID,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!.tiles,
+      ).toHaveLength(2);
+      expect(useWorkspaceStore.getState().workspaceDocs[DOC_ID]!.tiles).toHaveLength(2);
+    });
+  });
+});
+
+// --- worktree:deleted sweeps `tools:<worktreeId>` tiles, which carry no
+// sessionId and so are unreachable by the session-keyed cleanup ---
+describe("useServerSync — worktree:deleted tools-tile cleanup", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {} });
+  });
+
+  it("drops the deleted worktree's tools tile from a scratch canvas", async () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        "wt-1": {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          scratchCanvas: {
+            mode: "free",
+            tiles: [
+              { id: "tile-tools", kind: "tools" },
+              { id: "tile-agent", kind: "agent", sessionId: "sess-x" },
+            ],
+            tree: null,
+            freeRects: {},
+          },
+        },
+      },
+    });
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({ type: "worktree:deleted", worktreeId: "wt-1" });
+    });
+
+    await waitFor(() => {
+      const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+      expect(canvas.tiles.map((t) => t.id)).toEqual(["tile-agent"]);
+    });
   });
 });

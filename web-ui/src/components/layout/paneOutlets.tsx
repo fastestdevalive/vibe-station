@@ -21,9 +21,29 @@ import {
 
 type Listener = () => void;
 
+/**
+ * A registration token. Each `<PaneOutlet>`/`<ToolbarOutlet>` instance owns one
+ * for its whole lifetime, so `unregister` can remove *that instance's* entry
+ * rather than blowing away whatever happens to be stored under the key.
+ *
+ * Without this, two components legitimately mounting the same paneKey at once
+ * (e.g. a stale classic-mode fullscreen overlay lingering next to the canvas
+ * tile that owns the same `tools:<worktreeId>` pane) collide: the second
+ * registration silently overwrites the first, and whichever unmounts first
+ * deletes the key outright — leaving the surviving outlet a permanently empty
+ * "ghost" window.
+ */
+export type OutletToken = { readonly id: number };
+
+interface Registration {
+  token: OutletToken;
+  el: HTMLElement;
+}
+
 interface RegistryValue {
-  register: (key: string, el: HTMLElement | null) => void;
-  unregister: (key: string) => void;
+  createToken: () => OutletToken;
+  register: (key: string, token: OutletToken, el: HTMLElement | null) => void;
+  unregister: (key: string, token: OutletToken) => void;
   getOutlet: (key: string) => HTMLElement | null;
   subscribe: (key: string, listener: Listener) => () => void;
 }
@@ -31,8 +51,9 @@ interface RegistryValue {
 const PaneOutletRegistryContext = createContext<RegistryValue | null>(null);
 
 export function PaneOutletProvider({ children }: { children: ReactNode }) {
-  const outletsRef = useRef<Map<string, HTMLElement | null>>(new Map());
+  const outletsRef = useRef<Map<string, Registration[]>>(new Map());
   const listenersRef = useRef<Map<string, Set<Listener>>>(new Map());
+  const nextTokenId = useRef(0);
 
   const notify = useCallback((key: string) => {
     const listeners = listenersRef.current.get(key);
@@ -40,23 +61,40 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
     for (const listener of listeners) listener();
   }, []);
 
+  const createToken = useCallback(() => ({ id: nextTokenId.current++ }), []);
+
   const register = useCallback(
-    (key: string, el: HTMLElement | null) => {
-      outletsRef.current.set(key, el);
+    (key: string, token: OutletToken, el: HTMLElement | null) => {
+      const list = outletsRef.current.get(key) ?? [];
+      const next = list.filter((r) => r.token !== token);
+      if (el) next.push({ token, el });
+      if (next.length > 0) outletsRef.current.set(key, next);
+      else outletsRef.current.delete(key);
       notify(key);
     },
     [notify],
   );
 
   const unregister = useCallback(
-    (key: string) => {
-      outletsRef.current.delete(key);
+    (key: string, token: OutletToken) => {
+      const list = outletsRef.current.get(key);
+      if (!list) return;
+      const next = list.filter((r) => r.token !== token);
+      if (next.length === list.length) return;
+      // Only clear the key once no live instance still claims it.
+      if (next.length > 0) outletsRef.current.set(key, next);
+      else outletsRef.current.delete(key);
       notify(key);
     },
     [notify],
   );
 
-  const getOutlet = useCallback((key: string) => outletsRef.current.get(key) ?? null, []);
+  // Most recently registered live entry wins.
+  const getOutlet = useCallback((key: string) => {
+    const list = outletsRef.current.get(key);
+    if (!list || list.length === 0) return null;
+    return list[list.length - 1]?.el ?? null;
+  }, []);
 
   const subscribe = useCallback((key: string, listener: Listener) => {
     let listeners = listenersRef.current.get(key);
@@ -72,8 +110,8 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<RegistryValue>(
-    () => ({ register, unregister, getOutlet, subscribe }),
-    [register, unregister, getOutlet, subscribe],
+    () => ({ createToken, register, unregister, getOutlet, subscribe }),
+    [createToken, register, unregister, getOutlet, subscribe],
   );
 
   return (
@@ -99,14 +137,17 @@ function useRegistry(): RegistryValue {
  * stays mounted elsewhere (see PaneHostLayer), it just loses its visible home.
  */
 export function PaneOutlet({ paneKey }: { paneKey: string }) {
-  const { register, unregister } = useRegistry();
+  const { createToken, register, unregister } = useRegistry();
+  const tokenRef = useRef<OutletToken | null>(null);
+  if (tokenRef.current === null) tokenRef.current = createToken();
+  const token = tokenRef.current;
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
-      if (el) register(paneKey, el);
-      else unregister(paneKey);
+      if (el) register(paneKey, token, el);
+      else unregister(paneKey, token);
     },
-    [paneKey, register, unregister],
+    [paneKey, token, register, unregister],
   );
 
   // MUST be a flex column container, not a plain block. Every pane root that
@@ -151,14 +192,17 @@ export const WORKSPACE_CANVAS_TOOLBAR_KEY = "workspace-canvas-toolbar";
  * stretched to 100%/100% like `PaneOutlet`.
  */
 export function ToolbarOutlet({ paneKey }: { paneKey: string }) {
-  const { register, unregister } = useRegistry();
+  const { createToken, register, unregister } = useRegistry();
+  const tokenRef = useRef<OutletToken | null>(null);
+  if (tokenRef.current === null) tokenRef.current = createToken();
+  const token = tokenRef.current;
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
-      if (el) register(paneKey, el);
-      else unregister(paneKey);
+      if (el) register(paneKey, token, el);
+      else unregister(paneKey, token);
     },
-    [paneKey, register, unregister],
+    [paneKey, token, register, unregister],
   );
 
   return (
