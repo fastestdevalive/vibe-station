@@ -181,6 +181,43 @@ function ThinkingHint() {
   );
 }
 
+/** Milliseconds each dot-count step of `WorkingIndicator` is shown. */
+const WORKING_INDICATOR_STEP_MS = 450;
+
+/** Persistent "agent is working" affordance pinned as the LAST item in the
+ *  feed while a turn is active — the footer `StatusBar` spinner (near Stop)
+ *  is easy to miss when scrolled up or glancing away from the composer; this
+ *  is the same `turnActive` signal, just anchored where the eye actually
+ *  lands. Dot COUNT cycles 1 → 2 → 3 → 1 (not a spinner) — only mounted
+ *  while busy (see call site), so the interval's lifetime is the busy
+ *  window, no separate start/stop wiring needed. */
+function WorkingIndicator() {
+  const [count, setCount] = useState(1);
+  useEffect(() => {
+    // Respect the same reduced-motion convention as `.chat-thinking-hint__dot`
+    // (chat.css) — that one is stoppable via a CSS media query since its
+    // motion is CSS-driven; this one's motion is a JS interval, so it needs
+    // its own explicit check to honor the same opt-out.
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const id = window.setInterval(() => {
+      setCount((c) => (c >= 3 ? 1 : c + 1));
+    }, WORKING_INDICATOR_STEP_MS);
+    return () => window.clearInterval(id);
+  }, []);
+  return (
+    <div className="chat-working-indicator" role="status" aria-live="polite" aria-label="Agent is working">
+      <span className="chat-working-indicator__dots" aria-hidden>
+        {[1, 2, 3].map((n) => (
+          <span
+            key={n}
+            className={`chat-working-indicator__dot${n <= count ? " chat-working-indicator__dot--on" : ""}`}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
+
 /** Loaded-turn count above which the "load all" escape hatch warns (R2.5). */
 const LOAD_ALL_WARN_TURNS = 200;
 
@@ -243,10 +280,48 @@ export function MessageList({
     return mergeToolRuns(filtered);
   }, [grouped, hiddenTurnIds]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [items.length, pending.length, thinking]);
+    // `turnActive` here so the new WorkingIndicator's own appear/disappear
+    // (it changes the feed's content height) re-triggers the scroll too.
+  }, [items.length, pending.length, thinking, turnActive]);
+
+  // Re-scroll to bottom when the SCROLL CONTAINER's own height changes (e.g.
+  // the footer below it grows/shrinks — composer auto-grow, StatusBar
+  // wrapping) — but only if the user is CURRENTLY near the bottom, so a
+  // growing footer never fights someone reading scrolled-up history.
+  // `.chat-message-list` (this component's root, via `listRef`) is unscrolled
+  // content; its parent is the `overflow-y: auto` element (`.chat-pane__body`,
+  // owned by `ChatPane.tsx`). Scoped via DOM traversal from this instance's
+  // own root rather than a global selector, since multiple chat panes can be
+  // mounted at once (canvas/workspace mode).
+  //
+  // Distance-to-bottom is computed FRESH inside the ResizeObserver callback,
+  // not cached from a scroll listener: streaming tokens into an existing
+  // assistant bubble grows content without moving `scrollTop` and without
+  // firing a `scroll` event, so a cached flag can go stale-true while the
+  // user has silently drifted away from the bottom — the observer callback
+  // always runs with current layout, so this read is free and always correct.
+  useEffect(() => {
+    const container = listRef.current?.parentElement;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      if (distance < 80) {
+        // Not `bottomRef.current.scrollIntoView(...)`: that walks EVERY
+        // scrollable ancestor (including `overflow: hidden` boxes, which are
+        // still programmatically scrollable), so an unrelated resize (a
+        // workspace-canvas divider drag, a sidebar collapse) could nudge
+        // ancestor scroll positions too. Scrolling just this one container
+        // keeps the effect local to the chat pane.
+        container.scrollTop = container.scrollHeight;
+      }
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
 
   // Anchor the thinking hint under the latest user message. When an optimistic
   // (non-queued) pending bubble exists, the newest user message is that pending
@@ -268,7 +343,7 @@ export function MessageList({
   }, [events]);
 
   return (
-    <div className="chat-message-list" role="log" aria-label="Conversation">
+    <div ref={listRef} className="chat-message-list" role="log" aria-label="Conversation">
       {hasMore && onLoadEarlier ? (
         <div className="chat-load-earlier">
           <button
@@ -386,6 +461,11 @@ export function MessageList({
       ))}
 
       {hintAfterPending ? <ThinkingHint /> : null}
+
+      {/* Not during `thinking`: `ThinkingHint` already anchors a "Thinking…"
+          affordance above for that sub-state — showing both at once would be
+          two competing busy indicators on screen simultaneously. */}
+      {turnActive && !thinking ? <WorkingIndicator /> : null}
 
       <div ref={bottomRef} />
     </div>
