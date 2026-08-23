@@ -382,7 +382,7 @@ export function TopBar({
                 disabled={paneLayoutMode === "workspace"}
                 title={
                   paneLayoutMode === "workspace"
-                    ? "Not applicable in canvas mode — every terminal is its own tile (use Add tile)"
+                    ? "Not applicable in canvas mode — every terminal is its own tile (use Windows)"
                     : `Toggle terminal dock (${hints.terminal})`
                 }
                 onClick={toggleTerminalDock}

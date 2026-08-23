@@ -302,8 +302,15 @@ export function Layout({
     </div>
   );
 
+  // Classic-mode-only — matching `mainColumnInner`'s own condition above, not
+  // just `paneLayoutMode`, since a direct-session route can have
+  // `paneLayoutMode === "workspace"` with no `workspaceCanvas` (falls back to
+  // the classic column there too). In workspace/canvas mode the canvas tile
+  // owns the `tools:<worktreeId>` pane; rendering this overlay too would
+  // mount a second outlet for the same pane key and leave one of them an
+  // empty ghost window.
   const fullscreenOverlay =
-    paneFullscreen === "tools" && hasToolPanel ? (
+    !(paneLayoutMode === "workspace" && workspaceCanvas != null) && paneFullscreen === "tools" && hasToolPanel ? (
       <div className="pane-viewport-fullscreen" key="viewport-fs-tools">
         {wrap(toolPanel, "viewport")}
       </div>
