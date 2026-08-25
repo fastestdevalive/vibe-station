@@ -9,8 +9,32 @@ body,
 #root {
   margin: 0;
   padding: 0;
+  /* `height: 100%` on the root resolves against the INITIAL CONTAINING BLOCK,
+     which mobile browsers size as the LARGE viewport (URL bar retracted).
+     With the URL bar showing, the shell is therefore ~50-100px TALLER than
+     the actually-visible area, and its bottom edge — including
+     AgentPaneSlot's 2px status border (chat.css), which sits flush against
+     the shell's outer edge with zero margin — falls below the fold and needs
+     a small scroll to reveal. `100dvh` tracks the DYNAMIC viewport, so the
+     shell always matches what's visible. `100%` stays first as the fallback
+     for engines without `dvh`. App.tsx's login shells already size
+     themselves with `100dvh`; the authed workspace path was the gap.
+     Note this does NOT regress the soft-keyboard reflow documented in
+     index.html: `interactive-widget=resizes-content` shrinks the ICB, and
+     `dvh` is defined in terms of that same viewport, so it follows suit. */
   height: 100%;
+  height: 100dvh;
   width: 100%;
+}
+
+/* The shell is definitionally viewport-sized — every route is a flex column
+   with `min-height: 0` and its own internal scrollers — so nothing should
+   ever scroll at the document level. Pinning that down makes the "bottom of
+   the pane is hidden until you scroll" symptom structurally impossible
+   rather than merely unlikely (e.g. iOS rubber-banding). */
+html,
+body {
+  overflow: hidden;
 }
 
 body {
