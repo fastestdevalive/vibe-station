@@ -21,14 +21,21 @@ function fmt(n: number): string {
 
 const BUSY_STATES: TurnState[] = ["thinking", "responding", "tool"];
 
-function turnLabel(state: TurnState | undefined, queue: number): string {
+/** Shared with `MessageList`'s `WorkingIndicator` (Decision 8) — one source of
+ *  truth for the turn-state label text instead of duplicating this switch.
+ *
+ *  The busy labels carry NO trailing "…": they render next to the
+ *  `WorkingIndicator`'s animated `•••`, so an ellipsis would read as "dots,
+ *  then more dots". The non-busy labels ("Ready" / "Queued (n)" / "Error")
+ *  never render beside the dots and are unaffected. */
+export function turnLabel(state: TurnState | undefined, queue: number): string {
   switch (state) {
     case "thinking":
-      return "Thinking…";
+      return "Thinking";
     case "responding":
-      return "Responding…";
+      return "Responding";
     case "tool":
-      return "Running tool…";
+      return "Running tool";
     case "queued":
       return `Queued (${queue})`;
     case "error":
@@ -100,11 +107,18 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: Stat
         {meta?.modeName ? <span className="chat-statusbar__mode">{meta.modeName}</span> : null}
       </div>
       <div className="chat-statusbar__turn">
-        <span className={`chat-statusbar__state chat-statusbar__state--${state ?? "idle"}`}>
-          {busy ? <span className="chat-spinner" aria-hidden /> : null}
-          {state === "error" ? <span aria-hidden>⚠ </span> : null}
-          {turnLabel(state, queue)}
-        </span>
+        {/* While busy, the SAME label already rides next to the in-feed
+         *  `WorkingIndicator`'s dots (Decision 8) — repeating it here, beside
+         *  the Stop button, is pure duplication, so the busy footer row is
+         *  just `[Stop]`. Non-busy states ("Ready" / "Queued (n)" / "Error")
+         *  have no in-feed counterpart and still render here. `error` is
+         *  never a busy state, so the ⚠ icon is unaffected. */}
+        {busy ? null : (
+          <span className={`chat-statusbar__state chat-statusbar__state--${state ?? "idle"}`}>
+            {state === "error" ? <span aria-hidden>⚠ </span> : null}
+            {turnLabel(state, queue)}
+          </span>
+        )}
         {busy && onStop ? (
           <button type="button" className="chat-statusbar__stop btn btn--secondary" onClick={onStop}>
             Stop

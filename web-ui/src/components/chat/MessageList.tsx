@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
@@ -12,7 +12,7 @@ import type { ToolCallEntry } from "./toolFormat";
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
   | { type: "assistant"; id: string; text: string; turnId?: string }
-  | { type: "thinking"; id: string; text: string; turnId?: string }
+  | { type: "thinking"; id: string; text: string; turnId?: string; startedTs: string; endedTs?: string }
   | ({ type: "tool" } & ToolCallEntry)
   | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
   | { type: "error"; id: string; text: string }
@@ -80,11 +80,36 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
   // A superseding (edited) `user` event carries the same turnId — keep the bubble
   // at its FIRST position but update to the LATEST text/attachments (A7).
   const userIndexByTurnId = new Map<string, number>();
+  // Same-turn thinking bursts merge into ONE RenderItem across intervening
+  // tool_use/tool_result (a turn can reason, call a tool, then keep
+  // reasoning about the result — that's still one logical "thinking" span
+  // from the user's perspective). The group is closed DETERMINISTICALLY
+  // inside this pure function — never by a later effect mutating the
+  // memoized result (see MessageList's primary render for why that would be
+  // unsound: it wouldn't survive the next `events` change, and it would
+  // never resolve for a cold-loaded/replayed transcript at all).
+  const thinkingOpenByTurnId = new Map<string, number>();
+  function closeOpenThinking(turnId: string | undefined, ts: string) {
+    if (!turnId) return;
+    const openIdx = thinkingOpenByTurnId.get(turnId);
+    const open = openIdx != null ? items[openIdx] : undefined;
+    if (open && open.type === "thinking" && !open.endedTs) open.endedTs = ts;
+    thinkingOpenByTurnId.delete(turnId);
+  }
 
   for (const ev of events) {
     // Guard: a superseded (forked-away) event never renders (R3.4). The daemon
     // already excludes these from replay; this is a belt-and-suspenders filter.
     if (ev.superseded) continue;
+    // Any event belonging to a DIFFERENT turn than a currently-open thinking
+    // group implies that prior turn's reasoning is over (turns are strictly
+    // sequential — one active turnId at a time per session) — close it before
+    // handling this event, regardless of this event's own kind.
+    if (ev.turnId) {
+      for (const openTurnId of thinkingOpenByTurnId.keys()) {
+        if (openTurnId !== ev.turnId) closeOpenThinking(openTurnId, ev.ts);
+      }
+    }
     switch (ev.kind) {
       case "user": {
         if (ev.turnId) {
@@ -112,6 +137,8 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       }
       case "text": {
+        // A real reply closes any open thinking group for this turn (Decision 3).
+        closeOpenThinking(ev.turnId, ev.ts);
         const last = items[items.length - 1];
         // Merge streaming deltas WITHIN a turn, but a new turn always starts a
         // fresh bubble — otherwise back-to-back replies (e.g. answers to several
@@ -124,11 +151,21 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       }
       case "thinking": {
-        const last = items[items.length - 1];
-        if (last && last.type === "thinking" && last.turnId === ev.turnId) {
-          last.text += ev.text ?? "";
+        // Empty/signature-only thinking events (no text) never open or append to
+        // a group — they carry no content or timing info, and letting them
+        // through would defeat the `mergeToolRuns` drop-rule below (an
+        // empty item that later gets text appended into it is no longer
+        // empty by the time that rule runs, breaking the tool-run merge).
+        if ((ev.text ?? "").trim().length === 0) break;
+        const openIdx = ev.turnId ? thinkingOpenByTurnId.get(ev.turnId) : undefined;
+        const open = openIdx != null ? items[openIdx] : undefined;
+        if (open && open.type === "thinking" && !open.endedTs) {
+          // Appends even across intervening tool_use/tool_result — those cases
+          // don't call closeOpenThinking, so the group stays open through them.
+          open.text += ev.text ?? "";
         } else {
-          items.push({ type: "thinking", id: ev.id, text: ev.text ?? "", turnId: ev.turnId });
+          items.push({ type: "thinking", id: ev.id, text: ev.text ?? "", turnId: ev.turnId, startedTs: ev.ts });
+          if (ev.turnId) thinkingOpenByTurnId.set(ev.turnId, items.length - 1);
         }
         break;
       }
@@ -149,6 +186,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       }
       case "error":
+        closeOpenThinking(ev.turnId, ev.ts);
         items.push({ type: "error", id: ev.id, text: ev.text ?? "" });
         break;
       case "status":
@@ -157,28 +195,25 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         // heartbeats (RA6 stops emitting these, but old transcripts persisted
         // "rate limit: unknown"/"allowed" noise) are filtered on render too so
         // history reads clean — real throttles (rejected/throttled/queued) show.
+        // The close call lives INSIDE this same condition, not unconditionally:
+        // a benign heartbeat carries no visible content, so closing the open
+        // thinking group on it would split one reasoning burst into
+        // "Thought for Xs" + a fresh "Thinking…" with nothing rendered in
+        // between to explain why — a real status (or any other event kind)
+        // still closes the group as before.
         if (ev.text && !isBenignRateLimit(ev.text)) {
+          closeOpenThinking(ev.turnId, ev.ts);
           items.push({ type: "status", id: ev.id, text: ev.text });
         }
         break;
       default:
-        // session_init / usage / result — not rendered as bubbles.
+        // session_init / usage / result — not rendered as bubbles, but a
+        // `result` event marks the turn as over, so close any open group.
+        closeOpenThinking(ev.turnId, ev.ts);
         break;
     }
   }
   return items;
-}
-
-/** A subtle "the agent is thinking on this point" affordance, anchored right
- *  below the most-recent user message (Change 3). Presence-only — the streaming
- *  ThinkingBlock renders the actual thinking content below it. */
-function ThinkingHint() {
-  return (
-    <div className="chat-thinking-hint" role="status" aria-live="polite">
-      <span className="chat-thinking-hint__dot" aria-hidden />
-      Thinking…
-    </div>
-  );
 }
 
 /** Milliseconds each dot-count step of `WorkingIndicator` is shown. */
@@ -191,13 +226,12 @@ const WORKING_INDICATOR_STEP_MS = 450;
  *  lands. Dot COUNT cycles 1 → 2 → 3 → 1 (not a spinner) — only mounted
  *  while busy (see call site), so the interval's lifetime is the busy
  *  window, no separate start/stop wiring needed. */
-function WorkingIndicator() {
+function WorkingIndicator({ label }: { label?: string }) {
   const [count, setCount] = useState(1);
   useEffect(() => {
-    // Respect the same reduced-motion convention as `.chat-thinking-hint__dot`
-    // (chat.css) — that one is stoppable via a CSS media query since its
-    // motion is CSS-driven; this one's motion is a JS interval, so it needs
-    // its own explicit check to honor the same opt-out.
+    // Explicit `prefers-reduced-motion` check: this dot-cycle's motion is a
+    // JS interval (not CSS-driven, so an `@media (prefers-reduced-motion)`
+    // rule alone can't stop it) — has to honor the opt-out itself.
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
     const id = window.setInterval(() => {
       setCount((c) => (c >= 3 ? 1 : c + 1));
@@ -205,7 +239,11 @@ function WorkingIndicator() {
     return () => window.clearInterval(id);
   }, []);
   return (
-    <div className="chat-working-indicator" role="status" aria-live="polite" aria-label="Agent is working">
+    // The accessible name tracks `label`: a STATIC name on a live-region root
+    // is what most assistive tech announces on change, which would suppress
+    // the actual (changing) "Thinking"/"Running tool" text entirely.
+    <div className="chat-working-indicator" role="status" aria-live="polite" aria-label={label ?? "Agent is working"}>
+      {label ? <span className="chat-working-indicator__label">{label}</span> : null}
       <span className="chat-working-indicator__dots" aria-hidden>
         {[1, 2, 3].map((n) => (
           <span
@@ -221,22 +259,40 @@ function WorkingIndicator() {
 /** Loaded-turn count above which the "load all" escape hatch warns (R2.5). */
 const LOAD_ALL_WARN_TURNS = 200;
 
+/** Distance (px) from the TOP of the scroll container within which scrolling
+ *  auto-triggers `onLoadEarlier` (infinite-scroll-upward). Deliberately the
+ *  same 80px scale as the near-BOTTOM guard used by the auto-scroll effects
+ *  below, so both edges feel symmetric. `onLoadAll` never auto-triggers — it
+ *  is a guarded escape hatch (R2.5) and stays manual-only. */
+const NEAR_TOP_PX = 80;
+
 interface MessageListProps {
   events: NormalizedEvent[];
   /** Optimistic user turns that are NOT queued (queued ones live in the tray). */
   pending: PendingTurn[];
   /** True while a turn is active — the trailing tool card shows a spinner. */
   turnActive?: boolean;
-  /** True while the active turn is in the pre-stream "thinking" state (Change 3). */
+  /** True while the active turn is in the pre-stream "thinking" state. No
+   *  longer drives any rendering choice directly (the old `ThinkingHint` that
+   *  consumed it as a boolean was removed) — kept only as a dependency of the
+   *  primary auto-scroll effect below, so a thinking↔responding/tool flip
+   *  still re-triggers that effect. */
   thinking?: boolean;
+  /** Turn-state label (e.g. "Thinking"/"Responding"/"Running tool" — no
+   *  trailing ellipsis; the animated dots carry the "in progress" sense) shown
+   *  next to the dots in the trailing `WorkingIndicator` (Decision 8) — computed
+   *  by `ChatPane` via the shared `turnLabel` export from `StatusBar.tsx`. */
+  workingLabel?: string;
   /** turnIds shown in the queued tray — filtered out of the inline chat log. */
   hiddenTurnIds?: ReadonlySet<string>;
   /** True when older history exists before the loaded window (R2.2). */
   hasMore?: boolean;
   /** True while a load-earlier / load-all fetch is in flight. */
   loadingEarlier?: boolean;
-  /** Fetch + prepend the previous keyset page. */
-  onLoadEarlier?: () => void;
+  /** Fetch + prepend the previous keyset page. May return a promise — when it
+   *  does, THAT promise (not the `loadingEarlier` prop's render transitions)
+   *  is what releases the internal prepend-pending state. */
+  onLoadEarlier?: () => void | Promise<void>;
   /** Guarded escape hatch: load the whole transcript. */
   onLoadAll?: () => void;
   onRetry?: () => void;
@@ -253,6 +309,7 @@ export function MessageList({
   pending,
   turnActive,
   thinking,
+  workingLabel,
   hiddenTurnIds,
   hasMore,
   loadingEarlier,
@@ -270,6 +327,17 @@ export function MessageList({
   // "answered" message (J6). Attachments/composer reuse the queued-turn editor.
   const canFork = !!onForkTurn && !!api && !!sessionId && !turnActive;
   const grouped = useMemo(() => groupEvents(events), [events]);
+  // The turnId of the turn that is actually running RIGHT NOW — the last
+  // event carrying one, since turns are strictly sequential (one active
+  // turnId at a time per session). Only meaningful while `turnActive`.
+  const activeTurnId = useMemo(() => {
+    if (!turnActive) return undefined;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const id = events[i]?.turnId;
+      if (id) return id;
+    }
+    return undefined;
+  }, [events, turnActive]);
   // Queued / editing user turns render in the tray above the composer, not in
   // the log. Filter after grouping so the A7 edited-turn dedupe still applies.
   const items = useMemo(() => {
@@ -281,12 +349,185 @@ export function MessageList({
   }, [grouped, hiddenTurnIds]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const prevPendingLenRef = useRef(pending.length);
+  // Whether the user is (or was, at last scroll) near the bottom of the
+  // scroll container — drives both the jump-to-bottom button's visibility
+  // AND the primary scroll effect's guard below. Initializes to `true`: no
+  // `scroll` event has fired at mount, and a fresh chat open should snap to
+  // the live edge like today's unconditional scroll did, not render at the
+  // top of history (that would be a mount-time regression).
+  const [atBottom, setAtBottom] = useState(true);
+  const atBottomRef = useRef(true);
 
+  // --- infinite-scroll-upward (auto "load earlier") state ---------------
+  // Set the moment a load-earlier is initiated (by the scroll trigger OR the
+  // manual button) and cleared once the prepended page has rendered. Doubles
+  // as the in-flight guard for the auto-trigger: a burst of scroll events
+  // near the top can't fan out into several overlapping fetches in the frames
+  // before the `loadingEarlier` prop has propagated back down from `useChat`.
+  const prependPendingRef = useRef(false);
+  // Whether we've observed `loadingEarlier` go true for the pending load —
+  // so a trigger the parent silently no-ops (no session / cursor) can't leave
+  // a scroll-restore armed against some unrelated later growth.
+  const sawLoadingRef = useRef(false);
+  // Identifies the CURRENT pending load, so a stale settle callback from an
+  // earlier (already-released) load can never release a later one.
+  const loadTokenRef = useRef(0);
+  // `scrollHeight` as of the END of the previous render, i.e. before the page
+  // about to be prepended exists. Re-captured on EVERY render (not once at
+  // trigger time) so height the feed gains at the BOTTOM while the fetch is in
+  // flight — streaming tokens, a growing tool card — is already folded in and
+  // never misattributed to the prepend. Same class of bug as the bottom-edge
+  // fix in this file: never restore from a stale measurement.
+  const prevScrollHeightRef = useRef(0);
+
+  /** Clear the pending-prepend state and re-anchor the read position: whatever
+   *  was on screen now sits `delta` px lower, so adding `delta` to `scrollTop`
+   *  leaves it pixel-identical. Applied in BOTH directions — a prepend can be
+   *  negative overall (a short page that also removes the `.chat-load-earlier`
+   *  row when `hasMore` flips false), and skipping those left the view shifted.
+   *
+   *  Known limit of measuring total `scrollHeight`: if a live bottom-edge
+   *  append (streaming tokens) commits in the SAME React batch as the prepend,
+   *  its height is folded into `delta` and the restore over-shifts by that
+   *  much. The per-render re-capture below keeps every OTHER frame of in-flight
+   *  bottom growth out of `delta`; isolating that single same-batch commit
+   *  would need per-item offset bookkeeping, which isn't worth it here. */
+  const releasePendingPrepend = useCallback(() => {
+    prependPendingRef.current = false;
+    sawLoadingRef.current = false;
+    const container = listRef.current?.parentElement;
+    if (!container) return;
+    const delta = container.scrollHeight - prevScrollHeightRef.current;
+    if (delta !== 0) container.scrollTop += delta;
+    prevScrollHeightRef.current = container.scrollHeight;
+  }, []);
+
+  const startLoadEarlier = useCallback(() => {
+    if (prependPendingRef.current || loadingEarlier || !hasMore || !onLoadEarlier) return;
+    prependPendingRef.current = true;
+    sawLoadingRef.current = false;
+    const token = ++loadTokenRef.current;
+    // Settlement is observed on the triggered call ITSELF, not inferred from
+    // the `loadingEarlier` prop's render transitions — a parent can
+    // legitimately never render `loadingEarlier === true` (it early-returns
+    // before flipping the flag when there's no session/cursor, throws first,
+    // or resolves fast enough that true→false coalesces into one `false`
+    // render). Any of those used to leave `prependPendingRef` set forever,
+    // which permanently disabled BOTH the primary auto-scroll effect and all
+    // further pagination for the rest of the session.
+    const settle = () => {
+      if (loadTokenRef.current !== token || !prependPendingRef.current) return;
+      // If the load DID render as in-flight, the guaranteed `loadingEarlier`
+      // false-edge commit owns the release (it lands with the prepended DOM);
+      // releasing here would race that commit.
+      if (sawLoadingRef.current) return;
+      releasePendingPrepend();
+    };
+    // `Promise.resolve` normalizes a `void`-returning parent too, so a silent
+    // no-op still settles (on the next microtask) instead of wedging.
+    Promise.resolve(onLoadEarlier()).then(settle, settle);
+  }, [hasMore, loadingEarlier, onLoadEarlier, releasePendingPrepend]);
+
+  // The scroll listener is registered ONCE (empty deps, passive) — read the
+  // current trigger through a ref instead of re-attaching on every prop change.
+  const startLoadEarlierRef = useRef(startLoadEarlier);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-    // `turnActive` here so the new WorkingIndicator's own appear/disappear
-    // (it changes the feed's content height) re-triggers the scroll too.
+    startLoadEarlierRef.current = startLoadEarlier;
+  }, [startLoadEarlier]);
+
+  // Track near-bottom state from real user scrolling. Recomputes `distance`
+  // fresh on every `scroll` event rather than trusting a cached flag from
+  // elsewhere — same rationale as the ResizeObserver path below. The same
+  // listener also drives the near-TOP auto-load of the previous keyset page.
+  useEffect(() => {
+    const container = listRef.current?.parentElement;
+    if (!container) return;
+    const onScroll = () => {
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      const near = distance < 80;
+      atBottomRef.current = near;
+      setAtBottom(near);
+      if (container.scrollTop < NEAR_TOP_PX) startLoadEarlierRef.current();
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // MUST be useLayoutEffect, not useEffect: this needs to read/write layout
+  // (scrollTop) before the browser paints the just-added content, so the
+  // user never sees a frame at the old scroll position for content that's
+  // about to be snapped to bottom.
+  //
+  // Guards on `atBottomRef.current` (captured from the LAST scroll event,
+  // i.e. before this render's DOM mutation) rather than a fresh post-render
+  // `distance` measurement: a single render that appends a lot of height (a
+  // large tool card, a batched token flush) could otherwise read distance
+  // >= 80 even though the user was following along right up to that append,
+  // silently dropping them out of follow-mode mid-stream. `own send` (the
+  // user's own optimistic bubble appearing, i.e. `pending.length` growing)
+  // always snaps regardless, so sending still feels immediate.
+  useLayoutEffect(() => {
+    const container = listRef.current?.parentElement;
+    const ownSend = pending.length > prevPendingLenRef.current;
+    prevPendingLenRef.current = pending.length;
+    if (!container) {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+      return;
+    }
+    // A render that lands a prepended "load earlier" page belongs to the
+    // scroll-restore effect below, which is the sole writer of `scrollTop`
+    // for it — snapping to the bottom here first would either fight that
+    // restore or overshoot past it. `ownSend` still wins: the user pressing
+    // send always jumps to their own message.
+    if (!ownSend && prependPendingRef.current) return;
+    if (ownSend || atBottomRef.current) {
+      container.scrollTop = container.scrollHeight;
+      // The scroll above doesn't fire a `scroll` event synchronously in every
+      // environment (and even where it does, staying pinned at the bottom
+      // should keep `atBottom` true regardless) — keep the tracked state in
+      // sync so the jump-to-bottom button doesn't flash on for a frame.
+      if (!atBottomRef.current) {
+        atBottomRef.current = true;
+        setAtBottom(true);
+      }
+    }
+    // `turnActive` here so the WorkingIndicator's own appear/disappear (it
+    // changes the feed's content height) re-triggers the scroll too.
   }, [items.length, pending.length, thinking, turnActive]);
+
+  // Scroll anchoring for prepended history. Declared AFTER the primary effect
+  // on purpose: layout effects run in declaration order, so this is the last
+  // writer of `scrollTop` for a prepend commit.
+  //
+  // MUST be useLayoutEffect: the shift has to be applied before the browser
+  // paints, otherwise the user sees one frame where the whole transcript has
+  // jumped down by the height of the newly prepended page — the classic
+  // infinite-scroll-upward jump.
+  //
+  // Runs on EVERY render (no dep array) because its other job is keeping
+  // `prevScrollHeightRef` current; the restore itself is gated on a pending
+  // load that has actually been observed in flight. The OTHER release path —
+  // for a load that never renders as in-flight — is the settle callback in
+  // `startLoadEarlier`, which calls the same `releasePendingPrepend`.
+  useLayoutEffect(() => {
+    const container = listRef.current?.parentElement;
+    if (!container) return;
+    if (loadingEarlier) {
+      sawLoadingRef.current = true;
+    } else if (prependPendingRef.current && sawLoadingRef.current) {
+      releasePendingPrepend(); // re-captures `prevScrollHeightRef` itself
+      return;
+    } else if (prependPendingRef.current) {
+      // A load is pending but this render is neither "in flight" nor its
+      // release — i.e. a page may already have landed while the parent never
+      // rendered `loadingEarlier === true`. Do NOT re-capture the height
+      // here: that would erase the pre-prepend measurement the settle
+      // callback is about to restore from.
+      return;
+    }
+    prevScrollHeightRef.current = container.scrollHeight;
+  });
 
   // Re-scroll to bottom when the SCROLL CONTAINER's own height changes (e.g.
   // the footer below it grows/shrinks — composer auto-grow, StatusBar
@@ -323,18 +564,6 @@ export function MessageList({
     return () => ro.disconnect();
   }, []);
 
-  // Anchor the thinking hint under the latest user message. When an optimistic
-  // (non-queued) pending bubble exists, the newest user message is that pending
-  // block, so the hint goes after it; otherwise after the last user item.
-  const lastUserIdx = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i]!.type === "user") return i;
-    }
-    return -1;
-  }, [items]);
-  const hintAfterPending = !!thinking && pending.length > 0;
-  const hintAfterItem = !!thinking && !hintAfterPending && lastUserIdx >= 0;
-
   // Distinct loaded turns — the "load all" hatch warns once the window is large.
   const loadedTurns = useMemo(() => {
     const ids = new Set<string>();
@@ -344,12 +573,21 @@ export function MessageList({
 
   return (
     <div ref={listRef} className="chat-message-list" role="log" aria-label="Conversation">
+      {/* Older history is loaded AUTOMATICALLY on scrolling near the top (see
+       *  the scroll listener above); this button is kept deliberately as a
+       *  manual fallback, not as the primary path. The auto-trigger rides on
+       *  `scroll` events, so it cannot fire in the two cases where there is
+       *  nothing to scroll: a loaded window shorter than the viewport, and a
+       *  container already pinned at scrollTop 0. It also doubles as the
+       *  top-of-list loading affordance (reusing this file's existing
+       *  "Loading…" convention) so an in-flight auto-load is visible.
+       *  "Load entire history" stays manual-only — R2.5 escape hatch. */}
       {hasMore && onLoadEarlier ? (
-        <div className="chat-load-earlier">
+        <div className="chat-load-earlier" aria-live="polite">
           <button
             type="button"
             className="chat-load-earlier__btn"
-            onClick={onLoadEarlier}
+            onClick={startLoadEarlier}
             disabled={loadingEarlier}
           >
             {loadingEarlier ? "Loading…" : "Load earlier messages"}
@@ -427,7 +665,21 @@ export function MessageList({
             node = <TextMessage key={key} role="assistant" text={item.text} />;
             break;
           case "thinking":
-            node = <ThinkingBlock key={key} text={item.text} />;
+            // A still-open thinking group renders NOTHING while the turn is
+            // active: its live header is always just "Thinking", which the
+            // trailing `WorkingIndicator`'s "Thinking •••" line already says.
+            // Once `groupEvents` closes the group the block appears in place
+            // (items never reorder) as "Thought for Xs", expandable to the
+            // accumulated reasoning. The second half of the gate compares
+            // against the CURRENTLY RUNNING turn, not the global `turnActive`
+            // flag: a group whose events carry no `turnId` (imported/resumed
+            // transcripts start with `currentTurnId: undefined`) can never be
+            // closed by `closeOpenThinking`, so gating on "any turn is
+            // active" hid such historical reasoning for the whole duration of
+            // every unrelated later turn.
+            node = item.endedTs || !turnActive || item.turnId !== activeTurnId ? (
+              <ThinkingBlock key={key} text={item.text} startedTs={item.startedTs} endedTs={item.endedTs} />
+            ) : null;
             break;
           case "toolRun":
             // "Live" means this run is the trailing item of an active turn —
@@ -449,9 +701,7 @@ export function MessageList({
           default:
             node = null;
         }
-        return hintAfterItem && i === lastUserIdx
-          ? [node, <ThinkingHint key={`${key}-thinking`} />]
-          : node;
+        return node;
       })}
 
       {pending.map((p) => (
@@ -460,14 +710,32 @@ export function MessageList({
         </div>
       ))}
 
-      {hintAfterPending ? <ThinkingHint /> : null}
-
-      {/* Not during `thinking`: `ThinkingHint` already anchors a "Thinking…"
-          affordance above for that sub-state — showing both at once would be
-          two competing busy indicators on screen simultaneously. */}
-      {turnActive && !thinking ? <WorkingIndicator /> : null}
+      {turnActive ? <WorkingIndicator label={workingLabel} /> : null}
 
       <div ref={bottomRef} />
+
+      {/* Floating jump-to-bottom affordance — only needed once the scroll
+       *  guard above can leave the user stranded above the live edge (Decision
+       *  5). Its containing block resolves to `.chat-pane__viewport` (the
+       *  non-scrolling wrapper around `.chat-pane__body`, see chat.css), so it
+       *  neither scrolls away with the content it lives in nor overlaps the
+       *  footer below the viewport. */}
+      {!atBottom ? (
+        <button
+          type="button"
+          className="chat-jump-to-bottom"
+          aria-label="Jump to latest message"
+          onClick={() => {
+            const container = listRef.current?.parentElement;
+            if (!container) return;
+            container.scrollTop = container.scrollHeight;
+            atBottomRef.current = true;
+            setAtBottom(true);
+          }}
+        >
+          ↓
+        </button>
+      ) : null}
     </div>
   );
 }

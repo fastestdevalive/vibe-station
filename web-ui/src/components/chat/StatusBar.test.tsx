@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@/api/types";
 import { createMockApi } from "@/api/mock";
-import { StatusBar } from "./StatusBar";
+import { StatusBar, turnLabel } from "./StatusBar";
 
 function meta(extra: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -67,10 +67,37 @@ describe("StatusBar (5.T2)", () => {
     expect(screen.getByText("Queued (2)")).toBeTruthy();
   });
 
-  it("shows a Stop button while a turn is active", () => {
-    render(<StatusBar meta={meta({ turnState: "responding" })} onStop={() => {}} />);
-    expect(screen.getByText("Responding…")).toBeTruthy();
+  it("shows a Stop button — and NO duplicate turn label — while a turn is active", () => {
+    const { container } = render(<StatusBar meta={meta({ turnState: "responding" })} onStop={() => {}} />);
     expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    // The label lives next to the in-feed WorkingIndicator's dots instead.
+    expect(screen.queryByText("Responding")).toBeNull();
+    expect(container.querySelector(".chat-statusbar__state")).toBeNull();
+  });
+
+  it("keeps the turn label for non-busy states (no in-feed indicator to duplicate)", () => {
+    const { container, rerender } = render(<StatusBar meta={meta({ turnState: "idle" })} onStop={() => {}} />);
+    expect(screen.getByText("Ready")).toBeTruthy();
+    rerender(<StatusBar meta={meta({ turnState: "error" })} onStop={() => {}} />);
+    expect(screen.getByText("Error")).toBeTruthy();
+    // error is never busy → the ⚠ icon is unaffected by the busy suppression.
+    expect(container.querySelector(".chat-statusbar__state--error")?.textContent).toContain("⚠");
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("3.T1 — no longer renders a circular spinner while busy (Decision 7 — replaced by the in-feed WorkingIndicator)", () => {
+    const { container } = render(<StatusBar meta={meta({ turnState: "responding" })} onStop={() => {}} />);
+    expect(container.querySelector(".chat-spinner")).toBeNull();
+  });
+
+  it("3.T1 — exported turnLabel() busy strings carry no trailing ellipsis (the WorkingIndicator's dots convey continuation)", () => {
+    expect(turnLabel("thinking", 0)).toBe("Thinking");
+    expect(turnLabel("responding", 0)).toBe("Responding");
+    expect(turnLabel("tool", 0)).toBe("Running tool");
+    expect(turnLabel("queued", 3)).toBe("Queued (3)");
+    expect(turnLabel("error", 0)).toBe("Error");
+    expect(turnLabel("idle", 0)).toBe("Ready");
+    expect(turnLabel(undefined, 0)).toBe("Ready");
   });
 
   it("renders the model switcher when api + sessionId are provided", () => {
