@@ -94,6 +94,60 @@ describe("Composer draft persistence (RA1)", () => {
   });
 });
 
+describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw busy)", () => {
+  it("4.T1 — busy=true, empty box → Stop button renders (the one real busy-with-nothing-to-send case)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-busy-empty" onSend={vi.fn()} busy onStop={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy();
+    expect(screen.queryByLabelText("Send message")).toBeNull();
+    expect(screen.queryByLabelText(/queues after current turn/i)).toBeNull();
+  });
+
+  it("4.T2 — busy=true, text ready → Send (queue variant) renders instead of Stop, and clicking it calls onSend", async () => {
+    const api = createMockApi();
+    const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
+    render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+    const button = screen.getByLabelText("Send message (queues after current turn)");
+    expect(button.className).toContain("chat-composer__send--queue");
+    fireEvent.click(button);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("follow-up", []));
+  });
+
+  it("4.T2b — a busy send that clears the box does NOT flip the button to Stop at the same position", async () => {
+    const api = createMockApi();
+    const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
+    render(<Composer api={api} sessionId="s-busy-swap" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
+    fireEvent.click(screen.getByLabelText("Send message (queues after current turn)"));
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    // Box is now empty and the turn is still busy — the hazard window. The
+    // button must stay Send (disabled), never Stop, so an impatient second
+    // click can't abort the running turn.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Send message (queues after current turn)") as HTMLButtonElement).disabled).toBe(true),
+    );
+    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
+    // Once the settle window elapses, Stop becomes reachable again.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy(), { timeout: 2000 });
+  });
+
+  it("4.T3 — busy=false, text ready → plain Send renders (no queue class)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-idle-text" onSend={vi.fn()} initialText="hello" />);
+    const button = screen.getByLabelText("Send message");
+    expect(button.className).not.toContain("chat-composer__send--queue");
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("4.T4 — regression: busy=false, empty box → Send renders disabled (unchanged existing behavior)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-idle-empty" onSend={vi.fn()} />);
+    const button = screen.getByLabelText("Send message") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.className).not.toContain("chat-composer__send--queue");
+  });
+});
+
 describe("Composer textarea auto-grow", () => {
   // jsdom has no real layout, so `scrollHeight` is stubbed per-assertion.
   // `getComputedStyle`'s line-height/padding/border resolve to jsdom's UA

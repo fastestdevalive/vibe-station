@@ -2,11 +2,23 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { render, screen, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi } from "@/api/mock";
 import type { NormalizedEvent, Session, SessionMeta } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { MessageList } from "@/components/chat/MessageList";
 import { ChatPane } from "./ChatPane";
+
+// Wraps the REAL MessageList (delegates every call to it, via importOriginal)
+// so the rest of this file's tests keep exercising real rendering — the mock
+// only adds the ability to inspect the exact props ChatPane passed on each
+// render, which is otherwise unobservable (1.T7 needs to assert the debounced
+// `thinking` prop's value across renders, not anything visibly different in
+// the DOM).
+vi.mock("@/components/chat/MessageList", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/chat/MessageList")>();
+  return { ...actual, MessageList: vi.fn(actual.MessageList) };
+});
 
 function meta(sessionId: string, extra: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -145,5 +157,63 @@ describe("ChatPane (4.T2)", () => {
     expect(
       screen.queryByText("This session has been archived. Start a new agent to continue."),
     ).toBeNull();
+  });
+});
+
+describe("ChatPane thinking-state debounce (1.T7 — Decision 2 anti-flicker)", () => {
+  it("does not flip the debounced `thinking` prop false during rapid turnState oscillation, but commits once a value holds past 250ms", () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockApi();
+      // Needs at least one event so ChatPane's `isEmpty` branch doesn't render
+      // the empty-state placeholder INSTEAD of MessageList — otherwise MessageList
+      // never mounts for this session and there's nothing to inspect props on.
+      api.__test.pushChatEvent("js-debounce", ev("u1", { kind: "user", role: "user", text: "hi", turnId: "t1" }));
+      render(<ChatPane api={api} session={jsonSession("js-debounce")} visible />);
+      const mockedMessageList = MessageList as unknown as Mock;
+      mockedMessageList.mockClear();
+
+      // Settle into a steady "thinking" state first (past the debounce window).
+      act(() => {
+        api.__test.emit({
+          type: "session:meta",
+          sessionId: "js-debounce",
+          meta: meta("js-debounce", { turnState: "thinking" }),
+        });
+      });
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(mockedMessageList.mock.calls.at(-1)![0].thinking).toBe(true);
+
+      // Rapidly oscillate thinking -> tool -> thinking -> tool, each change
+      // arriving well inside the 250ms debounce window (it resets on every
+      // `meta?.turnState` change) — the displayed `thinking` prop must stay
+      // true (its last COMMITTED value) throughout, never dropping to false.
+      mockedMessageList.mockClear();
+      const states: SessionMeta["turnState"][] = ["tool", "thinking", "tool"];
+      for (const turnState of states) {
+        act(() => {
+          api.__test.emit({ type: "session:meta", sessionId: "js-debounce", meta: meta("js-debounce", { turnState }) });
+        });
+        act(() => {
+          vi.advanceTimersByTime(80); // < 250ms — debounce timer keeps resetting
+        });
+      }
+      const thinkingPropsDuringOscillation = mockedMessageList.mock.calls.map((c) => c[0].thinking);
+      // Guard against a vacuous pass: this assertion is meaningless if the
+      // mock never actually re-rendered during the oscillation.
+      expect(thinkingPropsDuringOscillation.length).toBeGreaterThan(0);
+      expect(thinkingPropsDuringOscillation.every((t) => t === true)).toBe(true);
+
+      // Now let the final value ("tool") hold past the debounce window with no
+      // further change — it DOES commit, and `thinking` flips to false.
+      act(() => {
+        vi.advanceTimersByTime(250);
+      });
+      expect(mockedMessageList.mock.calls.at(-1)![0].thinking).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

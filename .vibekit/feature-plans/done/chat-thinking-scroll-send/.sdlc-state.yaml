@@ -1,0 +1,19 @@
+feature: chat-thinking-scroll-send
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-55
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "post-review fix pass: 8/8 findings resolved"
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null

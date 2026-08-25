@@ -168,6 +168,23 @@
   display: none;
 }
 
+/* Non-scrolling wrapper around the scroll viewport. Its box is exactly the
+   visible message area (footer excluded), and it is the positioned ancestor
+   for the floating jump-to-bottom button — see that rule below for why the
+   button can be anchored neither to `.chat-pane` (includes the footer) nor to
+   `.chat-pane__body` itself (an abspos child of a scroller scrolls with it).
+   Note the button is the ONLY thing this affects: the `.channel-toggle-button`
+   overlay is declared inside `.chat-pane__footer`, a SIBLING of this wrapper,
+   so it still resolves to `.chat-pane` and keeps its whole-pane top-right
+   corner. */
+.chat-pane__viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .chat-pane__body {
   flex: 1;
   min-height: 0;
@@ -206,6 +223,40 @@
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
+}
+
+/* Floating jump-to-bottom button (Decision 5). `position: absolute` here
+   resolves its containing block to `.chat-pane__viewport` — the non-scrolling
+   wrapper whose box IS the scroll viewport — even though the button is
+   rendered as a child of `.chat-message-list` inside the scroll container.
+   That gives both properties at once, which neither alternative does:
+   `.chat-pane__body` (the scroller) can't be the containing block because an
+   abspos child of a scroll container scrolls away with its content, and
+   `.chat-pane` can't be it because that box INCLUDES the footer (queued tray +
+   status bar + auto-growing composer), so any fixed `bottom` offset is a guess
+   that a tall footer overlaps. Anchored to the viewport, a plain small offset
+   sits just above the footer at every footer height. */
+.chat-jump-to-bottom {
+  position: absolute;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  z-index: 5;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  border: var(--border-width) solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-base);
+  line-height: 1;
+  box-shadow: var(--shadow-md);
+}
+.chat-jump-to-bottom:hover {
+  background: var(--bg-hover);
 }
 
 .chat-msg {
@@ -366,7 +417,6 @@
   margin-left: var(--space-1);
   opacity: 0.85;
 }
-
 /* ── Tool cards ───────────────────────────────────────────────────────────── */
 
 .chat-tool-card {
@@ -633,6 +683,11 @@
   padding: var(--space-2) var(--space-3);
   border-top: var(--border-width) solid var(--border-subtle);
 }
+/* The tray renders first in the footer, which already draws its own top border —
+   suppress the tray's so the two don't stack into a double rule. */
+.chat-pane__footer > .chat-queued-tray:first-child {
+  border-top: none;
+}
 .chat-queued-tray__row {
   display: flex;
   align-items: center;
@@ -698,48 +753,35 @@
   font-style: italic;
 }
 
-/* ── Thinking hint (anchored under the latest user message) ────────────────── */
-
-.chat-thinking-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  align-self: flex-start;
-  font-size: var(--font-size-sm);
-  color: var(--fg-muted);
-  font-style: italic;
-  line-height: 1;
-}
-.chat-thinking-hint__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--chat-accent);
-  animation: chat-thinking-pulse 1.1s ease-in-out infinite;
-}
-@keyframes chat-thinking-pulse {
-  0%, 100% { opacity: 0.3; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.2); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-thinking-hint__dot { animation: none; }
-}
-
 /* ── Persistent working indicator (last item in the feed while busy) ───────── */
 
 .chat-working-indicator {
   display: flex;
   align-self: flex-start;
   padding: var(--space-1) 0;
+  gap: var(--space-1);
+  /* Bottom/baseline-align the label text with the dots, NOT center — fallback
+     FIRST, enhancement LAST: the cascade means the LAST valid declaration for
+     a property wins, so the fallback must precede the preferred value, not
+     follow it (reversing this order would make `last baseline` dead code
+     even on browsers that support it, since the later `baseline` line would
+     always win back over it). */
+  align-items: baseline;      /* fallback: applied first, then overridden below where supported */
+  align-items: last baseline; /* wins on browsers that support it — must be the LAST declaration */
+}
+.chat-working-indicator__label {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  font-style: italic;
 }
 .chat-working-indicator__dots {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
 }
 .chat-working-indicator__dot {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: var(--chat-accent);
   opacity: 0.15;
@@ -910,8 +952,8 @@
   flex-shrink: 0;
 }
 .chat-statusbar__state {
-  /* Bare inline span otherwise — flexbox centers the spinner against the label
-     instead of dropping it to the text baseline. */
+  /* Text-only since the spinner moved out of this span; the flex box keeps it
+     vertically centered against its siblings (Stop button, queue depth). */
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
@@ -1003,6 +1045,20 @@
   border-color: var(--chat-accent);
 }
 .chat-composer__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* "Will queue" variant (Decision 9): busy + canSend — clicking enqueues a
+   follow-up turn rather than sending immediately. Visually distinct from the
+   solid-accent idle Send (dashed border, muted fill) so it doesn't read as
+   "sends right now". */
+.chat-composer__send--queue {
+  background: var(--bg-elevated);
+  color: var(--chat-accent);
+  border-style: dashed;
+  border-color: var(--chat-accent);
+}
+.chat-composer__send--queue:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
