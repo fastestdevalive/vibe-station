@@ -167,7 +167,8 @@ export interface AgentPlugin {
   refreshChatIdOnToggle?(args: {
     session: SessionRecord;
     project: ProjectRecord;
-    worktree: WorktreeRecord;
+    /** Undefined for a direct (non-worktree) session. */
+    worktree?: WorktreeRecord;
   }): Promise<string | null>;
   /**
    * Return the list of models available for this CLI.

@@ -61,11 +61,17 @@ describe("TerminalChannelToggle (terminal→JSON)", () => {
     expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
   });
 
-  it("hides for a direct (non-worktree) session", () => {
+  it("shows for a direct (non-worktree) session — the daemon supports the toggle for direct sessions too", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "setSessionChannel");
     render(
-      <TerminalChannelToggle api={createMockApi()} session={session({ worktreeId: null })} />,
+      <TerminalChannelToggle api={api} session={session({ worktreeId: null })} />,
     );
-    expect(screen.queryByRole("button", { name: /Rich Chat/i })).toBeNull();
+
+    const toggle = await screen.findByRole("button", { name: /Rich Chat/i });
+    await userEvent.click(toggle);
+    await userEvent.click(screen.getByRole("button", { name: /Switch to Rich Chat/i }));
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("sess-main", "json"));
   });
 
   it("hides when the session is already on the JSON channel", () => {
