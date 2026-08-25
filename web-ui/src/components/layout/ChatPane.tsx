@@ -92,6 +92,24 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // display state flickers the thinking-block/WorkingIndicator affordance.
   // `turnActive` above stays RAW/instant — Composer's busy/Stop gating must
   // never lag behind the real state.
+  // Mirrored up from `MessageList` (which stays the owner of the scroll
+  // measurement) purely so the footer `StatusBar` knows whether the in-feed
+  // working indicator is visible. Defaults to `true`, matching MessageList's
+  // own initial value, so no dots flash before the first scroll event.
+  const [atBottom, setAtBottom] = useState(true);
+  // `ChatPane` is NOT re-keyed per session — this one instance survives a pane
+  // hide (`enabled` flips), a channel toggle and a session switch, while the
+  // `MessageList` below fully unmounts/remounts across all three (the
+  // loading/isEmpty/!enabled branches). Its own `atBottom` resets to `true` on
+  // that remount, but this mirrored copy is only ever written by
+  // `onAtBottomChange`, which by design doesn't fire until a real scroll
+  // happens — so without this reset the footer could keep showing (or keep
+  // hiding) the busy dots based on the PREVIOUS conversation's scroll
+  // position, with no way to self-correct if the new transcript is shorter
+  // than the viewport.
+  useEffect(() => {
+    setAtBottom(true);
+  }, [sessionId, enabled]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
   useEffect(() => {
     const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
@@ -244,6 +262,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
               api={api}
               {...(sessionId ? { sessionId } : {})}
               onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
+              onAtBottomChange={setAtBottom}
             />
           )}
         </div>
@@ -266,6 +285,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
         <StatusBar
           meta={meta}
           queueDepth={trayRows.length}
+          atBottom={atBottom}
           onStop={() => void stop()}
           api={api}
           {...(sessionId ? { sessionId } : {})}

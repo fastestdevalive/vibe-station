@@ -7,12 +7,32 @@ import { QueuedTurnEditor } from "./QueuedTurnEditor";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
+import { WorkingDots } from "./WorkingDots";
 import type { ToolCallEntry } from "./toolFormat";
 
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
   | { type: "assistant"; id: string; text: string; turnId?: string }
-  | { type: "thinking"; id: string; text: string; turnId?: string; startedTs: string; endedTs?: string }
+  | {
+      type: "thinking";
+      id: string;
+      text: string;
+      turnId?: string;
+      startedTs: string;
+      endedTs?: string;
+      /** True when at least one tool call happened while this group was open —
+       *  the completed label then reads "Worked for Xs" instead of "Thought
+       *  for Xs", since the span covered real work, not just reasoning. */
+      hadToolCall?: boolean;
+      /** Whether this group is still empty AT THE POSITION IT OCCUPIES —
+       *  set at push time, and cleared only by an append that lands while the
+       *  group is still the trailing item (so its position is honest).
+       *  `mergeToolRuns` drops such groups between tool calls, so an empty blip
+       *  never fragments one logical tool run. Testing the item's current text
+       *  at merge time instead would let text appended after an intervening
+       *  tool call resurrect the group at its stale, too-early position. */
+      openedEmpty: boolean;
+    }
   | ({ type: "tool" } & ToolCallEntry)
   | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
   | { type: "error"; id: string; text: string }
@@ -31,7 +51,11 @@ type RenderItem =
  * signature-only reasoning block, common between near-every tool call in
  * some sessions) carries no information, so it's transparent to an
  * in-progress run: it's dropped rather than splitting one logical burst of
- * tool calls into several single-tool runs.
+ * tool calls into several single-tool runs. The drop tests `openedEmpty`
+ * (emptiness AT CREATION, see the RenderItem field) rather than the item's
+ * current text: `groupEvents` can append later text into a group that was
+ * empty when it took its position, and dropping THAT would render real,
+ * late-arriving reasoning at a stale, too-early spot in the transcript.
  */
 export function mergeToolRuns(items: RenderItem[]): RenderItem[] {
   const out: RenderItem[] = [];
@@ -42,7 +66,7 @@ export function mergeToolRuns(items: RenderItem[]): RenderItem[] {
     run = [];
   };
   for (const item of items) {
-    if (item.type === "thinking" && item.text.trim().length === 0 && run.length > 0) {
+    if (item.type === "thinking" && item.openedEmpty && run.length > 0) {
       continue;
     }
     // A run never spans a turn boundary — two tool calls from different
@@ -95,6 +119,15 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
     const open = openIdx != null ? items[openIdx] : undefined;
     if (open && open.type === "thinking" && !open.endedTs) open.endedTs = ts;
     thinkingOpenByTurnId.delete(turnId);
+  }
+  /** Pure bookkeeping: mark the still-open thinking group of `turnId` (if any)
+   *  as having spanned a tool call. Never touches control flow — tool events
+   *  deliberately do NOT close the group (see the thinking case). */
+  function markToolCallDuringThinking(turnId: string | undefined) {
+    if (!turnId) return;
+    const openIdx = thinkingOpenByTurnId.get(turnId);
+    const open = openIdx != null ? items[openIdx] : undefined;
+    if (open && open.type === "thinking" && !open.endedTs) open.hadToolCall = true;
   }
 
   for (const ev of events) {
@@ -151,30 +184,56 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         break;
       }
       case "thinking": {
-        // Empty/signature-only thinking events (no text) never open or append to
-        // a group — they carry no content or timing info, and letting them
-        // through would defeat the `mergeToolRuns` drop-rule below (an
-        // empty item that later gets text appended into it is no longer
-        // empty by the time that rule runs, breaking the tool-run merge).
-        if ((ev.text ?? "").trim().length === 0) break;
+        // Empty/signature-only thinking events (no text) DO open a group: they
+        // are the common case for real Claude reasoning, and dropping them here
+        // meant "Thought for Xs" never rendered for such a turn at all
+        // (`ThinkingBlock`'s static, non-expandable branch was unreachable).
+        // The noisy case — an empty blip sitting between two tool calls, which
+        // would otherwise fragment one logical tool run — is already handled
+        // downstream by `mergeToolRuns`' drop-rule above.
         const openIdx = ev.turnId ? thinkingOpenByTurnId.get(ev.turnId) : undefined;
         const open = openIdx != null ? items[openIdx] : undefined;
-        if (open && open.type === "thinking" && !open.endedTs) {
+        const incoming = ev.text ?? "";
+        // Real text arriving into a group that opened EMPTY and no longer sits
+        // at the end of the feed (a tool call has rendered since) must NOT be
+        // appended: that group's position is stale, so the reasoning would show
+        // up EARLIER than it was actually emitted — and, being empty at
+        // creation, it may also be dropped outright by `mergeToolRuns`. Start a
+        // fresh group at the current position instead. The abandoned empty
+        // placeholder is either merged away between tool calls or hidden by the
+        // render gate (empty + never closed → nothing to show).
+        const staleEmptyGroup =
+          open != null &&
+          open.type === "thinking" &&
+          open.openedEmpty &&
+          incoming.trim().length > 0 &&
+          openIdx !== items.length - 1;
+        if (open && open.type === "thinking" && !open.endedTs && !staleEmptyGroup) {
           // Appends even across intervening tool_use/tool_result — those cases
           // don't call closeOpenThinking, so the group stays open through them.
-          open.text += ev.text ?? "";
+          open.text += incoming;
+          if (open.openedEmpty && open.text.trim().length > 0) open.openedEmpty = false;
         } else {
-          items.push({ type: "thinking", id: ev.id, text: ev.text ?? "", turnId: ev.turnId, startedTs: ev.ts });
+          items.push({
+            type: "thinking",
+            id: ev.id,
+            text: incoming,
+            turnId: ev.turnId,
+            startedTs: ev.ts,
+            openedEmpty: incoming.trim().length === 0,
+          });
           if (ev.turnId) thinkingOpenByTurnId.set(ev.turnId, items.length - 1);
         }
         break;
       }
       case "tool_use": {
+        markToolCallDuringThinking(ev.turnId);
         items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", toolInput: ev.toolInput, turnId: ev.turnId });
         if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
         break;
       }
       case "tool_result": {
+        markToolCallDuringThinking(ev.turnId);
         const result = { content: ev.toolResult?.content, isError: ev.toolResult?.isError };
         const idx = ev.toolId ? toolIndexById.get(ev.toolId) : undefined;
         const target = idx != null ? items[idx] : undefined;
@@ -216,42 +275,21 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
   return items;
 }
 
-/** Milliseconds each dot-count step of `WorkingIndicator` is shown. */
-const WORKING_INDICATOR_STEP_MS = 450;
-
 /** Persistent "agent is working" affordance pinned as the LAST item in the
  *  feed while a turn is active — the footer `StatusBar` spinner (near Stop)
  *  is easy to miss when scrolled up or glancing away from the composer; this
  *  is the same `turnActive` signal, just anchored where the eye actually
- *  lands. Dot COUNT cycles 1 → 2 → 3 → 1 (not a spinner) — only mounted
- *  while busy (see call site), so the interval's lifetime is the busy
- *  window, no separate start/stop wiring needed. */
+ *  lands. The dot-cycle itself lives in the shared `WorkingDots` (also used
+ *  by the footer `StatusBar` when the user has scrolled away from this
+ *  indicator); this component only adds the live region and the label. */
 function WorkingIndicator({ label }: { label?: string }) {
-  const [count, setCount] = useState(1);
-  useEffect(() => {
-    // Explicit `prefers-reduced-motion` check: this dot-cycle's motion is a
-    // JS interval (not CSS-driven, so an `@media (prefers-reduced-motion)`
-    // rule alone can't stop it) — has to honor the opt-out itself.
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    const id = window.setInterval(() => {
-      setCount((c) => (c >= 3 ? 1 : c + 1));
-    }, WORKING_INDICATOR_STEP_MS);
-    return () => window.clearInterval(id);
-  }, []);
   return (
     // The accessible name tracks `label`: a STATIC name on a live-region root
     // is what most assistive tech announces on change, which would suppress
     // the actual (changing) "Thinking"/"Running tool" text entirely.
     <div className="chat-working-indicator" role="status" aria-live="polite" aria-label={label ?? "Agent is working"}>
       {label ? <span className="chat-working-indicator__label">{label}</span> : null}
-      <span className="chat-working-indicator__dots" aria-hidden>
-        {[1, 2, 3].map((n) => (
-          <span
-            key={n}
-            className={`chat-working-indicator__dot${n <= count ? " chat-working-indicator__dot--on" : ""}`}
-          />
-        ))}
-      </span>
+      <WorkingDots />
     </div>
   );
 }
@@ -302,6 +340,11 @@ interface MessageListProps {
   /** Edit an already-answered user turn → fork (R3.1). When provided, answered
    *  user bubbles show an Edit affordance; only enabled while the session is idle. */
   onForkTurn?: (turnId: string, message: string, attachmentIds: string[]) => Promise<void> | void;
+  /** Notified whenever the tracked near-bottom state changes (the same signal
+   *  that drives the jump-to-bottom button). `ChatPane` mirrors it so the
+   *  footer `StatusBar` can show busy dots exactly when the in-feed
+   *  `WorkingIndicator` is scrolled out of view. */
+  onAtBottomChange?: (atBottom: boolean) => void;
 }
 
 export function MessageList({
@@ -319,6 +362,7 @@ export function MessageList({
   api,
   sessionId,
   onForkTurn,
+  onAtBottomChange,
 }: MessageListProps) {
   // Which answered user turn (if any) this tab is editing → fork. Local to the
   // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
@@ -358,6 +402,26 @@ export function MessageList({
   // top of history (that would be a mount-time regression).
   const [atBottom, setAtBottom] = useState(true);
   const atBottomRef = useRef(true);
+  // Read through a ref so the once-registered scroll listener below (empty
+  // deps, passive) never has to re-attach when the parent passes a new
+  // callback identity.
+  const onAtBottomChangeRef = useRef(onAtBottomChange);
+  useEffect(() => {
+    onAtBottomChangeRef.current = onAtBottomChange;
+  }, [onAtBottomChange]);
+  /** Single writer for the near-bottom state: keeps the ref (read by the
+   *  layout effects), the local state (jump-to-bottom button) and the parent
+   *  notification in lockstep. */
+  const applyAtBottom = useCallback((next: boolean) => {
+    // Only genuine transitions propagate — a `scroll` burst that never leaves
+    // the near-bottom band would otherwise re-notify the parent on every
+    // event, contradicting this callback's own contract ("notified whenever
+    // the tracked state CHANGES").
+    if (next === atBottomRef.current) return;
+    atBottomRef.current = next;
+    setAtBottom(next);
+    onAtBottomChangeRef.current?.(next);
+  }, []);
 
   // --- infinite-scroll-upward (auto "load earlier") state ---------------
   // Set the moment a load-earlier is initiated (by the scroll trigger OR the
@@ -446,13 +510,12 @@ export function MessageList({
     const onScroll = () => {
       const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
       const near = distance < 80;
-      atBottomRef.current = near;
-      setAtBottom(near);
+      applyAtBottom(near);
       if (container.scrollTop < NEAR_TOP_PX) startLoadEarlierRef.current();
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [applyAtBottom]);
 
   // MUST be useLayoutEffect, not useEffect: this needs to read/write layout
   // (scrollTop) before the browser paints the just-added content, so the
@@ -487,14 +550,11 @@ export function MessageList({
       // environment (and even where it does, staying pinned at the bottom
       // should keep `atBottom` true regardless) — keep the tracked state in
       // sync so the jump-to-bottom button doesn't flash on for a frame.
-      if (!atBottomRef.current) {
-        atBottomRef.current = true;
-        setAtBottom(true);
-      }
+      if (!atBottomRef.current) applyAtBottom(true);
     }
     // `turnActive` here so the WorkingIndicator's own appear/disappear (it
     // changes the feed's content height) re-triggers the scroll too.
-  }, [items.length, pending.length, thinking, turnActive]);
+  }, [items.length, pending.length, thinking, turnActive, applyAtBottom]);
 
   // Scroll anchoring for prepended history. Declared AFTER the primary effect
   // on purpose: layout effects run in declaration order, so this is the last
@@ -677,8 +737,25 @@ export function MessageList({
             // closed by `closeOpenThinking`, so gating on "any turn is
             // active" hid such historical reasoning for the whole duration of
             // every unrelated later turn.
-            node = item.endedTs || !turnActive || item.turnId !== activeTurnId ? (
-              <ThinkingBlock key={key} text={item.text} startedTs={item.startedTs} endedTs={item.endedTs} />
+            //
+            // A group that is BOTH empty and unclosable (no `endedTs` and no
+            // text — e.g. a turnId-less imported event, or a turn whose last
+            // persisted event is a thinking event because the session died
+            // mid-turn) never gets an `endedTs` from `closeOpenThinking`, so
+            // it would otherwise render forever as a bare, non-expandable,
+            // live-looking "Thinking" label over permanently dead content.
+            // There is nothing meaningful to show, so it renders nothing. A
+            // NON-empty unclosable group still renders once the turn ends.
+            node =
+              (item.endedTs || !turnActive || item.turnId !== activeTurnId) &&
+              (item.endedTs || item.text.trim().length > 0) ? (
+              <ThinkingBlock
+                key={key}
+                text={item.text}
+                startedTs={item.startedTs}
+                endedTs={item.endedTs}
+                hadToolCall={item.hadToolCall}
+              />
             ) : null;
             break;
           case "toolRun":
@@ -729,8 +806,7 @@ export function MessageList({
             const container = listRef.current?.parentElement;
             if (!container) return;
             container.scrollTop = container.scrollHeight;
-            atBottomRef.current = true;
-            setAtBottom(true);
+            applyAtBottom(true);
           }}
         >
           ↓

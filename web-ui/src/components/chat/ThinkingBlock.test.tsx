@@ -51,4 +51,22 @@ describe("ThinkingBlock label (1.T4 — Decision 4 'Thought for Xs')", () => {
     expect(screen.getAllByText("Thought for 3s")).toHaveLength(1);
     expect(document.querySelector(".chat-thinking__summary")).toBeNull();
   });
+
+  it("renders 'Worked for Xs' instead of 'Thought for Xs' when hadToolCall is set", () => {
+    render(
+      <ThinkingBlock
+        text=""
+        startedTs="2024-01-01T00:00:00.000Z"
+        endedTs="2024-01-01T00:00:06.400Z"
+        hadToolCall
+      />,
+    );
+    expect(screen.getByText("Worked for 6s")).toBeTruthy();
+    expect(screen.queryByText("Thought for 6s")).toBeNull();
+  });
+
+  it("keeps the LIVE label as 'Thinking' even when hadToolCall is set (no 'Working' variant)", () => {
+    render(<ThinkingBlock text="" startedTs="2024-01-01T00:00:00.000Z" hadToolCall />);
+    expect(screen.getByText("Thinking")).toBeTruthy();
+  });
 });

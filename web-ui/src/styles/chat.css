@@ -951,6 +951,19 @@
   gap: var(--space-2);
   flex-shrink: 0;
 }
+/* Busy dots shown left of Stop only while the user is scrolled away from the
+   live edge. Reuses the in-feed `.chat-working-indicator__dot(s)` rules
+   verbatim — this wrapper only centers them in the footer row. */
+.chat-statusbar__busy {
+  display: inline-flex;
+  align-items: center;
+}
+/* Kept in flow (NOT `display: none`) so crossing the near-bottom threshold
+   mid-scroll only fades the dots out — it never re-lays-out the row and
+   shifts the Stop button sideways. */
+.chat-statusbar__busy--hidden {
+  visibility: hidden;
+}
 .chat-statusbar__state {
   /* Text-only since the spinner moved out of this span; the flex box keeps it
      vertically centered against its siblings (Stop button, queue depth). */
