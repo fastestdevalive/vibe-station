@@ -247,25 +247,26 @@ async function getAgentChatId(sid: string): Promise<string | undefined> {
 
 async function getLifecycleState(sid: string): Promise<string | undefined> {
   const { getProject } = await import("../state/project-store.js");
-  return getProject(PROJECT_ID)
-    ?.worktrees.flatMap((w) => w.sessions)
+  const project = getProject(PROJECT_ID);
+  return project?.worktrees
+    .flatMap((w) => w.sessions)
+    .concat(project.directSessions)
     .find((s) => s.id === sid)?.lifecycle.state;
 }
 
 /** Force a session's persisted lifecycle to "exited" (simulates a real prior
- *  tmux death) — the exact precondition the stale-banner bug needs. */
+ *  tmux death) — the exact precondition the stale-banner bug needs. Patches
+ *  BOTH worktree and direct sessions so it works for either kind. */
 async function forceExited(sid: string): Promise<void> {
   const { mutateProject } = await import("../state/project-store.js");
+  const patchExited = (s: SessionRecord): SessionRecord =>
+    s.id === sid
+      ? { ...s, lifecycle: { state: "exited" as const, lastTransitionAt: new Date().toISOString() } }
+      : s;
   await mutateProject(PROJECT_ID, (p) => ({
     ...p,
-    worktrees: p.worktrees.map((w) => ({
-      ...w,
-      sessions: w.sessions.map((s) =>
-        s.id === sid
-          ? { ...s, lifecycle: { state: "exited" as const, lastTransitionAt: new Date().toISOString() } }
-          : s,
-      ),
-    })),
+    worktrees: p.worktrees.map((w) => ({ ...w, sessions: w.sessions.map(patchExited) })),
+    directSessions: p.directSessions.map(patchExited),
   }));
 }
 
@@ -385,6 +386,17 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     // the EMPTY_SID worktree case (P3.T4) but through the direct-session path.
     expect(await getAgentChatId(DIRECT_SID)).toBeUndefined();
 
+    // Force a stale "exited" lifecycle first (as if a prior real tmux death
+    // was never cleared) — this is the ONE field the toggle route only ever
+    // writes via `mutateProject`'s `directSessions.map(patchToggledSession)`
+    // branch (channel/useTmux/tmuxName/agentChatId are ALSO mutated in place
+    // on the live in-memory record before mutateProject runs, so they'd look
+    // persisted even if that branch silently no-op'd — lifecycle is not
+    // touched anywhere else, so this is what actually proves the direct-
+    // session persist path runs, not just the in-memory object).
+    await forceExited(DIRECT_SID);
+    expect(await getLifecycleState(DIRECT_SID)).toBe("exited");
+
     const spawn = await import("../services/spawn.js");
     const toTty = await app.inject({ method: "PATCH", url: `/sessions/${DIRECT_SID}/channel`, payload: { channel: "tmux" } });
     expect(toTty.statusCode).toBe(200);
@@ -393,6 +405,10 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     // No restore argv (no agentChatId) → fresh launch via spawnDirectSession,
     // NOT the worktree-only spawnSession.
     expect((spawn.spawnDirectSession as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+    // Proves the mutateProject persist branch actually wrote into
+    // `directSessions` (not a silent no-op onto `worktrees`) — same
+    // stale-banner fix as P3.T3b, exercised through the direct-session path.
+    expect(await getLifecycleState(DIRECT_SID)).toBe("working");
 
     const toJson = await app.inject({ method: "PATCH", url: `/sessions/${DIRECT_SID}/channel`, payload: { channel: "json" } });
     expect(toJson.statusCode).toBe(200);

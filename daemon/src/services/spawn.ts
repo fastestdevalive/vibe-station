@@ -542,9 +542,17 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
     ...(model ? { model } : {}),
   };
 
-  // Setup workspace hooks in project directory
-  if (plugin.setupWorkspaceHooks) {
-    await plugin.setupWorkspaceHooks(cwd);
+  // provideChatId + setupWorkspaceHooks in parallel (both pre-spawn, independent)
+  // — same as spawnSession's steps 2.5+3. Without this, a CLI that pre-mints
+  // its own chat id (cursor) never gets one for a direct session, so a later
+  // json→tty→json channel toggle (or any /resume) has nothing to --resume and
+  // silently starts a fresh conversation instead of continuing this one.
+  const [preSpawnChatId] = await Promise.all([
+    plugin.provideChatId?.({ session, project, cwd }) ?? Promise.resolve(null),
+    plugin.setupWorkspaceHooks ? plugin.setupWorkspaceHooks(cwd) : Promise.resolve(),
+  ]);
+  if (preSpawnChatId) {
+    session.agentChatId = preSpawnChatId;
   }
 
   // Write system-prompt file to this context's session data dir
