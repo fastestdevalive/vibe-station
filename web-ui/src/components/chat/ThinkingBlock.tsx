@@ -12,6 +12,9 @@ interface ThinkingBlockProps {
    *  meta event, or the first event of the next turn); unset while the
    *  block is still live. */
   endedTs?: string;
+  /** True when a tool call ran while this thinking group was open — the
+   *  completed label reads "Worked for Xs" instead of "Thought for Xs". */
+  hadToolCall?: boolean;
 }
 
 /** "Thought for Xs" once `endedTs` is set, else the live "Thinking" label —
@@ -24,7 +27,9 @@ interface ThinkingBlockProps {
  *  `WorkingIndicator`'s animated dots. In practice `MessageList` no longer
  *  renders a still-open thinking group at all, so the live label only
  *  surfaces via the malformed-timestamp fallback below. */
-function thinkingLabel(startedTs: string, endedTs: string | undefined): string {
+function thinkingLabel(startedTs: string, endedTs: string | undefined, hadToolCall = false): string {
+  // The LIVE label stays "Thinking" either way — only the completed label
+  // distinguishes a reasoning-only span from one that spanned real work.
   if (!endedTs) return "Thinking";
   const seconds = Math.round((Date.parse(endedTs) - Date.parse(startedTs)) / 1000);
   // Either timestamp can be empty/malformed (e.g. test fixtures, or a
@@ -32,17 +37,17 @@ function thinkingLabel(startedTs: string, endedTs: string | undefined): string {
   // is NaN, which would otherwise render "Thought for NaNs". Fall back to the
   // live label rather than showing a broken duration.
   if (!Number.isFinite(seconds)) return "Thinking";
-  return `Thought for ${seconds}s`;
+  return hadToolCall ? `Worked for ${seconds}s` : `Thought for ${seconds}s`;
 }
 
 /** Collapsible dim "Thinking" / "Thought for Xs" reasoning block (Decision 9,
  *  extended by Decision 4). Signature-only / redacted thinking events carry no
  *  text — those render as a plain label with no chevron, since there's
  *  nothing to expand. */
-export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs }: ThinkingBlockProps) {
+export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, hadToolCall }: ThinkingBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
   const hasContent = text.trim().length > 0;
-  const label = thinkingLabel(startedTs, endedTs);
+  const label = thinkingLabel(startedTs, endedTs, hadToolCall);
   if (!hasContent) {
     return (
       <div className="chat-thinking">

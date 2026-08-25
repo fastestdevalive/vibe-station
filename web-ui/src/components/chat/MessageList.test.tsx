@@ -143,6 +143,58 @@ describe("groupEvents thinking merge/close (1.T1 / 1.T2)", () => {
     expect((items[0] as { tools: unknown[] }).tools).toHaveLength(3);
     expect(items.some((i) => i.type === "thinking")).toBe(false);
   });
+
+  it("a group that opened EMPTY but later gained text is not swept under its stale position — the tool run stays whole", () => {
+    // The late text arrives AFTER tool b, so it must not render between a and
+    // b. The drop-rule keys on emptiness at creation, so the (still logically
+    // empty at that point) group stays transparent to the run, and the merged
+    // group renders after it.
+    const items = mergeToolRuns(
+      groupEvents([
+        toolUseEvent("a", "t1"),
+        thinkingEvent("th1", "t1", ""),
+        toolUseEvent("b", "t1"),
+        thinkingEvent("th2", "t1", "late reasoning"),
+      ]),
+    );
+    expect(items.map((i) => i.type)).toEqual(["toolRun", "thinking"]);
+    expect((items[0] as { tools: unknown[] }).tools).toHaveLength(2);
+    expect((items[1] as { text: string }).text).toBe("late reasoning");
+  });
+
+  it("an empty/signature-only thinking event NOT sandwiched between tool calls survives and renders 'Thought for Xs'", () => {
+    // The common real-world shape: Claude emits signature-only reasoning (text
+    // "") and then answers. This used to be dropped in `groupEvents`, so no
+    // ThinkingBlock ever rendered for it.
+    const closed: NormalizedEvent[] = [
+      thinkingEvent("th1", "t1", "", "2024-01-01T00:00:00.000Z"),
+      { ...textEvent("a1", "t1", "answer"), ts: "2024-01-01T00:00:04.000Z" },
+    ];
+    const items = mergeToolRuns(groupEvents(closed));
+    expect(items.filter((i) => i.type === "thinking")).toHaveLength(1);
+
+    const { container } = render(<MessageList events={closed} pending={[]} />);
+    const block = container.querySelector(".chat-thinking");
+    expect(block).toBeTruthy();
+    expect(block!.textContent).toContain("Thought for 4s");
+  });
+
+  it("hadToolCall: true when a tool call ran while the group was open, false for a thinking-only group", () => {
+    const withTool = groupEvents([
+      thinkingEvent("th1", "t1", "reasoning", "2024-01-01T00:00:00.000Z"),
+      toolUseEvent("tool1", "t1", "2024-01-01T00:00:01.000Z"),
+      { ...textEvent("a1", "t1", "answer"), ts: "2024-01-01T00:00:03.000Z" },
+    ]).find((i) => i.type === "thinking") as { hadToolCall?: boolean; endedTs?: string };
+    expect(withTool.endedTs).toBe("2024-01-01T00:00:03.000Z");
+    expect(withTool.hadToolCall).toBe(true);
+
+    const withoutTool = groupEvents([
+      thinkingEvent("th1", "t1", "reasoning", "2024-01-01T00:00:00.000Z"),
+      { ...textEvent("a1", "t1", "answer"), ts: "2024-01-01T00:00:03.000Z" },
+    ]).find((i) => i.type === "thinking") as { hadToolCall?: boolean; endedTs?: string };
+    expect(withoutTool.endedTs).toBe("2024-01-01T00:00:03.000Z");
+    expect(withoutTool.hadToolCall).toBeFalsy();
+  });
 });
 
 describe("MessageList queued-turn filtering (tray relocation)", () => {
@@ -179,7 +231,9 @@ function toolItem(id: string, turnId: string) {
   return { type: "tool" as const, id, toolName: "Bash", turnId, toolInput: { command: "echo" } };
 }
 function thinkingItem(id: string, turnId: string, text: string) {
-  return { type: "thinking" as const, id, turnId, text, startedTs: "" };
+  // `openedEmpty` mirrors what `groupEvents` records at push time for a group
+  // whose first (and here only) event carries this text.
+  return { type: "thinking" as const, id, turnId, text, startedTs: "", openedEmpty: text.trim().length === 0 };
 }
 
 describe("mergeToolRuns", () => {
@@ -254,7 +308,9 @@ describe("MessageList live thinking block suppression", () => {
     const { container } = render(<MessageList events={closed} pending={[]} turnActive />);
     const block = container.querySelector(".chat-thinking");
     expect(block).toBeTruthy();
-    expect(block!.textContent).toContain("Thought for 3s");
+    // "Worked for", not "Thought for": a tool call ran while this group was
+    // open (see `liveEvents`), so the completed label takes the tool variant.
+    expect(block!.textContent).toContain("Worked for 3s");
     // Position preserved: thinking block precedes the tool card in DOM order.
     const tool = screen.getByText("Bash");
     expect(block!.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -271,6 +327,22 @@ describe("MessageList live thinking block suppression", () => {
     };
     const { container } = render(<MessageList events={[noTurn]} pending={[]} />);
     expect(container.querySelector(".chat-thinking")).toBeTruthy();
+  });
+
+  it("renders NOTHING for an unclosable (turnId-less) thinking group with no text", () => {
+    // Empty + never-closeable: `closeOpenThinking` early-returns without a
+    // turnId, so this group can never gain an `endedTs` — rendering it would
+    // leave a permanent, live-looking "Thinking" label over dead content.
+    const noTurnEmpty: NormalizedEvent = {
+      id: "th0",
+      sessionId: "s1",
+      ts: "",
+      provider: "claude",
+      kind: "thinking",
+      text: "",
+    };
+    const { container } = render(<MessageList events={[noTurnEmpty]} pending={[]} />);
+    expect(container.querySelector(".chat-thinking")).toBeNull();
   });
 
   it("keeps a turnId-less (historical) thinking group visible while a DIFFERENT turn is running", () => {
@@ -526,6 +598,30 @@ describe("MessageList primary scroll effect — atBottom guard + jump-to-bottom 
     // listener's own "near bottom" computation must independently agree.
     fireEvent.scroll(container);
     expect(screen.queryByRole("button", { name: "Jump to latest message" })).toBeNull();
+  });
+
+  it("notifies onAtBottomChange on the scroll path and on the jump-to-bottom click", () => {
+    const onAtBottomChange = vi.fn();
+    const { container } = render(
+      <MessageList events={[userEvent("t1", "hi")]} pending={[]} onAtBottomChange={onAtBottomChange} />,
+    );
+    // No scroll yet → no notification; the parent's own default (true) holds.
+    expect(onAtBottomChange).not.toHaveBeenCalled();
+
+    stubMetrics(container, 1000, 300);
+    container.scrollTop = 0; // distance = 700 → scrolled away
+    fireEvent.scroll(container);
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to latest message" }));
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+
+    // Already at the bottom: the listener's own near-bottom computation
+    // (scrollTop = 1000) agrees, so this scroll is NOT a transition and must
+    // not re-notify — the callback fires on change only.
+    onAtBottomChange.mockClear();
+    fireEvent.scroll(container);
+    expect(onAtBottomChange).not.toHaveBeenCalled();
   });
 });
 

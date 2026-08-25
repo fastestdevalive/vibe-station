@@ -188,3 +188,42 @@ describe("StatusBar (5.T2)", () => {
     });
   });
 });
+
+describe("StatusBar busy dots when scrolled away", () => {
+  const busyMeta = meta({ turnState: "thinking" });
+
+  it("renders the dots (and NO busy text label) left of Stop when busy and scrolled away", () => {
+    const { container } = render(<StatusBar meta={busyMeta} atBottom={false} onStop={() => {}} />);
+    expect(container.querySelectorAll(".chat-working-indicator__dot")).toHaveLength(3);
+    // The removed duplicate label must NOT come back with the dots.
+    expect(screen.queryByText("Thinking")).toBeNull();
+    // Order: dots precede the Stop button in DOM order.
+    const dots = container.querySelector(".chat-statusbar__busy")!;
+    expect(dots.className).not.toContain("chat-statusbar__busy--hidden");
+    const stop = container.querySelector(".chat-statusbar__stop")!;
+    expect(dots.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the dots mounted but HIDDEN while busy at the bottom, so the Stop button never shifts", () => {
+    // Present-but-hidden (not unmounted): the reserved box keeps the row's
+    // layout identical across the near-bottom threshold the user is crossing
+    // while they scroll.
+    const { container } = render(<StatusBar meta={busyMeta} atBottom onStop={() => {}} />);
+    const dots = container.querySelector(".chat-statusbar__busy")!;
+    expect(dots).toBeTruthy();
+    expect(dots.className).toContain("chat-statusbar__busy--hidden");
+    expect(dots.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector(".chat-statusbar__stop")).toBeTruthy();
+  });
+
+  it("defaults to hidden dots when `atBottom` is not supplied at all", () => {
+    const { container } = render(<StatusBar meta={busyMeta} onStop={() => {}} />);
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
+  });
+
+  it("renders no dots when idle, even if scrolled away", () => {
+    const { container } = render(<StatusBar meta={meta({ turnState: "idle" })} atBottom={false} onStop={() => {}} />);
+    expect(container.querySelector(".chat-statusbar__busy")).toBeNull();
+    expect(screen.getByText("Ready")).toBeTruthy();
+  });
+});

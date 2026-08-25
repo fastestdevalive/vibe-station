@@ -217,3 +217,58 @@ describe("ChatPane thinking-state debounce (1.T7 — Decision 2 anti-flicker)", 
     }
   });
 });
+
+describe("ChatPane atBottom threading (MessageList → ChatPane → StatusBar)", () => {
+  it("passes MessageList's onAtBottomChange through, so the footer busy dots follow the scroll position", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-atbottom", ev("u1", { kind: "user", role: "user", text: "hi", turnId: "t1" }));
+    const { container } = render(<ChatPane api={api} session={jsonSession("js-atbottom")} visible />);
+    const mockedMessageList = MessageList as unknown as Mock;
+
+    // Busy, but still at the live edge → in-feed indicator covers it, footer
+    // stays dots-free.
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-atbottom",
+        meta: meta("js-atbottom", { turnState: "thinking" }),
+      });
+    });
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
+
+    const onAtBottomChange = mockedMessageList.mock.calls.at(-1)![0].onAtBottomChange;
+    expect(typeof onAtBottomChange).toBe("function");
+
+    // Scrolled away while busy → the footer shows the dots.
+    act(() => onAtBottomChange(false));
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeNull();
+    expect(container.querySelector(".chat-statusbar__busy")).toBeTruthy();
+
+    // Back at the bottom → the dots hide again (the box stays reserved).
+    act(() => onAtBottomChange(true));
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
+  });
+
+  it("resets to at-bottom when the pane switches session, so stale dots don't survive the MessageList remount", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("js-a", ev("u1", { kind: "user", role: "user", text: "hi", turnId: "t1" }));
+    api.__test.pushChatEvent("js-b", ev("u2", { kind: "user", role: "user", text: "hello", turnId: "t2" }));
+    const { container, rerender } = render(<ChatPane api={api} session={jsonSession("js-a")} visible />);
+    const mockedMessageList = MessageList as unknown as Mock;
+
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-a", meta: meta("js-a", { turnState: "thinking" }) });
+    });
+    act(() => mockedMessageList.mock.calls.at(-1)![0].onAtBottomChange(false));
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeNull();
+
+    // Switch to a different conversation: MessageList remounts pinned to the
+    // bottom, so the footer must not keep the previous session's dots — and no
+    // scroll event will ever fire to correct it.
+    rerender(<ChatPane api={api} session={jsonSession("js-b")} visible />);
+    act(() => {
+      api.__test.emit({ type: "session:meta", sessionId: "js-b", meta: meta("js-b", { turnState: "thinking" }) });
+    });
+    expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
+  });
+});

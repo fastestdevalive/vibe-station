@@ -3,6 +3,7 @@ import type { ApiInstance } from "@/api";
 import type { SessionMeta, TurnState } from "@/api/types";
 import { ModelSwitch } from "./ModelSwitch";
 import { ChannelToggleButton } from "./ChannelToggleButton";
+import { WorkingDots } from "./WorkingDots";
 
 interface StatusBarProps {
   meta: SessionMeta | null;
@@ -13,6 +14,13 @@ interface StatusBarProps {
   /** When provided (with sessionId), the model becomes a live switcher. */
   api?: ApiInstance;
   sessionId?: string;
+  /** Whether the message list is scrolled to (or near) the live edge, mirrored
+   *  up from `MessageList` by `ChatPane`. While busy AND scrolled away, the
+   *  in-feed `WorkingIndicator` is off-screen, so the footer shows the same
+   *  animated dots next to Stop; at the bottom it stays dots-free (the in-feed
+   *  indicator already covers it). Defaults to `true` — no busy dots — so
+   *  callers that don't track scrolling are unaffected. */
+  atBottom?: boolean;
 }
 
 function fmt(n: number): string {
@@ -51,7 +59,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * branching). Fields absent from `meta` (e.g. costUsd, contextWindow) hide
  * gracefully.
  */
-export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true }: StatusBarProps) {
   const usage = meta?.usage;
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
@@ -119,6 +127,28 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId }: Stat
             {turnLabel(state, queue)}
           </span>
         )}
+        {/* Dots ONLY (never the busy label — that would re-create the exact
+         *  duplication removed above), and visible only while the in-feed
+         *  indicator is actually out of view. This is the sole "still working"
+         *  affordance left for a user who has scrolled up.
+         *
+         *  The element stays MOUNTED for the whole busy period and only toggles
+         *  visibility: mounting/unmounting it would resize the row and shove
+         *  the Stop button sideways every time the user crosses the 80px
+         *  near-bottom threshold — i.e. exactly while they are scrolling.
+         *  `visibility: hidden` (not `display: none`) keeps the box, so the
+         *  reserved space is identical either way. `aria-hidden` while
+         *  invisible keeps it out of the a11y tree, matching the visual. */}
+        {busy ? (
+          <span
+            className={`chat-statusbar__busy${atBottom ? " chat-statusbar__busy--hidden" : ""}`}
+            role="status"
+            aria-label="Agent is working"
+            {...(atBottom ? { "aria-hidden": true } : {})}
+          >
+            <WorkingDots />
+          </span>
+        ) : null}
         {busy && onStop ? (
           <button type="button" className="chat-statusbar__stop btn btn--secondary" onClick={onStop}>
             Stop
