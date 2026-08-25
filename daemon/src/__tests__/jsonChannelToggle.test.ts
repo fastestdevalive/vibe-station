@@ -148,7 +148,7 @@ const JSON_SID = `${WT_ID}-a1`; // claude json worktree agent
 const CURSOR_SID = `${WT_ID}-a2`; // cursor json worktree agent (blocked)
 const AGY_SID = `${WT_ID}-a3`; // agy json worktree agent (blocked)
 const EMPTY_SID = `${WT_ID}-a4`; // claude json worktree agent, never run
-const DIRECT_SID = `${PROJECT_ID}-d1`; // claude json DIRECT agent (blocked, R1.5)
+const DIRECT_SID = `${PROJECT_ID}-d1`; // claude json DIRECT (non-worktree) agent
 
 function ev(kind: NormalizedEvent["kind"], extra: Partial<NormalizedEvent> = {}): NormalizedEvent {
   return {
@@ -238,8 +238,10 @@ async function getChannel(sid: string): Promise<string | undefined> {
 
 async function getAgentChatId(sid: string): Promise<string | undefined> {
   const { getProject } = await import("../state/project-store.js");
-  return getProject(PROJECT_ID)
-    ?.worktrees.flatMap((w) => w.sessions)
+  const project = getProject(PROJECT_ID);
+  return project?.worktrees
+    .flatMap((w) => w.sessions)
+    .concat(project.directSessions)
     .find((s) => s.id === sid)?.agentChatId;
 }
 
@@ -378,10 +380,24 @@ describe("P3 — JSON↔terminal channel toggle", () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it("P3.T1 — 400 for a direct (non-worktree) session (R1.5)", async () => {
-    const res = await app.inject({ method: "PATCH", url: `/sessions/${DIRECT_SID}/channel`, payload: { channel: "tmux" } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: string }>().error).toContain("worktree");
+  it("P3.T1 — a direct (non-worktree) session toggles json→tty→json via spawnDirectSession (R1.5)", async () => {
+    // DIRECT_SID never ran a turn → no agentChatId → fresh launch, mirroring
+    // the EMPTY_SID worktree case (P3.T4) but through the direct-session path.
+    expect(await getAgentChatId(DIRECT_SID)).toBeUndefined();
+
+    const spawn = await import("../services/spawn.js");
+    const toTty = await app.inject({ method: "PATCH", url: `/sessions/${DIRECT_SID}/channel`, payload: { channel: "tmux" } });
+    expect(toTty.statusCode).toBe(200);
+    expect(toTty.json<{ channel: string }>().channel).toBe("tmux");
+    expect(await getChannel(DIRECT_SID)).toBe("tmux");
+    // No restore argv (no agentChatId) → fresh launch via spawnDirectSession,
+    // NOT the worktree-only spawnSession.
+    expect((spawn.spawnDirectSession as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(0);
+
+    const toJson = await app.inject({ method: "PATCH", url: `/sessions/${DIRECT_SID}/channel`, payload: { channel: "json" } });
+    expect(toJson.statusCode).toBe(200);
+    expect(toJson.json<{ channel: string }>().channel).toBe("json");
+    expect(await getChannel(DIRECT_SID)).toBe("json");
   });
 
   it("P3.T1 — cursor + agy (no native-history importer) toggle in BOTH directions, lossily", async () => {
