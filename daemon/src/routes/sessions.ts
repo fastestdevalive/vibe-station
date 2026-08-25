@@ -1835,21 +1835,25 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, model: parsed.data.model ?? mode.model ?? null });
   });
 
-  // Spawn the tmux/pty process for an EXISTING worktree agent session, resuming
-  // its `agentChatId` when one exists (P3 json→tty, R1.2/R1.3). Reuses the same
-  // restore primitives as POST /resume — `getRestoreCommand` → `spawnSessionFromArgv`
-  // — with a fresh-launch fallback for an empty session (no `agentChatId`, J12).
-  // It does NOT reserve a slot or create a record (no create-time side effects).
-  async function spawnTtyForWorktreeAgent(opts: {
+  // Spawn the tmux/pty process for an EXISTING agent session (worktree OR
+  // direct), resuming its `agentChatId` when one exists (P3 json→tty,
+  // R1.2/R1.3). Reuses the same restore primitives as POST /resume —
+  // `getRestoreCommand` → `spawnSessionFromArgv` — with a fresh-launch
+  // fallback for an empty session (no `agentChatId`, J12). `worktree` is
+  // `undefined` for a direct (non-worktree) session — mirrors POST /resume's
+  // `isWorktreeSession` branching so direct sessions restore too (R1.5 no
+  // longer disables the toggle for them). It does NOT reserve a slot or
+  // create a record (no create-time side effects).
+  async function spawnTtyForAgent(opts: {
     project: ProjectRecord;
-    worktree: WorktreeRecord;
+    worktree?: WorktreeRecord;
     session: SessionRecord;
     plugin: AgentPlugin;
     model?: string;
     context?: string;
   }): Promise<void> {
     const { project, worktree, session, plugin, model, context } = opts;
-    const cwd = worktreePath(project.id, worktree.id);
+    const cwd = worktree ? worktreePath(project.id, worktree.id) : project.absolutePath;
     const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
 
     const restoreArgv = await plugin.getRestoreCommand?.({
@@ -1864,7 +1868,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       if (plugin.setupWorkspaceHooks) await plugin.setupWorkspaceHooks(cwd);
       const launchCfg = {
         project,
-        ctx: resolvedContextOf(project, worktree),
+        ctx: resolvedContextOf(project, worktree ?? null),
         session,
         daemonPort: 0,
         ...(model ? { model } : {}),
@@ -1872,7 +1876,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       const env: Record<string, string> = {
         VST_SESSION: session.id,
         VST_SPAWN_TOKEN: session.id,
-        VST_WORKTREE: worktree.id,
+        // Direct sessions have no worktree — omit rather than fake it.
+        ...(worktree ? { VST_WORKTREE: worktree.id } : {}),
         VST_PROJECT: project.id,
         VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
         VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
@@ -1881,7 +1886,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       await spawnSessionFromArgv({
         project,
         cwd,
-        worktreeId: worktree.id,
+        worktreeId: worktree?.id,
         session,
         argv: restoreArgv,
         env,
@@ -1894,7 +1899,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         const capturedId = (await plugin.captureChatId?.({ session, project, cwd })) ?? null;
         if (capturedId) session.agentChatId = capturedId;
       }
-    } else {
+    } else if (worktree) {
       // Fresh launch — an empty session with nothing to resume (J12).
       const { buildPrompt } = await import("../services/promptBuilder.js");
       const built = await buildPrompt({
@@ -1912,13 +1917,32 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         taskPrompt: built.taskPrompt,
         ...(model ? { model } : {}),
       });
+    } else {
+      // Fresh launch — direct-session counterpart of the branch above.
+      const { buildDirectPrompt } = await import("../services/promptBuilder.js");
+      const built = await buildDirectPrompt({
+        project,
+        ...(context ? { modeContext: context } : {}),
+      });
+      const { spawnDirectSession } = await import("../services/spawn.js");
+      await spawnDirectSession({
+        project,
+        session,
+        plugin,
+        daemonPort,
+        systemPrompt: built.systemPrompt,
+        taskPrompt: built.taskPrompt,
+        ...(model ? { model } : {}),
+      });
     }
   }
 
   // PATCH …/sessions/:id/channel — live JSON↔terminal toggle (P3, R1.1–R1.7).
-  // Idle-gated (409 when a turn is active/queued/held for edit); worktree-only
-  // (400 for direct sessions — no restore path, R1.5). Works for EVERY agent CLI
-  // in both directions: json→tty spawns the TTY resuming the same agentChatId;
+  // Idle-gated (409 when a turn is active/queued/held for edit). Supports BOTH
+  // worktree-backed and direct/project-scoped sessions (R1.5 — direct sessions
+  // restore the same way POST /resume already does, via project.absolutePath
+  // as cwd). Works for EVERY agent CLI in both directions: json→tty spawns the
+  // TTY resuming the same agentChatId;
   // tty→json tears the TTY down and re-establishes the JSON session. The
   // terminal-phase turns are backfilled via the P2 importer ONLY for CLIs that
   // ship a native-history importer (claude/opencode); CLIs without one
@@ -1942,11 +1966,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const current = sessionChannel(session);
     if (current === target) return reply.send({ ok: true, channel: current }); // idempotent no-op
 
-    // R1.5 — direct (non-worktree) sessions have no restore path; disable toggle.
-    if (ctx.kind !== "worktree") {
-      return reply.status(400).send({ error: "Channel toggle is only supported for worktree sessions" });
-    }
-    const { worktree } = ctx;
+    // R1.5 — direct (non-worktree) sessions restore via project.absolutePath,
+    // same as POST /resume; `worktree` is undefined for them.
+    const worktree = ctx.kind === "worktree" ? ctx.worktree : undefined;
 
     // Resolve mode → plugin. Deleting an in-use mode is allowed, so a missing
     // mode falls back instead of hard-failing the toggle: prefer the cli a
@@ -2006,9 +2028,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         session.tmuxName = ttyTmuxName;
         session.channel = newChannel;
         session.useTmux = newUseTmux;
-        await spawnTtyForWorktreeAgent({
+        await spawnTtyForAgent({
           project,
-          worktree,
+          ...(worktree ? { worktree } : {}),
           session,
           plugin,
           ...(mode.model ? { model: mode.model } : {}),
@@ -2065,30 +2087,29 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // genuinely live tmux window does not by itself clear a stale "exited"
     // record, so the terminal pane keeps showing the "Session exited /
     // Resume" banner over a terminal that is actually live and working.
-    await mutateProject(project.id, (p) => ({
-      ...p,
-      worktrees: p.worktrees.map((w) =>
-        w.id === worktree.id
-          ? {
-              ...w,
-              sessions: w.sessions.map((s) =>
-                s.id === id
-                  ? {
-                      ...s,
-                      channel: newChannel,
-                      useTmux: newUseTmux,
-                      tmuxName: session.tmuxName,
-                      ...(session.agentChatId ? { agentChatId: session.agentChatId } : {}),
-                      ...(fromJson
-                        ? { lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() } }
-                        : {}),
-                    }
-                  : s,
-              ),
-            }
-          : w,
-      ),
-    }));
+    const patchToggledSession = (s: SessionRecord): SessionRecord =>
+      s.id === id
+        ? {
+            ...s,
+            channel: newChannel,
+            useTmux: newUseTmux,
+            tmuxName: session.tmuxName,
+            ...(session.agentChatId ? { agentChatId: session.agentChatId } : {}),
+            ...(fromJson
+              ? { lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() } }
+              : {}),
+          }
+        : s;
+    await mutateProject(project.id, (p) =>
+      worktree
+        ? {
+            ...p,
+            worktrees: p.worktrees.map((w) =>
+              w.id === worktree.id ? { ...w, sessions: w.sessions.map(patchToggledSession) } : w,
+            ),
+          }
+        : { ...p, directSessions: p.directSessions.map(patchToggledSession) },
+    );
 
     // Compute the fresh meta to mirror to other tabs.
     let meta: SessionMeta;

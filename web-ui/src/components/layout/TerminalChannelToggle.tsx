@@ -11,9 +11,9 @@ interface TerminalChannelToggleProps {
 
 /**
  * Terminal→JSON channel control — mirror of the StatusBar JSON→terminal
- * affordance (`chat/StatusBar.tsx`). Rendered for EVERY worktree-backed
- * **agent** session on a tmux/pty channel (the daemon supports the toggle for
- * all agent CLIs now); direct/non-worktree sessions are still ineligible.
+ * affordance (`chat/StatusBar.tsx`). Rendered for EVERY **agent** session
+ * (worktree-backed or direct/project-scoped) on a tmux/pty channel — the
+ * daemon supports the toggle for all agent CLIs in both contexts.
  *
  * Switching tears down the live terminal and reopens the same conversation as
  * JSON chat (resumed via --resume). The terminal-phase turns are backfilled by
@@ -31,7 +31,6 @@ export function TerminalChannelToggle({ api, session }: TerminalChannelTogglePro
   const channel = session.channel ?? "tmux";
   const eligible =
     session.type === "agent" &&
-    session.worktreeId != null &&
     channel !== "json" &&
     session.modeId != null;
 
