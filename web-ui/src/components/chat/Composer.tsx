@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment } from "@/api/types";
 import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
@@ -7,6 +7,10 @@ import { AttachmentChip } from "./AttachmentChip";
 
 /** Grow the textarea up to this many lines of content, then scroll internally. */
 const COMPOSER_MAX_GROW_LINES = 10;
+
+/** How long the Send button is held (disabled) at its position after OUR OWN
+ *  send emptied the box while a turn is still running — see `justSent`. */
+const SEND_SETTLE_MS = 700;
 
 /** Resize `el` to fit its content, capped at `COMPOSER_MAX_GROW_LINES` worth
  *  of height (derived from the element's own resolved line-height/padding/
@@ -93,7 +97,30 @@ export function Composer({
     if (internalTextareaRef.current) autosizeComposerTextarea(internalTextareaRef.current);
   }, [text]);
 
-  const canSend = !disabled && !sending && (text.trim().length > 0 || readyAttachments.length > 0);
+  // Split from `canSend`: whether the box HAS something to send (independent
+  // of `sending`) decides the Stop-vs-Send BRANCH; `canSend` (which also
+  // factors in `sending`/`disabled`) only decides whether the Send button is
+  // enabled. Collapsing these into one flag was a bug (see `busy` branch
+  // below): while a queued send is in flight, `sending` alone would make
+  // `canSend` false, which — if used for branching too — flips the button to
+  // Stop at the same screen position mid-send; a second/impatient click on
+  // what a moment ago was "Send" would then abort the ORIGINAL turn instead.
+  const hasContent = text.trim().length > 0 || readyAttachments.length > 0;
+  const canSend = !disabled && !sending && hasContent;
+
+  // The `hasContent` split above only deferred the swap hazard: a successful
+  // send CLEARS the box while the turn is still busy, so `hasContent` drops to
+  // false one tick later and the very same screen position turns into Stop —
+  // an impatient second click would then abort the running turn. Approach
+  // chosen (simplest that adds no persistent state): hold the Send branch,
+  // disabled, for a short settle window after our own send. A real Stop is
+  // still one moment (or one footer StatusBar click) away.
+  const [justSent, setJustSent] = useState(false);
+  useEffect(() => {
+    if (!justSent) return;
+    const id = window.setTimeout(() => setJustSent(false), SEND_SETTLE_MS);
+    return () => window.clearTimeout(id);
+  }, [justSent]);
 
   async function handleSend() {
     if (!canSend) return;
@@ -105,6 +132,7 @@ export function Composer({
       setText("");
       draft.clear();
       reset();
+      setJustSent(true);
     } finally {
       setSending(false);
     }
@@ -185,15 +213,24 @@ export function Composer({
           >
             📎
           </button>
-          {busy ? (
+          {/* Branch on `canSend`, not raw `busy` (Decision 9): a busy turn with
+           *  text/an attachment ready should still show Send — clicking it
+           *  enqueues a follow-up turn into the tray rather than sending
+           *  immediately, which is a real, working action, not a no-op. Stop
+           *  is reachable only in the one case where it's the sole useful
+           *  action: busy AND nothing ready to send — and not during the
+           *  `justSent` settle window, so our own clear-on-send can't swap
+           *  Send for Stop under the user's cursor. */}
+          {busy && !hasContent && !justSent ? (
             <button type="button" className="chat-composer__stop" onClick={onStop} aria-label="Stop turn">
               Stop
             </button>
           ) : (
             <button
               type="button"
-              className="chat-composer__send"
-              aria-label="Send message"
+              className={`chat-composer__send${busy ? " chat-composer__send--queue" : ""}`}
+              aria-label={busy ? "Send message (queues after current turn)" : "Send message"}
+              title={busy ? "Sends after the current turn finishes" : undefined}
               disabled={!canSend}
               onClick={() => void handleSend()}
             >

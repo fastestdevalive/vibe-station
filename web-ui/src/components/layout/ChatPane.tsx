@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
@@ -6,7 +6,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
-import { StatusBar } from "@/components/chat/StatusBar";
+import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -85,7 +85,36 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
     const s = meta?.turnState;
     return s === "thinking" || s === "responding" || s === "tool";
   }, [meta]);
-  const thinking = meta?.turnState === "thinking";
+
+  // Display-facing turn state, debounced (trailing ~250ms): the daemon
+  // recomputes turnState per raw event, so it can oscillate thinking→tool→
+  // thinking many times within one turn — committing every flip straight to
+  // display state flickers the thinking-block/WorkingIndicator affordance.
+  // `turnActive` above stays RAW/instant — Composer's busy/Stop gating must
+  // never lag behind the real state.
+  const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
+  useEffect(() => {
+    const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
+    return () => clearTimeout(id);
+  }, [meta?.turnState]);
+  const thinking = displayTurnState === "thinking";
+  // Label for the in-feed WorkingIndicator (Decision 8) — same `turnLabel`
+  // StatusBar uses, fed the DEBOUNCED state so it's consistent with
+  // `thinking`/the ThinkingBlock swap instead of flickering independently —
+  // BUT only once the debounced value has actually caught up to a busy
+  // state. On the very first idle→busy transition (or right after an
+  // oscillation resets the debounce timer), `displayTurnState` can still
+  // read "idle"/undefined for up to 250ms while `turnActive` (raw, driving
+  // WorkingIndicator's mount) is already true — falling back to `turnLabel`
+  // as-is would show "Ready •••" for that window. Falling back to the RAW
+  // `meta?.turnState` here is safe: `turnActive` is only true when the raw
+  // state is itself thinking/responding/tool, so the fallback is never
+  // "Ready" while the indicator is actually mounted. Once the debounce
+  // commits a busy value, this reads from `displayTurnState` again, so
+  // further label oscillation is still smoothed as intended.
+  const displayStateIsBusy =
+    displayTurnState === "thinking" || displayTurnState === "responding" || displayTurnState === "tool";
+  const workingLabel = turnLabel(displayStateIsBusy ? displayTurnState : meta?.turnState, meta?.queueDepth ?? 0);
 
   // Latest user text + attachments per turnId (last wins, mirroring the A7
   // edited-turn rule) + the set of turnIds that have a real `user` event.
@@ -182,43 +211,44 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
 
   return (
     <div className="chat-pane" style={chatFontVars}>
-      <div className="chat-pane__body">
-        {loading ? (
-          <div className="chat-pane__state">
-            <span className="chat-spinner" aria-hidden /> Loading history…
-          </div>
-        ) : isEmpty ? (
-          <div className="chat-pane__state chat-pane__empty">
-            <div className="chat-pane__empty-icon" aria-hidden>💬</div>
-            <div className="chat-pane__empty-title">Start chatting</div>
-            <div className="chat-pane__empty-sub">with the agent</div>
-          </div>
-        ) : (
-          <MessageList
-            events={events}
-            pending={pendingActive}
-            turnActive={turnActive}
-            thinking={thinking}
-            hiddenTurnIds={hiddenTurnIds}
-            hasMore={hasMore}
-            loadingEarlier={loadingEarlier}
-            onLoadEarlier={() => void loadEarlier()}
-            onLoadAll={() => void loadAll()}
-            onRetry={handleRetry}
-            api={api}
-            {...(sessionId ? { sessionId } : {})}
-            onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
-          />
-        )}
+      {/* Non-scrolling wrapper whose box is exactly the scroll VIEWPORT — it,
+          not `.chat-pane`, is the containing block for the floating
+          jump-to-bottom button, so the button clears the footer (queued tray +
+          status bar + auto-growing composer) at any footer height instead of
+          relying on a fixed offset that a tall footer overlaps. */}
+      <div className="chat-pane__viewport">
+        <div className="chat-pane__body">
+          {loading ? (
+            <div className="chat-pane__state">
+              <span className="chat-spinner" aria-hidden /> Loading history…
+            </div>
+          ) : isEmpty ? (
+            <div className="chat-pane__state chat-pane__empty">
+              <div className="chat-pane__empty-icon" aria-hidden>💬</div>
+              <div className="chat-pane__empty-title">Start chatting</div>
+              <div className="chat-pane__empty-sub">with the agent</div>
+            </div>
+          ) : (
+            <MessageList
+              events={events}
+              pending={pendingActive}
+              turnActive={turnActive}
+              thinking={thinking}
+              workingLabel={workingLabel}
+              hiddenTurnIds={hiddenTurnIds}
+              hasMore={hasMore}
+              loadingEarlier={loadingEarlier}
+              onLoadEarlier={() => loadEarlier()}
+              onLoadAll={() => void loadAll()}
+              onRetry={handleRetry}
+              api={api}
+              {...(sessionId ? { sessionId } : {})}
+              onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
+            />
+          )}
+        </div>
       </div>
       <div className="chat-pane__footer">
-        <StatusBar
-          meta={meta}
-          queueDepth={trayRows.length}
-          onStop={() => void stop()}
-          api={api}
-          {...(sessionId ? { sessionId } : {})}
-        />
         {sessionId ? (
           <QueuedTray
             api={api}
@@ -233,6 +263,13 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             focusComposer={() => composerRef.current?.focus()}
           />
         ) : null}
+        <StatusBar
+          meta={meta}
+          queueDepth={trayRows.length}
+          onStop={() => void stop()}
+          api={api}
+          {...(sessionId ? { sessionId } : {})}
+        />
         {sessionId && archived ? (
           // Decision 4 / CUJ 3: an archived session is read-only in place — no
           // new turns can be sent. Exact copy from the original F5 mockup.
