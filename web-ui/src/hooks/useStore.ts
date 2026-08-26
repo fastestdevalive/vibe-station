@@ -241,8 +241,8 @@ export interface WorkspaceState {
    * which stay on the old local-only mechanism because the server's
    * `sortOrder` column is scoped per-worktree/per-project and cannot express a
    * cross-project pinned order (see plan Decision 1 exception):
-   *   - `pinned-worktrees` / `pinned-direct` — the pinned sub-lists (their own
-   *     reorderable scope, independent of pin recency — see LeftSidebar).
+   *   - `pinned-all` — the combined pinned list of worktrees and direct
+   *     sessions (their own reorderable scope, independent of pin recency — see LeftSidebar).
    * Missing/unknown ids (id not yet dragged) are appended in their natural
    * order by callers — this map only needs to hold the ids the user has
    * actually dragged. The merge helper for this (formerly `applySortOrder`,
