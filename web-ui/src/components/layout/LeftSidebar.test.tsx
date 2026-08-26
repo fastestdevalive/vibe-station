@@ -466,6 +466,53 @@ describe("LeftSidebar", () => {
         expect(screen.getByRole("region", { name: /^pinned$/i })).toBeInTheDocument();
       });
     });
+
+    it("pinned direct sessions and pinned worktrees are combined and sorted by pinnedAt DESC", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-2");
+      const sess = await localApi.createDirectSession({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        name: "direct-agent-1",
+      });
+      await localApi.pinSession(sess.id, true);
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+      const now = Date.now();
+      act(() => {
+        localApi.__test.emit({
+          type: "session:updated",
+          sessionId: sess.id,
+          pinnedAt: new Date(now + 10000).toISOString(),
+        });
+        localApi.__test.emit({
+          type: "worktree:updated",
+          worktree: {
+            id: "wt-2",
+            projectId: "proj-a",
+            branch: "wt-2",
+            baseBranch: "main",
+            baseSha: "def456",
+            createdAt: new Date().toISOString(),
+            pinnedAt: new Date(now - 10000).toISOString(),
+          },
+        });
+      });
+      const region = screen.getByRole("region", { name: /^pinned$/i });
+      await waitFor(() => {
+        const labels = Array.from(region.querySelectorAll(".pinned-row__primary")).map(
+          (n) => n.textContent,
+        );
+        expect(labels).toEqual(["direct-agent-1", "wt-2"]);
+      });
+    });
   });
 
   // ─── Project hiding ──────────────────────────────────────────────────────
