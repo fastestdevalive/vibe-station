@@ -388,23 +388,26 @@ export function LeftSidebar({
     return w.name ?? w.branch;
   }
 
-  /** Reorder scope: pinned worktrees float in their own drag-order list,
+  /** Reorder scope: pinned worktrees and direct sessions float in a single drag-order list,
    *  independent of pin recency once the user has dragged them (documented
    *  choice — see task write-up: pin recency is only the *default* order).
    *  Pinned lists keep the OLD local-only mechanism (Decision 1 exception). */
-  const orderedPinnedWorktrees = useMemo(() => {
-    const ids = pinnedWorktrees.map((w) => w.id);
-    const order = applyLocalSortOrder(sortOrders["pinned-worktrees"], ids);
-    const byId = new Map(pinnedWorktrees.map((w) => [w.id, w]));
+  const orderedPinnedItems = useMemo(() => {
+    const items = [
+      ...pinnedWorktrees.map((w) => ({ id: w.id, kind: "worktree" as const, data: w })),
+      ...pinnedDirectSessions.map((s) => ({ id: s.id, kind: "session" as const, data: s })),
+    ];
+    // Sort by pinnedAt DESC
+    items.sort((a, b) => {
+      const aTime = a.data.pinnedAt ?? "";
+      const bTime = b.data.pinnedAt ?? "";
+      return bTime.localeCompare(aTime);
+    });
+    const ids = items.map((x) => x.id);
+    const order = applyLocalSortOrder(sortOrders["pinned-all"], ids);
+    const byId = new Map(items.map((x) => [x.id, x]));
     return order.map((id) => byId.get(id)!).filter(Boolean);
-  }, [pinnedWorktrees, sortOrders]);
-
-  const orderedPinnedDirectSessions = useMemo(() => {
-    const ids = pinnedDirectSessions.map((s) => s.id);
-    const order = applyLocalSortOrder(sortOrders["pinned-direct"], ids);
-    const byId = new Map(pinnedDirectSessions.map((s) => [s.id, s]));
-    return order.map((id) => byId.get(id)!).filter(Boolean);
-  }, [pinnedDirectSessions, sortOrders]);
+  }, [pinnedWorktrees, pinnedDirectSessions, sortOrders]);
 
   /** Projects reorder scope — local-only (Decision 1 exception, same as
    *  pinned lists): no `Project.sortOrder` field/route exists server-side. */
@@ -897,249 +900,233 @@ export function LeftSidebar({
               onDragCancel={markDrag}
               onDragEnd={(e) =>
                 handleReorder(
-                  "pinned-direct",
-                  orderedPinnedDirectSessions.map((s) => s.id),
+                  "pinned-all",
+                  orderedPinnedItems.map((x) => x.id),
                   e,
                 )
               }
             >
               <SortableContext
-                items={orderedPinnedDirectSessions.map((s) => s.id)}
+                items={orderedPinnedItems.map((x) => x.id)}
                 strategy={verticalListSortingStrategy}
               >
-                {orderedPinnedDirectSessions.map((sess) => {
-                  const proj = projectById[sess.projectId];
-                  const isActive = location.pathname === `/session/${sess.id}`;
-                  const label = sessionLabel(sess);
-                  return (
-                    <SortableRow key={`pinned-sess-${sess.id}`} id={sess.id}>
-                      {({ setNodeRef, style, attributes, listeners }) => (
-                        <div
-                          ref={setNodeRef}
-                          style={style}
-                          className="wt-row-wrap"
-                          {...attributes}
-                          {...listeners}
-                        >
+                {orderedPinnedItems.map((item) => {
+                  if (item.kind === "session") {
+                    const sess = item.data;
+                    const proj = projectById[sess.projectId];
+                    const isActive = location.pathname === `/session/${sess.id}`;
+                    const label = sessionLabel(sess);
+                    return (
+                      <SortableRow key={`pinned-sess-${sess.id}`} id={sess.id}>
+                        {({ setNodeRef, style, attributes, listeners }) => (
                           <div
-                            className="tree-row tree-row--direct-session pinned-row"
-                            data-active={isActive}
-                            data-archived={sess.archivedAt != null ? "true" : undefined}
-                            style={{ position: "relative" }}
-                            title={`${label} — direct session`}
-                            onClickCapture={suppressDoubleClickNavigation}
-                            onDoubleClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              startInlineRename("session", sess.id, label, "pinned");
-                            }}
+                            ref={setNodeRef}
+                            style={style}
+                            className="wt-row-wrap"
+                            {...attributes}
+                            {...listeners}
                           >
-                            <Link
-                              to={`/session/${sess.id}`}
-                              className="wt-row__stretch-link"
-                              draggable={false}
-                              aria-label={`Open pinned direct session ${label}`}
-                              onClick={() => {
-                                if (isMobile) setMobileSidebarOpen(false);
-                              }}
-                              tabIndex={-1}
-                            />
-                            <span className="wt-leading-slot pinned-row__leading">
-                              <StatusDot
-                                status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
-                                // Direct session — no worktree to branch-guard a PR against, so
-                                // it can never show one (docs/STATUS-INDICATORS.md).
-                                pr={null}
-                              />
-                            </span>
-                            <div className="pinned-row__text">
-                              {inlineRename?.kind === "session" &&
-                              inlineRename.id === sess.id &&
-                              inlineRename.site === "pinned" ? (
-                                <input
-                                  ref={inlineInputRef}
-                                  className="pinned-row__primary pinned-row__rename-input"
-                                  aria-label="Rename"
-                                  value={inlineValue}
-                                  autoFocus
-                                  onClick={(e) => e.stopPropagation()}
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onChange={(e) => setInlineValue(e.target.value)}
-                                  onBlur={commitInlineRename}
-                                  onKeyDown={(e) => {
-                                    e.stopPropagation();
-                                    if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
-                                    if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
-                                  }}
-                                  maxLength={60}
-                                />
-                              ) : (
-                                <span className="pinned-row__primary">{label}</span>
-                              )}
-                              <span className="pinned-row__subhead" title={proj?.path}>
-                                {proj?.name ?? sess.projectId}
-                              </span>
-                            </div>
-                            <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                              {sess.archivedAt != null ? (
-                                <span className="direct-session__badge">archived</span>
-                              ) : null}
-                              <span className="direct-session__badge">direct</span>
-                              <button
-                                type="button"
-                                data-sess-menu-trigger
-                                className="icon-btn wt-menu-trigger tree-row__action"
-                                aria-label={`Session actions for ${label}`}
-                                aria-expanded={sessMenu?.session.id === sess.id}
-                                aria-haspopup="menu"
-                                title="Session menu"
-                                onPointerDown={(e) => e.stopPropagation()}
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  setSessMenu((prev) =>
-                                    prev?.session.id === sess.id ? null : { session: sess, rect },
-                                  );
-                                }}
-                              >
-                                <MoreHorizontal size={16} />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </SortableRow>
-                  );
-                })}
-              </SortableContext>
-            </DndContext>
-            <DndContext
-              sensors={dndSensors}
-              collisionDetection={closestCenter}
-              onDragStart={markDrag}
-              onDragCancel={markDrag}
-              onDragEnd={(e) =>
-                handleReorder(
-                  "pinned-worktrees",
-                  orderedPinnedWorktrees.map((w) => w.id),
-                  e,
-                )
-              }
-            >
-              <SortableContext
-                items={orderedPinnedWorktrees.map((w) => w.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                {orderedPinnedWorktrees.map((w) => {
-                  const proj = projectById[w.projectId];
-                  const isActive = activeWorktreeId === w.id && location.pathname.startsWith("/worktree/");
-                  const label = worktreeLabel(w);
-                  return (
-                    <SortableRow key={`pinned-${w.id}`} id={w.id}>
-                      {({ setNodeRef, style, attributes, listeners }) => (
-                        <div
-                          ref={setNodeRef}
-                          style={style}
-                          className="wt-row-wrap"
-                          {...attributes}
-                          {...listeners}
-                        >
-                          <div
-                            className="tree-row tree-row--worktree pinned-row"
-                            data-active={isActive}
-                            style={{ position: "relative" }}
-                            role="button"
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
+                            <div
+                              className="tree-row tree-row--direct-session pinned-row"
+                              data-active={isActive}
+                              data-archived={sess.archivedAt != null ? "true" : undefined}
+                              style={{ position: "relative" }}
+                              title={`${label} — direct session`}
+                              onClickCapture={suppressDoubleClickNavigation}
+                              onDoubleClick={(e) => {
                                 e.preventDefault();
-                                selectWorktree(w.projectId, w);
-                              }
-                            }}
-                            onClickCapture={suppressDoubleClickNavigation}
-                            onDoubleClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              startInlineRename("worktree", w.id, label, "pinned");
-                            }}
-                          >
-                            <Link
-                              to={`/worktree/${w.id}`}
-                              className="wt-row__stretch-link"
-                              draggable={false}
-                              aria-label={`Open pinned worktree ${label}`}
-                              onClick={(e) => {
-                                if (isModifiedClick(e)) return;
-                                selectWorktree(w.projectId, w);
+                                e.stopPropagation();
+                                startInlineRename("session", sess.id, label, "pinned");
                               }}
-                              tabIndex={-1}
-                            />
-                            <span className="wt-leading-slot pinned-row__leading">
-                              <StatusDot
-                                status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
-                                pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
-                              />
-                            </span>
-                            <div className="pinned-row__text">
-                              {inlineRename?.kind === "worktree" &&
-                              inlineRename.id === w.id &&
-                              inlineRename.site === "pinned" ? (
-                                <input
-                                  ref={inlineInputRef}
-                                  className="pinned-row__primary pinned-row__rename-input"
-                                  aria-label="Rename"
-                                  value={inlineValue}
-                                  autoFocus
-                                  onClick={(e) => e.stopPropagation()}
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  onChange={(e) => setInlineValue(e.target.value)}
-                                  onBlur={commitInlineRename}
-                                  onKeyDown={(e) => {
-                                    e.stopPropagation();
-                                    if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
-                                    if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
-                                  }}
-                                  maxLength={60}
-                                />
-                              ) : (
-                                <span className="pinned-row__primary">{label}</span>
-                              )}
-                              <span className="pinned-row__subhead" title={proj?.path}>
-                                {proj?.name ?? w.projectId}
-                              </span>
-                            </div>
-                            <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
-                              <span className="wt-row__id" title={w.id}>
-                                {w.id}
-                              </span>
-                              <button
-                                type="button"
-                                data-wt-menu-trigger
-                                className="icon-btn wt-menu-trigger tree-row__action"
-                                aria-label={`Worktree actions for ${label}`}
-                                aria-expanded={wtMenu?.worktree.id === w.id}
-                                aria-haspopup="menu"
-                                title="Worktree menu"
-                                onPointerDown={(e) => e.stopPropagation()}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  setWtMenu((prev) =>
-                                    prev?.worktree.id === w.id
-                                      ? null
-                                      : { projectId: w.projectId, worktree: w, rect },
-                                  );
+                            >
+                              <Link
+                                to={`/session/${sess.id}`}
+                                className="wt-row__stretch-link"
+                                draggable={false}
+                                aria-label={`Open pinned direct session ${label}`}
+                                onClick={() => {
+                                  if (isMobile) setMobileSidebarOpen(false);
                                 }}
-                              >
-                                <MoreHorizontal size={16} />
-                              </button>
+                                tabIndex={-1}
+                              />
+                              <span className="wt-leading-slot pinned-row__leading">
+                                <StatusDot
+                                  status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
+                                  // Direct session — no worktree to branch-guard a PR against, so
+                                  // it can never show one (docs/STATUS-INDICATORS.md).
+                                  pr={null}
+                                />
+                              </span>
+                              <div className="pinned-row__text">
+                                {inlineRename?.kind === "session" &&
+                                inlineRename.id === sess.id &&
+                                inlineRename.site === "pinned" ? (
+                                  <input
+                                    ref={inlineInputRef}
+                                    className="pinned-row__primary pinned-row__rename-input"
+                                    aria-label="Rename"
+                                    value={inlineValue}
+                                    autoFocus
+                                    onClick={(e) => e.stopPropagation()}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onChange={(e) => setInlineValue(e.target.value)}
+                                    onBlur={commitInlineRename}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                      if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                    }}
+                                    maxLength={60}
+                                  />
+                                ) : (
+                                  <span className="pinned-row__primary">{label}</span>
+                                )}
+                                <span className="pinned-row__subhead" title={proj?.path}>
+                                  {proj?.name ?? sess.projectId}
+                                </span>
+                              </div>
+                              <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                {sess.archivedAt != null ? (
+                                  <span className="direct-session__badge">archived</span>
+                                ) : null}
+                                <span className="direct-session__badge">direct</span>
+                                <button
+                                  type="button"
+                                  data-sess-menu-trigger
+                                  className="icon-btn wt-menu-trigger tree-row__action"
+                                  aria-label={`Session actions for ${label}`}
+                                  aria-expanded={sessMenu?.session.id === sess.id}
+                                  aria-haspopup="menu"
+                                  title="Session menu"
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setSessMenu((prev) =>
+                                      prev?.session.id === sess.id ? null : { session: sess, rect },
+                                    );
+                                  }}
+                                >
+                                  <MoreHorizontal size={16} />
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                    </SortableRow>
-                  );
+                        )}
+                      </SortableRow>
+                    );
+                  } else {
+                    const w = item.data;
+                    const proj = projectById[w.projectId];
+                    const isActive = activeWorktreeId === w.id && location.pathname.startsWith("/worktree/");
+                    const label = worktreeLabel(w);
+                    return (
+                      <SortableRow key={`pinned-${w.id}`} id={w.id}>
+                        {({ setNodeRef, style, attributes, listeners }) => (
+                          <div
+                            ref={setNodeRef}
+                            style={style}
+                            className="wt-row-wrap"
+                            {...attributes}
+                            {...listeners}
+                          >
+                            <div
+                              className="tree-row tree-row--worktree pinned-row"
+                              data-active={isActive}
+                              style={{ position: "relative" }}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  selectWorktree(w.projectId, w);
+                                }
+                              }}
+                              onClickCapture={suppressDoubleClickNavigation}
+                              onDoubleClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                startInlineRename("worktree", w.id, label, "pinned");
+                              }}
+                            >
+                              <Link
+                                to={`/worktree/${w.id}`}
+                                className="wt-row__stretch-link"
+                                draggable={false}
+                                aria-label={`Open pinned worktree ${label}`}
+                                onClick={(e) => {
+                                  if (isModifiedClick(e)) return;
+                                  selectWorktree(w.projectId, w);
+                                }}
+                                tabIndex={-1}
+                              />
+                              <span className="wt-leading-slot pinned-row__leading">
+                                <StatusDot
+                                  status={worktreeRolledUpStatus(sessionMap[w.id] ?? [], sessionStates)}
+                                  pr={worktreePrStatus(sessionMap[w.id] ?? [], w.branch)}
+                                />
+                              </span>
+                              <div className="pinned-row__text">
+                                {inlineRename?.kind === "worktree" &&
+                                inlineRename.id === w.id &&
+                                inlineRename.site === "pinned" ? (
+                                  <input
+                                    ref={inlineInputRef}
+                                    className="pinned-row__primary pinned-row__rename-input"
+                                    aria-label="Rename"
+                                    value={inlineValue}
+                                    autoFocus
+                                    onClick={(e) => e.stopPropagation()}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onChange={(e) => setInlineValue(e.target.value)}
+                                    onBlur={commitInlineRename}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                      if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                    }}
+                                    maxLength={60}
+                                  />
+                                ) : (
+                                  <span className="pinned-row__primary">{label}</span>
+                                )}
+                                <span className="pinned-row__subhead" title={proj?.path}>
+                                  {proj?.name ?? w.projectId}
+                                </span>
+                              </div>
+                              <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                <span className="wt-row__id" title={w.id}>
+                                  {w.id}
+                                </span>
+                                <button
+                                  type="button"
+                                  data-wt-menu-trigger
+                                  className="icon-btn wt-menu-trigger tree-row__action"
+                                  aria-label={`Worktree actions for ${label}`}
+                                  aria-expanded={wtMenu?.worktree.id === w.id}
+                                  aria-haspopup="menu"
+                                  title="Worktree menu"
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setWtMenu((prev) =>
+                                      prev?.worktree.id === w.id
+                                        ? null
+                                        : { projectId: w.projectId, worktree: w, rect },
+                                    );
+                                  }}
+                                >
+                                  <MoreHorizontal size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </SortableRow>
+                    );
+                  }
                 })}
               </SortableContext>
             </DndContext>
