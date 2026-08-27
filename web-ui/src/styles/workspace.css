@@ -719,13 +719,22 @@
   transition: opacity var(--transition-fast);
 }
 
+/* `pointer-events` used to gate on `:hover`/`:focus-within` alongside opacity
+ * (none at rest, auto on hover) — the same pattern the touch-device fix below
+ * already had to abandon: gating clickability on a `:hover` match that hasn't
+ * necessarily settled by the time the paired click's hit-test runs means a
+ * single fluid "move onto the row and click" gesture can land its first click
+ * before the browser treats the trigger as interactive, so only the second,
+ * separate click (now safely inside a settled hover state) opens the menu.
+ * Always-auto removes the race outright; opacity alone still hides the
+ * trigger visually at rest. */
 .tree-row--worktree .wt-menu-trigger {
   position: absolute;
   right: 0;
   top: 50%;
   transform: translateY(-50%);
   opacity: 0;
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity var(--transition-fast);
 }
 
@@ -749,7 +758,6 @@
 .tree-row--worktree:focus-within .wt-menu-trigger,
 .wt-menu-trigger[aria-expanded="true"] {
   opacity: 1;
-  pointer-events: auto;
 }
 
 .menu-pop button.menu-pop__item--active {
@@ -1054,28 +1062,26 @@
  * always-on "direct" badge doesn't shift. */
 .tree-row--direct-session.pinned-row .wt-menu-trigger {
   opacity: 0;
-  pointer-events: none;
+  pointer-events: auto;
   transition: opacity var(--transition-fast);
 }
 .tree-row--direct-session.pinned-row:hover .wt-menu-trigger,
 .tree-row--direct-session.pinned-row:focus-within .wt-menu-trigger,
 .tree-row--direct-session.pinned-row .wt-menu-trigger[aria-expanded="true"] {
   opacity: 1;
-  pointer-events: auto;
 }
 
-/* Touch devices have no `:hover` — the reveal-on-hover rules above left the
- * ⋯ trigger `pointer-events: none` at rest, so the first tap only landed on
- * the row underneath (synthesizing a hover-like state) and only the SECOND
- * tap actually hit the button. Keep it always interactive when hover isn't
- * available. Selectors + specificity mirror the rules above exactly so this
- * wins the cascade for every `.wt-menu-trigger` variant (plain worktree rows,
+/* Touch devices have no `:hover`, so the opacity-only reveal above never
+ * fires — force the trigger permanently visible (it was already always
+ * interactive; see the `pointer-events: auto` comment near
+ * `.tree-row--worktree .wt-menu-trigger` above for why that's unconditional
+ * now). Selectors + specificity mirror the rules above exactly so this wins
+ * the cascade for every `.wt-menu-trigger` variant (plain worktree rows,
  * pinned worktree rows, pinned direct-session rows). */
 @media (hover: none) {
   .tree-row--worktree .wt-menu-trigger,
   .tree-row--direct-session.pinned-row .wt-menu-trigger {
     opacity: 1;
-    pointer-events: auto;
   }
 
   /* The trigger and the id chip share the same trailing slot (see

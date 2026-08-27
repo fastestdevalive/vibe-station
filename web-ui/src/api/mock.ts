@@ -89,6 +89,7 @@ export function createMockApi() {
       baseSha: "abc123",
       createdAt: nowIso(),
       pinnedAt: null,
+      hiddenAt: null,
       sortOrder: 1,
     },
     {
@@ -99,6 +100,7 @@ export function createMockApi() {
       baseSha: "def456",
       createdAt: nowIso(),
       pinnedAt: null,
+      hiddenAt: null,
       sortOrder: 2,
     },
     {
@@ -109,6 +111,7 @@ export function createMockApi() {
       baseSha: "fed789",
       createdAt: nowIso(),
       pinnedAt: null,
+      hiddenAt: null,
       sortOrder: 1,
     },
   ];
@@ -384,6 +387,7 @@ export function createMockApi() {
         baseSha: "mock-base-sha",
         createdAt: nowIso(),
         pinnedAt: null,
+        hiddenAt: null,
         mainSessionId: `${wtId}-m`,
       };
       worktrees.push(wt);
@@ -459,6 +463,27 @@ export function createMockApi() {
       if (!wt) throw new ApiError("not found", 404);
       if (wt.pinnedAt != null) {
         wt.pinnedAt = null;
+        emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      }
+      return { ok: true, worktree: structuredClone(wt) };
+    },
+
+    async hideWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      if (wt.hiddenAt == null) {
+        wt.hiddenAt = new Date().toISOString();
+        wt.pinnedAt = null; // hide implies unpin, mirrors the daemon route
+        emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      }
+      return { ok: true, worktree: structuredClone(wt) };
+    },
+
+    async unhideWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      if (wt.hiddenAt != null) {
+        wt.hiddenAt = null;
         emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       }
       return { ok: true, worktree: structuredClone(wt) };
@@ -1038,6 +1063,7 @@ export function createMockApi() {
             baseSha: "mock-base-sha",
             createdAt: nowIso(),
             pinnedAt: null,
+            hiddenAt: null,
             sortOrder: Date.now(),
           };
           worktrees.push(wt);

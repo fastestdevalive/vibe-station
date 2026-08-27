@@ -459,6 +459,7 @@ describe("LeftSidebar", () => {
           baseSha: "abc123",
           createdAt: new Date().toISOString(),
           pinnedAt: new Date().toISOString(),
+          hiddenAt: null,
         },
       });
 
@@ -502,6 +503,7 @@ describe("LeftSidebar", () => {
             baseSha: "def456",
             createdAt: new Date().toISOString(),
             pinnedAt: new Date(now - 10000).toISOString(),
+            hiddenAt: null,
           },
         });
       });
@@ -512,6 +514,95 @@ describe("LeftSidebar", () => {
         );
         expect(labels).toEqual(["direct-agent-1", "wt-2"]);
       });
+    });
+  });
+
+  // ─── Worktree hiding ─────────────────────────────────────────────────────
+  describe("worktree hiding", () => {
+    it("Hide action in the ⋯ menu calls api.hideWorktree and the row disappears from the sidebar", async () => {
+      const localApi = createMockApi();
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
+      const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(trigger);
+
+      const hideItem = await screen.findByRole("menuitem", { name: /^hide$/i });
+      await user.click(hideItem);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+      });
+    });
+
+    it("hiding a pinned worktree removes it from the pinned section too", async () => {
+      const localApi = createMockApi();
+      await localApi.pinWorktree("wt-1");
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      const pinnedLink = screen.getByRole("link", { name: /Open pinned worktree wt-1/i });
+      const pinnedRow = pinnedLink.closest(".pinned-row")! as HTMLElement;
+      const trigger = pinnedRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(trigger);
+
+      const hideItem = await screen.findByRole("menuitem", { name: /^hide$/i });
+      await user.click(hideItem);
+
+      await waitFor(() => {
+        expect(screen.queryByRole("region", { name: /^pinned$/i })).toBeNull();
+      });
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+    });
+
+    it("project menu shows a Hidden worktrees item only once the project has a hidden worktree, and Unhide restores it", async () => {
+      const localApi = createMockApi();
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      // No hidden worktrees yet — the item shouldn't be in the project menu.
+      await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
+      expect(screen.queryByRole("menuitem", { name: /Hidden worktrees/i })).not.toBeInTheDocument();
+      await user.keyboard("{Escape}");
+
+      await localApi.hideWorktree("wt-1");
+
+      await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
+      const hiddenItem = await screen.findByRole("menuitem", { name: /Hidden worktrees \(1\)/i });
+      await user.click(hiddenItem);
+
+      const dialog = await screen.findByRole("dialog", { name: /Hidden worktrees/i });
+      expect(within(dialog).getByText("wt-1")).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: /unhide/i }));
+
+      await waitFor(() => {
+        expect(within(dialog).getByText("No hidden worktrees.")).toBeInTheDocument();
+      });
+      // The worktree is back in the normal sidebar list.
+      expect(screen.getByRole("link", { name: /Open worktree wt-1/i })).toBeInTheDocument();
     });
   });
 

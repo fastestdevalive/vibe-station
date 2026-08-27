@@ -326,6 +326,13 @@ export interface WorktreeRecord {
    * (newest pinned first), so we don't need a separate sort field.
    */
   pinnedAt?: string; // ISO8601
+  /**
+   * When set, this worktree is hidden from the sidebar (both the normal list
+   * and the pinned section) and surfaces only in the project's "Hidden
+   * worktrees" list. Absent ≡ visible. Hiding a pinned worktree clears
+   * `pinnedAt` in the same update — unhiding does not restore the pin.
+   */
+  hiddenAt?: string; // ISO8601
   /** Fractional display-order rank among a project's worktrees (F9 — reordering itself is Part 03). */
   sortOrder: number;
   /**

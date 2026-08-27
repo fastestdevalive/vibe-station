@@ -136,8 +136,9 @@ export function serializeWorktree(projectId: string, w: WorktreeRecord) {
     baseBranch: w.baseBranch,
     baseSha: w.baseSha,
     createdAt: w.createdAt,
-    // Always emit pinnedAt so the client doesn't have to special-case undefined.
+    // Always emit pinnedAt/hiddenAt so the client doesn't have to special-case undefined.
     pinnedAt: w.pinnedAt ?? null,
+    hiddenAt: w.hiddenAt ?? null,
     sortOrder: w.sortOrder,
     // Id of the worktree's main agent session (isMain === true — replaces the
     // old slot==="m" check, Decision 1). Lets the create-dialog JSON path
@@ -656,6 +657,84 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       // Broadcast after the lock has been released — `applyWorktreeUpdated`
       // on the client drops unknown ids, so any reorder with a concurrent
       // `worktree:deleted` is benign.
+      broadcastAll({ type: "worktree:updated", worktree: apiWorktree });
+    }
+    return reply.send({ ok: true, worktree: apiWorktree });
+  });
+
+  // PATCH /worktrees/:id/hide   { hidden: boolean }
+  // Toggles WorktreeRecord.hiddenAt. Idempotent: no-op when already in the
+  // requested state, same rationale as /pin above. Hiding a pinned worktree
+  // clears pinnedAt in the same update — a hidden worktree never sits in the
+  // pinned section. Unhiding does not restore the pin.
+  app.patch("/worktrees/:id/hide", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const bodySchema = z.object({ hidden: z.boolean() });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+    const { hidden } = parsed.data;
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    let outcome:
+      | { kind: "not_found" }
+      | { kind: "noop"; worktree: WorktreeRecord }
+      | { kind: "updated"; worktree: WorktreeRecord } = { kind: "not_found" } as
+      | { kind: "not_found" }
+      | { kind: "noop"; worktree: WorktreeRecord }
+      | { kind: "updated"; worktree: WorktreeRecord };
+
+    try {
+      await mutateProject(project.id, (p) => {
+        const wt = p.worktrees.find((w) => w.id === wtId);
+        if (!wt) {
+          outcome = { kind: "not_found" };
+          return p;
+        }
+        const alreadyHidden = wt.hiddenAt != null;
+        if (alreadyHidden === hidden) {
+          outcome = { kind: "noop", worktree: wt };
+          return p;
+        }
+        const next: ProjectRecord = {
+          ...p,
+          worktrees: p.worktrees.map((w) => {
+            if (w.id !== wtId) return w;
+            if (hidden) {
+              // Hide implies unpin — a hidden worktree never sits in the
+              // pinned section, so drop pinnedAt in the same update.
+              const { pinnedAt: _dropPinned, ...rest } = w;
+              void _dropPinned;
+              return { ...rest, hiddenAt: new Date().toISOString() };
+            }
+            const { hiddenAt: _dropHidden, ...rest } = w;
+            void _dropHidden;
+            return rest;
+          }),
+        };
+        const after = next.worktrees.find((w) => w.id === wtId);
+        if (!after) {
+          outcome = { kind: "not_found" };
+          return p;
+        }
+        outcome = { kind: "updated", worktree: after };
+        return next;
+      });
+    } catch (err) {
+      if (err instanceof Error && /not found/i.test(err.message)) {
+        return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+      }
+      throw err;
+    }
+
+    if (outcome.kind === "not_found") {
+      return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+    }
+    const apiWorktree = serializeWorktree(project.id, outcome.worktree);
+    if (outcome.kind === "updated") {
       broadcastAll({ type: "worktree:updated", worktree: apiWorktree });
     }
     return reply.send({ ok: true, worktree: apiWorktree });

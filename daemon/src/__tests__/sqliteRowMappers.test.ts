@@ -200,6 +200,40 @@ describe("worktree row <-> record round-trip", () => {
     const row = worktreeToRow(wt, "proj-1");
     expect(rowToWorktree(row, [])).toEqual(wt);
   });
+
+  it("round-trips hiddenAt", () => {
+    const wt: WorktreeRecord = {
+      id: "vs-2",
+      branch: "feature-hidden",
+      baseBranch: "main",
+      baseSha: "0".repeat(40),
+      createdAt: "2024-01-01T00:00:00.000Z",
+      hiddenAt: "2024-01-03T00:00:00.000Z",
+      sortOrder: 1,
+      terminalSeq: 0,
+      agentSeq: 0,
+      sessions: [],
+    };
+    const row = worktreeToRow(wt, "proj-1");
+    expect(rowToWorktree(row, [])).toEqual(wt);
+  });
+
+  it("omits hiddenAt entirely when the row column is NULL", () => {
+    const wt: WorktreeRecord = {
+      id: "vs-3",
+      branch: "feature-visible",
+      baseBranch: "main",
+      baseSha: "0".repeat(40),
+      createdAt: "2024-01-01T00:00:00.000Z",
+      sortOrder: 1,
+      terminalSeq: 0,
+      agentSeq: 0,
+      sessions: [],
+    };
+    const row = worktreeToRow(wt, "proj-1");
+    expect(row.hiddenAt).toBeNull();
+    expect(rowToWorktree(row, []).hiddenAt).toBeUndefined();
+  });
 });
 
 describe("project row <-> record round-trip", () => {

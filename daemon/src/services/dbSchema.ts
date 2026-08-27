@@ -42,6 +42,7 @@ export function ensureSchema(db: Database): void {
       baseSha TEXT,
       createdAt TEXT NOT NULL,
       pinnedAt TEXT,
+      hiddenAt TEXT,
       sortOrder REAL NOT NULL,
       terminalSeq INTEGER NOT NULL DEFAULT 0,
       agentSeq INTEGER NOT NULL DEFAULT 0,
@@ -99,6 +100,10 @@ export function ensureSchema(db: Database): void {
   // COLUMN` (idempotent: skipped once the column is present, safe to run on
   // every `getDb()` open like the rest of this function).
   addColumnIfMissing(db, "worktrees", "branchIsPlaceholder", "INTEGER NOT NULL DEFAULT 0");
+  // hiddenAt (hide-worktrees) — set when a worktree is hidden from the
+  // sidebar. NULL for every worktree created before this column existed
+  // (the common case) and for any worktree that has never been hidden.
+  addColumnIfMissing(db, "worktrees", "hiddenAt", "TEXT");
   // spawnedFrom (agent-interaction-workspaces/04-workspaces Phase 4a) — the
   // sessionId this session was spawned from (via the in-app dialogs or a
   // running agent's own `vst --source-agent` shell), or NULL when spawned
