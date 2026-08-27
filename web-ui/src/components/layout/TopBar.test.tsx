@@ -21,7 +21,7 @@ const projects: Project[] = [
   },
 ];
 const worktrees: Worktree[] = [
-  { id: W1, projectId: "proj-1", branch: "main", baseBranch: "main", createdAt: new Date().toISOString(), pinnedAt: null },
+  { id: W1, projectId: "proj-1", branch: "main", baseBranch: "main", createdAt: new Date().toISOString(), pinnedAt: null, hiddenAt: null },
 ];
 
 const emptyCanvas: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };

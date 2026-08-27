@@ -36,6 +36,12 @@ export interface Worktree {
    * default sort order (newest first).
    */
   pinnedAt: string | null;
+  /**
+   * ISO8601 timestamp set when the user hides this worktree from the
+   * sidebar; null when visible. Hidden worktrees surface only in the
+   * project's "Hidden worktrees" list. Hiding clears `pinnedAt` server-side.
+   */
+  hiddenAt: string | null;
   /** Fractional display-order rank among a project's worktrees (F9). Optional for legacy/test fixtures predating this field. */
   sortOrder?: number;
   /**
