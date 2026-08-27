@@ -117,7 +117,7 @@ describe("Worktree routes", () => {
       payload: { projectId, branch: `${prefix}-${branchSuffix}-${Date.now()}`, modeId: "bug-fix" },
     });
     expect(res.statusCode).toBe(201);
-    return res.json<{ id: string; pinnedAt: string | null }>();
+    return res.json<{ id: string; pinnedAt: string | null; hiddenAt: string | null }>();
   }
 
   it("GET /worktrees?project=:id returns empty array initially", async () => {
@@ -872,6 +872,123 @@ describe("Worktree routes", () => {
       }
       const pinned = items.find((w) => w.id === wt.id);
       expect(pinned?.pinnedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
+
+  // ─── PATCH /worktrees/:id/hide ──────────────────────────────────────────
+  describe("PATCH /worktrees/:id/hide", () => {
+    it("serializes hiddenAt as null for a visible worktree", async () => {
+      const wt = await createWorktree("hide", "unhidden");
+      expect(wt.hiddenAt).toBeNull();
+    });
+
+    it("PATCH { hidden: true } sets hiddenAt to an ISO timestamp", async () => {
+      const wt = await createWorktree("hide", "set");
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ ok: boolean; worktree: { id: string; hiddenAt: string | null } }>();
+      expect(body.ok).toBe(true);
+      expect(body.worktree.id).toBe(wt.id);
+      expect(body.worktree.hiddenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
+
+    it("PATCH { hidden: false } clears hiddenAt", async () => {
+      const wt = await createWorktree("hide", "clear");
+      await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/hide`, payload: { hidden: true } });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ worktree: { hiddenAt: string | null } }>().worktree.hiddenAt).toBeNull();
+    });
+
+    it("is idempotent: hiding twice keeps the original timestamp", async () => {
+      const wt = await createWorktree("hide", "idempotent");
+      const first = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: true },
+      });
+      const ts1 = first.json<{ worktree: { hiddenAt: string } }>().worktree.hiddenAt;
+      await new Promise((r) => setTimeout(r, 10));
+      const second = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: true },
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.json<{ worktree: { hiddenAt: string } }>().worktree.hiddenAt).toBe(ts1);
+    });
+
+    it("hiding a pinned worktree clears pinnedAt in the same update", async () => {
+      const wt = await createWorktree("hide", "unpin-on-hide");
+      await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/pin`, payload: { pinned: true } });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ worktree: { pinnedAt: string | null; hiddenAt: string | null } }>();
+      expect(body.worktree.hiddenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(body.worktree.pinnedAt).toBeNull();
+    });
+
+    it("unhiding does not restore a pin that was cleared by hiding", async () => {
+      const wt = await createWorktree("hide", "no-restore-pin");
+      await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/pin`, payload: { pinned: true } });
+      await app.inject({ method: "PATCH", url: `/worktrees/${wt.id}/hide`, payload: { hidden: true } });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: false },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ worktree: { pinnedAt: string | null; hiddenAt: string | null } }>();
+      expect(body.worktree.hiddenAt).toBeNull();
+      expect(body.worktree.pinnedAt).toBeNull();
+    });
+
+    it("returns 404 for an unknown worktree id", async () => {
+      const res = await app.inject({
+        method: "PATCH",
+        url: "/worktrees/does-not-exist/hide",
+        payload: { hidden: true },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it("returns 400 for an invalid body", async () => {
+      const wt = await createWorktree("hide", "badbody");
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: "yes" },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("GET /worktrees response includes hiddenAt for every record", async () => {
+      const wt = await createWorktree("hide", "listshape");
+      await app.inject({
+        method: "PATCH",
+        url: `/worktrees/${wt.id}/hide`,
+        payload: { hidden: true },
+      });
+      const res = await app.inject({ method: "GET", url: "/worktrees" });
+      expect(res.statusCode).toBe(200);
+      const items = res.json<Array<{ id: string; hiddenAt: string | null }>>();
+      for (const w of items) {
+        expect(w).toHaveProperty("hiddenAt");
+      }
+      const hidden = items.find((w) => w.id === wt.id);
+      expect(hidden?.hiddenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     });
   });
 

@@ -350,6 +350,26 @@ export function createClientApi() {
       return parseJson<{ ok: true; worktree: Worktree }>(res);
     },
 
+    async hideWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/hide`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: true }),
+      });
+      return parseJson<{ ok: true; worktree: Worktree }>(res);
+    },
+
+    async unhideWorktree(id: string): Promise<{ ok: true; worktree: Worktree }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/hide`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: false }),
+      });
+      return parseJson<{ ok: true; worktree: Worktree }>(res);
+    },
+
     /** Cosmetic rename (F2). Empty string clears back to the default (falls back to `branch`). */
     async renameWorktree(id: string, name: string): Promise<{ ok: true; name: string | null }> {
       const root = baseUrl();

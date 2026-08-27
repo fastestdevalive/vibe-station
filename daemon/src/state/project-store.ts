@@ -254,8 +254,8 @@ function writeProjectFull(record: ProjectRecord): void {
     db.prepare("DELETE FROM worktrees WHERE projectId = ?").run(p.id);
 
     const insertWorktree = db.prepare(
-      `INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
-       VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)`,
+      `INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, hiddenAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
+       VALUES (@id, @projectId, @name, @branch, @baseBranch, @baseSha, @createdAt, @pinnedAt, @hiddenAt, @sortOrder, @terminalSeq, @agentSeq, @branchIsPlaceholder)`,
     );
     const insertSession = db.prepare(
       `INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch)

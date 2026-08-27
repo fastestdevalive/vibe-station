@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -29,6 +29,7 @@ import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
 import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
@@ -183,9 +184,25 @@ export function LeftSidebar({
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
+  /** Non-hidden worktrees, grouped by project — the only ones rendered in the
+   *  normal per-project list. Hidden worktrees surface only via `hiddenWorktreeMap`
+   *  below (the project's "Hidden worktrees" dialog). */
   const worktreeMap = useMemo(() => {
     const m: Record<string, Worktree[]> = {};
-    for (const w of worktrees) (m[w.projectId] ??= []).push(w);
+    for (const w of worktrees) {
+      if (w.hiddenAt != null) continue;
+      (m[w.projectId] ??= []).push(w);
+    }
+    return m;
+  }, [worktrees]);
+  /** Hidden worktrees, grouped by project — feeds the "Hidden worktrees" dialog
+   *  and the count shown in the project overflow menu. */
+  const hiddenWorktreeMap = useMemo(() => {
+    const m: Record<string, Worktree[]> = {};
+    for (const w of worktrees) {
+      if (w.hiddenAt == null) continue;
+      (m[w.projectId] ??= []).push(w);
+    }
     return m;
   }, [worktrees]);
   const sessionMap = useMemo(() => {
@@ -252,7 +269,7 @@ export function LeftSidebar({
   const pinnedWorktrees = useMemo(
     () =>
       worktrees
-        .filter((w) => w.pinnedAt != null && !hiddenProjectIds.has(w.projectId))
+        .filter((w) => w.pinnedAt != null && w.hiddenAt == null && !hiddenProjectIds.has(w.projectId))
         .slice()
         .sort((a, b) => (b.pinnedAt ?? "").localeCompare(a.pinnedAt ?? "")),
     [worktrees, hiddenProjectIds],
@@ -564,6 +581,8 @@ export function LeftSidebar({
   const visible = isMobile ? mobileSidebarOpen : !collapsed;
   const prevVisibleRef = useRef<boolean>(!visible);
   const [filterMenuRect, setFilterMenuRect] = useState<DOMRect | null>(null);
+  /** Id of the project whose "Hidden worktrees" dialog is open, or null when closed. */
+  const [hiddenWtDialogProjectId, setHiddenWtDialogProjectId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const [pendingTerminateSession, setPendingTerminateSession] = useState<Session | null>(null);
@@ -1795,6 +1814,13 @@ export function LeftSidebar({
         />
       ) : null}
 
+      <HiddenWorktreesDialog
+        open={hiddenWtDialogProjectId !== null}
+        worktrees={hiddenWtDialogProjectId ? (hiddenWorktreeMap[hiddenWtDialogProjectId] ?? []) : []}
+        api={api}
+        onClose={() => setHiddenWtDialogProjectId(null)}
+      />
+
       <ConfirmDialog
         open={pendingDelete !== null}
         title="Delete worktree?"
@@ -1894,6 +1920,27 @@ export function LeftSidebar({
                   fill={wtMenu.worktree.pinnedAt != null ? "currentColor" : "none"}
                 />
                 {wtMenu.worktree.pinnedAt != null ? "Unpin" : "Pin to top"}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="menu-pop__item menu-pop__item--icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const wtId = wtMenu.worktree.id;
+                  setWtMenu(null);
+                  void (async () => {
+                    try {
+                      await api.hideWorktree(wtId);
+                      // Store stays current via the `worktree:updated` WS event.
+                    } catch {
+                      /* surface errors later */
+                    }
+                  })();
+                }}
+              >
+                <EyeOff size={13} aria-hidden />
+                Hide
               </button>
               <button
                 type="button"
@@ -2071,6 +2118,25 @@ export function LeftSidebar({
                 <EyeOff size={13} aria-hidden />
                 Hide project
               </button>
+              {(() => {
+                const hiddenCount = hiddenWorktreeMap[projMenu.project.id]?.length ?? 0;
+                if (hiddenCount === 0) return null;
+                return (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menu-pop__item menu-pop__item--icon"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setHiddenWtDialogProjectId(projMenu.project.id);
+                      setProjMenu(null);
+                    }}
+                  >
+                    <Eye size={13} aria-hidden />
+                    {`Hidden worktrees (${hiddenCount})`}
+                  </button>
+                );
+              })()}
             </div>,
             document.body,
           )

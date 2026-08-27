@@ -23,6 +23,7 @@ describe("NewAgentDialog — worktree with no mainSessionId", () => {
       baseSha: "0".repeat(40),
       createdAt: new Date().toISOString(),
       pinnedAt: null,
+      hiddenAt: null,
       mainSessionId: null,
     }));
     const chatSpy = vi.spyOn(api, "sendChat");
