@@ -411,6 +411,17 @@ const WorktreeUpdatedEvent = z.object({
   worktree: z.record(z.string(), z.unknown()),
 });
 
+// Pinned-order-sync — broadcast whenever PUT /user/ordered-lists/:scopeKey
+// upserts a row (routes/orderedLists.ts). `scopeKey` is generic (Decision 1,
+// plan-pinned-order-sync.md) even though only "pinned-all" is allowlisted
+// server-side today.
+const OrderedListUpdatedEvent = z.object({
+  type: z.literal("orderedList:updated"),
+  scopeKey: z.string(),
+  itemIds: z.array(z.string()),
+  updatedAt: z.string(),
+});
+
 const ModeCreatedEvent = z.object({
   type: z.literal("mode:created"),
   mode: z.record(z.string(), z.unknown()),
@@ -488,6 +499,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   WorktreeCreatedEvent,
   WorktreeDeletedEvent,
   WorktreeUpdatedEvent,
+  OrderedListUpdatedEvent,
   ModeCreatedEvent,
   ModeUpdatedEvent,
   ModeDeletedEvent,

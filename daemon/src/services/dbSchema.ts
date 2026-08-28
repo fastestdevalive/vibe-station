@@ -90,6 +90,22 @@ export function ensureSchema(db: Database): void {
       status TEXT NOT NULL CHECK (status IN ('ok', 'failed')),
       error TEXT
     );
+
+    -- Per-user, per-scope ordered id list (pinned-order-sync) — generic over
+    -- scopeKey so future client-only orderings (e.g. the sidebar's project
+    -- tree order, saved-workspace order) can reuse this table without a new
+    -- migration. No users table exists yet, so userId is a bare string,
+    -- always 'local' today (routes/orderedLists.ts) — see PRD-scenes.md's
+    -- identical "single implicit user, shaped for a real user model later"
+    -- direction. itemIds is a JSON-encoded string array, mirroring the
+    -- client's sortOrders[scopeKey] shape exactly.
+    CREATE TABLE IF NOT EXISTS user_ordered_lists (
+      userId TEXT NOT NULL,
+      scopeKey TEXT NOT NULL,
+      itemIds TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      PRIMARY KEY (userId, scopeKey)
+    );
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above is a no-op against a `worktrees` table

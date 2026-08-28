@@ -21,6 +21,7 @@ import type { ApiInstance } from "@/api";
 import type { Project, Session, SessionState, Worktree } from "@/api/types";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription } from "@/hooks/useSubscription";
@@ -297,10 +298,15 @@ export function LeftSidebar({
   const hasPinned = pinnedWorktrees.length > 0 || pinnedDirectSessions.length > 0;
 
   // --- Rename + drag-reorder (Part 03 Phase 2): real daemon endpoints for
-  // regular (unpinned) worktree/direct-session scopes. Pinned sub-lists keep
-  // the old local-only `sortOrders` mechanism (see `applyLocalSortOrder`
-  // above) — the server's per-worktree/per-project `sortOrder` column can't
-  // express a cross-project pinned order (Decision 1 exception). ---
+  // regular (unpinned) worktree/direct-session scopes, via the per-worktree/
+  // per-project `sortOrder` column, which can't express a cross-project
+  // pinned order (Decision 1 exception). The `pinned-all` sub-list is ALSO
+  // daemon-synced now (pinned-order-sync), but through a separate mechanism:
+  // a generic `user_ordered_lists` table keyed by scopeKey, not the
+  // `sortOrder` column — see `handleReorder`'s `scopeKey === "pinned-all"`
+  // branch below. Every other scope (`projects`, `workspaces:global`) still
+  // uses the old local-only `sortOrders` mechanism (`applyLocalSortOrder`
+  // above). ---
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const setSortOrder = useWorkspaceStore((s) => s.setSortOrder);
   // --- Saved workspace layouts (per-worktree, purely client-side — no daemon
@@ -408,7 +414,9 @@ export function LeftSidebar({
   /** Reorder scope: pinned worktrees and direct sessions float in a single drag-order list,
    *  independent of pin recency once the user has dragged them (documented
    *  choice — see task write-up: pin recency is only the *default* order).
-   *  Pinned lists keep the OLD local-only mechanism (Decision 1 exception). */
+   *  `sortOrders["pinned-all"]` is now daemon-synced (pinned-order-sync) —
+   *  hydrated on mount/reconnect and kept live via `orderedList:updated`
+   *  (see `useServerSync.ts`), so this read site needs no changes. */
   const orderedPinnedItems = useMemo(() => {
     const items = [
       ...pinnedWorktrees.map((w) => ({ id: w.id, kind: "worktree" as const, data: w })),
@@ -435,7 +443,9 @@ export function LeftSidebar({
     return order.map((id) => byId.get(id)!).filter(Boolean);
   }, [visibleProjects, sortOrders]);
 
-  /** Pinned-scope reorder handler — unchanged local-only mechanism. */
+  /** Pinned-scope reorder handler. `pinned-all` is now daemon-synced
+   *  (pinned-order-sync) — every other scope stays on the old local-only
+   *  `sortOrders` mechanism (see the comment above `sortOrders`). */
   function handleReorder(scopeKey: string, currentIds: string[], e: DragEndEvent) {
     // Mark BEFORE the early return: a drag that ends where it started still
     // produces the trailing click that would navigate the row's <a href>.
@@ -449,6 +459,18 @@ export function LeftSidebar({
     next.splice(from, 1);
     next.splice(to, 0, String(active.id));
     setSortOrder(scopeKey, next);
+
+    if (scopeKey === "pinned-all") {
+      const p = api.setOrderedList("pinned-all", next).catch(() => {
+        // Stale until the next successful write or reload — there is
+        // nothing to roll back to, local state already reflects intent.
+      });
+      markOrderedListWrite(p);
+      // Compare-and-clear: if a second drag started a newer write before
+      // this one settles, clearOrderedListWrite no-ops instead of wiping
+      // the newer promise out from under it.
+      void p.finally(() => clearOrderedListWrite(p));
+    }
   }
 
   /** Workspaces-section reorder — client-only, mirrors `handleReorder` above
