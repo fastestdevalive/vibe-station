@@ -465,6 +465,14 @@ export type WSEvent =
       worktree: Worktree;
     }
   | {
+      /** Broadcast after PUT /user/ordered-lists/:scopeKey (pinned-order-sync).
+       *  `scopeKey` is generic even though only "pinned-all" is wired up today. */
+      type: "orderedList:updated";
+      scopeKey: string;
+      itemIds: string[];
+      updatedAt: string;
+    }
+  | {
       type: "mode:created";
       mode: Mode;
     }

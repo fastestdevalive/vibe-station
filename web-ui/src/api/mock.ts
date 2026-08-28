@@ -57,6 +57,9 @@ const MOCK_FS_TREE: Record<string, string[]> = {
 };
 
 export function createMockApi() {
+  /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
+  const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
+
   const projects: Project[] = [
     {
       id: "proj-a",
@@ -504,6 +507,23 @@ export function createMockApi() {
       wt.sortOrder = sortOrder;
       emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       return { ok: true, sortOrder };
+    },
+
+    async getOrderedList(scopeKey: string): Promise<{ scopeKey: string; itemIds: string[]; updatedAt: string | null }> {
+      const row = orderedLists.get(scopeKey);
+      return row
+        ? { scopeKey, itemIds: [...row.itemIds], updatedAt: row.updatedAt }
+        : { scopeKey, itemIds: [], updatedAt: null };
+    },
+
+    async setOrderedList(
+      scopeKey: string,
+      itemIds: string[],
+    ): Promise<{ ok: true; scopeKey: string; itemIds: string[]; updatedAt: string }> {
+      const updatedAt = nowIso();
+      orderedLists.set(scopeKey, { itemIds: [...itemIds], updatedAt });
+      emit({ type: "orderedList:updated", scopeKey, itemIds: [...itemIds], updatedAt });
+      return { ok: true, scopeKey, itemIds: [...itemIds], updatedAt };
     },
 
     async listSessions(worktreeId?: string): Promise<Session[]> {

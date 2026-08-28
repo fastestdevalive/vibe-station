@@ -334,6 +334,90 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   });
 });
 
+// --- pinned-order-sync: mount-time migration/hydration + WS reducer ---
+describe("useServerSync — pinned order sync", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useWorkspaceStore.setState({ sortOrders: {} });
+  });
+
+  it("2.T2 pushes an existing local order to the daemon when the server has none yet", async () => {
+    useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["a", "b"] } });
+    const api = createMockApi();
+    const setOrderedListSpy = vi.spyOn(api, "setOrderedList");
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    await waitFor(() => {
+      expect(setOrderedListSpy).toHaveBeenCalledWith("pinned-all", ["a", "b"]);
+    });
+  });
+
+  it("2.T3 hydrates local sortOrders from an existing daemon-side order, overriding stale local state", async () => {
+    useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["stale"] } });
+    const api = createMockApi();
+    await api.setOrderedList("pinned-all", ["c", "d"]);
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sortOrders["pinned-all"]).toEqual(["c", "d"]);
+    });
+  });
+
+  it("2.T4 applies an orderedList:updated WS event for pinned-all, ignores other scopeKeys", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "orderedList:updated",
+        scopeKey: "pinned-all",
+        itemIds: ["x", "y"],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sortOrders["pinned-all"]).toEqual(["x", "y"]);
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "orderedList:updated",
+        scopeKey: "projects",
+        itemIds: ["should-not-apply"],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useWorkspaceStore.getState().sortOrders["projects"]).toBeUndefined();
+  });
+
+  it("2.T5 skips the hydrate branch while a pinned-order write is in flight", async () => {
+    useWorkspaceStore.setState({ sortOrders: { "pinned-all": ["local"] } });
+    const api = createMockApi();
+    await api.setOrderedList("pinned-all", ["server"]);
+
+    const { markOrderedListWrite } = await import("./useServerSync");
+    let resolveWrite!: () => void;
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = resolve;
+    });
+    markOrderedListWrite(pendingWrite);
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    // The hydrate branch would normally overwrite local with the server's
+    // ["server"] value — it must NOT while the write guard is set.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useWorkspaceStore.getState().sortOrders["pinned-all"]).toEqual(["local"]);
+
+    resolveWrite();
+  });
+});
+
 // --- worktree:deleted sweeps `tools:<worktreeId>` tiles, which carry no
 // sessionId and so are unreachable by the session-keyed cleanup ---
 describe("useServerSync — worktree:deleted tools-tile cleanup", () => {

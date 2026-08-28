@@ -23,6 +23,28 @@ import {
  */
 let inFlightRefresh: Promise<void> | null = null;
 
+/** Dedup guard for `syncPinnedOrder`, mirroring `inFlightRefresh` above. */
+let inFlightPinnedOrderSync: Promise<void> | null = null;
+
+/**
+ * Set while a `pinned-all` `PUT /user/ordered-lists/pinned-all` (LeftSidebar's
+ * drag handler) is in flight. Guards `syncPinnedOrder`'s hydrate branch below
+ * from clobbering a just-made local drag with a stale server value fetched by
+ * a reconnect-triggered refresh landing mid-write (pinned-order-sync CUJ 1
+ * "Reconnect race"). `clearOrderedListWrite` is compare-and-clear so a second
+ * drag's still-pending write can't be cleared early by the first drag's
+ * `finally` settling after a newer write started (Risk 4).
+ */
+let orderedListWriteInFlight: Promise<unknown> | null = null;
+
+export function markOrderedListWrite(p: Promise<unknown>): void {
+  orderedListWriteInFlight = p;
+}
+
+export function clearOrderedListWrite(p: Promise<unknown>): void {
+  if (orderedListWriteInFlight === p) orderedListWriteInFlight = null;
+}
+
 /**
  * Mount once at the top of the authenticated app (in `Workspace`). Owns:
  *
@@ -85,9 +107,38 @@ export function useServerSync(api: ApiInstance): void {
       return inFlightRefresh;
     }
 
+    // Pinned-order-sync (Decision 5): mirrors `refresh()`'s trigger points
+    // (mount + every `ws:open`, including reconnects) but is a separate,
+    // independently-dedup'd resource — a stale bundle refetch racing this
+    // is unrelated. The hydrate branch is skipped while a local drag's
+    // write is in flight (`orderedListWriteInFlight`) so a reconnect landing
+    // mid-drag can't clobber the just-made local order with a stale server
+    // value; the pending write's own response/WS-echo settles it right after.
+    function syncPinnedOrder(): Promise<void> {
+      if (inFlightPinnedOrderSync) return inFlightPinnedOrderSync;
+      inFlightPinnedOrderSync = (async () => {
+        try {
+          const pinnedOrder = await api.getOrderedList("pinned-all");
+          if (pinnedOrder.updatedAt === null) {
+            const local = useWorkspaceStore.getState().sortOrders["pinned-all"];
+            if (local && local.length > 0) {
+              await api.setOrderedList("pinned-all", local);
+            }
+          } else if (!orderedListWriteInFlight) {
+            useWorkspaceStore.getState().setSortOrder("pinned-all", pinnedOrder.itemIds);
+          }
+        } finally {
+          inFlightPinnedOrderSync = null;
+        }
+      })();
+      return inFlightPinnedOrderSync;
+    }
+
     void refresh();
+    void syncPinnedOrder();
     const off = api.on("ws:open", () => {
       void refresh();
+      void syncPinnedOrder();
     });
     return off;
   }, [api, replaceAll, syncSessionsFromApi]);
@@ -227,6 +278,11 @@ export function useServerSync(api: ApiInstance): void {
         }
       }
     });
+    const offOrderedListUpdated = api.on("orderedList:updated", (ev) => {
+      if (ev.type === "orderedList:updated" && ev.scopeKey === "pinned-all") {
+        useWorkspaceStore.getState().setSortOrder("pinned-all", ev.itemIds);
+      }
+    });
     return () => {
       offProjCreated();
       offProjDeleted();
@@ -240,6 +296,7 @@ export function useServerSync(api: ApiInstance): void {
       offSessResumed();
       offSessDeleted();
       offSessUpdated();
+      offOrderedListUpdated();
     };
   }, [
     api,

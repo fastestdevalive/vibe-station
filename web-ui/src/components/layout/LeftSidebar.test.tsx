@@ -21,6 +21,16 @@ import { useServerSync } from "@/hooks/useServerSync";
  */
 let capturedOnDragStart: (() => void) | null = null;
 let capturedOnDragEnd: ((e: DragEndEvent) => void) | null = null;
+/**
+ * Pinned-order-sync: with a pinned item AND a regular (unpinned) worktree
+ * both present, more than one `DndContext` renders, so the single
+ * "last one wins" capture above can't isolate the pinned list's handler
+ * (it renders first in JSX, not last). Pair each `DndContext`'s `onDragEnd`
+ * with its immediate child `SortableContext`'s `items` (the id list) so
+ * tests can pick the pair whose `items` match the pinned list.
+ */
+let capturedDndPairs: Array<{ onDragEnd: (e: DragEndEvent) => void; items: string[] }> = [];
+let pendingOnDragEnd: ((e: DragEndEvent) => void) | null = null;
 vi.mock("@dnd-kit/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@dnd-kit/core")>();
   return {
@@ -28,7 +38,24 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
     DndContext: (props: Parameters<typeof actual.DndContext>[0]) => {
       capturedOnDragStart = (props.onDragStart as (() => void) | undefined) ?? null;
       capturedOnDragEnd = props.onDragEnd ?? null;
+      pendingOnDragEnd = props.onDragEnd ?? null;
       return createElement(actual.DndContext, props);
+    },
+  };
+});
+vi.mock("@dnd-kit/sortable", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@dnd-kit/sortable")>();
+  return {
+    ...actual,
+    SortableContext: (props: Parameters<typeof actual.SortableContext>[0]) => {
+      if (pendingOnDragEnd) {
+        capturedDndPairs.push({
+          onDragEnd: pendingOnDragEnd,
+          items: (props.items as Array<string | number>).map(String),
+        });
+        pendingOnDragEnd = null;
+      }
+      return createElement(actual.SortableContext, props);
     },
   };
 });
@@ -47,6 +74,8 @@ describe("LeftSidebar", () => {
   beforeEach(() => {
     capturedOnDragStart = null;
     capturedOnDragEnd = null;
+    capturedDndPairs = [];
+    pendingOnDragEnd = null;
     localStorage.clear();
     useWorkspaceStore.persist.clearStorage?.();
     useWorkspaceStore.setState({
@@ -514,6 +543,123 @@ describe("LeftSidebar", () => {
         );
         expect(labels).toEqual(["direct-agent-1", "wt-2"]);
       });
+    });
+  });
+
+  // ─── Pinned-order-sync: daemon-persisted pinned-list drag order ────────────
+  describe("pinned order sync", () => {
+    beforeEach(() => {
+      // Prevent a prior test's pinned-all order from leaking into this one's
+      // CUJ-2 migration check (a non-empty local order + a fresh mock api's
+      // empty server-side row would otherwise auto-push on mount).
+      useWorkspaceStore.setState({ sortOrders: {} });
+    });
+
+    /**
+     * wt-1 (proj-a) + wt-3 (proj-b) — a CROSS-project pair. Every other
+     * DndContext in this fixture is scoped to a single project, so no other
+     * SortableContext's `items` can ever equal this exact pair; that's
+     * precisely the reason the pinned list needs its own daemon-synced
+     * mechanism (Problem, plan-pinned-order-sync.md). Using a same-project
+     * pair here (e.g. wt-1 + wt-2) would collide with proj-a's own regular
+     * worktree-order DndContext, which happens to list exactly those two.
+     */
+    async function pinCrossProjectPair(localApi: ReturnType<typeof createMockApi>) {
+      await localApi.pinWorktree("wt-1");
+      await localApi.pinWorktree("wt-3");
+    }
+
+    function findPinnedPair() {
+      return capturedDndPairs.find(
+        (p) => p.items.length === 2 && p.items.includes("wt-1") && p.items.includes("wt-3"),
+      );
+    }
+
+    it("3.T1 dragging a pinned item calls api.setOrderedList with the new order", async () => {
+      const localApi = createMockApi();
+      await pinCrossProjectPair(localApi);
+      const setOrderedListSpy = vi.spyOn(localApi, "setOrderedList");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      await waitFor(() => {
+        expect(findPinnedPair()).toBeDefined();
+      });
+      const pinnedPair = findPinnedPair()!;
+      const [firstId, secondId] = pinnedPair.items;
+
+      act(() => {
+        pinnedPair.onDragEnd({
+          active: { id: firstId },
+          over: { id: secondId },
+        } as DragEndEvent);
+      });
+
+      await waitFor(() => {
+        expect(setOrderedListSpy).toHaveBeenCalledWith(
+          "pinned-all",
+          expect.arrayContaining([firstId, secondId]),
+        );
+      });
+      // The dragged item must actually have moved — not a same-position no-op.
+      const [, calledOrder] = setOrderedListSpy.mock.calls[setOrderedListSpy.mock.calls.length - 1]!;
+      expect(calledOrder).not.toEqual(pinnedPair.items);
+    });
+
+    it("3.T2 an incoming orderedList:updated WS event re-renders the pinned list in the new order, no reload", async () => {
+      const localApi = createMockApi();
+      await pinCrossProjectPair(localApi);
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("region", { name: /^pinned$/i });
+
+      act(() => {
+        localApi.__test.emit({
+          type: "orderedList:updated",
+          scopeKey: "pinned-all",
+          itemIds: ["wt-3", "wt-1"],
+          updatedAt: new Date().toISOString(),
+        });
+      });
+
+      await waitFor(() => {
+        const region = screen.getByRole("region", { name: /^pinned$/i });
+        const labels = Array.from(region.querySelectorAll(".pinned-row__primary")).map(
+          (n) => n.textContent,
+        );
+        expect(labels).toEqual(["wt-main", "wt-1"]);
+      });
+    });
+
+    it("3.T3 reordering the (unrelated) projects scope does not call api.setOrderedList", async () => {
+      const localApi = createMockApi();
+      const setOrderedListSpy = vi.spyOn(localApi, "setOrderedList");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      act(() => {
+        useWorkspaceStore.getState().setSortOrder("projects", ["proj-b", "proj-a"]);
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(setOrderedListSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -12,6 +12,7 @@ import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerModeRoutes } from "./routes/modes.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerOrderedListsRoutes } from "./routes/orderedLists.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerWSEndpoint } from "./ws/server.js";
@@ -137,6 +138,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   registerAttachmentRoutes(app);
   registerModeRoutes(app);
   registerSettingsRoutes(app);
+  registerOrderedListsRoutes(app);
   registerFsRoutes(app);
   await registerWSEndpoint(app, noAuth ? undefined : token);
 

@@ -392,6 +392,27 @@ export function createClientApi() {
       return parseJson<{ ok: true; sortOrder: number }>(res);
     },
 
+    /** Daemon-persisted ordered id list for a given scope (pinned-order-sync). */
+    async getOrderedList(scopeKey: string): Promise<{ scopeKey: string; itemIds: string[]; updatedAt: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/user/ordered-lists/${encodeURIComponent(scopeKey)}`);
+      return parseJson<{ scopeKey: string; itemIds: string[]; updatedAt: string | null }>(res);
+    },
+
+    /** Persist the full ordered id list for a given scope (pinned-order-sync). */
+    async setOrderedList(
+      scopeKey: string,
+      itemIds: string[],
+    ): Promise<{ ok: true; scopeKey: string; itemIds: string[]; updatedAt: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/user/ordered-lists/${encodeURIComponent(scopeKey)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemIds }),
+      });
+      return parseJson<{ ok: true; scopeKey: string; itemIds: string[]; updatedAt: string }>(res);
+    },
+
     async listSessions(worktreeId?: string): Promise<Session[]> {
       const root = baseUrl();
       const url = worktreeId
