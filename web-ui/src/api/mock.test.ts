@@ -130,6 +130,31 @@ describe("mock api contract", () => {
     off();
   });
 
+  it("2.T1 getOrderedList/setOrderedList round-trip and emit orderedList:updated", async () => {
+    const api = createMockApi();
+    const handler = vi.fn();
+    const off = api.on("orderedList:updated", handler);
+
+    expect(await api.getOrderedList("pinned-all")).toEqual({
+      scopeKey: "pinned-all",
+      itemIds: [],
+      updatedAt: null,
+    });
+
+    const res = await api.setOrderedList("pinned-all", ["x"]);
+    expect(res.ok).toBe(true);
+    expect(res.itemIds).toEqual(["x"]);
+    expect(typeof res.updatedAt).toBe("string");
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "orderedList:updated", scopeKey: "pinned-all", itemIds: ["x"] }),
+    );
+
+    const after = await api.getOrderedList("pinned-all");
+    expect(after.itemIds).toEqual(["x"]);
+    expect(after.updatedAt).toBe(res.updatedAt);
+    off();
+  });
+
   it("renameSession updates name/nameSource, clears on empty string, and emits session:updated", async () => {
     const api = createMockApi();
     const handler = vi.fn();
