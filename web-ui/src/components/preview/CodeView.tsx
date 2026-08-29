@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
 import { languageForFilePath } from "./codeHighlight";
 import { pickShikiLang } from "./previewLang";
-import { escapeHtml, getShikiHighlighter, innerFromShikiHtml } from "./shikiHighlighter";
+import { escapeHtml, highlightDocumentLines } from "./shikiHighlighter";
 
 interface CodeViewProps {
   code: string;
@@ -35,23 +35,7 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
     let cancelled = false;
     void (async () => {
       try {
-        const h = await getShikiHighlighter();
-        const split = code.split("\n");
-        const out: string[] = [];
-        for (const line of split) {
-          const payload = line.length === 0 ? " " : line;
-          try {
-            const html = h.codeToHtml(payload, { lang: shikiLang, theme: themeId });
-            out.push(innerFromShikiHtml(html));
-          } catch {
-            try {
-              const html = h.codeToHtml(payload, { lang: "plaintext", theme: themeId });
-              out.push(innerFromShikiHtml(html));
-            } catch {
-              out.push(escapeHtml(line));
-            }
-          }
-        }
+        const out = await highlightDocumentLines(code, shikiLang, themeId);
         if (!cancelled) setHighlightedLines(out);
       } catch {
         if (!cancelled) setHighlightedLines(null);
