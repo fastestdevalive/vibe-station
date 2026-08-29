@@ -42,7 +42,7 @@ export function registerOrderedListsRoutes(app: FastifyInstance): void {
     }
     const { scopeKey } = parsedParams.data;
     const { itemIds, updatedAt } = setOrderedList(scopeKey, parsedBody.data.itemIds);
-    broadcastAll({ type: "orderedList:updated", scopeKey, itemIds, updatedAt });
+    broadcastAll({ type: "orderedList:updated", scopeKey, itemIds, updatedAt: updatedAt! });
     return reply.send({ ok: true, scopeKey, itemIds, updatedAt });
   });
 }
