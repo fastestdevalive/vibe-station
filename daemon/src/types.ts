@@ -81,7 +81,9 @@ export type NormalizedEventKind =
   | "usage"
   | "result"
   | "error"
-  | "status";
+  | "status"
+  | "mode_update"
+  | "commands_update";
 
 /** Token / cost usage numbers, normalized across harnesses. */
 export interface UsageInfo {
@@ -108,6 +110,48 @@ export interface Attachment {
   size: number;
   mime: string;
 }
+
+/**
+ * Normalized non-text (or text-in-a-mixed-array) content block, carried in
+ * `NormalizedEvent.blocks` (acp-normalize-superset, Gap 1). `type:"text"`
+ * blocks are a redundant copy of `NormalizedEvent.text` — kept for order,
+ * never the only place text lives.
+ */
+export interface NormalizedContentBlock {
+  type: "text" | "image" | "audio" | "resource" | "resource_link";
+  /** `type:"text"` only */
+  text?: string;
+  /** `type:"image"|"audio"|"resource_link"` */
+  mimeType?: string;
+  /** base64, `type:"image"|"audio"` only */
+  data?: string;
+  /** `type:"resource_link"`, or `type:"resource"`'s nested `resource.uri` */
+  uri?: string;
+  /** `type:"resource_link"` only */
+  name?: string;
+}
+
+/** A structured file-edit diff from a `ToolCallContent` entry (Gap 2). */
+export interface ToolDiff {
+  /** absolute file path */
+  path: string;
+  /** absent ⇒ new file */
+  oldText?: string;
+  newText: string;
+}
+
+/** ACP `ToolKind` union, verbatim (Gap 4). */
+export type AcpToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
 
 /**
  * One normalized chat event. This is the single shape the UI renders and the
@@ -168,6 +212,20 @@ export interface NormalizedEvent {
    * core can capture + persist it (Decision 10) without parsing raw CLI JSON.
    */
   agentChatId?: string;
+  /** Non-text (or mixed) content blocks from `agent_message_chunk`/`agent_thought_chunk` (Gap 1). */
+  blocks?: NormalizedContentBlock[];
+  /** Structured file-edit diffs from `tool_call`/`tool_call_update.content` (Gap 2). */
+  toolDiffs?: ToolDiff[];
+  /** `tool_call`/`tool_call_update.locations` (Gap 3). */
+  toolLocations?: { path: string; line?: number }[];
+  /** `tool_call`/`tool_call_update.kind`, structural (Gap 4). */
+  toolKind?: AcpToolKind;
+  /** ACP `ToolCallStatus`, mirrored on `tool_use`/`tool_result` events (Gap 5). */
+  toolStatus?: "pending" | "in_progress" | "completed" | "failed";
+  /** `mode_update` only — the new `currentModeId` (Gap 6). */
+  modeId?: string;
+  /** `commands_update` only — the available slash commands (Gap 7). */
+  commands?: { name: string; description: string }[];
 }
 
 /** Derived turn state driving the composer status indicator. */

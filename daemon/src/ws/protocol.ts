@@ -165,6 +165,8 @@ export const NormalizedEventSchema = z.object({
     "result",
     "error",
     "status",
+    "mode_update",
+    "commands_update",
   ]),
   role: z.enum(["user", "assistant"]).optional(),
   text: z.string().optional(),
@@ -182,6 +184,34 @@ export const NormalizedEventSchema = z.object({
   agentChatId: z.string().optional(),
   /** Durable monotonic pagination cursor assigned at persist (R0.3/R2.x). */
   logSeq: z.number().optional(),
+  blocks: z
+    .array(
+      z.object({
+        type: z.enum(["text", "image", "audio", "resource", "resource_link"]),
+        text: z.string().optional(),
+        mimeType: z.string().optional(),
+        data: z.string().optional(),
+        uri: z.string().optional(),
+        name: z.string().optional(),
+      }),
+    )
+    .optional(),
+  toolDiffs: z
+    .array(
+      z.object({
+        path: z.string(),
+        oldText: z.string().optional(),
+        newText: z.string(),
+      }),
+    )
+    .optional(),
+  toolLocations: z.array(z.object({ path: z.string(), line: z.number().optional() })).optional(),
+  toolKind: z
+    .enum(["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"])
+    .optional(),
+  toolStatus: z.enum(["pending", "in_progress", "completed", "failed"]).optional(),
+  modeId: z.string().optional(),
+  commands: z.array(z.object({ name: z.string(), description: z.string() })).optional(),
 });
 
 export const SessionMetaSchema = z.object({

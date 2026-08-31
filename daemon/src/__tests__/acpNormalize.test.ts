@@ -55,13 +55,65 @@ describe("normalizeSessionUpdate (1.T3)", () => {
     expect(toolResult?.toolResult?.content).toContain("file1");
   });
 
-  it("an in-progress tool_call_update (no terminal status) produces nothing", () => {
+  it("an in-progress tool_call_update (no terminal status) produces a live tool_result event, no toolResult", () => {
     const ev = normalizeSessionUpdate(
       { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "in_progress" },
       "sess1",
       "claude",
     );
-    expect(ev).toBeNull();
+    expect(ev?.kind).toBe("tool_result");
+    expect(ev?.toolStatus).toBe("in_progress");
+    expect(ev?.toolResult).toBeUndefined();
+  });
+
+  it("agent_message_chunk with a non-text block populates blocks, leaves text undefined", () => {
+    const ev = normalizeSessionUpdate(
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "image", data: "abc123", mimeType: "image/png" },
+      },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.kind).toBe("text");
+    expect(ev?.text).toBeUndefined();
+    expect(ev?.blocks).toEqual([{ type: "image", mimeType: "image/png", data: "abc123" }]);
+  });
+
+  it("tool_call with a diff content block populates toolDiffs verbatim", () => {
+    const ev = normalizeSessionUpdate(
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "tc-2",
+        content: [{ type: "diff", path: "/a.ts", oldText: "old", newText: "new" }],
+      },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.toolDiffs).toEqual([{ path: "/a.ts", oldText: "old", newText: "new" }]);
+  });
+
+  it("current_mode_update maps to a mode_update event", () => {
+    const ev = normalizeSessionUpdate(
+      { sessionUpdate: "current_mode_update", currentModeId: "build" },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.kind).toBe("mode_update");
+    expect(ev?.modeId).toBe("build");
+  });
+
+  it("available_commands_update maps to a commands_update event", () => {
+    const ev = normalizeSessionUpdate(
+      {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [{ name: "/plan", description: "Plan mode" }],
+      },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.kind).toBe("commands_update");
+    expect(ev?.commands).toEqual([{ name: "/plan", description: "Plan mode" }]);
   });
 
   it("maps plan to a status event, never a new kind", () => {

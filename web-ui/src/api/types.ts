@@ -188,7 +188,39 @@ export type NormalizedEventKind =
   | "usage"
   | "result"
   | "error"
-  | "status";
+  | "status"
+  | "mode_update"
+  | "commands_update";
+
+/** Normalized non-text (or text-in-a-mixed-array) content block (mirror of daemon `NormalizedContentBlock`). */
+export interface NormalizedContentBlock {
+  type: "text" | "image" | "audio" | "resource" | "resource_link";
+  text?: string;
+  mimeType?: string;
+  data?: string;
+  uri?: string;
+  name?: string;
+}
+
+/** A structured file-edit diff (mirror of daemon `ToolDiff`). */
+export interface ToolDiff {
+  path: string;
+  oldText?: string;
+  newText: string;
+}
+
+/** ACP `ToolKind` union, verbatim (mirror of daemon `AcpToolKind`). */
+export type AcpToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
 
 /** One normalized chat event (mirror of daemon `NormalizedEvent`). */
 export interface NormalizedEvent {
@@ -218,6 +250,20 @@ export interface NormalizedEvent {
   agentChatId?: string;
   /** Durable monotonic pagination cursor assigned by the daemon at persist. */
   logSeq?: number;
+  /** Non-text (or mixed) content blocks from `agent_message_chunk`/`agent_thought_chunk`. */
+  blocks?: NormalizedContentBlock[];
+  /** Structured file-edit diffs from `tool_call`/`tool_call_update.content`. */
+  toolDiffs?: ToolDiff[];
+  /** `tool_call`/`tool_call_update.locations`. */
+  toolLocations?: { path: string; line?: number }[];
+  /** `tool_call`/`tool_call_update.kind`, structural. */
+  toolKind?: AcpToolKind;
+  /** ACP `ToolCallStatus`, mirrored on `tool_use`/`tool_result` events. */
+  toolStatus?: "pending" | "in_progress" | "completed" | "failed";
+  /** `mode_update` only — the new `currentModeId`. */
+  modeId?: string;
+  /** `commands_update` only — the available slash commands. */
+  commands?: { name: string; description: string }[];
 }
 
 export type TurnState = "idle" | "queued" | "thinking" | "responding" | "tool" | "error";

@@ -4,6 +4,7 @@
  * call) and by ToolRunSummary's merged per-tool rows (a run of consecutive
  * tool calls) — kept in one place so both stay in sync.
  */
+import type { AcpToolKind, NormalizedContentBlock, ToolDiff } from "@/api/types";
 
 /** One tool_use (+ its tool_result, once it arrives) as rendered in chat —
  *  shared shape between MessageList's `RenderItem` and ToolRunSummary's
@@ -17,6 +18,37 @@ export interface ToolCallEntry {
   /** The turn this tool call belongs to — used to stop a run of consecutive
    *  tool calls from merging across a turn boundary. */
   turnId?: string;
+  /** ACP `ToolCallStatus` — when present, drives the spinner/checkmark instead
+   *  of `result` truthiness (acp-normalize-superset Decision 4b). */
+  status?: "pending" | "in_progress" | "completed" | "failed";
+  /** Structured file-edit diffs (acp-normalize-superset Decision 2/3). */
+  diffs?: ToolDiff[];
+  /** `tool_call`/`tool_call_update.locations` (acp-normalize-superset Gap 3). */
+  locations?: { path: string; line?: number }[];
+  /** `tool_call`/`tool_call_update.kind`, structural (acp-normalize-superset Gap 4). */
+  toolKind?: AcpToolKind;
+}
+
+/** One-line placeholder for a non-text content block, joined into a bubble's
+ *  text when an assistant/thinking event carries `blocks` but no `text`
+ *  (acp-normalize-superset Decision 4c) — never a silently blank bubble. */
+export function blocksToPlaceholder(blocks: NormalizedContentBlock[]): string {
+  return blocks
+    .map((b) => {
+      switch (b.type) {
+        case "image":
+          return "🖼 image";
+        case "audio":
+          return "🔊 audio";
+        case "resource":
+        case "resource_link":
+          return `📎 ${b.name ?? b.uri ?? "resource"}`;
+        default:
+          return b.text ?? "";
+      }
+    })
+    .filter((s) => s.length > 0)
+    .join(" ");
 }
 
 /** Common single-value tool inputs render inline (command / path / pattern). */

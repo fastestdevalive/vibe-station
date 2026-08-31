@@ -8,7 +8,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
 import { WorkingDots } from "./WorkingDots";
-import type { ToolCallEntry } from "./toolFormat";
+import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
 
 type RenderItem =
   | { type: "user"; id: string; text: string; attachments?: Attachment[]; turnId?: string; cancelled?: boolean }
@@ -176,10 +176,11 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         // Merge streaming deltas WITHIN a turn, but a new turn always starts a
         // fresh bubble — otherwise back-to-back replies (e.g. answers to several
         // queued messages, with only meta events between them) run together.
+        const incomingText = ev.text ?? (ev.blocks && ev.blocks.length > 0 ? blocksToPlaceholder(ev.blocks) : "");
         if (last && last.type === "assistant" && last.turnId === ev.turnId) {
-          last.text += ev.text ?? "";
+          last.text += incomingText;
         } else {
-          items.push({ type: "assistant", id: ev.id, text: ev.text ?? "", turnId: ev.turnId });
+          items.push({ type: "assistant", id: ev.id, text: incomingText, turnId: ev.turnId });
         }
         break;
       }
@@ -193,7 +194,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         // downstream by `mergeToolRuns`' drop-rule above.
         const openIdx = ev.turnId ? thinkingOpenByTurnId.get(ev.turnId) : undefined;
         const open = openIdx != null ? items[openIdx] : undefined;
-        const incoming = ev.text ?? "";
+        const incoming = ev.text ?? (ev.blocks && ev.blocks.length > 0 ? blocksToPlaceholder(ev.blocks) : "");
         // Real text arriving into a group that opened EMPTY and no longer sits
         // at the end of the feed (a tool call has rendered since) must NOT be
         // appended: that group's position is stale, so the reasoning would show
@@ -228,19 +229,38 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
       }
       case "tool_use": {
         markToolCallDuringThinking(ev.turnId);
-        items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", toolInput: ev.toolInput, turnId: ev.turnId });
+        items.push({
+          type: "tool",
+          id: ev.id,
+          toolName: ev.toolName ?? "tool",
+          toolInput: ev.toolInput,
+          turnId: ev.turnId,
+          status: ev.toolStatus,
+          diffs: ev.toolDiffs,
+          locations: ev.toolLocations,
+          toolKind: ev.toolKind,
+        });
         if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
         break;
       }
       case "tool_result": {
         markToolCallDuringThinking(ev.turnId);
-        const result = { content: ev.toolResult?.content, isError: ev.toolResult?.isError };
         const idx = ev.toolId ? toolIndexById.get(ev.toolId) : undefined;
         const target = idx != null ? items[idx] : undefined;
         if (target && target.type === "tool") {
-          target.result = result;
+          if (ev.toolResult !== undefined) {
+            target.result = { content: ev.toolResult.content, isError: ev.toolResult.isError };
+          }
+          if (ev.toolStatus !== undefined) target.status = ev.toolStatus;
+          if (ev.toolDiffs !== undefined) target.diffs = ev.toolDiffs;
+          if (ev.toolLocations !== undefined) target.locations = ev.toolLocations;
+          if (ev.toolKind !== undefined) target.toolKind = ev.toolKind;
         } else {
-          items.push({ type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", result, turnId: ev.turnId });
+          items.push({
+            type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", turnId: ev.turnId,
+            result: ev.toolResult !== undefined ? { content: ev.toolResult.content, isError: ev.toolResult.isError } : undefined,
+            status: ev.toolStatus, diffs: ev.toolDiffs, locations: ev.toolLocations, toolKind: ev.toolKind,
+          });
         }
         break;
       }
@@ -265,6 +285,23 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           items.push({ type: "status", id: ev.id, text: ev.text });
         }
         break;
+      case "mode_update":
+        closeOpenThinking(ev.turnId, ev.ts);
+        items.push({ type: "status", id: ev.id, text: `Mode changed${ev.modeId ? ` to ${ev.modeId}` : ""}` });
+        break;
+      case "commands_update": {
+        closeOpenThinking(ev.turnId, ev.ts);
+        const names = (ev.commands ?? []).map((c) => c.name);
+        const CAP = 8;
+        const shown = names.slice(0, CAP).join(", ");
+        const more = names.length > CAP ? ` (+${names.length - CAP} more)` : "";
+        items.push({
+          type: "status",
+          id: ev.id,
+          text: `${names.length} command${names.length === 1 ? "" : "s"} available${shown ? `: ${shown}${more}` : ""}`,
+        });
+        break;
+      }
       default:
         // session_init / usage / result — not rendered as bubbles, but a
         // `result` event marks the turn as over, so close any open group.
