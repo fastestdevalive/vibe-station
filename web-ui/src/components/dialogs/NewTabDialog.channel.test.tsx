@@ -29,7 +29,7 @@ describe("NewTabDialog channel toggle (5.T3 / 5.T4)", () => {
       { id: "n", name: "No-JSON", cli: "nojson", context: "x" },
     ]);
     vi.spyOn(api, "getSupportedClis").mockResolvedValue([
-      { id: "nojson", defaultModel: "auto", supportsJson: false, importsNativeHistory: false },
+      { id: "nojson", defaultModel: "auto", supportsJson: false, importsNativeHistory: false, supportsJsonToTerminalResume: true },
     ]);
     render(<NewTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
 

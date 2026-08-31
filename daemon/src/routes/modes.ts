@@ -191,6 +191,7 @@ export function registerModeRoutes(app: FastifyInstance): void {
         defaultModel: plugin.defaultModel,
         supportsJson: plugin.supportsJson?.() === true,
         importsNativeHistory: hasNativeHistoryImporter(id),
+        supportsJsonToTerminalResume: plugin.supportsJsonToTerminalResume?.() ?? true,
       };
     });
     return reply.send(list);

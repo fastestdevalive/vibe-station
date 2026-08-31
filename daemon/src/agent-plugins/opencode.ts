@@ -8,12 +8,10 @@
  * Ready signal: waits for "opencode" banner in pane output.
  */
 
-import { execFile, spawn } from "node:child_process";
-import { guardChildStdio } from "../services/childStreams.js";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 
 const execFileAsync = promisify(execFile);
 import { join } from "node:path";
@@ -22,15 +20,97 @@ import { opencodeConfigPathFor, systemPromptPathFor, resolvedContextOf } from ".
 import { writeOpenCodeConfig } from "../services/opencodeConfig.js";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { PromptBlock } from "../services/acp/acpTransport.js";
+import type { AcpEnrichHook } from "../services/acp/normalize.js";
 import type {
   SessionRecord,
   ProjectRecord,
   NormalizedEvent,
   NormalizedEventKind,
+  UsageInfo,
 } from "../types.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Decision 2.3 — no opencode-specific enrichment needed beyond the shared mapping. */
+const opencodeEnrich: AcpEnrichHook = (_raw, base) => base;
+
+/**
+ * ACP-based turn (Decision 2). `opencode acp` is opencode's own native ACP
+ * mode (no adapter package, Requirement 7) — spawned directly. System-prompt
+ * delivery moves from a per-turn env var to the CONNECTION-spawn env
+ * (Phase 3.2) — applied once, at first spawn, instead of re-written every
+ * turn; harmless to also re-point it on a later reconnect (matches the
+ * legacy plugin's own "harmless to re-point on resumed turns" note).
+ * `VST_SPAWN_TOKEN=<session.id>` is also set here — opencode's Option B side
+ * channel (the `session.created` hook), harmless under Option A.
+ */
+async function* runTurnAcp(
+  input: TurnInput,
+  ctx: TurnContext,
+  signal: AbortSignal,
+): AsyncIterable<NormalizedEvent> {
+  const resolvedCtx = resolvedContextOf(ctx.project, ctx.worktree);
+  const configPath = opencodeConfigPathFor(resolvedCtx, ctx.session.id);
+  const promptFile = systemPromptPathFor(resolvedCtx, ctx.session.id);
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeOpenCodeConfig(configPath, [promptFile]);
+  } catch {
+    /* best-effort — spawn still proceeds without instructions */
+  }
+
+  const conn = await ctx.getAcpConnection!(
+    {
+      command: "opencode",
+      args: ["acp"],
+      cwd: ctx.cwd,
+      env: { OPENCODE_CONFIG: configPath, VST_SPAWN_TOKEN: ctx.session.id },
+      ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+    },
+    opencodeEnrich,
+  );
+  const sessionId = conn.currentSessionId;
+  if (!sessionId) throw new Error("opencode ACP session was not established");
+
+  if (input.isFirstTurn) {
+    // Decision 6 Option A capture path (spike 3.0b verdict: coincide) — see
+    // claude.ts's identical pattern for the full rationale.
+    yield opencodeEvent(ctx.session.id, "session_init", { agentChatId: sessionId });
+  }
+  const promptBlocks: PromptBlock[] = [{ type: "text", text: input.message }];
+
+  const { updates, result } = conn.sendPrompt(sessionId, promptBlocks, signal);
+  for await (const ev of updates) yield ev;
+
+  let usageRaw: Record<string, unknown> | undefined;
+  try {
+    const r = await result;
+    usageRaw = (r as unknown as { usage?: Record<string, unknown> }).usage;
+  } catch (err) {
+    if (signal.aborted) return;
+    throw err;
+  }
+
+  const usage: UsageInfo | undefined = usageRaw
+    ? (() => {
+        const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+        const inputTokens = num(usageRaw!.inputTokens);
+        const outputTokens = num(usageRaw!.outputTokens);
+        return {
+          inputTokens,
+          outputTokens,
+          cacheReadTokens: num(usageRaw!.cachedReadTokens),
+          cacheCreateTokens: num(usageRaw!.cachedWriteTokens),
+          totalTokens: num(usageRaw!.totalTokens) || inputTokens + outputTokens,
+          model: ctx.model ?? "",
+        };
+      })()
+    : undefined;
+  if (usage) yield opencodeEvent(ctx.session.id, "usage", { usage, model: usage.model || undefined });
+  yield opencodeEvent(ctx.session.id, "result", usage ? { usage, model: usage.model || undefined } : {});
 }
 
 function opencodeEvent(
@@ -274,87 +354,22 @@ export function createOpencodePlugin(): AgentPlugin {
       return true;
     },
 
+    /** ACP migration (Decision 7/1.4): gates jsonAgent's stop/release semantics. */
+    supportsAcp(): boolean {
+      return true;
+    },
+
     /**
-     * Run ONE JSON-channel turn (Decision 2/3): `opencode run <msg> --format
-     * json [-m model] [--session <id>]`. The system prompt is delivered via the
-     * `OPENCODE_CONFIG` env → a JSON config listing the system-prompt file as
-     * `instructions` (applied on turn 1; harmless to re-point on resumed turns).
+     * Run ONE JSON-channel turn (Decision 2/3). Drives the persistent ACP
+     * connection (`opencode acp`, Decision 1) instead of a per-turn one-shot
+     * spawn.
      */
     async *runTurn(
       input: TurnInput,
       ctx: TurnContext,
       signal: AbortSignal,
     ): AsyncIterable<NormalizedEvent> {
-      const sessionId = ctx.session.id;
-
-      // Resolve config + system-prompt paths for worktree OR direct sessions —
-      // routed through the shared *For(ctx, …) helpers (not manual ctx.worktree
-      // branching) so this can't drift into the "fabricated worktree resolves to
-      // a nonexistent directory" bug class the context refactor eliminated.
-      const resolvedCtx = resolvedContextOf(ctx.project, ctx.worktree);
-      const configPath = opencodeConfigPathFor(resolvedCtx, sessionId);
-      const promptFile = systemPromptPathFor(resolvedCtx, sessionId);
-      try {
-        mkdirSync(dirname(configPath), { recursive: true });
-        writeOpenCodeConfig(configPath, [promptFile]);
-      } catch {
-        /* best-effort — spawn still proceeds without instructions */
-      }
-
-      const args = ["run", input.message, "--format", "json"];
-      if (ctx.model && ctx.model !== "auto") args.push("-m", ctx.model);
-      if (ctx.chatId) args.push("--session", ctx.chatId);
-
-      const child = spawn("opencode", args, {
-        cwd: ctx.cwd,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, OPENCODE_CONFIG: configPath },
-      });
-      guardChildStdio(child, "opencode");
-      if (child.pid) ctx.onSpawn?.(child.pid);
-
-      let stderr = "";
-      child.stderr?.on("data", (d: Buffer) => {
-        stderr += d.toString("utf8");
-      });
-
-      const onAbort = (): void => {
-        try {
-          if (child.pid) process.kill(-child.pid, "SIGTERM");
-        } catch {
-          /* already dead */
-        }
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-
-      const exitPromise = new Promise<number>((resolve) => {
-        child.on("close", (code) => resolve(code ?? 0));
-      });
-
-      const state = { initEmitted: false };
-      try {
-        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        for await (const line of rl) {
-          for (const ev of parseOpencodeStreamLine(line, sessionId, state)) {
-            yield ev;
-          }
-        }
-        const code = await exitPromise;
-        if (code !== 0 && !signal.aborted) {
-          throw new Error(`opencode exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
-        }
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        if (!child.killed && child.exitCode === null) {
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGTERM");
-          } catch {
-            /* ignore */
-          }
-        }
-      }
+      yield* runTurnAcp(input, ctx, signal);
     },
 
     async setupWorkspaceHooks(worktreePath: string): Promise<void> {

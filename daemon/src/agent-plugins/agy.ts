@@ -63,17 +63,22 @@
 import { promises as fs, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
-import { guardChildStdio } from "../services/childStreams.js";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
 import { sq } from "../services/shell.js";
+import type { PromptBlock } from "../services/acp/acpTransport.js";
+import type { AcpEnrichHook } from "../services/acp/normalize.js";
+import {
+  readAgyAcpSessionConversationId,
+  readLatestAgyConversationId,
+} from "./native-chat-id/agy.js";
 import type {
   SessionRecord,
   ProjectRecord,
   NormalizedEvent,
   NormalizedEventKind,
+  UsageInfo,
 } from "../types.js";
 
 function agyEvent(
@@ -249,28 +254,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Path to agy's per-cwd conversation index (`cwd → latest conversation_id`). */
-function agyLastConversationsPath(): string {
-  return join(homedir(), ".gemini", "antigravity-cli", "cache", "last_conversations.json");
-}
-
-/**
- * Read the latest agy conversation id for a given workspace cwd (best-effort).
- * NOTE: only reliable as a LAST-RESORT fallback (`getRestoreCommand` below) —
- * see the chat-id capture block comment for why this cannot be trusted as a
- * primary signal.
- */
-async function readLatestAgyConversationId(cwd: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(agyLastConversationsPath(), "utf8");
-    const map = JSON.parse(raw) as Record<string, unknown>;
-    const id = map[cwd];
-    return typeof id === "string" && id ? id : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Chat-id capture (serious bug, two design iterations — see the
  * json-mode-followups investigation):
@@ -375,6 +358,117 @@ const AGY_MODELS = [
 ] as const;
 
 const AGY_DEFAULT_MODEL = "Gemini 3.1 Pro (High)";
+
+// --- ACP migration (Decision 2/6, Phase 4 — spike-gated) ---
+//
+// IMPORTANT / deviation flagged for human review: unlike claude (an
+// npm-installable, Anthropic-affiliated adapter package) and cursor/opencode
+// (first-party native ACP subcommands on binaries already required by this
+// plugin), agy's ONLY available ACP adapter as of this implementation is the
+// THIRD-PARTY, single-maintainer npm package `antigravity-acp` (published by
+// an individual GitHub user, not Google/Zed/agentclientprotocol), and it is
+// built on Bun — its own `bin` entries are literal `.ts` files, runnable only
+// via `bun`/`bunx`, NOT via plain `node`. This introduces a NEW system-level
+// runtime dependency (`bun`) beyond everything else this plan needs (which is
+// npm-installable and node-executable). Phase 4.1's spike (initialize +
+// session/new against a real, already-authenticated `agy`) completed without
+// hanging on this machine, so this plugin proceeds per the plan's own
+// "on success, continue to 4.2" instruction — but the supply-chain trust and
+// new-runtime-dependency questions this raises are NOT this plan's to settle
+// unilaterally; see the final report / Risk 1 update for the explicit
+// call-out. `bunx antigravity-acp@<pinned version>` is used directly (NOT
+// vendored via `cli/package.json`, since it is not a node-resolvable
+// dependency) — the exact version is pinned on the command line for the same
+// "don't silently float" reason Phase 1.7 pins npm packages.
+const ANTIGRAVITY_ACP_PACKAGE = "antigravity-acp@1.1.0";
+
+/** Resolve the user's own `agy` binary, passed to the adapter via `AGY_BIN` (its own escape hatch — it otherwise tries to download a release binary itself). */
+function resolveAgyBinary(): string {
+  try {
+    return execFileSync("which", ["agy"], { encoding: "utf8" }).trim() || "agy";
+  } catch {
+    return "agy";
+  }
+}
+
+/** Decision 2.3 — no agy-specific enrichment needed beyond the shared mapping. */
+const agyEnrich: AcpEnrichHook = (_raw, base) => base;
+
+/**
+ * ACP-based turn (Decision 2). Drives `bunx antigravity-acp@<pinned>` (spawned
+ * once per session, Decision 1) instead of a per-turn one-shot `agy` spawn.
+ * Phase 4.3's 20s connect/initialize timeout is `AcpConnection`'s existing
+ * `initializeTimeoutMs`, not a new mechanism.
+ */
+async function* runTurnAcp(
+  input: TurnInput,
+  ctx: TurnContext,
+  signal: AbortSignal,
+): AsyncIterable<NormalizedEvent> {
+  let conn;
+  try {
+    conn = await ctx.getAcpConnection!(
+      {
+        command: "bunx",
+        args: [ANTIGRAVITY_ACP_PACKAGE],
+        cwd: ctx.cwd,
+        env: { AGY_BIN: resolveAgyBinary() },
+        initializeTimeoutMs: 20_000, // Phase 4.3 — never lets the turn hang indefinitely
+        ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+      },
+      agyEnrich,
+    );
+  } catch (err) {
+    // Phase 4.3: a specific, human-readable message for the connect/
+    // initialize timeout (or a spawn failure) — the core (jsonAgent.ts's
+    // runOneTurn catch block, Decision 7) converts this thrown error into a
+    // synthetic `error` NormalizedEvent exactly as any other transport
+    // failure, so the turn fails fast instead of hanging.
+    throw new Error(`Antigravity ACP unavailable: ${String(err)}`);
+  }
+  const sessionId = conn.currentSessionId;
+  if (!sessionId) throw new Error("agy ACP session was not established");
+
+  // agy spike (4.1b) verdict: Option B — the ACP session id does not
+  // round-trip through `agy --conversation`. Do NOT surface it as
+  // `agentChatId`; `captureNativeChatId` below is the source of truth.
+  let message = input.message;
+  if (input.isFirstTurn) {
+    const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
+    if (systemPrompt) message = `${systemPrompt}\n\n${message}`;
+  }
+  const promptBlocks: PromptBlock[] = [{ type: "text", text: message }];
+
+  const { updates, result } = conn.sendPrompt(sessionId, promptBlocks, signal);
+  for await (const ev of updates) yield ev;
+
+  let usageRaw: Record<string, unknown> | undefined;
+  try {
+    const r = await result;
+    usageRaw = (r as unknown as { usage?: Record<string, unknown> }).usage;
+  } catch (err) {
+    if (signal.aborted) return;
+    throw err;
+  }
+
+  const usage: UsageInfo | undefined = usageRaw
+    ? (() => {
+        const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+        const inputTokens = num(usageRaw!.inputTokens);
+        const outputTokens = num(usageRaw!.outputTokens);
+        return {
+          inputTokens,
+          outputTokens,
+          cacheReadTokens: num(usageRaw!.cachedReadTokens),
+          cacheCreateTokens: num(usageRaw!.cachedWriteTokens),
+          totalTokens: num(usageRaw!.totalTokens) || inputTokens + outputTokens,
+          model: ctx.model ?? "",
+        };
+      })()
+    : undefined;
+  if (usage) yield agyEvent(ctx.session.id, "usage", { usage, model: usage.model || undefined });
+  yield agyEvent(ctx.session.id, "result", usage ? { usage, model: usage.model || undefined } : {});
+}
 
 export function createAgyPlugin(): AgentPlugin {
   return {
@@ -487,94 +581,52 @@ export function createAgyPlugin(): AgentPlugin {
     },
 
     /**
-     * Run ONE JSON-channel turn (Decision 2/3). Spawns `agy --print=<msg>
-     * --output-format stream-json` and yields NormalizedEvents live, as agy's
-     * per-step NDJSON arrives (see the file-header doc comment for the event
-     * shapes). Own process group (detached) so a stuck turn is group-killed and
-     * never orphaned (Decision 13).
-     *
-     * The message is passed as the VALUE of `--print` (agy's `--print` is a
-     * string flag, NOT a boolean — a bare `--print` with the message on stdin or
-     * as a `--`-separated positional is mis-parsed into the prompt text). The
-     * `--print=<msg>` attached form is safe for any message (even one starting
-     * with `--`). System prompt is folded into the first turn's message; resumed
-     * turns pass `--conversation <chatId>`.
+     * ACP migration (Decision 7/1.4/4.1): true because Phase 4.1's live spike
+     * (real `agy` + `bunx antigravity-acp`) completed `initialize` +
+     * `session/new` without hanging on this machine. See the block comment
+     * above `ANTIGRAVITY_ACP_PACKAGE` for the third-party-adapter /
+     * new-`bun`-dependency caveat this verdict carries — flagged for human
+     * review, not silently accepted.
+     */
+    supportsAcp(): boolean {
+      return true;
+    },
+
+    /**
+     * Run ONE JSON-channel turn (Decision 2/3). Drives the persistent ACP
+     * connection (Decision 1) instead of a per-turn one-shot spawn.
      */
     async *runTurn(
       input: TurnInput,
       ctx: TurnContext,
       signal: AbortSignal,
     ): AsyncIterable<NormalizedEvent> {
-      const sessionId = ctx.session.id;
+      yield* runTurnAcp(input, ctx, signal);
+    },
 
-      let message = input.message;
-      if (input.isFirstTurn) {
-        const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
-        if (systemPrompt) message = `${systemPrompt}\n\n${message}`;
-      }
-
-      const args = [
-        `--print=${message}`,
-        "--output-format",
-        "stream-json",
-        "--dangerously-skip-permissions",
-      ];
-      if (ctx.model) args.push("--model", ctx.model);
-      if (ctx.chatId) args.push("--conversation", ctx.chatId);
-
-      const child = spawn("agy", args, {
-        cwd: ctx.cwd,
-        detached: true, // own process group for group-kill on abort
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      guardChildStdio(child, "agy");
-      if (child.pid) ctx.onSpawn?.(child.pid);
-
-      let stderr = "";
-      child.stderr?.on("data", (d: Buffer) => {
-        stderr += d.toString("utf8");
-      });
-
-      const onAbort = (): void => {
-        try {
-          if (child.pid) process.kill(-child.pid, "SIGTERM");
-        } catch {
-          /* already dead */
-        }
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-
-      const exitPromise = new Promise<number>((resolve) => {
-        child.on("close", (code) => resolve(code ?? 0));
-      });
-
-      const state = createAgyStreamState();
-      try {
-        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        for await (const line of rl) {
-          for (const ev of parseAgyStreamLine(line, sessionId, state, ctx.model)) {
-            yield ev;
-          }
-        }
-        const code = await exitPromise;
-        // A non-zero exit with no JSON envelope (e.g. model-resolution hard-fail)
-        // surfaces as a thrown error the core converts into a synthetic error
-        // event (Decision 7). agy in-turn failures instead exit 0 with
-        // status:ERROR and are handled by the parser above.
-        if (code !== 0 && !signal.aborted) {
-          throw new Error(`agy exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
-        }
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        if (!child.killed && child.exitCode === null) {
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGTERM");
-          } catch {
-            /* ignore */
-          }
-        }
-      }
+    /**
+     * Decision 6 Option B (spike 4.1b verdict: diverge — ACP `session/new` id
+     * does not round-trip through `agy --conversation`), REVISED after live
+     * re-verification (2026-08-30): prefer the `antigravity-acp` adapter's own
+     * `~/.agy-acp/sessions.json` (`readAgyAcpSessionConversationId`, keyed by
+     * the exact ACP `acpSessionId` — no cross-session ambiguity at all), and
+     * fall back to the cwd-keyed `readLatestAgyConversationId(cwd)` only if
+     * that adapter-state file is missing/stale (e.g. an older adapter version
+     * without this store, or the file was cleared). See the block comment
+     * above `readAgyAcpSessionConversationId` for the live-verified mechanism
+     * and resume proof.
+     */
+    async captureNativeChatId(args: {
+      session: SessionRecord;
+      project: ProjectRecord;
+      cwd: string;
+      acpSessionId: string;
+    }): Promise<string | null> {
+      return (
+        args.session.agentChatId ??
+        (await readAgyAcpSessionConversationId(args.acpSessionId)) ??
+        (await readLatestAgyConversationId(args.cwd))
+      );
     },
 
     async getRestoreCommand(args: {

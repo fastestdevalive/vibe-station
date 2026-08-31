@@ -1,0 +1,48 @@
+feature: acp-migration
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-60
+master:
+  prd: skipped
+  plan: skipped
+current_subfeature: 02-new-plugins
+subfeatures:
+  - id: 01-core-plugins
+    origin: planned
+    spawned_from: null
+    mode: planning
+    last_completed: null
+    awaiting_phase: review
+    awaiting_artifact: .vibekit/feature-plans/wip/acp-migration/01-core-plugins/plan-01-acp-migration-core-plugins.md
+    phase_chain: [plan, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+    reviewer_model: opus
+    reviewer_verdict: "had issues — fixed in place, now clean"
+  - id: 02-new-plugins
+    origin: planned
+    spawned_from: null
+    mode: planning
+    last_completed: null
+    awaiting_phase: review
+    awaiting_artifact: .vibekit/feature-plans/wip/acp-migration/02-new-plugins/plan-02-acp-migration-new-plugins.md
+    phase_chain: [plan, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+    reviewer_model: opus
+    reviewer_verdict: "had issues — fixed in place, now clean"
+
+notes:
+  - "Unattended decomposition decision: no master PRD/arch was written. This feature was split directly
+     into two sibling sub-plans (01-core-plugins, 02-new-plugins) at feature creation, bypassing the
+     normal root->arch->parts flow, because the task explicitly asked for two related-but-separable
+     plans and both are independently executable without a system-level arch document. Flagged here
+     as a human-confirmable process choice, not a technical one."
+  - "Chain requested was plan+review only, per invocation scope. Both sub-features are correctly
+     stopped at awaiting_phase: review (chain end is a hard stop regardless of gate). implement/verify
+     were never started."
+  - "reviewer.model: opus was used for both review passes (config had no .vibekit/config.yaml override;
+     opus is also the ${CLI_DEFAULT} resolution for Claude Code, so this matches both the explicit ask
+     and the tool default)."

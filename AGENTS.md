@@ -83,6 +83,27 @@ else if (mode.cli === "opencode") { ... }
 | `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
 | `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |
 | `getRestoreCommand?(args)` | optional | Return resume argv, or null for fresh spawn |
+| `supportsAcp?()` | optional | ACP migration: true once `runTurn` drives a persistent ACP connection (`ctx.getAcpConnection`) instead of a per-turn one-shot spawn |
+| `captureNativeChatId?(args)` | optional | Two-identity model: read the CLI's NATIVE resume id out-of-band, for a plugin whose ACP `session/new` id was empirically proven to diverge from it (`bridged` = agy, `unavailable` = cursor). Deliberately NOT implemented by an `identical`-strategy plugin (claude, opencode) |
+| `supportsChannelResume?()` | optional | Two-identity model: `false` (cursor only) declares that no bridge exists from this CLI's ACP session to its own resume flag, so a json→tty toggle starting a fresh conversation is expected, not a bug. Unimplemented ≡ `true` |
+
+### The two session identities (ACP)
+
+A session that has run a Rich Chat turn carries **two** ids — the ACP
+`session/new` id (`SessionRecord.acpSessionId`, protocol-level) and the
+**native** chat id (`SessionRecord.agentChatId`, what the CLI's own
+`--resume`/`--session`/`--conversation` flag understands). `agentChatId` is
+always the native one; never store an ACP id in it.
+
+Whether the two coincide is a per-CLI fact, not a choice, and each plugin
+declares its answer only by which of the two methods above it implements:
+`identical` (claude, opencode — implement neither), `bridged` (agy —
+`captureNativeChatId`), `unavailable` (cursor — plus `supportsChannelResume:
+false`). Per-CLI resolution code lives in
+`daemon/src/agent-plugins/native-chat-id/` (one file per CLI that needs one —
+opencode's absence is meaningful). The model is stated once in the
+"two session identities" block above `captureNativeChatId` in `spawn.ts`, and
+in full in [`docs/AGENT-CHAT-ID-CAPTURE.md`](docs/AGENT-CHAT-ID-CAPTURE.md).
 
 ### What to watch for
 

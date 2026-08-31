@@ -1,6 +1,16 @@
 /**
- * Claude chat session restore helpers.
- * Discovers and restores prior Claude Code chat sessions by UUID.
+ * claude — NATIVE chat-id resolution (`native-chat-id/` — see the block comment
+ * above `AgentPlugin.captureNativeChatId` in `daemon/src/services/spawn.ts`
+ * for the two-identity model, and `docs/AGENT-CHAT-ID-CAPTURE.md` for the
+ * per-CLI strategy matrix).
+ *
+ * claude's strategy is **identical**: the ACP `session/new` id IS the native id,
+ * so `claude.ts` deliberately does NOT implement `captureNativeChatId` — nothing
+ * needs converting. This file therefore serves only the TERMINAL-channel restore
+ * path (`getRestoreCommand`), recovering a native id for a session that has none
+ * on record (e.g. one started outside vibe-station's own capture).
+ *
+ * Discovers prior Claude Code chat sessions by UUID.
  *
  * Claude Code stores chat transcripts at:
  *   ~/.claude/projects/<project-slug>/<uuid>.jsonl

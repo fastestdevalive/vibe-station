@@ -13,17 +13,17 @@
  * Removed `--print` (causes immediate exit on EOF; we want interactive REPL)
  */
 
-import { execFile as execFileCb, spawn } from "node:child_process";
-import { guardChildStdio } from "../services/childStreams.js";
+import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
 import { sq } from "../services/shell.js";
-import { findLatestCursorChatId } from "./cursorRestore.js";
-import type { NormalizedEvent, NormalizedEventKind } from "../types.js";
+import { findLatestCursorChatId } from "./native-chat-id/cursor.js";
+import type { PromptBlock } from "../services/acp/acpTransport.js";
+import type { AcpEnrichHook } from "../services/acp/normalize.js";
+import type { NormalizedEvent, NormalizedEventKind, ProjectRecord, SessionRecord, UsageInfo } from "../types.js";
 
 const execFile = promisify(execFileCb);
 
@@ -223,6 +223,74 @@ async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promi
   await fs.writeFile(gitignorePath, newContent, "utf8");
 }
 
+// --- ACP migration (Decision 2/6, Phase 3) ---
+
+/** Decision 2.3 — no cursor-specific enrichment needed beyond the shared mapping. */
+const cursorEnrich: AcpEnrichHook = (_raw, base) => base;
+
+/**
+ * ACP-based turn (Decision 2). `cursor-agent acp` is cursor's own native ACP
+ * mode (no adapter package, Requirement 7) — spawned directly.
+ */
+async function* runTurnAcp(
+  input: TurnInput,
+  ctx: TurnContext,
+  signal: AbortSignal,
+): AsyncIterable<NormalizedEvent> {
+  const conn = await ctx.getAcpConnection!(
+    {
+      command: "cursor-agent",
+      args: ["acp"],
+      cwd: ctx.cwd,
+      ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+    },
+    cursorEnrich,
+  );
+  const sessionId = conn.currentSessionId;
+  if (!sessionId) throw new Error("cursor ACP session was not established");
+
+  // cursor spike (3.0a) verdict: Option B — the ACP session id does not
+  // reliably round-trip through the raw CLI's own `--resume`. Do NOT surface
+  // it as `agentChatId` here; `captureNativeChatId` below is the source of
+  // truth for that field (Decision 6).
+  let message = input.message;
+  if (input.isFirstTurn) {
+    const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
+    if (systemPrompt) message = `${systemPrompt}\n\n${message}`;
+  }
+  const promptBlocks: PromptBlock[] = [{ type: "text", text: message }];
+
+  const { updates, result } = conn.sendPrompt(sessionId, promptBlocks, signal);
+  for await (const ev of updates) yield ev;
+
+  let usageRaw: Record<string, unknown> | undefined;
+  try {
+    const r = await result;
+    usageRaw = (r as unknown as { usage?: Record<string, unknown> }).usage;
+  } catch (err) {
+    if (signal.aborted) return;
+    throw err;
+  }
+
+  const usage: UsageInfo | undefined = usageRaw
+    ? (() => {
+        const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+        const inputTokens = num(usageRaw!.inputTokens);
+        const outputTokens = num(usageRaw!.outputTokens);
+        return {
+          inputTokens,
+          outputTokens,
+          cacheReadTokens: num(usageRaw!.cachedReadTokens),
+          cacheCreateTokens: num(usageRaw!.cachedWriteTokens),
+          totalTokens: num(usageRaw!.totalTokens) || inputTokens + outputTokens,
+          model: "",
+        };
+      })()
+    : undefined;
+  if (usage) yield cursorEvent(ctx.session.id, "usage", { usage });
+  yield cursorEvent(ctx.session.id, "result", usage ? { usage } : {});
+}
+
 export function createCursorPlugin(): AgentPlugin {
   return {
     name: "cursor",
@@ -315,80 +383,49 @@ export function createCursorPlugin(): AgentPlugin {
       return true;
     },
 
+    /** ACP migration (Decision 7/1.4): gates jsonAgent's stop/release semantics. */
+    supportsAcp(): boolean {
+      return true;
+    },
+
     /**
-     * Run ONE JSON-channel turn (Decision 2/3). cursor is one-shot per turn:
-     * `cursor-agent -p <msg> --output-format stream-json -f [--resume <id>]`.
-     *
-     * Free plans reject named models → run Auto (omit `--model`). cursor has no
-     * system-prompt flag, so the system prompt is baked into message 1 only
-     * (cursor.ts pattern); resumed turns rely on cursor's saved transcript and
-     * must NOT re-inject it.
+     * Decision 6 follow-up: `cursor-agent acp` persists its session in a
+     * dedicated SQLite store (`~/.cursor/acp-sessions/<id>/store.db`) that a
+     * raw `cursor-agent --resume` cannot read — confirmed by live spike (no
+     * sync into `agent-transcripts/`, ruling out a timing fix) and by
+     * checking neither agent-orchestrator nor emdash bridge this either. The
+     * Rich Chat ↔ Terminal toggle still works; it just can't resume for this
+     * CLI specifically.
+     */
+    supportsJsonToTerminalResume(): boolean {
+      return false;
+    },
+
+    /**
+     * Run ONE JSON-channel turn (Decision 2/3). Drives the persistent ACP
+     * connection (`cursor-agent acp`, Decision 1) instead of a per-turn
+     * one-shot spawn.
      */
     async *runTurn(
       input: TurnInput,
       ctx: TurnContext,
       signal: AbortSignal,
     ): AsyncIterable<NormalizedEvent> {
-      const sessionId = ctx.session.id;
+      yield* runTurnAcp(input, ctx, signal);
+    },
 
-      let message = input.message;
-      if (input.isFirstTurn) {
-        const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
-        if (systemPrompt) message = `${systemPrompt}\n\n${message}`;
-      }
-
-      const args = ["-p", message, "--output-format", "stream-json", "-f"];
-      if (ctx.chatId) args.push("--resume", ctx.chatId);
-      // Auto model on Free plans — deliberately omit `--model`.
-
-      const child = spawn("cursor-agent", args, {
-        cwd: ctx.cwd,
-        detached: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      guardChildStdio(child, "cursor-agent");
-      if (child.pid) ctx.onSpawn?.(child.pid);
-
-      let stderr = "";
-      child.stderr?.on("data", (d: Buffer) => {
-        stderr += d.toString("utf8");
-      });
-
-      const onAbort = (): void => {
-        try {
-          if (child.pid) process.kill(-child.pid, "SIGTERM");
-        } catch {
-          /* already dead */
-        }
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-
-      const exitPromise = new Promise<number>((resolve) => {
-        child.on("close", (code) => resolve(code ?? 0));
-      });
-
-      try {
-        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        for await (const line of rl) {
-          for (const ev of parseCursorStreamLine(line, sessionId)) {
-            yield ev;
-          }
-        }
-        const code = await exitPromise;
-        if (code !== 0 && !signal.aborted) {
-          throw new Error(`cursor-agent exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
-        }
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        if (!child.killed && child.exitCode === null) {
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGTERM");
-          } catch {
-            /* ignore */
-          }
-        }
-      }
+    /**
+     * Decision 6 Option B (spike 3.0a verdict: diverge — see the plan's Spike
+     * Results table). Called once, at the connection's first `result`. Reuses
+     * `native-chat-id/cursor.ts`'s `findLatestCursorChatId` verbatim, exactly as Decision 6 specifies.
+     */
+    async captureNativeChatId(args: {
+      session: SessionRecord;
+      project: ProjectRecord;
+      cwd: string;
+      acpSessionId: string;
+    }): Promise<string | null> {
+      return args.session.agentChatId ?? (await findLatestCursorChatId(args.cwd));
     },
 
     async setupWorkspaceHooks(worktreePath: string): Promise<void> {

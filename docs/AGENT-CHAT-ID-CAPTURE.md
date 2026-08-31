@@ -4,9 +4,11 @@ How the daemon learns each CLI's own conversation/session identifier
 (`SessionRecord.agentChatId`) — the value that lets a session resume the
 **same** underlying CLI conversation across a daemon restart, a terminal
 `/resume`, or a JSON↔terminal channel toggle. Read this before touching
-`provideChatId` / `captureChatId` / `refreshChatIdOnToggle` on any plugin
-(`daemon/src/agent-plugins/*.ts`) or the spawn/toggle call sites
-(`daemon/src/services/spawn.ts`, `daemon/src/routes/sessions.ts`).
+`provideChatId` / `captureChatId` / `refreshChatIdOnToggle` /
+`captureNativeChatId` / `supportsChannelResume` on any plugin
+(`daemon/src/agent-plugins/*.ts`, `daemon/src/agent-plugins/native-chat-id/*.ts`)
+or the spawn/toggle call sites (`daemon/src/services/spawn.ts`,
+`daemon/src/services/jsonAgent.ts`, `daemon/src/routes/sessions.ts`).
 
 `agentChatId` is the one piece of state that has to survive every transition
 a session can go through — fresh spawn, resume, and a live channel toggle in
@@ -15,7 +17,62 @@ either direction — because it's the only thing that tells the CLI "continue
 failure is silent: the CLI happily resumes *some* conversation, just not the
 right one (see [Historical note](#historical-note--the-agy-investigation)).
 
-## Summary
+## Two identities, not one (ACP migration)
+
+Since Rich Chat moved to the Agent Client Protocol, a session that has run a
+JSON turn carries **two** distinct ids. Nearly every subtlety below is about
+the gap between them:
+
+| # | Field | Layer | Minted by | Understood by |
+|---|---|---|---|---|
+| 1 | `SessionRecord.acpSessionId` | Protocol | ACP `session/new` | `session/load` / `session/prompt` on the same ACP connection — and nothing else |
+| 2 | `SessionRecord.agentChatId` | CLI | the CLI itself (hook, pre-mint, log, or adapter store) | the CLI's own `--resume`/`--session`/`--conversation` flag and its native transcript store |
+
+**The invariant: `agentChatId` is ALWAYS the native id, never the protocol
+one.** That is what makes the Terminal channel's `getRestoreCommand` and the
+native-history importers safe to write against a single field. `acpSessionId`
+exists only because, for some CLIs, the ACP id is *not* the same value and
+still has to be remembered somewhere for a `session/load` reconnect.
+
+Whether the two ids coincide is a per-CLI **fact**, established by a live spike
+per plugin — not a design choice. Each plugin declares its answer purely by
+which optional `AgentPlugin` methods it implements (`daemon/src/services/spawn.ts`,
+see the "two session identities" block above `captureNativeChatId`):
+
+| CLI | Strategy | ACP id == native id? | `captureNativeChatId` | `supportsChannelResume` | Resolver file |
+|---|---|---|---|---|---|
+| **claude** | `identical` | Yes, byte-identical | not implemented (deliberately) | not implemented → `true` | `native-chat-id/claude.ts` (terminal restore only) |
+| **opencode** | `identical` | Yes, byte-identical | not implemented (deliberately) | not implemented → `true` | none needed |
+| **agy** | `bridged` | No — but a reliable, ACP-id-keyed mapping exists on disk | implemented: reads the `antigravity-acp` adapter's own `~/.agy-acp/sessions.json` | not implemented → `true` | `native-chat-id/agy.ts` |
+| **cursor** | `unavailable` | No, and no bridge exists at all | implemented best-effort only (a cwd-keyed guess) | returns **`false`** | `native-chat-id/cursor.ts` |
+
+- `identical` — implementing `captureNativeChatId` would be pure downside: the
+  id is already right, so a second write is only a chance to make it wrong.
+- `bridged` — the ids differ, but the ACP adapter persists its own
+  session→conversation binding keyed by the exact ACP session id, so the
+  native id is recoverable with no cross-session ambiguity.
+- `unavailable` — the ids differ and nothing bridges them. `cursor-agent acp`
+  keeps its sessions in `~/.cursor/acp-sessions/<id>/store.db`, structurally
+  separate from the store `cursor-agent --resume` reads, and no CLI flag spans
+  the two. `supportsChannelResume(): false` is the honest declaration of that;
+  a json→tty toggle then starts a *fresh* terminal conversation rather than
+  crashing or passing a bogus `--resume`. It is surfaced to the UI via
+  `GET /supported-clis` so the user gets a warning before toggling. See
+  `JSON-CHAT-ARCHITECTURE.md`'s Decision-6 table for the full evidence trail.
+
+**Where the code lives:** all per-CLI native-id resolution is in
+`daemon/src/agent-plugins/native-chat-id/` — one file per CLI that needs one.
+opencode's *absence* from that directory is meaningful, not an omission: its
+native id never has to be discovered out of band. Those files are shared by
+both consumers of a native id — the terminal restore path
+(`getRestoreCommand`) and, for `bridged`/`unavailable` plugins, the ACP-side
+`captureNativeChatId`.
+
+## Summary — terminal-channel capture
+
+The rest of this document covers the *other* half of the story: how the native
+id (identity #2) is first learned for a session started in the **terminal**
+channel, which predates ACP and is unchanged by it.
 
 | CLI | Pre-mint before spawn? | Terminal-start capture | JSON-turn self-report | Toggle self-heal (tty→json) | Resume/restore self-heal (→tty) |
 |---|---|---|---|---|---|
