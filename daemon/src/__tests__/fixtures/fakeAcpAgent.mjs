@@ -21,6 +21,11 @@
 //   FAKE_ACP_MODE=permission_request_reject_only — same, but every offered
 //     option is reject-kind (no allow_once/allow_always at all) — asserts the
 //     daemon cancels rather than ever "selecting" a rejection as an approval.
+//   FAKE_ACP_MODE=prompt_hang — initialize/session/new succeed normally, but
+//     session/prompt NEVER responds and ignores session/cancel too (unlike
+//     "cancel" mode) — simulates a connection that looks alive (child process
+//     still running) but has stopped answering, so the per-request timeout
+//     (not process death) must be what eventually rejects the turn.
 import { createInterface } from "node:readline";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
@@ -155,6 +160,10 @@ rl.on("line", (line) => {
         method: "session/request_permission",
         params: { sessionId: sid, toolCall: { toolCallId: "tc-1" }, options },
       });
+      return;
+    }
+    if (mode === "prompt_hang") {
+      // Deliberately never write a response and never observe cancelRequested.
       return;
     }
     if (mode === "cancel") {
