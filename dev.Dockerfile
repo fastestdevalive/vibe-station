@@ -19,7 +19,7 @@
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tmux git procps curl ripgrep ca-certificates \
+    tmux git procps curl ripgrep ca-certificates unzip \
     python3 make g++ \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -63,6 +63,15 @@ RUN chmod +x /app/scripts/dev-entrypoint.sh
 USER vst
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @vibestation/cli build
+
+# agy's ACP path (`daemon/src/agent-plugins/agy.ts`) spawns the third-party
+# `antigravity-acp` adapter via `bunx` — Bun is a hard runtime dependency of
+# that one plugin, not otherwise needed by this project. Installed as `vst`
+# (not root) so it lands under $HOME/.bun, matching how the daemon itself
+# runs `bunx` at spawn time.
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/home/vst/.bun/bin:${PATH}"
+
 USER root
 
 EXPOSE 5173

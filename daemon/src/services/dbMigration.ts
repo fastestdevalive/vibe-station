@@ -160,6 +160,29 @@ function insertLegacySession(
   });
 }
 
+/**
+ * A hand-authored or hand-edited `manifest.json` (e.g. the demo-seed fixtures)
+ * may list worktrees like `napi-1`..`napi-4` without ever setting the sibling
+ * `nextWorktreeNum` counter. Defaulting that counter to `1` in that case would
+ * let the very next worktree creation reserve `napi-1` again and crash on
+ * SQLite's `worktrees.id` UNIQUE constraint. Derive a safe floor from the
+ * highest `<prefix>-<n>` suffix actually present instead of trusting an
+ * absent/stale field.
+ */
+function safeNextWorktreeNum(legacy: LegacyProjectRecord): number {
+  const declared = legacy.nextWorktreeNum;
+  const prefixPattern = new RegExp(`^${legacy.prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-(\\d+)$`);
+  let highestSeen = 0;
+  for (const w of legacy.worktrees) {
+    const match = prefixPattern.exec(w.id);
+    if (match) highestSeen = Math.max(highestSeen, Number(match[1]));
+  }
+  const floor = highestSeen + 1;
+  // A `nextWorktreeNum` lower than every id already on record is stale, not
+  // authoritative — trust it only when it's at least as high as our floor.
+  return declared != null && declared >= floor ? declared : floor;
+}
+
 function insertLegacyProject(db: Database, p: LegacyProjectRecord): void {
   const txn = db.transaction((legacy: LegacyProjectRecord) => {
     db.prepare(
@@ -175,7 +198,7 @@ function insertLegacyProject(db: Database, p: LegacyProjectRecord): void {
       createdAt: legacy.createdAt,
       hidden: legacy.hidden ? 1 : 0,
       directSessionSeq: legacy.directSessionSeq ?? 0,
-      nextWorktreeNum: legacy.nextWorktreeNum ?? 1,
+      nextWorktreeNum: safeNextWorktreeNum(legacy),
     });
 
     legacy.worktrees.forEach((w, wi) => {

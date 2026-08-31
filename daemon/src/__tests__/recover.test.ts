@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as tmuxNs from "../services/tmux.js";
@@ -300,5 +301,58 @@ describe("sweepOrphanTurnPids — PID-reuse safety (opus review finding)", () =>
     } finally {
       child.kill("SIGKILL");
     }
+  });
+
+  it("5.T2 — verifyPidIsTurnProcess recognizes the ACP adapter's observed comm name (Decision 7)", async () => {
+    const { verifyPidIsTurnProcess } = await import("../services/recover.js");
+    const { spawn } = await import("node:child_process");
+    const { writeFile, chmod } = await import("node:fs/promises");
+    // claude-agent-acp / cursor-agent acp are Bun-bundled binaries empirically
+    // observed (Phase 1.6/5.3) to report comm "MainThread", not their own
+    // binary name — the allowlist must include it for the sweep to work.
+    const scriptPath = join(tempDir, "MainThread");
+    await writeFile(scriptPath, "#!/bin/sh\nsleep 5\n", "utf8");
+    await chmod(scriptPath, 0o755);
+    const child = spawn(scriptPath, [], { stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 100));
+      expect(verifyPidIsTurnProcess(child.pid!)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
+  it("5.T2 — sweepOrphanTurnPids kills an orphaned ACP connection process (own group) and unlinks turn.pids", async () => {
+    const { sweepOrphanTurnPids } = await import("../services/recover.js");
+    const { spawn } = await import("node:child_process");
+    const { writeFile, mkdir: mkdirp } = await import("node:fs/promises");
+
+    const scriptPath = join(tempDir, "MainThread");
+    await writeFile(scriptPath, "#!/bin/sh\nsleep 30\n", "utf8");
+    await import("node:fs/promises").then((m) => m.chmod(scriptPath, 0o755));
+    const child = spawn(scriptPath, [], { detached: true, stdio: "ignore" });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(child.pid).toBeDefined();
+
+    const dataDir = join(tempDir, "projects", "proj-pidsweep", "session-data", "wt-pidsweep", "sess-pidsweep");
+    await mkdirp(dataDir, { recursive: true });
+    const pidFile = join(dataDir, "turn.pids");
+    await writeFile(pidFile, String(child.pid), "utf8");
+
+    sweepOrphanTurnPids();
+
+    // Give the SIGKILL a moment to land, then assert the orphan is gone AND
+    // the pidfile was unlinked (both halves of Decision 7's sweep contract).
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i++) {
+      try {
+        process.kill(child.pid!, 0);
+        await new Promise((r) => setTimeout(r, 50));
+      } catch {
+        alive = false;
+      }
+    }
+    expect(alive).toBe(false);
+    expect(existsSync(pidFile)).toBe(false);
   });
 });

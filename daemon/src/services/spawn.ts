@@ -21,6 +21,8 @@ import { DirectPtyBackend } from "./directPty.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord, NormalizedEvent } from "../types.js";
 import type { ResolvedContext } from "./context.js";
 import { resolvedContextOf, systemPromptPathFor, sessionDataDirFor } from "./context.js";
+import type { AcpConnection, AcpLaunchSpec } from "./acp/acpTransport.js";
+import type { AcpEnrichHook } from "./acp/normalize.js";
 
 /** Substring searched in pane output after paste (matches plugins' HTML tail marker). */
 export function promptVerificationNeedle(sessionId: string): string {
@@ -33,8 +35,15 @@ export function promptVerificationNeedle(sessionId: string): string {
  * The core asks the plugin to "run one turn" and consumes NormalizedEvents; it
  * NEVER sees raw CLI JSON, never `JSON.parse`es a CLI line, never branches on
  * `cli`. Each plugin owns spawn/transport AND normalization behind this
- * boundary. The async-iterator completing == the turn is done (a `result`
- * event was emitted). `signal` aborts/stops the turn.
+ * boundary. `signal` aborts/stops the turn.
+ *
+ * Turn-done signal (ACP migration, Decision 2): for a plugin with
+ * `supportsAcp() === true`, the iterator yields off a persistent
+ * `AcpConnection`'s `session/update` stream, and the turn is done when that
+ * connection's `session/prompt` RESULT resolves — not when a process exits.
+ * The connection itself is spawned once per session (Decision 1) and outlives
+ * any single turn; a legacy (non-ACP) plugin still spawns one process per
+ * turn and completes the iterator on process exit, exactly as before.
  */
 export interface AgentJsonTransport {
   /** Whether this plugin can run in the JSON channel. */
@@ -89,6 +98,15 @@ export interface TurnContext {
    * (Decision 13).
    */
   onSpawn?: (pid: number) => void;
+  /**
+   * ACP migration (Decision 1/2): lazily create-or-return this session's ONE
+   * persistent `AcpConnection`. The plugin builds the launch spec (argv/env —
+   * CLI-specific, AGENTS.md) and an optional per-CLI `enrich` hook; the core
+   * (`JsonAgentSession`) owns caching, `initialize`, `session/new`-or-`load`
+   * (Decision 5), and disposal. Only present for plugins that call it —
+   * legacy (non-ACP) plugins never receive it invoked.
+   */
+  getAcpConnection?(spec: AcpLaunchSpec, enrich?: AcpEnrichHook): Promise<AcpConnection>;
 }
 
 export interface AgentPlugin {
@@ -209,6 +227,108 @@ export interface AgentPlugin {
     ctx: TurnContext,
     signal: AbortSignal,
   ): AsyncIterable<NormalizedEvent>;
+  /**
+   * ACP migration (Decision 2/7): true once this plugin's `runTurn` drives a
+   * persistent `AcpConnection` (via `ctx.getAcpConnection`) instead of a
+   * per-turn one-shot spawn. Gates `runOneTurn`'s stop/release semantics
+   * (Decision 3/9) and the boot-sweep allowlist (Decision 7). A plugin not
+   * yet migrated (or permanently staying legacy, e.g. agy on spike failure)
+   * omits this or returns false.
+   */
+  supportsAcp?(): boolean;
+  // --- The two session identities (ACP migration, Decision 6) ---
+  //
+  // Once a session runs in Rich Chat over ACP it carries TWO distinct ids, and
+  // essentially every subtlety in the three methods below is about the gap
+  // between them:
+  //
+  //   1. The ACP session id (`SessionRecord.acpSessionId`) — protocol-level.
+  //      Minted by `session/new`, understood only by `session/load` /
+  //      `session/prompt` on that same ACP connection. Owned by the core
+  //      (`JsonAgentSession`), never by a plugin.
+  //   2. The NATIVE chat id (`SessionRecord.agentChatId`) — CLI-level. The
+  //      value this CLI's OWN `--resume`/`--session`/`--conversation` flag and
+  //      native transcript store understand. This is what the Terminal channel
+  //      resumes with (`getRestoreCommand`), and its meaning is invariant:
+  //      `agentChatId` is ALWAYS the native id, never the ACP one.
+  //
+  // Whether (1) and (2) are the same value is a per-CLI FACT, established
+  // empirically per plugin (Phase 1.8's spike procedure), not a design choice.
+  // Each plugin therefore declares one of four strategies, purely by which of
+  // the two optional methods below it implements:
+  //
+  //   | CLI      | Strategy    | captureNativeChatId | supportsJsonToTerminalResume |
+  //   |----------|-------------|---------------------|-----------------------|
+  //   | claude   | identical   | not implemented     | not implemented (true)|
+  //   | opencode | identical   | not implemented     | not implemented (true)|
+  //   | agy      | bridged     | implemented         | not implemented (true)|
+  //   | cursor   | unavailable | best-effort only    | returns FALSE         |
+  //
+  //   - identical   ("Option A" in the plan): the ACP id IS the native id, so
+  //                 `agentChatId` is already correct the moment the plugin's
+  //                 `runTurn` yields its `session_init`. Implementing
+  //                 `captureNativeChatId` here would only be a chance to
+  //                 overwrite a correct value with a wrong one — so don't.
+  //   - bridged     ("Option B", recoverable): the ids differ, but a reliable
+  //                 ACP-id-keyed mapping to the native id exists on disk, so
+  //                 `captureNativeChatId` converts one into the other.
+  //   - unavailable ("Option B", not recoverable): the ids differ and NO
+  //                 bridge exists. `captureNativeChatId` may still guess, but
+  //                 `supportsJsonToTerminalResume(): false` is the honest signal, and
+  //                 a degraded json→tty toggle is the expected outcome.
+  //
+  // Per-CLI resolution strategies live in `agent-plugins/native-chat-id/`
+  // (one file per CLI that needs one — opencode has none, because it needs
+  // none). `docs/AGENT-CHAT-ID-CAPTURE.md` carries the full matrix, including
+  // the separate terminal-channel capture story (`provideChatId` /
+  // `captureChatId` / `refreshChatIdOnToggle` above).
+  /**
+   * Bridged / unavailable strategies only (Decision 6 "Option B" — see the
+   * two-identities block above). Read the NATIVE chat id — the one this CLI's own
+   * `--resume`/`--session`/`--conversation` flag and native transcript store
+   * understand — out of band, after an ACP session has been established and the
+   * first turn has produced output. Return null when this plugin cannot recover it.
+   *
+   * Optional, and deliberately NOT implemented by plugins whose spike proved the ACP
+   * id IS the native id (the `identical` strategy) — for those, `agentChatId` is
+   * already correct and a second write would be a chance to make it wrong.
+   */
+  captureNativeChatId?(args: {
+    session: SessionRecord;
+    project: ProjectRecord;
+    /** Session working directory — same semantics as provideChatId/captureChatId. */
+    cwd: string;
+    /** The ACP session/new id, for plugins that can derive or verify from it. */
+    acpSessionId: string;
+  }): Promise<string | null>;
+  /**
+   * The `unavailable` strategy's declaration (see the two-identities block
+   * above): whether a Rich Chat (json) session for this CLI can actually resume
+   * its conversation when toggled to the Terminal channel.
+   *
+   * `false` means the CLI's ACP-side session state lives somewhere the raw
+   * binary's own resume flag cannot reach — `getRestoreCommand` returning null
+   * (or a native id that resumes the WRONG/no conversation) is then an
+   * expected, permanent outcome for this CLI, not a bug to keep chasing.
+   * `captureNativeChatId` may still populate `agentChatId` on a best-effort
+   * basis; it just isn't guaranteed to produce a working resume.
+   *
+   * Default when unimplemented: `true` (today's assumption — matches
+   * claude/opencode, whose ACP session id IS the native id, and agy, whose
+   * native id is now reliably derived from the ACP session via the adapter's
+   * own session store — see captureNativeChatId's per-plugin bodies).
+   *
+   * cursor returns `false`: `cursor-agent acp` persists each session in a
+   * dedicated SQLite store at `~/.cursor/acp-sessions/<sessionId>/store.db`,
+   * structurally separate from both interactive chat history and the
+   * print-mode `agent-transcripts/` directory `--resume` reads. There is no
+   * CLI-level bridge — confirmed by live spike (a completed ACP turn never
+   * appears in `agent-transcripts/`, ruling out a sync-timing explanation) and
+   * by checking that neither agent-orchestrator nor emdash bridge cursor's ACP
+   * session into a raw-terminal resume either. The toggle still works — it
+   * just starts a fresh terminal conversation instead of resuming.
+   */
+  supportsJsonToTerminalResume?(): boolean;
 }
 
 export interface LaunchConfig {

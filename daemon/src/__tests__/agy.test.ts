@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionRecord, LaunchConfig } from "../types.js";
 
-// Mirrors the existing pattern in claudeRestore.test.ts — swap homedir() so
+// Mirrors the existing pattern in nativeChatIdClaude.test.ts — swap homedir() so
 // agy's per-session `--log-file` (~/.vibe-station/agy-logs/<id>.log) AND its
 // last-resort cache-file fallback land under a temp dir we control.
 let testHomeDir: string;
@@ -217,5 +217,107 @@ describe("agy chat-id capture — log-file design (json-mode-followups, iteratio
     const { readFileSync } = await import("node:fs");
     const writtenCombined = readFileSync(join(testHomeDir, "combined_prompt.txt"), "utf8");
     expect(writtenCombined).toBe("System Rules\n\nDo the task");
+  });
+});
+
+// captureNativeChatId — Decision 6 Option B, revised 2026-08-30 after live
+// verification against a real `bunx antigravity-acp@1.1.0` + real `agy`: the
+// adapter's own `~/.agy-acp/sessions.json` (keyed by ACP sessionId) carries
+// agy's real native `conversationId`, which `agy --conversation <id>` was
+// confirmed live to resume correctly. See the block comment above
+// `readAgyAcpSessionConversationId` in agy.ts for the full investigation.
+describe("agy captureNativeChatId — antigravity-acp adapter session store", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-agy-acp-test-"));
+    testHomeDir = tempDir;
+  });
+
+  afterEach(async () => {
+    testHomeDir = "";
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  async function writeAcpSessionsFile(
+    sessions: Record<string, { conversationId: string | null; cwd?: string }>,
+  ): Promise<void> {
+    const dir = join(testHomeDir, ".agy-acp");
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "sessions.json"),
+      JSON.stringify({ sessions }, null, 2),
+      "utf8",
+    );
+  }
+
+  it("prefers the antigravity-acp adapter's session-keyed conversationId over the cwd-keyed fallback", async () => {
+    const { createAgyPlugin } = await import("../agent-plugins/agy.js");
+    const plugin = createAgyPlugin();
+    const s = session("sess-acp-1");
+    await writeAcpSessionsFile({
+      "acp-session-1": { conversationId: "e1daa217-70be-4b99-b7e5-78706623762b", cwd: "/tmp/ws" },
+    });
+
+    const id = await plugin.captureNativeChatId?.({
+      session: s,
+      project: { id: "p1" } as any,
+      cwd: "/tmp/ws",
+      acpSessionId: "acp-session-1",
+    });
+    expect(id).toBe("e1daa217-70be-4b99-b7e5-78706623762b");
+  });
+
+  it("never overwrites an already-captured native id (write-once semantics)", async () => {
+    const { createAgyPlugin } = await import("../agent-plugins/agy.js");
+    const plugin = createAgyPlugin();
+    const s = { ...session("sess-acp-2"), agentChatId: "already-set-id" };
+    await writeAcpSessionsFile({
+      "acp-session-2": { conversationId: "some-other-id" },
+    });
+
+    const id = await plugin.captureNativeChatId?.({
+      session: s,
+      project: { id: "p1" } as any,
+      cwd: "/tmp/ws",
+      acpSessionId: "acp-session-2",
+    });
+    expect(id).toBe("already-set-id");
+  });
+
+  it("falls back to the cwd-keyed last_conversations.json when the acp session id is unknown to the adapter store", async () => {
+    const { createAgyPlugin } = await import("../agent-plugins/agy.js");
+    const plugin = createAgyPlugin();
+    const s = session("sess-acp-3");
+    // No ~/.agy-acp/sessions.json at all (older adapter / cleared state).
+    const cacheDir = join(testHomeDir, ".gemini", "antigravity-cli", "cache");
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(
+      join(cacheDir, "last_conversations.json"),
+      JSON.stringify({ "/tmp/ws": "fallback-conversation-id" }),
+      "utf8",
+    );
+
+    const id = await plugin.captureNativeChatId?.({
+      session: s,
+      project: { id: "p1" } as any,
+      cwd: "/tmp/ws",
+      acpSessionId: "acp-session-missing",
+    });
+    expect(id).toBe("fallback-conversation-id");
+  });
+
+  it("returns null when neither channel has a value", async () => {
+    const { createAgyPlugin } = await import("../agent-plugins/agy.js");
+    const plugin = createAgyPlugin();
+    const s = session("sess-acp-4");
+
+    const id = await plugin.captureNativeChatId?.({
+      session: s,
+      project: { id: "p1" } as any,
+      cwd: "/tmp/ws",
+      acpSessionId: "acp-session-4",
+    });
+    expect(id).toBeNull();
   });
 });

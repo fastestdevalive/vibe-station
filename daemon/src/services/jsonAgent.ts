@@ -31,6 +31,8 @@ import {
 import { mutateProject } from "../state/project-store.js";
 import { JsonAgentStream } from "../ws/streams/jsonAgentStream.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
+import { AcpConnection, SessionLoadFailed, type AcpLaunchSpec } from "./acp/acpTransport.js";
+import type { AcpEnrichHook } from "./acp/normalize.js";
 import type {
   ProjectRecord,
   WorktreeRecord,
@@ -274,6 +276,21 @@ export class JsonAgentSession {
   private readonly livePids = new Set<number>();
 
   /**
+   * ACP migration (Decision 1): this session's ONE persistent AcpConnection,
+   * created lazily on first turn for a plugin with `supportsAcp()`, reused for
+   * every later turn, disposed on release()/toggle (Decision 9). `undefined`
+   * for a plugin not migrated to ACP.
+   */
+  private connection?: AcpConnection;
+  /**
+   * True until the connection's FIRST turn reaches `result` (Decision 6 Option
+   * B call-site gate) — `captureNativeChatId` must run exactly once, at that
+   * point, never earlier (the native side channel is a filesystem artifact
+   * written only once the CLI has actually produced a conversation).
+   */
+  private connectionFirstTurnPending = false;
+
+  /**
    * Set by `release()` — this instance is being torn down and must never write
    * again. Two late writers exist and both would corrupt state after release:
    *
@@ -458,6 +475,13 @@ export class JsonAgentSession {
       this.settled().catch(() => {}),
       new Promise<void>((resolve) => setTimeout(resolve, RELEASE_DRAIN_TIMEOUT_MS)),
     ]);
+    // Decision 9 — tear down the ACP connection (and its live terminals)
+    // BEFORE closing the SQLite handle. Bounded by the same drain timeout
+    // above having already elapsed; dispose() itself is internally capped.
+    if (this.connection) {
+      await this.connection.dispose().catch(() => {});
+      this.connection = undefined;
+    }
     this.dispose();
   }
 
@@ -469,10 +493,15 @@ export class JsonAgentSession {
    */
   stopActiveTurn(): boolean {
     if (!this.running || !this.activeAbort) return false;
-    // Kill the whole descendant tree (tool subprocesses in their own groups
-    // would otherwise survive the stop), then abort to unwind the iterator so
-    // the runner advances to the next queued turn (Decision 8/13).
-    this.killLivePids();
+    if (this.connection) {
+      // Decision 3 — an ACP connection (and its live terminals) must SURVIVE a
+      // Stop: cancel only the in-flight prompt, never kill the process group.
+      this.connection.cancelActivePrompt();
+    } else {
+      // Legacy per-turn spawn: kill the whole descendant tree (tool
+      // subprocesses in their own groups would otherwise survive the stop).
+      this.killLivePids();
+    }
     this.activeAbort.abort();
     return true;
   }
@@ -842,6 +871,9 @@ export class JsonAgentSession {
       systemPromptFile: this.systemPromptFile,
       daemonPort: this.daemonPort,
       onSpawn: (pid: number) => this.recordTurnPid(pid),
+      // ACP migration (Decision 1/2): only a plugin that calls this ever
+      // triggers connection creation — legacy plugins never invoke it.
+      getAcpConnection: (spec, enrich) => this.getOrCreateConnection(spec, enrich),
     };
 
     // Whether the turn reached its own terminal `result` before any abort. A stop
@@ -875,6 +907,9 @@ export class JsonAgentSession {
       // context) if a turn-1 is stopped early, but not data loss or a wrong
       // conversation.
       if (!abort.signal.aborted || sawResult) this.firstTurnDone = true;
+      // Decision 6 Option B call site — only meaningful once the plugin has
+      // actually reached a result on the (possibly brand-new) connection.
+      if (sawResult && this.plugin.supportsAcp?.()) await this.maybeCaptureNativeChatId();
     } catch (err) {
       // Plugins return cleanly on abort (they guard the non-zero-exit throw with
       // `!signal.aborted`), so this catch only fires on a real transport/exit
@@ -940,6 +975,122 @@ export class JsonAgentSession {
     }
     this.ensureDataDir();
     writeFileSync(pidFile, [...this.livePids].join("\n"), "utf8");
+  }
+
+  // --- ACP connection lifecycle (Decision 1/2/5/9) ---
+
+  /**
+   * Lazily create-or-return this session's ONE `AcpConnection`. First call:
+   * spawns + `initialize`s, then `session/load`s the existing `agentChatId`
+   * (iff `initialize` advertised `loadSession` AND an id already exists) or
+   * else `session/new`s (Decision 5) — a failed/unsupported load falls through
+   * to a fresh session with a `status` event naming the fallback, never a
+   * silent respawn. Subsequent calls return the cached connection untouched.
+   */
+  private async getOrCreateConnection(
+    spec: AcpLaunchSpec,
+    enrich?: AcpEnrichHook,
+  ): Promise<AcpConnection> {
+    if (this.connection) return this.connection;
+
+    const conn = new AcpConnection(spec, this.cli, enrich);
+    const { loadSession } = await conn.initialize();
+
+    // Decision 6 reconnect id: prefer `acpSessionId` (Option B — the id
+    // `session/load` actually understands) and fall back to `agentChatId`
+    // (Option A, where the two id spaces coincide so it's ALSO the right
+    // value). Never the other way around — using a native-only Option B id
+    // for `session/load` would ask the adapter to load an id it never minted.
+    const priorAcpId = this.session.acpSessionId ?? this.session.agentChatId;
+    let usedFreshSession = true;
+    if (loadSession && priorAcpId) {
+      try {
+        await conn.loadSession(this.cwd, priorAcpId);
+        usedFreshSession = false;
+      } catch (err) {
+        if (!(err instanceof SessionLoadFailed)) throw err;
+        const ev = this.newEvent("status", {
+          text: "resumed with a fresh agent session — prior context may not be visible to the CLI",
+        });
+        this.persist(ev);
+        this.stream.emitMessage(ev);
+      }
+    }
+    if (usedFreshSession) {
+      const acpSessionId = await conn.newSession(this.cwd);
+      // Decision 6 Option B: persist the ACP id separately so a LATER
+      // reconnect's `session/load` uses it (never `agentChatId`, which stays
+      // native-only for this plugin). Option A plugins persist their id via
+      // the synthetic `session_init` NormalizedEvent their `runTurn` yields
+      // instead (mirrors a legacy plugin's own session_init line) — that
+      // path writes `agentChatId` directly and never touches this column, so
+      // it is safe to ALSO opportunistically record it here: harmless for
+      // Option A (never read back, since `agentChatId` already equals it),
+      // necessary for Option B (the only place this id is captured at all).
+      await this.persistAcpSessionId(acpSessionId);
+    }
+    this.connection = conn;
+    this.connectionFirstTurnPending = true;
+    return conn;
+  }
+
+  /**
+   * Decision 6 Option B call site: called once per connection, at the
+   * `result` event of that connection's FIRST turn (never earlier — see the
+   * field doc comment). `null` is a normal outcome, not an error. Write-once:
+   * never overwrites an `agentChatId` already captured by the terminal path.
+   */
+  private async maybeCaptureNativeChatId(): Promise<void> {
+    if (!this.connectionFirstTurnPending) return;
+    this.connectionFirstTurnPending = false;
+    const acpSessionId = this.connection?.currentSessionId;
+    if (!acpSessionId || !this.plugin.captureNativeChatId) return;
+    if (this.session.agentChatId) return; // write-once — terminal path already set it
+    const captured = await this.plugin.captureNativeChatId({
+      session: this.session,
+      project: this.project,
+      cwd: this.cwd,
+      acpSessionId,
+    });
+    if (captured) {
+      this.session.agentChatId = captured;
+      await this.persistChatId(captured);
+    }
+  }
+
+  /**
+   * Decision 6 Option B storage — persist `sessions.acpSessionId` (twin of
+   * `persistChatId`, same mutateProject shape). Read back only by
+   * `getOrCreateConnection`'s reconnect `session/load` call — never by
+   * `getRestoreCommand`/importers/launch argv, which stay on `agentChatId`.
+   */
+  private async persistAcpSessionId(acpSessionId: string): Promise<void> {
+    if (this.session.acpSessionId === acpSessionId) return; // already current
+    this.session.acpSessionId = acpSessionId;
+    const worktreeId = this.worktree?.id;
+    await mutateProject(this.project.id, (p) => {
+      if (worktreeId) {
+        return {
+          ...p,
+          worktrees: p.worktrees.map((w) =>
+            w.id === worktreeId
+              ? {
+                  ...w,
+                  sessions: w.sessions.map((s) =>
+                    s.id === this.session.id ? { ...s, acpSessionId } : s,
+                  ),
+                }
+              : w,
+          ),
+        };
+      }
+      return {
+        ...p,
+        directSessions: p.directSessions.map((s) =>
+          s.id === this.session.id ? { ...s, acpSessionId } : s,
+        ),
+      };
+    });
   }
 
   private async handleEvent(ev: NormalizedEvent): Promise<void> {

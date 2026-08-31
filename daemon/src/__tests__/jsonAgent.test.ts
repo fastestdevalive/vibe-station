@@ -3,7 +3,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import { parseClaudeStreamLine } from "../agent-plugins/claude.js";
 import type { AgentPlugin, TurnContext } from "../services/spawn.js";
 import type {
@@ -782,5 +785,147 @@ describe("JsonAgentSession — abort kills the whole descendant tree (Fix #3)", 
 
     expect(alive(rootPid)).toBe(false);
     expect(alive(grandchildPid)).toBe(false);
+  });
+});
+
+describe("JsonAgentSession — 1.T4 stopActiveTurn cancels an ACP connection, never kills it", () => {
+  let project: ProjectRecord;
+  const FAKE_AGENT = join(__dirname, "fixtures", "fakeAcpAgent.mjs");
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-acp-stop-"));
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempDir, "repo"), { recursive: true });
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  /** A real ACP-driving plugin (via ctx.getAcpConnection) against the fake agent fixture. */
+  function acpPlugin(
+    mode: "normal" | "cancel" | "bg_terminal",
+    onConn?: (conn: { hasLiveTerminals(): boolean }) => void,
+  ): AgentPlugin {
+    return {
+      ...mockPlugin(""),
+      supportsAcp() {
+        return true;
+      },
+      async *runTurn(_input, ctx, signal) {
+        const conn = await ctx.getAcpConnection!(
+          {
+            command: process.execPath,
+            args: [FAKE_AGENT],
+            cwd: ctx.cwd,
+            env: { FAKE_ACP_MODE: mode },
+            // Mirror the real plugins (claude.ts:396) — the connection PID is
+            // recorded in livePids, so a regression that hard-kills on
+            // stop/force-send would actually take this fake agent down.
+            ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+          },
+        );
+        onConn?.(conn);
+        const sessionId = conn.currentSessionId ?? (await conn.newSession(ctx.cwd));
+        const { updates, result } = conn.sendPrompt(sessionId, [{ type: "text", text: "hi" }], signal);
+        for await (const ev of updates) yield ev;
+        const { stopReason } = await result;
+        yield { id: "r1", sessionId: ctx.session.id, ts: new Date().toISOString(), provider: "claude", kind: "result", text: stopReason } as NormalizedEvent;
+      },
+    } as unknown as AgentPlugin;
+  }
+
+  it("stopActiveTurn() sends session/cancel (not killProcessTree) and the connection stays usable for the next turn", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: acpPlugin("cancel"),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.enqueue({ message: "start something long" });
+    // Give the fake agent time to spawn + reach session/prompt before stopping.
+    await new Promise((r) => setTimeout(r, 200));
+    const stopped = agent.stopActiveTurn();
+    expect(stopped).toBe(true);
+    await agent.settled();
+
+    // A SECOND turn on the SAME session must succeed without hanging or
+    // spawning a brand-new connection — proof the connection survived Stop.
+    agent.enqueue({ message: "are you still there?" });
+    await agent.settled();
+
+    const kinds = agent.readTranscript().map((e) => e.kind);
+    expect(kinds.filter((k) => k === "result").length).toBeGreaterThanOrEqual(1);
+  });
+
+  // 1.T6 — "Send now" (force-send) is the SAME preemption as Stop: it routes
+  // through promoteQueuedTurn → stopActiveTurn, so it must cancel the in-flight
+  // prompt (session/cancel) and leave the connection AND every live
+  // AcpTerminalManager-tracked background terminal running. A regression to the
+  // legacy killProcessTree path here would SIGKILL the adapter's process group,
+  // taking the background terminal (and everything the CLI is running inside
+  // that one process) with it.
+  it("1.T6 — force-send (promoteQueuedTurn) preserves a live background terminal and the connection", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    let conn: { hasLiveTerminals(): boolean } | undefined;
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: acpPlugin("bg_terminal", (c) => {
+        conn = c;
+      }),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    try {
+      // Turn 1 starts a host-managed background terminal, then hangs.
+      agent.enqueue({ message: "start the dev server in the background" });
+      const deadline = Date.now() + 5000;
+      while (!conn?.hasLiveTerminals() && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(conn?.hasLiveTerminals()).toBe(true);
+
+      // Queue a second turn and FORCE-SEND it while turn 1 is still running.
+      const { turnId } = agent.enqueue({ message: "actually, do this instead" });
+      expect(agent.promoteQueuedTurn(turnId)).toBe("ok");
+      await agent.settled();
+
+      // The background terminal must still be alive — force-send cancelled the
+      // turn, it did not kill the process tree.
+      expect(conn?.hasLiveTerminals()).toBe(true);
+
+      // …and the promoted turn ran to completion on the SAME connection.
+      const results = agent.readTranscript().filter((e) => e.kind === "result");
+      expect(results.some((e) => e.text === "end_turn")).toBe(true);
+    } finally {
+      // release() is the only path that may hard-kill the terminal (Requirement 2).
+      await agent.release();
+    }
   });
 });

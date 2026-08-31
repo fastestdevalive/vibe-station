@@ -356,4 +356,101 @@ describe("migrateManifestsToSqlite", () => {
     expect(joined!.worktreeId).toBe(`${id}-1`);
     expect(joined!.worktreeProjectId).toBe(id);
   });
+
+  // Regression — a hand-authored manifest (the demo-seed fixtures) lists
+  // worktrees `napi-1..napi-4` but never sets `nextWorktreeNum`. Defaulting the
+  // counter to 1 made the first real `POST /worktrees` reserve `napi-1` again →
+  // `SqliteError: UNIQUE constraint failed: worktrees.id`. The migrated counter
+  // must be strictly greater than every existing worktree number.
+  describe("nextWorktreeNum floor (UNIQUE-constraint regression)", () => {
+    /** A manifest with `n` worktrees `<prefix>-1..<prefix>-n` and no sessions. */
+    function manifestWithWorktrees(
+      id: string,
+      prefix: string,
+      ids: string[],
+      extra: Record<string, unknown> = {},
+    ) {
+      return {
+        id,
+        absolutePath: `/fake/${id}`,
+        prefix,
+        isGit: true,
+        defaultBranch: "main",
+        createdAt: new Date().toISOString(),
+        directSessions: [],
+        worktrees: ids.map((wtId) => ({
+          id: wtId,
+          branch: `b-${wtId}`,
+          baseBranch: "main",
+          baseSha: "0".repeat(40),
+          createdAt: new Date().toISOString(),
+          sessions: [],
+        })),
+        ...extra,
+      };
+    }
+
+    async function migrate(id: string, manifest: unknown): Promise<number> {
+      await writeLegacyManifest(id, manifest);
+      const { getDb } = await import("../state/db.js");
+      const { migrateManifestsToSqlite } = await import("../services/dbMigration.js");
+      const db = getDb();
+      await migrateManifestsToSqlite(db);
+      const row = db.prepare("SELECT nextWorktreeNum AS n FROM projects WHERE id = ?").get(id) as
+        | { n: number }
+        | undefined;
+      expect(row).toBeDefined();
+      return row!.n;
+    }
+
+    it("derives a counter above every existing worktree when `nextWorktreeNum` is absent", async () => {
+      const wtIds = ["napi-1", "napi-2", "napi-3", "napi-4"];
+      const next = await migrate("proj-seed", manifestWithWorktrees("proj-seed", "napi", wtIds));
+
+      // Strictly greater than EVERY existing worktree number — the id the next
+      // creation reserves (`napi-<next>`) can never collide.
+      const highest = Math.max(...wtIds.map((w) => Number(w.split("-")[1])));
+      expect(next).toBeGreaterThan(highest);
+      expect(next).toBe(5);
+    });
+
+    it("keeps a declared `nextWorktreeNum` that is already above the floor", async () => {
+      const next = await migrate(
+        "proj-declared",
+        manifestWithWorktrees("proj-declared", "napi", ["napi-1", "napi-2"], { nextWorktreeNum: 9 }),
+      );
+      expect(next).toBe(9);
+    });
+
+    it("overrides a stale `nextWorktreeNum` that is below the highest existing worktree", async () => {
+      const next = await migrate(
+        "proj-stale",
+        manifestWithWorktrees("proj-stale", "napi", ["napi-1", "napi-2", "napi-3"], { nextWorktreeNum: 2 }),
+      );
+      expect(next).toBe(4);
+    });
+
+    it("falls back to 1 for a project with no worktrees at all", async () => {
+      const next = await migrate("proj-empty", manifestWithWorktrees("proj-empty", "napi", []));
+      expect(next).toBe(1);
+    });
+
+    it("ignores worktree ids that don't match `<prefix>-<n>` (hand-renamed dirs)", async () => {
+      const next = await migrate(
+        "proj-renamed",
+        manifestWithWorktrees("proj-renamed", "napi", ["napi-1", "napi-hotfix", "other-9"]),
+      );
+      // Only `napi-1` counts; the renamed/foreign ids never consumed a number.
+      expect(next).toBe(2);
+    });
+
+    it("treats a regex-special prefix literally", async () => {
+      const next = await migrate(
+        "proj-regex",
+        // `a.b` must NOT match `axb-3`; only the literal `a.b-2` counts.
+        manifestWithWorktrees("proj-regex", "a.b", ["a.b-2", "axb-3"]),
+      );
+      expect(next).toBe(3);
+    });
+  });
 });

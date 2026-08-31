@@ -8,18 +8,22 @@
 
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { guardChildStdio } from "../services/childStreams.js";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
+import { createRequire } from "node:module";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
 import { sq } from "../services/shell.js";
-import { findLatestChatUuid } from "./claudeRestore.js";
+import { findLatestChatUuid } from "./native-chat-id/claude.js";
+import type { AcpEnrichHook } from "../services/acp/normalize.js";
+import type { PromptBlock } from "../services/acp/acpTransport.js";
 import type {
   SessionRecord,
   ProjectRecord,
   NormalizedEvent,
   NormalizedEventKind,
+  UsageInfo,
 } from "../types.js";
 
 /** Build a claude-provider NormalizedEvent, stamping id/ts/provider. */
@@ -221,6 +225,224 @@ async function ensureGitignoreEntry(gitignorePath: string, entry: string): Promi
       ? content + entry + "\n"
       : content + "\n" + entry + "\n";
   await fs.writeFile(gitignorePath, newContent, "utf8");
+}
+
+// --- ACP migration (Decision 1/2/6) ---
+
+/**
+ * Resolve the user's own `claude` binary absolute path, so it can be pinned
+ * via `CLAUDE_CODE_EXECUTABLE` for the ACP adapter (mirrors
+ * agent-orchestrator's `chatdriver/claudeacp/driver.go:33-98` precedent).
+ * Falls back to the bare name (PATH lookup at spawn time) when `which` is
+ * unavailable or finds nothing — matches `getLaunchCommand`'s existing
+ * behavior of never hardcoding a path.
+ */
+function resolveClaudeBinary(): string {
+  try {
+    return execFileSync("which", ["claude"], { encoding: "utf8" }).trim() || "claude";
+  } catch {
+    return "claude";
+  }
+}
+
+/**
+ * Resolve the `claude-agent-acp` adapter's entry script (Phase 1.7's pinned
+ * `@agentclientprotocol/claude-agent-acp` dependency in `cli/package.json`).
+ * Resolved via Node's own module resolution (not a hardcoded `.bin` path) so
+ * it works regardless of package-manager layout (pnpm's `.pnpm` store,
+ * hoisted `node_modules`, etc).
+ */
+function resolveClaudeAdapterEntry(): string {
+  const require = createRequire(import.meta.url);
+  return require.resolve("@agentclientprotocol/claude-agent-acp/dist/index.js");
+}
+
+/**
+ * Decision 2.3 — claude's `enrich` hook. Nothing claude-specific needs
+ * special-casing beyond the shared mapping today (its `plan` updates already
+ * map generically to `status`); kept as a named seam per the plan's directory
+ * layout, not a no-op removed for tidiness.
+ */
+const claudeEnrich: AcpEnrichHook = (_raw, base) => base;
+
+/** Map an ACP `session/prompt` result's `usage` shape onto the shared `UsageInfo`. */
+function acpUsageToUsageInfo(
+  raw: Record<string, unknown> | undefined,
+  model: string | undefined,
+): UsageInfo | undefined {
+  if (!raw) return undefined;
+  const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+  const inputTokens = num(raw.inputTokens);
+  const outputTokens = num(raw.outputTokens);
+  const cacheReadTokens = num(raw.cachedReadTokens);
+  const cacheCreateTokens = num(raw.cachedWriteTokens);
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreateTokens,
+    totalTokens: num(raw.totalTokens) || inputTokens + outputTokens + cacheReadTokens + cacheCreateTokens,
+    model: model ?? "",
+  };
+}
+
+/**
+ * Legacy per-turn one-shot spawn (Decision 2's predecessor). Decision 8 keeps
+ * this path ALIVE for exactly one case post-migration: edit-a-sent-message
+ * fork (`ctx.forkFromChatId` set) — ACP has no standardized "fork a session"
+ * primitive, and a fork inherently starts a new branch with no prior
+ * background work to lose, so there's nothing the ACP migration needs to fix
+ * here. Every OTHER turn goes through `runTurnAcp` below.
+ */
+async function* runLegacySpawnTurn(
+  input: TurnInput,
+  ctx: TurnContext,
+  signal: AbortSignal,
+): AsyncIterable<NormalizedEvent> {
+  const sessionId = ctx.session.id;
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"];
+  if (ctx.model) args.push("--model", ctx.model);
+  if (ctx.forkFromChatId) {
+    // Edit-a-sent-message fork (R3.2/R3.5): resume the original session but
+    // `--fork-session` branches it into a NEW session id, so re-running from
+    // the fork point never mutates the original branch.
+    args.push("--resume", ctx.forkFromChatId, "--fork-session");
+  } else if (ctx.chatId) {
+    args.push("--resume", ctx.chatId);
+  }
+  if (input.isFirstTurn) {
+    const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
+    if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
+  }
+
+  const child = spawn("claude", args, {
+    cwd: ctx.cwd,
+    detached: true, // own process group for group-kill on abort
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  // `claude` also gets its prompt on stdin below, so an EPIPE on a child
+  // that died during spawn is directly reachable here.
+  guardChildStdio(child, "claude");
+  if (child.pid) ctx.onSpawn?.(child.pid);
+
+  let stderr = "";
+  child.stderr?.on("data", (d: Buffer) => {
+    stderr += d.toString("utf8");
+  });
+
+  const onAbort = (): void => {
+    try {
+      if (child.pid) process.kill(-child.pid, "SIGTERM");
+    } catch {
+      /* already dead */
+    }
+  };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+
+  // Deliver the user's message on stdin (avoids MAX_ARG_STRLEN on large msgs).
+  child.stdin?.write(input.message);
+  child.stdin?.end();
+
+  const exitPromise = new Promise<number>((resolve) => {
+    child.on("close", (code) => resolve(code ?? 0));
+  });
+
+  try {
+    // Track the primary model across lines (session_init reports claude's
+    // real model) so the `result`/`usage` model resolves to the answering
+    // model, not a subagent. Seeded with the requested model when set.
+    let primaryModel = ctx.model;
+    const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
+    for await (const line of rl) {
+      for (const ev of parseClaudeStreamLine(line, sessionId, primaryModel)) {
+        if (ev.kind === "session_init" && ev.model) primaryModel = ev.model;
+        yield ev;
+      }
+    }
+    const code = await exitPromise;
+    if (code !== 0 && !signal.aborted) {
+      throw new Error(`claude exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
+    }
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    if (!child.killed && child.exitCode === null) {
+      try {
+        if (child.pid) process.kill(-child.pid, "SIGTERM");
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/**
+ * ACP-based turn (Decision 2). Drives the persistent `AcpConnection` (spawned
+ * once per session via `ctx.getAcpConnection`, Decision 1) instead of a
+ * per-turn one-shot spawn — the turn ends when `session/prompt` RESOLVES, not
+ * when a process exits, so background work started mid-turn survives.
+ */
+async function* runTurnAcp(
+  input: TurnInput,
+  ctx: TurnContext,
+  signal: AbortSignal,
+): AsyncIterable<NormalizedEvent> {
+  const conn = await ctx.getAcpConnection!(
+    {
+      command: process.execPath,
+      args: [resolveClaudeAdapterEntry()],
+      cwd: ctx.cwd,
+      env: { CLAUDE_CODE_EXECUTABLE: resolveClaudeBinary() },
+      ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+    },
+    claudeEnrich,
+  );
+  const sessionId = conn.currentSessionId;
+  if (!sessionId) throw new Error("claude ACP session was not established");
+
+  const promptBlocks: PromptBlock[] = [];
+  if (input.isFirstTurn) {
+    // Decision 6 Option A capture path: surface the ACP session id as a
+    // synthetic `session_init` event — `handleEvent`'s existing write-once
+    // capture (Decision 10) then persists it as `agentChatId`, EXACTLY the
+    // same path a legacy session_init line already used. Claude's spike
+    // (2.0) proved this id IS the CLI's own native resume id.
+    yield claudeEvent(ctx.session.id, "session_init", {
+      agentChatId: sessionId,
+      ...(ctx.model ? { model: ctx.model } : {}),
+    });
+    // ACP has no dedicated system-prompt field — prepend it as the first
+    // content block of turn 1's prompt, the closest analog to
+    // `--append-system-prompt` that `session/prompt`'s `PromptBlock[]` shape
+    // allows. Resumed turns rely on claude's own session state, exactly as
+    // the legacy path already did.
+    const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
+    if (systemPrompt) promptBlocks.push({ type: "text", text: systemPrompt });
+  }
+  promptBlocks.push({ type: "text", text: input.message });
+
+  const { updates, result } = conn.sendPrompt(sessionId, promptBlocks, signal);
+  for await (const ev of updates) yield ev;
+
+  let stopReason: string;
+  let usageRaw: Record<string, unknown> | undefined;
+  try {
+    const r = await result;
+    stopReason = r.stopReason;
+    usageRaw = (r as unknown as { usage?: Record<string, unknown> }).usage;
+  } catch (err) {
+    if (signal.aborted) return; // Stop unwinding — no synthetic error (mirrors legacy path)
+    throw err;
+  }
+
+  const usage = acpUsageToUsageInfo(usageRaw, ctx.model);
+  if (usage) yield claudeEvent(ctx.session.id, "usage", { usage, model: usage.model || undefined });
+  yield claudeEvent(ctx.session.id, "result", {
+    ...(usage ? { usage, model: usage.model || undefined } : {}),
+  });
+  if (stopReason === "refusal") {
+    yield claudeEvent(ctx.session.id, "error", { text: "turn refused" });
+  }
 }
 
 const CLAUDE_MODELS = [
@@ -462,102 +684,27 @@ export function createClaudePlugin(): AgentPlugin {
       return true;
     },
 
+    /** ACP migration (Decision 7/1.4): gates jsonAgent's stop/release semantics. */
+    supportsAcp(): boolean {
+      return true;
+    },
+
     /**
-     * Run ONE JSON-channel turn (Decision 2/3). Spawns claude headless with
-     * `--output-format stream-json`, message on stdin, and yields NormalizedEvents
-     * as lines arrive. Own process group (detached) so a stuck turn can be killed
-     * as a group and never orphaned into the checkout (Decision 13).
-     *
-     * Headless — no `--chrome` (that flag is TTY-only). System prompt applied on
-     * the first turn via `--append-system-prompt`; resumed turns rely on claude's
-     * own session state (`--resume <chatId>`, never `--fork-session`).
+     * Run ONE JSON-channel turn (Decision 2/3/8). Decision 8: an edit-a-sent-
+     * message fork (`ctx.forkFromChatId` set) stays on the legacy one-shot
+     * spawn — ACP has no fork primitive. Every other turn drives the
+     * persistent ACP connection (Decision 1/2).
      */
     async *runTurn(
       input: TurnInput,
       ctx: TurnContext,
       signal: AbortSignal,
     ): AsyncIterable<NormalizedEvent> {
-      const sessionId = ctx.session.id;
-      const args = [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-      ];
-      if (ctx.model) args.push("--model", ctx.model);
       if (ctx.forkFromChatId) {
-        // Edit-a-sent-message fork (R3.2/R3.5): resume the original session but
-        // `--fork-session` branches it into a NEW session id, so re-running from
-        // the fork point never mutates the original branch.
-        args.push("--resume", ctx.forkFromChatId, ...(this.getForkCommand?.() ?? ["--fork-session"]));
-      } else if (ctx.chatId) {
-        args.push("--resume", ctx.chatId);
+        yield* runLegacySpawnTurn(input, ctx, signal);
+        return;
       }
-      if (input.isFirstTurn) {
-        const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
-        if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
-      }
-
-      const child = spawn("claude", args, {
-        cwd: ctx.cwd,
-        detached: true, // own process group for group-kill on abort
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      // `claude` also gets its prompt on stdin below, so an EPIPE on a child
-      // that died during spawn is directly reachable here.
-      guardChildStdio(child, "claude");
-      if (child.pid) ctx.onSpawn?.(child.pid);
-
-      let stderr = "";
-      child.stderr?.on("data", (d: Buffer) => {
-        stderr += d.toString("utf8");
-      });
-
-      const onAbort = (): void => {
-        try {
-          if (child.pid) process.kill(-child.pid, "SIGTERM");
-        } catch {
-          /* already dead */
-        }
-      };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
-
-      // Deliver the user's message on stdin (avoids MAX_ARG_STRLEN on large msgs).
-      child.stdin?.write(input.message);
-      child.stdin?.end();
-
-      const exitPromise = new Promise<number>((resolve) => {
-        child.on("close", (code) => resolve(code ?? 0));
-      });
-
-      try {
-        // Track the primary model across lines (session_init reports claude's
-        // real model) so the `result`/`usage` model resolves to the answering
-        // model, not a subagent. Seeded with the requested model when set.
-        let primaryModel = ctx.model;
-        const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
-        for await (const line of rl) {
-          for (const ev of parseClaudeStreamLine(line, sessionId, primaryModel)) {
-            if (ev.kind === "session_init" && ev.model) primaryModel = ev.model;
-            yield ev;
-          }
-        }
-        const code = await exitPromise;
-        if (code !== 0 && !signal.aborted) {
-          throw new Error(`claude exited ${code}${stderr ? `: ${stderr.trim()}` : ""}`);
-        }
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-        if (!child.killed && child.exitCode === null) {
-          try {
-            if (child.pid) process.kill(-child.pid, "SIGTERM");
-          } catch {
-            /* ignore */
-          }
-        }
-      }
+      yield* runTurnAcp(input, ctx, signal);
     },
 
     /** Fork flag (R3.2/R3.5): claude branches a resumed session with `--fork-session`. */

@@ -1,0 +1,127 @@
+#!/usr/bin/env node
+// Minimal fake ACP agent for tests — NDJSON JSON-RPC over stdio.
+// Behavior is driven by env vars so tests can exercise different paths
+// without spawning a real CLI:
+//   FAKE_ACP_MODE=normal (default) — initialize/session/new/session/prompt all succeed,
+//     streaming one agent_message_chunk before resolving with stopReason "end_turn".
+//   FAKE_ACP_MODE=cancel — session/prompt hangs until it receives session/cancel,
+//     then resolves with stopReason "cancelled".
+//   FAKE_ACP_MODE=exit_before_ready — exits immediately without responding to anything.
+//   FAKE_ACP_MODE=hang — never responds to ANYTHING (simulates a wedged adapter, 4.T2).
+//   FAKE_ACP_MODE=bg_terminal — the FIRST session/prompt starts a host-managed
+//     background terminal (client-side `terminal/create`) and then hangs until
+//     session/cancel, resolving "cancelled"; every LATER prompt resolves
+//     "end_turn" immediately. Models "a turn that backgrounded a dev server is
+//     interrupted, and the next turn runs on the same connection" (1.T6).
+import { createInterface } from "node:readline";
+
+const mode = process.env.FAKE_ACP_MODE ?? "normal";
+
+if (mode === "exit_before_ready") {
+  process.exit(1);
+}
+if (mode === "hang") {
+  // Never respond, never exit — the connect/initialize timeout must fire.
+  // (Don't wire up the readline handler below at all — even parsing/ignoring
+  // input would still risk an accidental response path.)
+  setInterval(() => {}, 60_000);
+} else {
+  setupNormalHandlers();
+}
+
+function setupNormalHandlers() {
+const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+let sessionId = "fake-session-1";
+let cancelRequested = false;
+let promptCount = 0;
+let nextClientReqId = 1000;
+
+function write(obj) {
+  process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+rl.on("line", (line) => {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  // A RESPONSE to one of our own agent→client requests (terminal/create): ignore
+  // the payload, we only care that the daemon now owns the background child.
+  if (msg.id !== undefined && msg.method === undefined) return;
+  if (msg.method === "initialize") {
+    write({
+      jsonrpc: "2.0",
+      id: msg.id,
+      result: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
+    });
+    return;
+  }
+  if (msg.method === "session/new") {
+    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId } });
+    return;
+  }
+  if (msg.method === "session/load") {
+    if (msg.params.sessionId === "fail-me") {
+      write({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such session" } });
+    } else {
+      write({ jsonrpc: "2.0", id: msg.id, result: {} });
+    }
+    return;
+  }
+  if (msg.method === "session/cancel") {
+    cancelRequested = true;
+    return;
+  }
+  if (msg.method === "session/prompt") {
+    const sid = msg.params.sessionId;
+    if (mode === "bg_terminal") {
+      promptCount += 1;
+      if (promptCount > 1) {
+        // A later turn on the SAME connection — answer immediately.
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+        return;
+      }
+      // Turn 1 backgrounds a long-lived process through the HOST (the daemon's
+      // AcpTerminalManager owns the OS child, not this process), then hangs.
+      write({
+        jsonrpc: "2.0",
+        id: nextClientReqId++,
+        method: "terminal/create",
+        params: {
+          sessionId: sid,
+          command: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1000)"],
+        },
+      });
+      const bgCheck = setInterval(() => {
+        if (cancelRequested) {
+          clearInterval(bgCheck);
+          cancelRequested = false;
+          write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "cancelled" } });
+        }
+      }, 20);
+      return;
+    }
+    if (mode === "cancel") {
+      const check = setInterval(() => {
+        if (cancelRequested) {
+          clearInterval(check);
+          write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "cancelled" } });
+        }
+      }, 20);
+      return;
+    }
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi from fake agent" } } },
+    });
+    setTimeout(() => {
+      write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+    }, 20);
+    return;
+  }
+});
+}

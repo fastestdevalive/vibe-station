@@ -96,6 +96,7 @@ JSON
   "prefix": "napi",
   "defaultBranch": "main",
   "createdAt": "2025-05-01T09:00:00.000Z",
+  "nextWorktreeNum": 5,
   "worktrees": [
     {
       "id": "napi-1",
@@ -152,6 +153,7 @@ JSON
   "prefix": "atls",
   "defaultBranch": "main",
   "createdAt": "2025-05-01T09:10:00.000Z",
+  "nextWorktreeNum": 4,
   "worktrees": [
     {
       "id": "atls-1",
@@ -196,6 +198,7 @@ JSON
   "prefix": "frge",
   "defaultBranch": "main",
   "createdAt": "2025-05-01T09:15:00.000Z",
+  "nextWorktreeNum": 3,
   "worktrees": [
     {
       "id": "frge-1",

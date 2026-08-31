@@ -54,23 +54,38 @@ describe("Mode routes", () => {
     expect(res.json()).toEqual([]);
   });
 
-  it("GET /supported-clis lists all CLIs with defaultModel + supportsJson + importsNativeHistory", async () => {
+  it("GET /supported-clis lists all CLIs with defaultModel + supportsJson + importsNativeHistory + supportsJsonToTerminalResume", async () => {
     const res = await app.inject({ method: "GET", url: "/supported-clis" });
     expect(res.statusCode).toBe(200);
     const body = res.json<
-      Array<{ id: string; defaultModel: string; supportsJson: boolean; importsNativeHistory: boolean }>
+      Array<{
+        id: string;
+        defaultModel: string;
+        supportsJson: boolean;
+        importsNativeHistory: boolean;
+        supportsJsonToTerminalResume: boolean;
+      }>
     >();
     expect(body.find((c) => c.id === "claude")?.supportsJson).toBe(true);
     // claude + opencode ship a native-history importer; cursor + agy don't (yet).
     expect(body.find((c) => c.id === "claude")?.importsNativeHistory).toBe(true);
     expect(body.find((c) => c.id === "opencode")?.importsNativeHistory).toBe(true);
     expect(body.find((c) => c.id === "cursor")?.importsNativeHistory).toBe(false);
+    // Decision 6 follow-up: cursor's ACP session state lives in a store its own
+    // --resume can't read, so json->tty always starts fresh for it; the other
+    // three CLIs can genuinely resume (agy's native id is derived reliably from
+    // the ACP session via the adapter's own store — see agy.ts captureNativeChatId).
+    expect(body.find((c) => c.id === "cursor")?.supportsJsonToTerminalResume).toBe(false);
+    expect(body.find((c) => c.id === "claude")?.supportsJsonToTerminalResume).toBe(true);
+    expect(body.find((c) => c.id === "opencode")?.supportsJsonToTerminalResume).toBe(true);
+    expect(body.find((c) => c.id === "agy")?.supportsJsonToTerminalResume).toBe(true);
     // agy (Antigravity CLI) registers with JSON support enabled but no importer.
     expect(body.find((c) => c.id === "agy")).toEqual({
       id: "agy",
       defaultModel: "Gemini 3.1 Pro (High)",
       supportsJson: true,
       importsNativeHistory: false,
+      supportsJsonToTerminalResume: true,
     });
     expect(body.map((c) => c.id).sort()).toEqual(["agy", "claude", "cursor", "opencode"]);
   });

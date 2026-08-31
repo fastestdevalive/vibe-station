@@ -34,6 +34,7 @@ export interface SessionRow {
   transcriptKind: string | null;
   transcriptPath: string | null;
   agentChatId: string | null;
+  acpSessionId: string | null;
   modelOverride: string | null;
   pinnedAt: string | null;
   initialPrompt: string | null;
@@ -93,6 +94,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     },
     ...(transcriptRef ? { transcriptRef } : {}),
     ...(row.agentChatId != null ? { agentChatId: row.agentChatId } : {}),
+    ...(row.acpSessionId != null ? { acpSessionId: row.acpSessionId } : {}),
     ...(row.modelOverride != null ? { modelOverride: row.modelOverride } : {}),
     ...(row.pinnedAt != null ? { pinnedAt: row.pinnedAt } : {}),
     ...(row.initialPrompt != null ? { initialPrompt: row.initialPrompt } : {}),
@@ -139,6 +141,7 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     transcriptKind: session.transcriptRef?.kind ?? null,
     transcriptPath: session.transcriptRef?.path ?? null,
     agentChatId: session.agentChatId ?? null,
+    acpSessionId: session.acpSessionId ?? null,
     modelOverride: session.modelOverride ?? null,
     pinnedAt: session.pinnedAt ?? null,
     initialPrompt: session.initialPrompt ?? null,

@@ -32,6 +32,7 @@ const baseRow: SessionRow = {
   transcriptKind: null,
   transcriptPath: null,
   agentChatId: null,
+  acpSessionId: null,
   modelOverride: null,
   pinnedAt: null,
   initialPrompt: null,
