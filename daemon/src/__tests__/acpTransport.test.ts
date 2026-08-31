@@ -68,12 +68,25 @@ describe("AcpConnection happy path", () => {
     await conn.initialize();
     const sessionId = await conn.newSession("/tmp");
     const { result } = conn.sendPrompt(sessionId, [{ type: "text", text: "edit a file" }], new AbortController().signal);
-    // The fixture echoes the chosen optionId back as stopReason (see
+    // The fixture echoes the daemon's actual outcome back as stopReason (see
     // fakeAcpAgent.mjs's permission_request mode) — asserts the daemon picked
     // "allow_always" over the offered "reject_once"/"allow_once", matching
     // the `--dangerously-skip-permissions` trust model used everywhere else.
     const { stopReason } = await result;
-    expect(stopReason).toBe("allow_always");
+    expect(stopReason).toBe("selected:allow_always");
+    await conn.dispose();
+  });
+
+  it("cancels rather than approving when every offered permission option is reject-kind", async () => {
+    const conn = makeConnection("permission_request_reject_only");
+    await conn.initialize();
+    const sessionId = await conn.newSession("/tmp");
+    const { result } = conn.sendPrompt(sessionId, [{ type: "text", text: "do something risky" }], new AbortController().signal);
+    // No allow_once/allow_always offered at all — the daemon must never fall
+    // back to blindly picking options[0] (a reject option) and reporting it
+    // as "selected", which would silently approve a rejection.
+    const { stopReason } = await result;
+    expect(stopReason).toBe("cancelled");
     await conn.dispose();
   });
 
