@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import type { DiffLine } from "@/preview/diffParser";
 import { parseUnifiedDiff, syntheticUntrackedHunks } from "@/preview/diffParser";
+import { diffLinesToHunks } from "@/preview/diffFromTexts";
 import { useTheme } from "@/hooks/useTheme";
 import { languageForFilePath } from "./codeHighlight";
 import { pickShikiLang } from "./previewLang";
 import { escapeHtml, highlightLineHtml } from "./shikiHighlighter";
 
 interface DiffViewProps {
-  diffText: string;
+  /** Unified-diff text. Optional when `oldText`/`newText` are supplied instead
+   *  (acp-normalize-superset Decision 3). */
+  diffText?: string;
   /** Raw file text when diff empty / untracked */
   fileContentFallback?: string;
+  /** Structured before/after text — takes precedence over `diffText` when
+   *  either is defined (a new file has `oldText` absent, `newText` required). */
+  oldText?: string;
+  newText?: string;
   /** Used for syntax highlighting (extension → language) */
   filePath?: string;
   themeMode?: "dark" | "light";
@@ -38,6 +45,8 @@ function flattenHunks(hunks: ReturnType<typeof parseUnifiedDiff>): FlatDiffRow[]
 export function DiffView({
   diffText,
   fileContentFallback,
+  oldText,
+  newText,
   filePath,
   themeMode,
 }: DiffViewProps) {
@@ -49,11 +58,14 @@ export function DiffView({
   const shikiLang = pickShikiLang(filePath, hljsLang);
 
   const hunks = useMemo(() => {
-    const trimmed = diffText.trim();
-    if (trimmed.length > 0) return parseUnifiedDiff(diffText);
+    if (oldText !== undefined || newText !== undefined) {
+      return diffLinesToHunks(oldText ?? "", newText ?? "");
+    }
+    const trimmed = (diffText ?? "").trim();
+    if (trimmed.length > 0) return parseUnifiedDiff(diffText ?? "");
     if (fileContentFallback) return syntheticUntrackedHunks(fileContentFallback);
     return [];
-  }, [diffText, fileContentFallback]);
+  }, [diffText, fileContentFallback, oldText, newText]);
 
   const flatRows = useMemo(() => flattenHunks(hunks), [hunks]);
 
