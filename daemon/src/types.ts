@@ -235,7 +235,24 @@ export interface SessionRecord {
   channel?: Channel;
   lifecycle: SessionLifecycle;
   transcriptRef?: TranscriptRef;
+  /**
+   * Identity #1 of two (see the "two session identities" block above
+   * `AgentPlugin.captureNativeChatId` in `services/spawn.ts`): the **NATIVE**
+   * chat id — the value this CLI's OWN `--resume`/`--session`/`--conversation`
+   * flag and native transcript store understand. Invariant: this field is
+   * ALWAYS the native id, never an ACP-protocol one. It is what the Terminal
+   * channel resumes with, and for a CLI whose two ids coincide (claude,
+   * opencode) it doubles as the ACP id too.
+   */
   agentChatId?: string;
+  /**
+   * Identity #2 of two. ACP migration (Decision 6 Option B only). The ACP `session/new`/`load` id
+   * for a plugin whose spike proved this differs from the CLI's own native
+   * resume id — read ONLY by `session/load` reconnect (Decision 5). Plugins
+   * whose spike proved the two ids coincide (Option A) never set this; for
+   * them `agentChatId` alone is both the ACP id and the native id.
+   */
+  acpSessionId?: string;
   /**
    * Per-session model override (JSON channel), set live from the status-bar model
    * switcher. When present it wins over the mode's model for every subsequent

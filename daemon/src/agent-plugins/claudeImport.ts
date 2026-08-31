@@ -3,7 +3,7 @@
  *
  * Reads `~/.claude/projects/<slug>/<uuid>.jsonl` where `<uuid> == agentChatId`
  * and `<slug>` is the cwd with `/`→`-` and `.`→`-` (same convention as
- * `claudeRestore.ts`). It is a NEW at-rest envelope adapter, NOT a reuse of
+ * `native-chat-id/claude.ts`). It is a NEW at-rest envelope adapter, NOT a reuse of
  * `parseClaudeStreamLine`:
  *  - the at-rest store is the ONLY source of `user` prompts (the live path
  *    synthesizes those in the core), so we emit `user` events from `type:"user"`

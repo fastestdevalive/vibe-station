@@ -191,10 +191,10 @@ describe("Agent plugins", () => {
 
     it("Phase 3 — T3.T3 — getRestoreCommand returns argv [claude, --resume, <uuid>, --dangerously-skip-permissions] when uuid exists", async () => {
       const { resolvePlugin } = await import("../agent-plugins/registry.js");
-      const { findLatestChatUuid } = await import("../agent-plugins/claudeRestore.js");
+      const { findLatestChatUuid } = await import("../agent-plugins/native-chat-id/claude.js");
 
       // Create a temporary test to simulate a working findLatestChatUuid
-      // We'll test just the return shape here; full integration test in claudeRestore.test.ts
+      // We'll test just the return shape here; full integration test in nativeChatIdClaude.test.ts
       const plugin = resolvePlugin("claude");
 
       // Call with stub args (will return null since no real claude config)

@@ -969,10 +969,10 @@ export function createMockApi() {
 
     async getSupportedClis(): Promise<SupportedCli[]> {
       return [
-        { id: "claude", defaultModel: "sonnet", supportsJson: true, importsNativeHistory: true },
-        { id: "cursor", defaultModel: "auto", supportsJson: true, importsNativeHistory: false },
-        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true, importsNativeHistory: true },
-        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true, importsNativeHistory: false },
+        { id: "claude", defaultModel: "sonnet", supportsJson: true, importsNativeHistory: true, supportsJsonToTerminalResume: true },
+        { id: "cursor", defaultModel: "auto", supportsJson: true, importsNativeHistory: false, supportsJsonToTerminalResume: false },
+        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true, importsNativeHistory: true, supportsJsonToTerminalResume: true },
+        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true, importsNativeHistory: false, supportsJsonToTerminalResume: true },
       ];
     },
 

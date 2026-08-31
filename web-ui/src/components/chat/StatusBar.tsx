@@ -82,13 +82,22 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
   // we default to NOT warning until it resolves. cursor/agy → false.
   const cli = meta?.cli;
   const [importsHistory, setImportsHistory] = useState<boolean | null>(null);
+  // Same resolve-once-from-GET/supported-clis pattern as importsHistory above,
+  // for a second, independent caveat: can the terminal side actually RESUME
+  // this CLI's conversation at all (vs. just missing its terminal-phase
+  // backfill). false only for cursor today — its ACP session state lives in a
+  // store `--resume` can't read (Decision 6 follow-up, spawn.ts).
+  const [supportsResume, setSupportsResume] = useState<boolean | null>(null);
   useEffect(() => {
     if (!api || !cli) return undefined;
     setImportsHistory(null);
+    setSupportsResume(null);
     let live = true;
     void api.getSupportedClis().then((clis) => {
       if (!live) return;
-      setImportsHistory(clis.find((c) => c.id === cli)?.importsNativeHistory ?? true);
+      const entry = clis.find((c) => c.id === cli);
+      setImportsHistory(entry?.importsNativeHistory ?? true);
+      setSupportsResume(entry?.supportsJsonToTerminalResume ?? true);
     });
     return () => {
       live = false;
@@ -166,11 +175,17 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
           triggerDisabled={!idle}
           confirmBlocked={!idle}
           blockedMessage="The session just went busy — wait for it to finish (or clear the queue) before switching."
-          {...(importsHistory === false
-            ? {
-                warning: `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`,
-              }
-            : {})}
+          {...(() => {
+            const warnings = [
+              supportsResume === false
+                ? `⚠ ${cli} can't resume in the terminal — this switch starts a FRESH terminal conversation instead of continuing this one. Your Rich Chat history stays intact and untouched.`
+                : null,
+              importsHistory === false
+                ? `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`
+                : null,
+            ].filter((w): w is string => w !== null);
+            return warnings.length > 0 ? { warning: warnings.join("\n\n") } : {};
+          })()}
         />
       ) : null}
     </div>

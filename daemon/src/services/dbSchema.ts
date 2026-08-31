@@ -148,6 +148,11 @@ export function ensureSchema(db: Database): void {
   // renders the PR colour only when this matches the worktree's current
   // branch, so a branch switch never shows a stale PR colour.
   addColumnIfMissing(db, "sessions", "prBranch", "TEXT");
+  // acpSessionId (acp-migration, Decision 6 Option B) — the ACP session/new
+  // id for a plugin whose spike proved it diverges from the CLI's own native
+  // resume id (agentChatId keeps meaning "native id" unconditionally). NULL
+  // for every plugin on Option A and for every session created before ACP.
+  addColumnIfMissing(db, "sessions", "acpSessionId", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */

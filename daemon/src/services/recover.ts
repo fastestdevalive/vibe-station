@@ -12,14 +12,41 @@ import { sessionDataDir, directSessionDataDir } from "./paths.js";
 import type { SessionLifecycle, SessionRecord } from "../types.js";
 
 /**
- * Binary names `runTurn` spawns per CLI (`spawn("claude", …)`,
- * `spawn("cursor-agent", …)`, `spawn("opencode", …)`, `spawn("agy", …)`) — the
- * allowlist `verifyPidIsTurnProcess` checks a recorded pidfile PID against
- * before killing it. Kept here (not re-derived from the plugin registry) to
- * avoid this recovery module depending on the whole plugin layer for one
- * string list; update this list if a plugin's spawned binary name changes.
+ * `comm` (`/proc/<pid>/stat`'s parenthesized field) names of every process
+ * this daemon may mirror into a session's `turn.pids` pidfile — the allowlist
+ * `verifyPidIsTurnProcess` checks a recorded PID against before killing it.
+ * Kept here (not re-derived from the plugin registry) to avoid this recovery
+ * module depending on the whole plugin layer for one string list; update this
+ * list if a plugin's spawned binary/adapter comm name changes.
+ *
+ * ACP migration (Decision 7): under ACP, `turn.pids` mirrors ONE connection
+ * PID per session (spawned once, alive across turns) instead of one PID per
+ * turn — the sweep's control flow is unchanged, only what it's allowed to
+ * kill grows to include the ACP adapter processes:
+ *   - claude: legacy one-shot spawn comm is `claude`; the ACP adapter
+ *     (`@agentclientprotocol/claude-agent-acp`, a Bun-bundled JS binary)
+ *     was empirically observed to report comm `MainThread` (Bun's default
+ *     main-thread name), NOT `claude-agent-acp`.
+ *   - cursor: legacy one-shot spawn comm is `cursor-agent`; `cursor-agent acp`
+ *     is the SAME Bun-bundled binary and was ALSO empirically observed to
+ *     report comm `MainThread`.
+ *   - opencode: both the legacy one-shot spawn and `opencode acp` report
+ *     comm `opencode` — no new entry needed.
+ *   - agy: unresolved — Phase 4.1's auth spike was not run this pass; add
+ *     agy's ACP adapter comm here once that spike determines it.
+ *
+ * Known precision gap (documented, not silently papered over): `MainThread`
+ * is a generic Bun runtime thread name, not a vibe-station-specific
+ * identifier — in principle ANY Bun-based process on the host could share it,
+ * which weakens the PID-reuse guard's specificity for exactly the two CLIs
+ * that happen to be Bun-bundled. This is the same trade-off the pre-ACP code
+ * already had for `cursor-agent`'s own one-shot spawns (its comm was already
+ * `MainThread` before this plan, not `cursor-agent`) — this plan does not
+ * introduce a NEW gap, it inherits and extends an existing one. A tighter fix
+ * (matching `/proc/<pid>/cmdline` against the known script path instead of
+ * `comm`) is a reasonable follow-up but out of scope here.
  */
-const KNOWN_TURN_BINARIES = new Set(["claude", "cursor-agent", "opencode", "agy"]);
+const KNOWN_TURN_BINARIES = new Set(["claude", "cursor-agent", "opencode", "agy", "MainThread"]);
 
 /**
  * Best-effort identity check before killing a pidfile-recorded PID on boot:

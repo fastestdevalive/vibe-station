@@ -19,6 +19,8 @@
     "dist"
   ],
   "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.70.0",
+    "@agentclientprotocol/sdk": "1.4.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
     "@fastify/type-provider-zod": "^1.0.0",

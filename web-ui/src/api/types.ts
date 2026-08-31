@@ -292,6 +292,13 @@ export interface SupportedCli {
    * won't appear in JSON chat, though the agent still has them via --resume.
    */
   importsNativeHistory: boolean;
+  /**
+   * Whether a Rich Chat session for this CLI can actually resume its
+   * conversation when toggled to the Terminal channel. `false` (cursor) means
+   * the toggle still works but always starts a fresh terminal conversation —
+   * the CLI's ACP session state lives somewhere its own `--resume` can't reach.
+   */
+  supportsJsonToTerminalResume: boolean;
 }
 
 export interface Mode {
