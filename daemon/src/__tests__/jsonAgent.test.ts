@@ -928,4 +928,54 @@ describe("JsonAgentSession — 1.T4 stopActiveTurn cancels an ACP connection, ne
       await agent.release();
     }
   });
+
+  // Regression test for the "stuck thinking… forever after 30+ min idle" bug:
+  // AcpConnection.dispose() (idle TTL, or the child process dying on its own)
+  // must notify the owning JsonAgentSession so it drops the dead connection,
+  // and the NEXT getOrCreateConnection() call must transparently respawn
+  // instead of silently reusing (and hanging on) the dead one.
+  it("a connection disposed while idle is transparently respawned on the next turn, no stuck 'thinking…'", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const conns: Array<{ dispose(): Promise<void>; isAlive(): boolean }> = [];
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: acpPlugin("normal", (c) => {
+        conns.push(c as unknown as { dispose(): Promise<void>; isAlive(): boolean });
+      }),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    try {
+      agent.enqueue({ message: "first turn" });
+      await agent.settled();
+      expect(conns).toHaveLength(1);
+      expect(conns[0]!.isAlive()).toBe(true);
+
+      // Simulate exactly what the idle TTL (or a crashed child) does: dispose
+      // the connection out from under the session, with no explicit teardown
+      // or "restart" action from the caller.
+      await conns[0]!.dispose();
+      expect(conns[0]!.isAlive()).toBe(false);
+
+      // The next turn must NOT hang forever reusing the dead connection — it
+      // should silently spin up a fresh one and complete normally.
+      agent.enqueue({ message: "second turn, after idle-dispose" });
+      await agent.settled();
+
+      expect(conns).toHaveLength(2);
+      expect(conns[1]).not.toBe(conns[0]);
+      expect(conns[1]!.isAlive()).toBe(true);
+
+      const results = agent.readTranscript().filter((e) => e.kind === "result");
+      expect(results.filter((e) => e.text === "end_turn")).toHaveLength(2);
+    } finally {
+      await agent.release();
+    }
+  });
 });

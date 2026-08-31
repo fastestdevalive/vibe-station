@@ -991,9 +991,23 @@ export class JsonAgentSession {
     spec: AcpLaunchSpec,
     enrich?: AcpEnrichHook,
   ): Promise<AcpConnection> {
-    if (this.connection) return this.connection;
+    // Defensive liveness check, not just truthiness: a cached connection can
+    // have died on its own (idle TTL dispose, crashed child process) without
+    // this session ever being told directly. `isAlive()` catches that so the
+    // next turn transparently respawns instead of reusing a dead connection
+    // and hanging forever (see AcpConnection's `onDispose` callback below,
+    // which is the primary way `this.connection` gets cleared — this check
+    // is a belt-and-suspenders backstop for any path that missed it).
+    if (this.connection?.isAlive()) return this.connection;
+    this.connection = undefined;
 
-    const conn = new AcpConnection(spec, this.cli, enrich);
+    const conn: AcpConnection = new AcpConnection(spec, this.cli, enrich, () => {
+      // Self-healing lazy respawn: notified whenever THIS connection disposes
+      // (idle TTL, explicit teardown, or the child process exiting/crashing
+      // on its own) so the next getOrCreateConnection() call spawns fresh
+      // instead of returning a connection nothing will ever answer on.
+      if (this.connection === conn) this.connection = undefined;
+    });
     const { loadSession } = await conn.initialize();
 
     // Decision 6 reconnect id: prefer `acpSessionId` (Option B — the id
