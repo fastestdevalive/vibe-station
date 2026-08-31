@@ -15,9 +15,12 @@
 //     interrupted, and the next turn runs on the same connection" (1.T6).
 //   FAKE_ACP_MODE=permission_request — session/prompt sends a
 //     session/request_permission client-request (offering reject_once,
-//     allow_once, allow_always in that order) before resolving; the chosen
-//     optionId is echoed back as the resolved stopReason so a test can assert
-//     the daemon auto-picked "allow_always" without a human in the loop.
+//     allow_once, allow_always in that order) before resolving; the daemon's
+//     outcome is echoed back as stopReason ("selected:<optionId>" or
+//     "cancelled") so a test can assert it without a human in the loop.
+//   FAKE_ACP_MODE=permission_request_reject_only — same, but every offered
+//     option is reject-kind (no allow_once/allow_always at all) — asserts the
+//     daemon cancels rather than ever "selecting" a rejection as an approval.
 import { createInterface } from "node:readline";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
@@ -121,25 +124,36 @@ rl.on("line", (line) => {
       }, 20);
       return;
     }
-    if (mode === "permission_request") {
+    if (mode === "permission_request" || mode === "permission_request_reject_only") {
       const reqId = nextClientReqId++;
       pendingClientRequests.set(reqId, (resp) => {
-        const optionId = resp.result?.outcome?.optionId ?? `error:${resp.error?.message}`;
-        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: optionId } });
+        // Echo the daemon's actual outcome back as stopReason: "selected:<id>"
+        // or "cancelled" (or "error:<msg>" if it errored) — lets a test assert
+        // on the daemon's decision without inspecting the wire protocol.
+        const outcome = resp.result?.outcome;
+        const stopReason = outcome
+          ? outcome.outcome === "selected"
+            ? `selected:${outcome.optionId}`
+            : outcome.outcome
+          : `error:${resp.error?.message}`;
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason } });
       });
+      const options =
+        mode === "permission_request_reject_only"
+          ? [
+              { optionId: "reject_once", name: "Reject once", kind: "reject_once" },
+              { optionId: "reject_always", name: "Reject always", kind: "reject_always" },
+            ]
+          : [
+              { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+              { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+              { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+            ];
       write({
         jsonrpc: "2.0",
         id: reqId,
         method: "session/request_permission",
-        params: {
-          sessionId: sid,
-          toolCall: { toolCallId: "tc-1" },
-          options: [
-            { optionId: "reject_once", name: "Reject", kind: "reject_once" },
-            { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
-            { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
-          ],
-        },
+        params: { sessionId: sid, toolCall: { toolCallId: "tc-1" }, options },
       });
       return;
     }
