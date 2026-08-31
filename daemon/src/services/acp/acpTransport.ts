@@ -342,6 +342,29 @@ export class AcpConnection {
           this.activeUpdateSink?.(params.update);
           return; // notification, no response
         }
+        case "session/request_permission": {
+          // Auto-approve every permission request — matches the trust model
+          // every other launch path in this codebase already uses
+          // (`--dangerously-skip-permissions` for the legacy one-shot spawn
+          // and terminal launches, agy.ts's own equivalent): agents run in
+          // their own isolated worktree, so there is no user to prompt.
+          // Pick the most-permissive offered option so the agent doesn't ask
+          // again for the same kind of action this session; fall back to
+          // whatever's offered if "allow_always" isn't present (some agents
+          // may only offer "allow_once").
+          const params = req.params as { options: Array<{ optionId: string; kind: string }> };
+          const options = Array.isArray(params.options) ? params.options : [];
+          const chosen =
+            options.find((o) => o.kind === "allow_always") ??
+            options.find((o) => o.kind === "allow_once") ??
+            options[0];
+          if (!chosen) {
+            respond({ outcome: { outcome: "cancelled" } });
+            return;
+          }
+          respond({ outcome: { outcome: "selected", optionId: chosen.optionId } });
+          return;
+        }
         case "fs/read_text_file": {
           const result = await readTextFile(this.spec.cwd, req.params as { path: string; line?: number; limit?: number });
           respond(result);

@@ -51,15 +51,24 @@ export function blocksToPlaceholder(blocks: NormalizedContentBlock[]): string {
     .join(" ");
 }
 
-/** Common single-value tool inputs render inline (command / path / pattern). */
-export function summarizeToolInput(input: unknown): string {
-  if (input == null) return "";
-  if (typeof input === "string") return input;
-  if (typeof input === "object") {
-    const obj = input as Record<string, unknown>;
-    for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query"]) {
-      if (typeof obj[key] === "string") return obj[key] as string;
+/** Common single-value tool inputs render inline (command / path / pattern).
+ *  `locations` (ACP `tool_call.locations`, acp-normalize-superset Gap 3) is a
+ *  fallback for adapters that report a structural edit/read via `locations`
+ *  instead of an inspectable `toolInput` — e.g. claude's ACP adapter sends
+ *  `toolInput: {}` for Edit/Read, with the actual file path arriving only via
+ *  `locations`, so without this fallback those calls show no file name at all. */
+export function summarizeToolInput(input: unknown, locations?: { path: string; line?: number }[]): string {
+  if (input != null) {
+    if (typeof input === "string") return input;
+    if (typeof input === "object") {
+      const obj = input as Record<string, unknown>;
+      for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query"]) {
+        if (typeof obj[key] === "string") return obj[key] as string;
+      }
     }
+  }
+  if (locations && locations.length > 0) {
+    return locations.map((l) => (l.line != null ? `${l.path}:${l.line}` : l.path)).join(", ");
   }
   return "";
 }
