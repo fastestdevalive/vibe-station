@@ -13,6 +13,11 @@
 //     session/cancel, resolving "cancelled"; every LATER prompt resolves
 //     "end_turn" immediately. Models "a turn that backgrounded a dev server is
 //     interrupted, and the next turn runs on the same connection" (1.T6).
+//   FAKE_ACP_MODE=permission_request — session/prompt sends a
+//     session/request_permission client-request (offering reject_once,
+//     allow_once, allow_always in that order) before resolving; the chosen
+//     optionId is echoed back as the resolved stopReason so a test can assert
+//     the daemon auto-picked "allow_always" without a human in the loop.
 import { createInterface } from "node:readline";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
@@ -40,6 +45,10 @@ function write(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
+// Maps a client-request id we sent to a callback for its eventual response —
+// used by permission_request mode to observe what the daemon auto-selected.
+const pendingClientRequests = new Map();
+
 rl.on("line", (line) => {
   let msg;
   try {
@@ -47,9 +56,17 @@ rl.on("line", (line) => {
   } catch {
     return;
   }
-  // A RESPONSE to one of our own agent→client requests (terminal/create): ignore
-  // the payload, we only care that the daemon now owns the background child.
-  if (msg.id !== undefined && msg.method === undefined) return;
+  // A RESPONSE to one of our own agent→client requests: dispatch to whoever
+  // is waiting on it (permission_request mode), else ignore the payload
+  // (terminal/create — we only care that the daemon now owns the child).
+  if (msg.id !== undefined && msg.method === undefined) {
+    const cb = pendingClientRequests.get(msg.id);
+    if (cb) {
+      pendingClientRequests.delete(msg.id);
+      cb(msg);
+    }
+    return;
+  }
   if (msg.method === "initialize") {
     write({
       jsonrpc: "2.0",
@@ -102,6 +119,28 @@ rl.on("line", (line) => {
           write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "cancelled" } });
         }
       }, 20);
+      return;
+    }
+    if (mode === "permission_request") {
+      const reqId = nextClientReqId++;
+      pendingClientRequests.set(reqId, (resp) => {
+        const optionId = resp.result?.outcome?.optionId ?? `error:${resp.error?.message}`;
+        write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: optionId } });
+      });
+      write({
+        jsonrpc: "2.0",
+        id: reqId,
+        method: "session/request_permission",
+        params: {
+          sessionId: sid,
+          toolCall: { toolCallId: "tc-1" },
+          options: [
+            { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+            { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+            { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+          ],
+        },
+      });
       return;
     }
     if (mode === "cancel") {

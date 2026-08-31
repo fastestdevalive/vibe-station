@@ -25,6 +25,30 @@ describe("ToolRunSummary status-aware spinner/checkmark (Decision 4b, 3.T3)", ()
   });
 });
 
+describe("ToolRunSummary shows a file name for a location-only tool call", () => {
+  it("falls back to `locations` for the inline summary when toolInput carries nothing usable", () => {
+    const tools = [
+      tool({
+        toolName: "Edit",
+        toolInput: {},
+        toolKind: "edit",
+        locations: [{ path: "/app/README.md" }],
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(screen.getByText("/app/README.md")).toBeTruthy();
+  });
+
+  it("does not expand into a useless empty {} body when toolInput is {} and locations cover it", () => {
+    const tools = [
+      tool({ toolName: "Edit", toolInput: {}, locations: [{ path: "/app/README.md" }] }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    const header = document.querySelector(".chat-tool-entry__header") as HTMLElement;
+    expect(header.hasAttribute("disabled")).toBe(true);
+  });
+});
+
 describe("ToolRunSummary structured diffs (Decision 3/4, 4.T2)", () => {
   it("renders DiffView via the structured diffs path, not the looksLikeUnifiedDiff heuristic", () => {
     const tools = [

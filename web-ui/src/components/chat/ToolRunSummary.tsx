@@ -76,9 +76,12 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
  */
 function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: boolean }) {
   const [open, setOpen] = useState(false);
-  const inline = summarizeToolInput(tool.toolInput);
+  const inline = summarizeToolInput(tool.toolInput, tool.locations);
   const pretty = prettyToolInput(tool.toolInput);
-  const hasInputBody = tool.toolInput != null && pretty !== "undefined";
+  // `toolInput` is often `{}` for an ACP adapter that reports the target via
+  // `locations` instead (see summarizeToolInput) — an empty-object body adds
+  // nothing over the inline location text above, so don't expand into one.
+  const hasInputBody = tool.toolInput != null && pretty !== "undefined" && pretty !== "{}";
   const result = tool.result;
   const resultText = result?.content ? capForDisplay(result.content) : "";
   const hasResultBody = resultText.length > 0;

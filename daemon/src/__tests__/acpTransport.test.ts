@@ -63,6 +63,20 @@ describe("AcpConnection happy path", () => {
     await conn.dispose();
   });
 
+  it("auto-approves a session/request_permission with the most-permissive offered option, no human in the loop", async () => {
+    const conn = makeConnection("permission_request");
+    await conn.initialize();
+    const sessionId = await conn.newSession("/tmp");
+    const { result } = conn.sendPrompt(sessionId, [{ type: "text", text: "edit a file" }], new AbortController().signal);
+    // The fixture echoes the chosen optionId back as stopReason (see
+    // fakeAcpAgent.mjs's permission_request mode) — asserts the daemon picked
+    // "allow_always" over the offered "reject_once"/"allow_once", matching
+    // the `--dangerously-skip-permissions` trust model used everywhere else.
+    const { stopReason } = await result;
+    expect(stopReason).toBe("allow_always");
+    await conn.dispose();
+  });
+
   it("cancelActivePrompt (Stop) resolves the prompt with stopReason cancelled without killing the connection", async () => {
     const conn = makeConnection("cancel");
     await conn.initialize();
