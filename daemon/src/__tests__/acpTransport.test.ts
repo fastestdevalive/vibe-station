@@ -105,3 +105,86 @@ describe("AcpConnection happy path", () => {
     await conn.dispose();
   });
 });
+
+describe("AcpConnection self-healing (idle-dispose / crash respawn regression)", () => {
+  it("isAlive() flips to false and onDispose fires exactly once when dispose() is called", async () => {
+    let disposeCalls = 0;
+    const conn = new AcpConnection(
+      { command: process.execPath, args: [FAKE_AGENT], cwd: __dirname, env: { FAKE_ACP_MODE: "normal" } },
+      "claude",
+      undefined,
+      () => {
+        disposeCalls += 1;
+      },
+    );
+    await conn.initialize();
+    expect(conn.isAlive()).toBe(true);
+
+    await conn.dispose();
+    await conn.dispose(); // idempotent — must not double-fire onDispose
+    expect(conn.isAlive()).toBe(false);
+    expect(disposeCalls).toBe(1);
+  });
+
+  it("onDispose fires when the child process exits on its own (crash), not just on explicit dispose()", async () => {
+    let disposed = false;
+    const conn = new AcpConnection(
+      { command: process.execPath, args: [FAKE_AGENT], cwd: __dirname, env: { FAKE_ACP_MODE: "normal" } },
+      "claude",
+      undefined,
+      () => {
+        disposed = true;
+      },
+    );
+    await conn.initialize();
+    const sessionId = await conn.newSession("/tmp");
+
+    // Kill the child out from under the connection — mirrors a crash, not a
+    // clean dispose() call.
+    const pid = (conn as unknown as { child: { pid?: number } }).child?.pid;
+    expect(pid).toBeTruthy();
+    process.kill(pid!, "SIGKILL");
+
+    const deadline = Date.now() + 2000;
+    while (!disposed && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(disposed).toBe(true);
+    expect(conn.isAlive()).toBe(false);
+
+    // A prompt against the now-dead connection must reject immediately with
+    // a clear error, never hang or silently drop the write.
+    await expect(
+      conn.sendPrompt(sessionId, [{ type: "text", text: "hi" }], new AbortController().signal).result,
+    ).rejects.toThrow(/disposed/i);
+  });
+
+  it("a request against an already-disposed connection rejects immediately instead of hanging", async () => {
+    const conn = makeConnection("normal");
+    await conn.initialize();
+    await conn.dispose();
+
+    await expect(conn.newSession("/tmp")).rejects.toThrow(/disposed/i);
+  });
+
+  it("session/prompt times out with a clear error instead of hanging forever when the agent stops responding", async () => {
+    const conn = new AcpConnection(
+      {
+        command: process.execPath,
+        args: [FAKE_AGENT],
+        cwd: __dirname,
+        env: { FAKE_ACP_MODE: "prompt_hang" },
+        promptTimeoutMs: 200,
+      },
+      "claude",
+    );
+    await conn.initialize();
+    const sessionId = await conn.newSession("/tmp");
+
+    const start = Date.now();
+    const { result } = conn.sendPrompt(sessionId, [{ type: "text", text: "hi" }], new AbortController().signal);
+    await expect(result).rejects.toThrow(/timed out/i);
+    expect(Date.now() - start).toBeLessThan(2000);
+    await conn.dispose();
+  });
+});

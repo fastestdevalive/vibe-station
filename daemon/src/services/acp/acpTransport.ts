@@ -38,11 +38,22 @@ export interface AcpLaunchSpec {
   onSpawn?: (pid: number) => void;
   /** ms to wait for `initialize` to resolve before ConnectionSpawnFailed/InitializeFailed. */
   initializeTimeoutMs?: number;
+  /** ms to wait for a `session/prompt` response before it is rejected with a timeout error. */
+  promptTimeoutMs?: number;
 }
 
 /** 30 minutes (Decision 4) — a connection with zero live terminals idles out after this. */
 const IDLE_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_INITIALIZE_TIMEOUT_MS = 30_000;
+/**
+ * Ceiling on how long a single `session/prompt` turn may run before the
+ * transport gives up on it. Generous — real agentic turns can legitimately
+ * run for many minutes — this exists purely as a last-resort guard against a
+ * connection that looks alive (child process still running) but has stopped
+ * responding for some other reason, so the turn eventually surfaces a clear
+ * error instead of hanging "thinking..." forever.
+ */
+const DEFAULT_PROMPT_TIMEOUT_MS = 20 * 60 * 1000;
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -67,6 +78,7 @@ export class AcpConnection {
   private agentCapabilities: Record<string, unknown> = {};
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  private disposeNotified = false;
   private disposePromise: Promise<void> | null = null;
   private activeUpdateSink: ((u: AcpSessionUpdate) => void) | null = null;
   readonly terminals = new AcpTerminalManager();
@@ -75,7 +87,32 @@ export class AcpConnection {
     private readonly spec: AcpLaunchSpec,
     private readonly provider: NormalizedEventProvider,
     private readonly enrich?: AcpEnrichHook,
+    /**
+     * Called exactly once, the first time this connection transitions to
+     * disposed — whether via idle TTL, explicit `dispose()`, or the child
+     * process exiting/crashing on its own. Lets the owning `JsonAgentSession`
+     * drop its cached reference so the NEXT `getOrCreateConnection()` call
+     * transparently respawns instead of reusing a dead connection.
+     */
+    private readonly onDispose?: () => void,
   ) {}
+
+  /** False once this connection has been (or is being) torn down for any reason. */
+  isAlive(): boolean {
+    return !this.disposed;
+  }
+
+  /** Idempotent — fires `onDispose` at most once regardless of how disposal was triggered. */
+  private notifyDisposed(): void {
+    this.disposed = true;
+    if (this.disposeNotified) return;
+    this.disposeNotified = true;
+    try {
+      this.onDispose?.();
+    } catch {
+      /* owner's callback must never break teardown */
+    }
+  }
 
   /** Spawn the agent process and complete the ACP `initialize` handshake. */
   async initialize(): Promise<{ loadSession: boolean }> {
@@ -103,6 +140,10 @@ export class AcpConnection {
         p.reject(new Error(`agent process closed${stderr ? `: ${stderr.trim()}` : ""}`));
         this.pending.delete(id);
       }
+      // The process died on its own (crash, kill from outside, etc.) rather
+      // than via our own dispose() — still a disposal from the owning
+      // session's point of view, so it must notify the same way.
+      this.notifyDisposed();
     });
 
     // Fail-closed-before-ready race (mirrors emdash `acp-agent-connection.ts:118-119`):
@@ -180,6 +221,13 @@ export class AcpConnection {
     prompt: PromptBlock[],
     signal: AbortSignal,
   ): { updates: AsyncIterable<NormalizedEvent>; result: Promise<{ stopReason: StopReason }> } {
+    if (this.disposed) {
+      const err = new Error("ACP connection is disposed; cannot send prompt");
+      return {
+        updates: (async function* (): AsyncGenerator<NormalizedEvent> {})(),
+        result: Promise.reject(err),
+      };
+    }
     this.resetIdleTimer();
     const queue: NormalizedEvent[] = [];
     const waiters: Array<() => void> = [];
@@ -201,10 +249,11 @@ export class AcpConnection {
     };
     signal.addEventListener("abort", onAbort, { once: true });
 
-    const resultPromise = this.request("session/prompt", {
-      sessionId,
-      prompt,
-    })
+    const resultPromise = this.request(
+      "session/prompt",
+      { sessionId, prompt },
+      this.spec.promptTimeoutMs ?? DEFAULT_PROMPT_TIMEOUT_MS,
+    )
       .then((r) => r as { stopReason: StopReason })
       .finally(() => {
         done = true;
@@ -245,7 +294,7 @@ export class AcpConnection {
   async dispose(): Promise<void> {
     if (this.disposePromise) return this.disposePromise;
     this.disposePromise = (async () => {
-      this.disposed = true;
+      this.notifyDisposed();
       if (this.idleTimer) clearTimeout(this.idleTimer);
       this.terminals.killAll();
       for (const [id, p] of this.pending) {
@@ -326,13 +375,24 @@ export class AcpConnection {
   }
 
   private async handleAgentMessage(req: JsonRpcRequest): Promise<void> {
+    // Best-effort — if the connection has died, there is no one left to
+    // write back to; the outer notifyDisposed()/dispose() path already
+    // handles surfacing that, so these must never throw.
     const respond = (result: unknown): void => {
       if (req.id === undefined) return; // notification — no response
-      this.writeLine({ jsonrpc: "2.0", id: req.id, result });
+      try {
+        this.writeLine({ jsonrpc: "2.0", id: req.id, result });
+      } catch {
+        /* connection is gone — nothing more to do */
+      }
     };
     const respondError = (message: string): void => {
       if (req.id === undefined) return;
-      this.writeLine({ jsonrpc: "2.0", id: req.id, error: { code: -32000, message } });
+      try {
+        this.writeLine({ jsonrpc: "2.0", id: req.id, error: { code: -32000, message } });
+      } catch {
+        /* connection is gone — nothing more to do */
+      }
     };
 
     try {
@@ -415,20 +475,60 @@ export class AcpConnection {
     }
   }
 
-  private request(method: string, params?: unknown): Promise<unknown> {
+  /**
+   * `timeoutMs`, when given, rejects the request after that many ms with a
+   * clear timeout error if no response has arrived yet — a last-resort guard
+   * so a connection that never answers (rather than cleanly erroring or
+   * dying) can't hang a caller forever. Always guards against a disposed
+   * connection up front: never registers a pending promise that a dead
+   * connection could never fulfill.
+   */
+  private request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
+    if (this.disposed) {
+      return Promise.reject(new Error(`ACP connection is disposed; cannot send "${method}"`));
+    }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.writeLine({ jsonrpc: "2.0", id, method, params });
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const settle = (fn: (v: unknown) => void, value: unknown): void => {
+        if (timer) clearTimeout(timer);
+        this.pending.delete(id);
+        fn(value);
+      };
+      this.pending.set(id, {
+        resolve: (v) => settle(resolve, v),
+        reject: (e) => settle(reject, e),
+      });
+      if (timeoutMs !== undefined) {
+        timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error(`ACP request "${method}" timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        timer.unref?.();
+      }
+      try {
+        this.writeLine({ jsonrpc: "2.0", id, method, params });
+      } catch (err) {
+        this.pending.delete(id);
+        if (timer) clearTimeout(timer);
+        reject(err);
+      }
     });
   }
 
   private notify(method: string, params?: unknown): void {
-    this.writeLine({ jsonrpc: "2.0", method, params });
+    try {
+      this.writeLine({ jsonrpc: "2.0", method, params });
+    } catch {
+      /* best-effort notification (e.g. session/cancel) — nothing to reject */
+    }
   }
 
+  /** Throws (never silently no-ops) if the child process/stdin is gone or destroyed. */
   private writeLine(obj: unknown): void {
-    if (!this.child?.stdin || this.child.stdin.destroyed) return;
+    if (!this.child?.stdin || this.child.stdin.destroyed) {
+      throw new Error("ACP connection: agent process is not available (stdin closed)");
+    }
     this.child.stdin.write(JSON.stringify(obj) + "\n");
   }
 }
