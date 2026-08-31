@@ -348,16 +348,19 @@ export class AcpConnection {
           // (`--dangerously-skip-permissions` for the legacy one-shot spawn
           // and terminal launches, agy.ts's own equivalent): agents run in
           // their own isolated worktree, so there is no user to prompt.
-          // Pick the most-permissive offered option so the agent doesn't ask
-          // again for the same kind of action this session; fall back to
+          // Pick the most-permissive offered ALLOW option so the agent doesn't
+          // ask again for the same kind of action this session; fall back to
           // whatever's offered if "allow_always" isn't present (some agents
-          // may only offer "allow_once").
+          // may only offer "allow_once"). Never falls back to a bare
+          // `options[0]` — if every offered option is reject-kind, there is
+          // no approval to give, so cancel rather than silently "selecting"
+          // a rejection as though it were an approval.
           const params = req.params as { options: Array<{ optionId: string; kind: string }> };
           const options = Array.isArray(params.options) ? params.options : [];
           const chosen =
             options.find((o) => o.kind === "allow_always") ??
             options.find((o) => o.kind === "allow_once") ??
-            options[0];
+            options.find((o) => o.kind.startsWith("allow_"));
           if (!chosen) {
             respond({ outcome: { outcome: "cancelled" } });
             return;

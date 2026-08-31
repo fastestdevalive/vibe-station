@@ -88,3 +88,32 @@ describe("1.T1 — capToolResultContent", () => {
     expect(emptyContent.toolResult!.content).toBe("");
   });
 });
+
+describe("capToolResultContent — toolDiffs (acp-normalize-superset follow-up)", () => {
+  it("replaces an oversized newText with a marker, keeping a small oldText untouched", () => {
+    const ev = toolResultEv("", {
+      kind: "tool_result",
+      toolDiffs: [{ path: "/a.ts", oldText: "small", newText: "y".repeat(TOOL_RESULT_MAX_BYTES + 1) }],
+    });
+    capToolResultContent(ev);
+    expect(ev.toolDiffs![0].newText).toContain("diff omitted");
+    expect(ev.toolDiffs![0].oldText).toBe("small");
+  });
+
+  it("drops an oversized oldText too when both sides are too big", () => {
+    const ev = toolResultEv("", {
+      kind: "tool_result",
+      toolDiffs: [{ path: "/a.ts", oldText: "x".repeat(TOOL_RESULT_MAX_BYTES + 1), newText: "y".repeat(TOOL_RESULT_MAX_BYTES + 1) }],
+    });
+    capToolResultContent(ev);
+    expect(ev.toolDiffs![0].newText).toContain("diff omitted");
+    expect(ev.toolDiffs![0].oldText).toBeUndefined();
+  });
+
+  it("leaves a normal-size diff untouched", () => {
+    const diff = { path: "/a.ts", oldText: "a\nb", newText: "a\nc" };
+    const ev = toolResultEv("", { kind: "tool_result", toolDiffs: [diff] });
+    capToolResultContent(ev);
+    expect(ev.toolDiffs![0]).toEqual(diff);
+  });
+});
