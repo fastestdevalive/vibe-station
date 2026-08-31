@@ -82,9 +82,12 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
   const result = tool.result;
   const resultText = result?.content ? capForDisplay(result.content) : "";
   const hasResultBody = resultText.length > 0;
-  const isError = !!result?.isError;
-  const isDiff = !isError && hasResultBody && looksLikeUnifiedDiff(resultText);
-  const hasBody = hasInputBody || hasResultBody;
+  const isError = !!result?.isError || tool.status === "failed";
+  const hasDiffs = !!tool.diffs && tool.diffs.length > 0;
+  // Structured diffs win over the heuristic text-sniffing path (Decision 3).
+  const isDiff = !hasDiffs && !isError && hasResultBody && looksLikeUnifiedDiff(resultText);
+  const hasBody = hasInputBody || hasResultBody || hasDiffs;
+  const done = tool.status ? tool.status === "completed" : (!hasBody && !!result);
 
   return (
     <div className={`chat-tool-entry${isError ? " chat-tool-entry--error" : ""}`}>
@@ -110,7 +113,7 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
         <span className="chat-tool-entry__status">
           {running ? (
             <span className="chat-spinner" aria-label="running" />
-          ) : !hasBody && result ? (
+          ) : done ? (
             <span className="chat-tool-entry__done" aria-hidden>
               ✓
             </span>
@@ -124,6 +127,11 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
               <code>{pretty}</code>
             </pre>
           ) : null}
+          {hasDiffs
+            ? tool.diffs!.map((diff, i) => (
+                <DiffView key={`${diff.path}-${i}`} oldText={diff.oldText ?? ""} newText={diff.newText} filePath={diff.path} />
+              ))
+            : null}
           {hasResultBody ? (
             isDiff ? (
               <DiffView diffText={resultText} />
@@ -156,8 +164,14 @@ export function ToolRunSummary({ tools, live }: ToolRunSummaryProps) {
   // (in the entry row below) are visible without a click, matching what a
   // lone tool call used to show directly.
   const [open, setOpen] = useState(() => !!live || tools.length === 1);
-  const hasError = tools.some((t) => t.result?.isError);
-  const hasPending = live && tools.some((t) => !t.result);
+  const hasError = tools.some((t) => t.result?.isError || t.status === "failed");
+  // A result already arrived, or a terminal status was set — never spin, even
+  // if an adapter's terminal update omitted a fresh `status` field (per ACP's
+  // "only changed fields need to be included", a stale `status:"pending"`
+  // could otherwise outlive an already-arrived result).
+  const isPending = (t: ToolCallEntry) =>
+    t.result ? false : t.status ? t.status === "pending" || t.status === "in_progress" : true;
+  const hasPending = live && tools.some(isPending);
 
   return (
     <div className="chat-tool-run">
@@ -178,7 +192,7 @@ export function ToolRunSummary({ tools, live }: ToolRunSummaryProps) {
       {open ? (
         <div className="chat-tool-run__body">
           {tools.map((t) => (
-            <ToolRunEntryRow key={t.id} tool={t} running={!!live && !t.result} />
+            <ToolRunEntryRow key={t.id} tool={t} running={!!live && isPending(t)} />
           ))}
         </div>
       ) : null}

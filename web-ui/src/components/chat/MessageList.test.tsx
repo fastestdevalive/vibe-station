@@ -197,6 +197,64 @@ describe("groupEvents thinking merge/close (1.T1 / 1.T2)", () => {
   });
 });
 
+describe("groupEvents acp-normalize-superset (Phase 3)", () => {
+  it("3.T1 — a tool_result with toolStatus in_progress and no toolResult does not erase a previously-set diffs", () => {
+    const items = groupEvents([
+      toolUseEvent("tc1", "t1"),
+      {
+        id: "r1",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "tool_result",
+        toolId: "tc1",
+        toolDiffs: [{ path: "/a.ts", oldText: "old", newText: "new" }],
+        toolStatus: "in_progress",
+      },
+      {
+        id: "r2",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "tool_result",
+        toolId: "tc1",
+        toolStatus: "in_progress",
+      },
+    ]);
+    const tool = items.find((i) => i.type === "tool") as { diffs?: unknown[]; status?: string };
+    expect(tool.diffs).toEqual([{ path: "/a.ts", oldText: "old", newText: "new" }]);
+    expect(tool.status).toBe("in_progress");
+  });
+
+  it("3.T2 — a mode_update event produces a status-type RenderItem", () => {
+    const items = groupEvents([
+      { id: "m1", sessionId: "s1", ts: "", provider: "claude", kind: "mode_update", modeId: "build" },
+    ]);
+    const status = items.find((i) => i.type === "status") as { text: string };
+    expect(status).toBeTruthy();
+    expect(status.text).toContain("build");
+  });
+
+  it("3.T4 — a text event with no text but a non-empty blocks array renders a non-empty placeholder bubble", () => {
+    const items = groupEvents([
+      {
+        id: "b1",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "text",
+        role: "assistant",
+        turnId: "t1",
+        blocks: [{ type: "image", mimeType: "image/png", data: "abc" }],
+      },
+    ]);
+    const assistant = items.find((i) => i.type === "assistant") as { text: string };
+    expect(assistant).toBeTruthy();
+    expect(assistant.text.length).toBeGreaterThan(0);
+    expect(assistant.text).not.toBe("");
+  });
+});
+
 describe("MessageList queued-turn filtering (tray relocation)", () => {
   it("hides user turns listed in hiddenTurnIds from the inline log", () => {
     render(
