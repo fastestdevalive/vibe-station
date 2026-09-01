@@ -30,7 +30,13 @@
 //     session/prompt behaves like normal mode.
 //   FAKE_ACP_MODE=steering_method_not_found — _session/steering returns a
 //     JSON-RPC method-not-found error (-32601); everything else behaves normally.
+//   FAKE_ACP_MODE=echo_meta — on every session/new and session/load, write the
+//     `_meta` field exactly as it arrived on the wire to the file named by
+//     META_OUT_FILE, as `{ hasMeta, meta }`. The file is ALWAYS written (with
+//     hasMeta:false when `_meta` was omitted) so tests can assert absence
+//     positively rather than relying on a missing file.
 import { createInterface } from "node:readline";
+import { writeFileSync } from "node:fs";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
 
@@ -55,6 +61,14 @@ let nextClientReqId = 1000;
 
 function write(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
+}
+
+// echo_meta mode: record the `_meta` of a session/new|load request exactly as
+// it arrived, so a test can assert both its contents and its absence.
+function recordMeta(params) {
+  if (mode !== "echo_meta" || !process.env.META_OUT_FILE) return;
+  const meta = params?._meta;
+  writeFileSync(process.env.META_OUT_FILE, JSON.stringify({ hasMeta: meta !== undefined, meta: meta ?? null }));
 }
 
 // Maps a client-request id we sent to a callback for its eventual response —
@@ -88,6 +102,7 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "session/new") {
+    recordMeta(msg.params);
     write({ jsonrpc: "2.0", id: msg.id, result: { sessionId } });
     return;
   }
@@ -95,6 +110,7 @@ rl.on("line", (line) => {
     if (msg.params.sessionId === "fail-me") {
       write({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such session" } });
     } else {
+      recordMeta(msg.params);
       write({ jsonrpc: "2.0", id: msg.id, result: {} });
     }
     return;
