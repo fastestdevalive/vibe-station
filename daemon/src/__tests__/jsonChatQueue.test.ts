@@ -799,6 +799,7 @@ describe("P4 — edit a sent message / fork", () => {
 
   // P4.T4 — a QUEUED-turn edit uses the `edited` path (same turnId, superseding
   // user event, NOTHING superseded) — distinct semantics from a fork.
+  // (kept in P4 section, followed by Phase 5 suite below)
   it("editing a queued turn keeps the original visible (edited path ≠ fork)", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { plugin, release, gatesReady } = makeGatePlugin();
@@ -822,5 +823,157 @@ describe("P4 — edit a sent message / fork", () => {
     expect(users.map((e) => e.text)).toEqual(["B", "B2"]);
     expect(users[1]!.edited).toBe(true);
     expect(users.every((e) => e.superseded !== true)).toBe(true);
+  });
+});
+
+describe("Phase 5 — submit() steer-vs-enqueue gate", () => {
+  let project: ProjectRecord;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-submit-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pq",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    jsonAgentRegistry.clear();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  // 5.T3 — submit() when NOT running: falls through to enqueue(), delivery: "queued"
+  it("5.T3 — submit() when not running falls through to enqueue, delivery: queued", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { plugin, release, gatesReady } = makeGatePlugin();
+    const session = project.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    // Not running — no turns started
+    const result = await agent.submit({ message: "hello" });
+    expect(result.delivery).toBe("queued");
+    expect(result.queuePosition).toBe(0);
+
+    await waitFor(() => gatesReady() >= 1);
+    release(0);
+    await agent.settled();
+    void release;
+  });
+
+  // 5.T4 — submit() when running + attachments: falls through to enqueue (attachment gate)
+  it("5.T4 — submit() when running with attachments falls through to enqueue, delivery: queued", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { plugin, release, gatesReady } = makeGatePlugin();
+    const session = project.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    agent.enqueue({ message: "A" });
+    await waitFor(() => gatesReady() >= 1); // A is running
+
+    // Has attachments — must NOT steer even if connection would support it
+    const result = await agent.submit({
+      message: "with attachment",
+      attachments: [{ id: "att-1", name: "file.txt", size: 100, mimeType: "text/plain" }],
+    });
+    expect(result.delivery).toBe("queued");
+    expect(result.queuePosition).toBe(1); // queued behind A
+
+    release(0);
+    await waitFor(() => gatesReady() >= 2);
+    release(1);
+    await agent.settled();
+  });
+
+  // 5.T5 — inject fake connection that returns "injected"; test: steered delivery
+  it("5.T5 — submit() with steering-capable connection injects mid-turn, delivery: steered", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { plugin, release, gatesReady } = makeGatePlugin();
+    const session = project.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    // Complete turn 1 so isFirstTurnPending becomes false
+    agent.enqueue({ message: "A" });
+    await waitFor(() => gatesReady() >= 1);
+    release(0);
+    await agent.settled();
+
+    // Enqueue turn 2 and let it start running
+    agent.enqueue({ message: "B" });
+    await waitFor(() => gatesReady() >= 2); // B is now running
+
+    // Inject a fake connection that claims alive + supportsSteering + returns "injected"
+    const fakeConn = {
+      isAlive: () => true,
+      supportsSteering: true,
+      steer: async (_blocks: unknown[]) => "injected" as const,
+    };
+    (agent as unknown as { connection: unknown }).connection = fakeConn;
+
+    const transcriptBefore = agent.readTranscript().filter((e) => e.kind === "user").length;
+
+    const result = await agent.submit({ message: "steer!" });
+    expect(result.delivery).toBe("steered");
+    expect(result.queuePosition).toBe(0);
+
+    // emitUserEvent was called — transcript gains one more user event
+    const transcriptAfter = agent.readTranscript().filter((e) => e.kind === "user").length;
+    expect(transcriptAfter).toBe(transcriptBefore + 1);
+
+    // Queue is untouched (no new item enqueued)
+    expect(agent.getMeta().queueDepth).toBe(0);
+
+    release(1);
+    await agent.settled();
+  });
+
+  // 5.T6 — same setup but fake returns "promptRequired" → falls through to enqueue
+  it("5.T6 — submit() with promptRequired falls through to enqueue, delivery: queued", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { plugin, release, gatesReady } = makeGatePlugin();
+    const session = project.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    // Complete turn 1 so isFirstTurnPending becomes false
+    agent.enqueue({ message: "A" });
+    await waitFor(() => gatesReady() >= 1);
+    release(0);
+    await agent.settled();
+
+    // Enqueue turn 2 and let it start running
+    agent.enqueue({ message: "B" });
+    await waitFor(() => gatesReady() >= 2); // B is now running
+
+    const userEventsBefore = agent.readTranscript().filter((e) => e.kind === "user").length;
+
+    // Fake returns "promptRequired" — should fall through to enqueue
+    const fakeConn = {
+      isAlive: () => true,
+      supportsSteering: true,
+      steer: async (_blocks: unknown[]) => "promptRequired" as const,
+    };
+    (agent as unknown as { connection: unknown }).connection = fakeConn;
+
+    const result = await agent.submit({ message: "fallback" });
+    expect(result.delivery).toBe("queued");
+    expect(result.queuePosition).toBe(1); // queued behind B
+
+    // emitUserEvent called by enqueue (not by the steer path)
+    const userEventsAfter = agent.readTranscript().filter((e) => e.kind === "user").length;
+    expect(userEventsAfter).toBe(userEventsBefore + 1);
+
+    release(1);
+    await waitFor(() => gatesReady() >= 3);
+    release(2);
+    await agent.settled();
   });
 });

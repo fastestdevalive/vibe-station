@@ -81,6 +81,8 @@ export class AcpConnection {
   private disposeNotified = false;
   private disposePromise: Promise<void> | null = null;
   private activeUpdateSink: ((u: AcpSessionUpdate) => void) | null = null;
+  /** Top-level `_meta` from the `initialize` response — carries steering capability flags. */
+  private _initMeta: Record<string, unknown> | null = null;
   /** Receives session/update notifications that arrive outside an active session/prompt turn. */
   outOfBandSink: ((ev: NormalizedEvent) => void) | null = null;
   readonly terminals = new AcpTerminalManager();
@@ -102,6 +104,36 @@ export class AcpConnection {
   /** False once this connection has been (or is being) torn down for any reason. */
   isAlive(): boolean {
     return !this.disposed;
+  }
+
+  /** True when the agent reported `_meta.steering.supported === true` during `initialize`. */
+  get supportsSteering(): boolean {
+    const steering = (this._initMeta as { steering?: { supported?: boolean } } | null)?.steering;
+    return steering?.supported === true;
+  }
+
+  /**
+   * Inject a mid-turn user message via `_session/steering` (ACP steering extension).
+   * Returns `"injected"` on success, `"promptRequired"` when the agent requested human
+   * re-prompt, or `"unsupported"` on any error (method-not-found, disposed connection,
+   * closed stdin). Callers fall back to `enqueue()` on anything other than `"injected"`.
+   */
+  async steer(blocks: PromptBlock[]): Promise<"injected" | "promptRequired" | "unsupported"> {
+    try {
+      const result = (await this.request("_session/steering", {
+        sessionId: this.sessionId,
+        prompt: blocks,
+        _meta: { steering: { idleBehavior: "promptRequired" } },
+      })) as { outcome?: string };
+      const outcome = result?.outcome;
+      if (outcome === "injected") {
+        this.resetIdleTimer();
+        return "injected";
+      }
+      return "promptRequired";
+    } catch {
+      return "unsupported";
+    }
   }
 
   /** Idempotent — fires `onDispose` at most once regardless of how disposal was triggered. */
@@ -171,8 +203,9 @@ export class AcpConnection {
         }),
         spawnFailed,
         timeout,
-      ])) as { agentCapabilities?: Record<string, unknown> };
+      ])) as { agentCapabilities?: Record<string, unknown>; _meta?: Record<string, unknown> };
       this.agentCapabilities = result.agentCapabilities ?? {};
+      this._initMeta = result._meta ?? null;
     } catch (err) {
       if (err instanceof ConnectionSpawnFailed || err instanceof InitializeFailed) throw err;
       throw new InitializeFailed(String(err));

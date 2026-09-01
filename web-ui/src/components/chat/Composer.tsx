@@ -45,6 +45,8 @@ interface ComposerProps {
   /** A turn is active — show Stop instead of disabling. */
   busy?: boolean;
   onStop?: () => void;
+  /** When true and busy, the send button label indicates steering instead of queuing. */
+  canSteer?: boolean;
   /** Disable input entirely (e.g. session not ready). */
   disabled?: boolean;
   /** Prefill text (e.g. salvaged from a failed queued-turn edit, A9). */
@@ -63,6 +65,7 @@ export function Composer({
   onSend,
   busy,
   onStop,
+  canSteer,
   disabled,
   initialText,
   initialAttachments,
@@ -263,8 +266,20 @@ export function Composer({
             <button
               type="button"
               className={`chat-composer__send${busy ? " chat-composer__send--queue" : ""}`}
-              aria-label={busy ? "Send message (queues after current turn)" : "Send message"}
-              title={busy ? "Sends after the current turn finishes" : undefined}
+              aria-label={
+                busy && canSteer
+                  ? "Interrupts and steers the running turn"
+                  : busy
+                    ? "Send message (queues after current turn)"
+                    : "Send message"
+              }
+              title={
+                busy && canSteer
+                  ? "Interrupts and steers the running turn"
+                  : busy
+                    ? "Sends after the current turn finishes"
+                    : undefined
+              }
               disabled={!canSend}
               onClick={() => void handleSend()}
             >

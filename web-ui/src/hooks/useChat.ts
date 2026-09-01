@@ -10,6 +10,8 @@ export interface PendingTurn {
   attachments: Attachment[];
   /** True when the daemon queued it behind a running turn (queuePosition > 0). */
   queued: boolean;
+  /** How the message was delivered — "steered" means it was injected mid-turn. */
+  delivery?: "queued" | "steered";
 }
 
 /** Local prefill for a queued turn this tab is actively editing. */
@@ -200,7 +202,16 @@ export function useChat(
       setPending((prev) => {
         if (userTurnIdsRef.current.has(res.turnId)) return prev;
         if (prev.some((p) => p.turnId === res.turnId)) return prev;
-        return [...prev, { turnId: res.turnId, message, attachments: [], queued: res.queuePosition > 0 }];
+        return [
+          ...prev,
+          {
+            turnId: res.turnId,
+            message,
+            attachments: [],
+            queued: res.queuePosition > 0,
+            ...(res.delivery ? { delivery: res.delivery } : {}),
+          },
+        ];
       });
     },
     [api, sessionId],

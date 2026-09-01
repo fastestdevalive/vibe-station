@@ -191,6 +191,7 @@ export { injectAttachments };
 export interface EnqueueChatResult {
   turnId: string;
   queuePosition: number;
+  delivery?: "queued" | "steered";
 }
 
 /**
@@ -220,9 +221,9 @@ export async function enqueueChatTurn(opts: {
     ? await buildSystemPrompt(ctx, mode)
     : undefined;
 
-  // Enqueue the RAW message + attachment records; injection happens at run time
-  // so the queued turn stays editable (queue-controls A1).
-  const result = agent.enqueue({
+  // Submit the RAW message + attachment records; steers mid-turn when possible
+  // (ACP steering), otherwise enqueues normally (queue-controls A1).
+  const result = await agent.submit({
     message: opts.message,
     ...(attachments.length ? { attachments } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),

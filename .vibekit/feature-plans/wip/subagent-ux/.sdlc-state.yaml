@@ -1,0 +1,14 @@
+feature: subagent-ux
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-64
+master:
+  prd: skipped
+  plan: in_progress
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: planning
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: plan+implement
