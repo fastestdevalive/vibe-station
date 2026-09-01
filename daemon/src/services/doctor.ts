@@ -127,6 +127,18 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
     });
   }
 
+  // bun/bunx — required by the agy plugin's ACP adapter (spawns `bunx antigravity-acp`)
+  checks.push(
+    (await checkBinary("bun"))
+      ? { name: "bun", status: "ok", message: "bun found on PATH (required for agy ACP)" }
+      : {
+          name: "bun",
+          status: "warn",
+          message:
+            "bun not found on PATH — agy Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash",
+        },
+  );
+
   // Orphan tmux sessions
   checks.push(await checkOrphanSessions());
 
