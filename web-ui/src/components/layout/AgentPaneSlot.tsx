@@ -30,6 +30,9 @@ interface AgentPaneSlotProps {
    * PR was last checked against a branch the worktree has since left.
    */
   pr?: PrStatus | null;
+  /** Called when the user requests navigation to a related session (e.g. a
+   *  child task or parent session). Forwarded to ChatPane. */
+  onNavigateToSession?: (sessionId: string) => void;
 }
 
 /**
@@ -43,7 +46,7 @@ interface AgentPaneSlotProps {
  * never unmounts the terminal, so it cannot recreate the ghost-stream remount
  * bug fixed in 9dc10ef.
  */
-export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null }: AgentPaneSlotProps) {
+export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null, onNavigateToSession }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
   // The channel toggle is handed to `TerminalPane` so a single owner decides its
   // placement: a top-right overlay while the terminal is live, but rendered
@@ -99,7 +102,7 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
         />
         {terminalLive && session ? <TerminalAttachmentUpload api={api} session={session} /> : null}
       </div>
-      <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} />
+      <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} onNavigateToSession={onNavigateToSession} />
     </div>
   );
 }

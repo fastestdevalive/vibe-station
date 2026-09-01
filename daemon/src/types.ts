@@ -255,6 +255,8 @@ export interface SessionMeta {
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;
+  /** True when the connection supports mid-turn steering (`_session/steering`). */
+  canSteer?: boolean;
 }
 
 export interface SessionRecord {

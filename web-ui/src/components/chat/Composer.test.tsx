@@ -148,6 +148,22 @@ describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw 
   });
 });
 
+describe("5.T7 — Composer canSteer aria-label", () => {
+  it("busy && !canSteer → aria-label is queuing label (unchanged)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-q" onSend={vi.fn()} busy initialText="text" />);
+    const btn = screen.getByLabelText("Send message (queues after current turn)");
+    expect(btn).toBeTruthy();
+  });
+
+  it("busy && canSteer → aria-label is steer label", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-s" onSend={vi.fn()} busy canSteer initialText="text" />);
+    const btn = screen.getByLabelText("Interrupts and steers the running turn");
+    expect(btn).toBeTruthy();
+  });
+});
+
 describe("Composer textarea auto-grow", () => {
   // jsdom has no real layout, so `scrollHeight` is stubbed per-assertion.
   // `getComputedStyle`'s line-height/padding/border resolve to jsdom's UA

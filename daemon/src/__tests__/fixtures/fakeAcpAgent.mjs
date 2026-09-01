@@ -26,6 +26,10 @@
 //     "cancel" mode) — simulates a connection that looks alive (child process
 //     still running) but has stopped answering, so the per-request timeout
 //     (not process death) must be what eventually rejects the turn.
+//   FAKE_ACP_MODE=steering_supported — initialize includes _meta.steering.supported=true;
+//     session/prompt behaves like normal mode.
+//   FAKE_ACP_MODE=steering_method_not_found — _session/steering returns a
+//     JSON-RPC method-not-found error (-32601); everything else behaves normally.
 import { createInterface } from "node:readline";
 
 const mode = process.env.FAKE_ACP_MODE ?? "normal";
@@ -76,11 +80,11 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "initialize") {
-    write({
-      jsonrpc: "2.0",
-      id: msg.id,
-      result: { protocolVersion: 1, agentCapabilities: { loadSession: true } },
-    });
+    const result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
+    if (mode === "steering_supported" || mode === "steering_method_not_found") {
+      result._meta = { steering: { supported: mode === "steering_supported" } };
+    }
+    write({ jsonrpc: "2.0", id: msg.id, result });
     return;
   }
   if (msg.method === "session/new") {
@@ -183,6 +187,14 @@ rl.on("line", (line) => {
     setTimeout(() => {
       write({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
     }, 20);
+    return;
+  }
+  if (msg.method === "_session/steering") {
+    if (mode === "steering_method_not_found") {
+      write({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
+    } else {
+      write({ jsonrpc: "2.0", id: msg.id, result: { outcome: "injected" } });
+    }
     return;
   }
 });
