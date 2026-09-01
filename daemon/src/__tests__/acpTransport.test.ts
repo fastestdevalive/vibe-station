@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { AcpConnection, ConnectionSpawnFailed, InitializeFailed } from "../services/acp/acpTransport.js";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { AcpConnection, ConnectionSpawnFailed, InitializeFailed, type AcpSessionMeta } from "../services/acp/acpTransport.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FAKE_AGENT = join(__dirname, "fixtures", "fakeAcpAgent.mjs");
@@ -213,5 +215,48 @@ describe("AcpConnection self-healing (idle-dispose / crash respawn regression)",
     await expect(result).rejects.toThrow(/timed out/i);
     expect(Date.now() - start).toBeLessThan(2000);
     await conn.dispose();
+  });
+});
+
+describe("AcpConnection _meta forwarding", () => {
+  const BETA_META: AcpSessionMeta = { claudeCode: { options: { betas: ["context-1m-2025-08-07"] } } };
+
+  /**
+   * Runs `body` against an `echo_meta` fake agent and returns what that agent
+   * saw on the wire: `{ hasMeta, meta }`, written on EVERY session/new|load so
+   * absence is observed rather than inferred from a missing file.
+   */
+  async function captureWireMeta(
+    body: (conn: AcpConnection) => Promise<void>,
+  ): Promise<{ hasMeta: boolean; meta: unknown }> {
+    const dir = mkdtempSync(join(tmpdir(), "acp-meta-"));
+    const outFile = join(dir, "meta.json");
+    const conn = new AcpConnection(
+      { command: process.execPath, args: [FAKE_AGENT], cwd: __dirname, env: { FAKE_ACP_MODE: "echo_meta", META_OUT_FILE: outFile } },
+      "claude",
+    );
+    try {
+      await conn.initialize();
+      await body(conn);
+      return JSON.parse(readFileSync(outFile, "utf8"));
+    } finally {
+      await conn.dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("newSession forwards _meta to the wire (betas reach the adapter)", async () => {
+    const seen = await captureWireMeta((conn) => conn.newSession("/tmp", BETA_META).then(() => {}));
+    expect(seen).toEqual({ hasMeta: true, meta: BETA_META });
+  });
+
+  it("loadSession forwards _meta to the wire", async () => {
+    const seen = await captureWireMeta((conn) => conn.loadSession("/tmp", "fake-session-1", BETA_META));
+    expect(seen).toEqual({ hasMeta: true, meta: BETA_META });
+  });
+
+  it("newSession omits _meta from the wire when no meta is passed", async () => {
+    const seen = await captureWireMeta((conn) => conn.newSession("/tmp").then(() => {}));
+    expect(seen).toEqual({ hasMeta: false, meta: null });
   });
 });

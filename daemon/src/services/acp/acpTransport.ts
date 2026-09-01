@@ -23,6 +23,18 @@ export class ConnectionSpawnFailed extends Error {}
 export class InitializeFailed extends Error {}
 export class SessionLoadFailed extends Error {}
 
+/** Typed extension bag for `session/new` and `session/load` params. */
+export interface AcpSessionMeta {
+  claudeCode?: {
+    options?: {
+      betas?: string[];
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export type PromptBlock =
   | { type: "text"; text: string }
   | { type: "resource_link"; uri: string; name: string };
@@ -216,8 +228,8 @@ export class AcpConnection {
   }
 
   /** `session/new` — mint a fresh ACP session for `cwd`. */
-  async newSession(cwd: string): Promise<string> {
-    const result = (await this.request("session/new", { cwd, mcpServers: [] })) as { sessionId: string };
+  async newSession(cwd: string, meta?: AcpSessionMeta): Promise<string> {
+    const result = (await this.request("session/new", { cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) })) as { sessionId: string };
     this.sessionId = result.sessionId;
     this.resetIdleTimer();
     return result.sessionId;
@@ -229,9 +241,9 @@ export class AcpConnection {
    * `newSession` and emits a `status` event naming the fallback. Never call
    * this unless `initialize()` reported `loadSession: true`.
    */
-  async loadSession(cwd: string, priorAcpSessionId: string): Promise<void> {
+  async loadSession(cwd: string, priorAcpSessionId: string, meta?: AcpSessionMeta): Promise<void> {
     try {
-      await this.request("session/load", { sessionId: priorAcpSessionId, cwd, mcpServers: [] });
+      await this.request("session/load", { sessionId: priorAcpSessionId, cwd, mcpServers: [], ...(meta ? { _meta: meta } : {}) });
       this.sessionId = priorAcpSessionId;
       this.resetIdleTimer();
     } catch (err) {

@@ -1083,10 +1083,21 @@ export class JsonAgentSession {
     // value). Never the other way around — using a native-only Option B id
     // for `session/load` would ask the adapter to load an id it never minted.
     const priorAcpId = this.session.acpSessionId ?? this.session.agentChatId;
+    // The 1M-token context-window beta is forwarded to the claude-agent-acp
+    // adapter via _meta.claudeCode.options. The adapter spreads these into the
+    // SDK options, which serialises `betas` into an `--betas` CLI flag that
+    // reaches the API as an `anthropic-beta` header. The API enforces
+    // eligibility per-account; passing the beta for an ineligible model/
+    // account is a no-op rather than an error.
+    // Only sent for the claude adapter — the _meta.claudeCode namespace is
+    // claude-agent-acp-specific; other adapters don't read it.
+    const acpMeta = this.cli === "claude"
+      ? { claudeCode: { options: { betas: ["context-1m-2025-08-07"] } } }
+      : undefined;
     let usedFreshSession = true;
     if (loadSession && priorAcpId) {
       try {
-        await conn.loadSession(this.cwd, priorAcpId);
+        await conn.loadSession(this.cwd, priorAcpId, acpMeta);
         usedFreshSession = false;
       } catch (err) {
         if (!(err instanceof SessionLoadFailed)) throw err;
@@ -1098,7 +1109,7 @@ export class JsonAgentSession {
       }
     }
     if (usedFreshSession) {
-      const acpSessionId = await conn.newSession(this.cwd);
+      const acpSessionId = await conn.newSession(this.cwd, acpMeta);
       // Decision 6 Option B: persist the ACP id separately so a LATER
       // reconnect's `session/load` uses it (never `agentChatId`, which stays
       // native-only for this plugin). Option A plugins persist their id via
