@@ -12,6 +12,12 @@ const COMPOSER_MAX_GROW_LINES = 10;
  *  send emptied the box while a turn is still running — see `justSent`. */
 const SEND_SETTLE_MS = 700;
 
+/** Shift+Enter and Alt+Enter insert a newline. The OS/browser sometimes drops the
+ *  modifier from the very next keydown when keys are released quickly, so a bare
+ *  Enter arriving within this window after either combo is treated as another
+ *  newline — a fast double-tap must never accidentally send the message. */
+const NEWLINE_KEY_GUARD_MS = 500;
+
 /** Resize `el` to fit its content, capped at `COMPOSER_MAX_GROW_LINES` worth
  *  of height (derived from the element's own resolved line-height/padding/
  *  border, not a guessed pixel constant, so it tracks the user's chat font
@@ -122,6 +128,9 @@ export function Composer({
     return () => window.clearTimeout(id);
   }, [justSent]);
 
+  // Timestamp of the last Shift/Alt+Enter — see NEWLINE_KEY_GUARD_MS.
+  const lastNewlineKeyRef = useRef<number>(0);
+
   async function handleSend() {
     if (!canSend) return;
     const message = text.trim();
@@ -139,7 +148,32 @@ export function Composer({
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    const isNewlineCombo = e.key === "Enter" && (e.shiftKey || e.altKey);
+    if (isNewlineCombo) {
+      lastNewlineKeyRef.current = Date.now();
+      // Alt+Enter: browser doesn't insert a newline by default, do it manually.
+      if (e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        const ta = e.currentTarget;
+        const start = ta.selectionStart ?? text.length;
+        const end = ta.selectionEnd ?? text.length;
+        const next = text.slice(0, start) + "\n" + text.slice(end);
+        setText(next);
+        draft.save(next);
+        // Restore caret after React re-renders the controlled value.
+        requestAnimationFrame(() => {
+          ta.selectionStart = ta.selectionEnd = start + 1;
+        });
+      }
+      return;
+    }
+    if (e.key === "Enter" && e.ctrlKey) {
+      e.preventDefault();
+      void handleSend();
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+      if (Date.now() - lastNewlineKeyRef.current < NEWLINE_KEY_GUARD_MS) return;
       e.preventDefault();
       void handleSend();
     }
@@ -240,7 +274,7 @@ export function Composer({
         </div>
       </div>
       <div className="chat-composer__hint">
-        <span aria-hidden>⤓</span> Drop files here · Enter to send · Shift+Enter for newline
+        <span aria-hidden>⤓</span> Drop files here · Enter / Ctrl+Enter to send · Shift+Enter or Alt+Enter for newline
       </div>
     </div>
   );

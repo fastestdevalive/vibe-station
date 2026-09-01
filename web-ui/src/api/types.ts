@@ -321,6 +321,8 @@ export interface SessionMeta {
   /** turnIds withdrawn into the editing hold (drives the "editing" bubble). */
   editingTurnIds: string[];
   usage?: UsageInfo;
+  /** Absolute working directory for the session (worktree or project root). */
+  cwd?: string;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */

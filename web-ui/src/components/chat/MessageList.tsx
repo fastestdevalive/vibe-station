@@ -382,6 +382,8 @@ interface MessageListProps {
    *  footer `StatusBar` can show busy dots exactly when the in-feed
    *  `WorkingIndicator` is scrolled out of view. */
   onAtBottomChange?: (atBottom: boolean) => void;
+  /** Absolute working directory — tool-call paths are shown relative to it. */
+  cwd?: string;
 }
 
 export function MessageList({
@@ -400,6 +402,7 @@ export function MessageList({
   sessionId,
   onForkTurn,
   onAtBottomChange,
+  cwd,
 }: MessageListProps) {
   // Which answered user turn (if any) this tab is editing → fork. Local to the
   // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
@@ -800,7 +803,7 @@ export function MessageList({
             // any tool inside it still missing a result is genuinely running
             // (turns can fire several tool calls before results land), not
             // just the last one in the run.
-            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} />;
+            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} cwd={cwd} />;
             break;
           case "error":
             node = <ErrorCard key={key} text={item.text} onRetry={onRetry} />;

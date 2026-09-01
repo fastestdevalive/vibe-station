@@ -355,7 +355,8 @@ describe("MessageList live thinking block suppression", () => {
     expect(container.querySelector(".chat-thinking")).toBeNull();
     expect(screen.queryByText("let me reason")).toBeNull();
     // The tool card around it is unaffected — no gap, no placeholder.
-    expect(screen.getByText("Bash")).toBeTruthy();
+    // Bash/Terminal rows render under the "Ran" label, not the raw tool name.
+    expect(screen.getByText("Ran")).toBeTruthy();
   });
 
   it("renders the completed block in its original position once the group closes", () => {
@@ -370,7 +371,7 @@ describe("MessageList live thinking block suppression", () => {
     // open (see `liveEvents`), so the completed label takes the tool variant.
     expect(block!.textContent).toContain("Worked for 3s");
     // Position preserved: thinking block precedes the tool card in DOM order.
-    const tool = screen.getByText("Bash");
+    const tool = screen.getByText("Ran");
     expect(block!.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
