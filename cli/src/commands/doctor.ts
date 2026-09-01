@@ -47,6 +47,21 @@ export function registerDoctor(program: Command): void {
         });
       }
 
+      // bun/bunx is required by the agy plugin's ACP adapter
+      check("bun is on PATH (required for agy Rich Chat / ACP)", () => {
+        try {
+          execSync("which bun", { stdio: "pipe" });
+          return true;
+        } catch {
+          const installCmd =
+            process.platform === "darwin"
+              ? "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
+              : "curl -fsSL https://bun.sh/install | bash";
+          console.log(chalk.yellow("  →"), `Install: ${installCmd}`);
+          return false;
+        }
+      });
+
       allOk = check("Daemon is running", () => {
         const url = getDaemonUrl();
         if (!url) {
