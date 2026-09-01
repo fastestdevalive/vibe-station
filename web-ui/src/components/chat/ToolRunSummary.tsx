@@ -12,9 +12,9 @@ import {
 } from "./toolFormat";
 
 const BASH_TOOL_NAMES = new Set(["bash", "terminal"]);
-// Read-only tools: start collapsed (no mutation happened, less urgent to surface).
-// Edit/Write tools stay expanded so diffs are immediately visible.
-const READ_ONLY_TOOL_NAMES = new Set(["read", "ls", "glob", "grep"]);
+// Read-only/search tool names (Claude Code native names, lowercased).
+// ACP sessions use toolKind instead — see below.
+const READ_ONLY_TOOL_NAMES = new Set(["read", "ls", "glob", "grep", "websearch", "webfetch", "task", "todowrite"]);
 
 interface ToolRunSummaryProps {
   tools: ToolCallEntry[];
@@ -85,10 +85,18 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
  * into (an empty-output Bash call, say) so it doesn't read as still pending.
  */
 function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running: boolean; cwd?: string }) {
-  const isBash = BASH_TOOL_NAMES.has(tool.toolName.toLowerCase());
-  const isReadOnly = READ_ONLY_TOOL_NAMES.has(tool.toolName.toLowerCase());
-  // Bash and read-only tools start collapsed (verbose / no mutation to surface);
-  // Edit/Write tools start expanded so diffs are immediately visible.
+  const name = tool.toolName.toLowerCase();
+  const isBash = BASH_TOOL_NAMES.has(name) || tool.toolKind === "execute";
+  // Collapse read-only/search tools — no mutation happened, diffs aren't relevant.
+  // Check toolKind first (reliable for ACP sessions where toolName is prose);
+  // fall back to name matching for native Claude Code sessions.
+  const isReadOnly =
+    tool.toolKind === "read" ||
+    tool.toolKind === "search" ||
+    tool.toolKind === "fetch" ||
+    tool.toolKind === "think" ||
+    READ_ONLY_TOOL_NAMES.has(name);
+  // Edit/Write/Delete/Move tools start expanded so diffs are immediately visible.
   const [open, setOpen] = useState(!isBash && !isReadOnly);
   const inline = summarizeToolInput(tool.toolInput, tool.locations, cwd);
   const pretty = prettyToolInput(tool.toolInput);

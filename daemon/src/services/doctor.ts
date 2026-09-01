@@ -135,7 +135,9 @@ export async function runDoctor(): Promise<DoctorCheck[]> {
           name: "bun",
           status: "warn",
           message:
-            "bun not found on PATH — agy Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash",
+            process.platform === "darwin"
+              ? "bun not found on PATH — agy Rich Chat (ACP) will fail. Install: brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
+              : "bun not found on PATH — agy Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash",
         },
   );
 
