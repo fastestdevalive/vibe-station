@@ -81,6 +81,8 @@ export class AcpConnection {
   private disposeNotified = false;
   private disposePromise: Promise<void> | null = null;
   private activeUpdateSink: ((u: AcpSessionUpdate) => void) | null = null;
+  /** Receives session/update notifications that arrive outside an active session/prompt turn. */
+  outOfBandSink: ((ev: NormalizedEvent) => void) | null = null;
   readonly terminals = new AcpTerminalManager();
 
   constructor(
@@ -399,7 +401,13 @@ export class AcpConnection {
       switch (req.method) {
         case "session/update": {
           const params = req.params as { sessionId: string; update: AcpSessionUpdate };
-          this.activeUpdateSink?.(params.update);
+          if (this.activeUpdateSink) {
+            this.activeUpdateSink(params.update);
+          } else if (this.outOfBandSink) {
+            if (!this.sessionId) return;
+            const ev = normalizeSessionUpdate(params.update, this.sessionId, this.provider, this.enrich);
+            if (ev) this.outOfBandSink(ev);
+          }
           return; // notification, no response
         }
         case "session/request_permission": {

@@ -26,7 +26,7 @@ import {
   type JsonAgentSession,
 } from "./jsonAgent.js";
 import { sessionChannel } from "./channel.js";
-import { sessionDataDir, directSessionDataDir } from "./paths.js";
+import { sessionDataDir, directSessionDataDir, worktreePath } from "./paths.js";
 import type { TranscriptPage } from "./transcriptStore.js";
 import type {
   ProjectRecord,
@@ -319,12 +319,16 @@ export async function readSessionMeta(
   void daemonPort;
   // Bounded meta rebuild (R2.6): resolve the last model + last real usage via the
   // store's bounded reverse scan, never a whole-transcript read.
+  const cwd = ctx.worktree
+    ? worktreePath(ctx.project.id, ctx.worktree.id)
+    : ctx.project.absolutePath;
   return buildMetaFromStoreMeta({
     sessionId: ctx.session.id,
     cli,
     ...(modeId ? { modeId } : {}),
     ...(modeName ? { modeName } : {}),
     ...(ctx.session.modelOverride ? { modelOverride: ctx.session.modelOverride } : {}),
+    cwd,
     meta: readMetaFromDataDir(sessionDataDirFor(ctx), ctx.session.id),
   });
 }

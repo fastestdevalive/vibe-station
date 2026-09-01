@@ -1,12 +1,17 @@
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { DiffView } from "@/components/preview/DiffView";
 import {
   capForDisplay,
   looksLikeUnifiedDiff,
   prettyToolInput,
+  relativize,
   summarizeToolInput,
   type ToolCallEntry,
 } from "./toolFormat";
+
+const BASH_TOOL_NAMES = new Set(["bash", "terminal"]);
 
 interface ToolRunSummaryProps {
   tools: ToolCallEntry[];
@@ -14,6 +19,8 @@ interface ToolRunSummaryProps {
    *  inside it still missing a result is genuinely in flight (a turn can fire
    *  several tool calls before results land, not just the last one). */
   live?: boolean;
+  /** Absolute working directory — paths are shown relative to it. */
+  cwd?: string;
 }
 
 // Tool names that describe the same kind of action fold into one bucket so
@@ -74,9 +81,12 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
  * done, a quiet checkmark marks completion when there's no detail to expand
  * into (an empty-output Bash call, say) so it doesn't read as still pending.
  */
-function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: boolean }) {
-  const [open, setOpen] = useState(false);
-  const inline = summarizeToolInput(tool.toolInput, tool.locations);
+function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running: boolean; cwd?: string }) {
+  const isBash = BASH_TOOL_NAMES.has(tool.toolName.toLowerCase());
+  // Bash/Terminal output is often verbose — start collapsed so it doesn't
+  // dominate the chat view; all other tool rows start expanded.
+  const [open, setOpen] = useState(!isBash);
+  const inline = summarizeToolInput(tool.toolInput, tool.locations, cwd);
   const pretty = prettyToolInput(tool.toolInput);
   // `toolInput` is often `{}` for an ACP adapter that reports the target via
   // `locations` instead (see summarizeToolInput) — an empty-object body adds
@@ -111,7 +121,7 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
         <span className="chat-tool-entry__icon" aria-hidden>
           {isError ? "⚠" : "🔧"}
         </span>
-        <span className="chat-tool-entry__name">{tool.toolName}</span>
+        <span className="chat-tool-entry__name">{isBash ? "Ran" : tool.toolName}</span>
         {inline ? <code className="chat-tool-entry__inline">{inline}</code> : null}
         <span className="chat-tool-entry__status">
           {running ? (
@@ -132,12 +142,21 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
           ) : null}
           {hasDiffs
             ? tool.diffs!.map((diff, i) => (
-                <DiffView key={`${diff.path}-${i}`} oldText={diff.oldText ?? ""} newText={diff.newText} filePath={diff.path} />
+                <DiffView
+                  key={`${diff.path}-${i}`}
+                  oldText={diff.oldText ?? ""}
+                  newText={diff.newText}
+                  filePath={relativize(diff.path, cwd)}
+                />
               ))
             : null}
           {hasResultBody ? (
             isDiff ? (
               <DiffView diffText={resultText} />
+            ) : isBash ? (
+              <div className="chat-tool-entry__md workspace-markdown-preview">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{resultText}</ReactMarkdown>
+              </div>
             ) : (
               <pre className="chat-tool-entry__pre">
                 <code>{resultText}</code>
@@ -161,12 +180,12 @@ function ToolRunEntryRow({ tool, running }: { tool: ToolCallEntry; running: bool
  * under the summary line; each tool's call and result render as ONE
  * element, not a separate card pair.
  */
-export function ToolRunSummary({ tools, live }: ToolRunSummaryProps) {
+export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
   // A singleton run's summary line is a generic phrase ("Ran 1 shell
   // command") — start it expanded so the actual tool name + inline args
   // (in the entry row below) are visible without a click, matching what a
   // lone tool call used to show directly.
-  const [open, setOpen] = useState(() => !!live || tools.length === 1);
+  const [open, setOpen] = useState(true);
   const hasError = tools.some((t) => t.result?.isError || t.status === "failed");
   // A result already arrived, or a terminal status was set — never spin, even
   // if an adapter's terminal update omitted a fresh `status` field (per ACP's
@@ -195,7 +214,7 @@ export function ToolRunSummary({ tools, live }: ToolRunSummaryProps) {
       {open ? (
         <div className="chat-tool-run__body">
           {tools.map((t) => (
-            <ToolRunEntryRow key={t.id} tool={t} running={!!live && isPending(t)} />
+            <ToolRunEntryRow key={t.id} tool={t} running={!!live && isPending(t)} cwd={cwd} />
           ))}
         </div>
       ) : null}
