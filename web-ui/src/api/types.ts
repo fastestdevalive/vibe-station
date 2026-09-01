@@ -272,6 +272,7 @@ export type TurnState = "idle" | "queued" | "thinking" | "responding" | "tool" |
 export interface SendChatResponse {
   turnId: string;
   queuePosition: number;
+  delivery?: "queued" | "steered";
 }
 
 /** Response from POST /sessions/:id/chat/queue/:turnId/edit (queue-controls). */
@@ -323,6 +324,8 @@ export interface SessionMeta {
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;
+  /** True when the connection supports mid-turn steering (`_session/steering`). */
+  canSteer?: boolean;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */

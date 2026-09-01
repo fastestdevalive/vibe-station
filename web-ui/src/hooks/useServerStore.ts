@@ -23,9 +23,18 @@ interface ServerData {
    *  view as each list arrives. (We use one Promise.all so in practice all
    *  three land together — `loaded` just makes the boundary explicit.) */
   loaded: boolean;
+  /** FIFO child session lists keyed by parentSessionId. Client-only, transient —
+   *  not persisted. Populated from the sessions list on every replaceAll (cold
+   *  load / reconnect) and extended in FIFO order by live session:created events.
+   *  Consumed (front-popped) inside groupEvents to correlate task tool_use entries
+   *  with their spawned child sessions. */
+  childByParent: Map<string, string[]>;
 
   // Bulk replace — initial load and ws:open refetch.
   replaceAll: (data: { projects: Project[]; worktrees: Worktree[]; sessions: Session[] }) => void;
+  /** Append a childSessionId to the FIFO queue for parentSessionId. Called from
+   *  the session:created WS handler when ev.spawnedFrom is set. */
+  addChildSession: (parentId: string, childId: string) => void;
 
   // Targeted patches driven by WS events. Cheaper than refetching the world
   // for a single state transition.
@@ -40,14 +49,46 @@ interface ServerData {
   applySessionDeleted: (sessionId: string) => void;
 }
 
+/** Build childByParent from a sessions array by grouping sessions that have
+ *  spawnedFrom set. Used in replaceAll so cold-load and reconnect both produce
+ *  a correct initial map without waiting for live session:created events. */
+function buildChildByParent(sessions: Session[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const s of sessions) {
+    if (s.spawnedFrom) {
+      const list = map.get(s.spawnedFrom);
+      if (list) {
+        list.push(s.id);
+      } else {
+        map.set(s.spawnedFrom, [s.id]);
+      }
+    }
+  }
+  return map;
+}
+
 export const useServerStore = create<ServerData>((set) => ({
   projects: [],
   worktrees: [],
   sessions: [],
   loaded: false,
+  childByParent: new Map(),
 
   replaceAll: ({ projects, worktrees, sessions }) =>
-    set({ projects, worktrees, sessions, loaded: true }),
+    set({ projects, worktrees, sessions, loaded: true, childByParent: buildChildByParent(sessions) }),
+
+  addChildSession: (parentId, childId) =>
+    set((s) => {
+      const existing = s.childByParent.get(parentId);
+      if (existing?.includes(childId)) return s;
+      const next = new Map(s.childByParent);
+      if (existing) {
+        next.set(parentId, [...existing, childId]);
+      } else {
+        next.set(parentId, [childId]);
+      }
+      return { childByParent: next };
+    }),
 
   applyProjectCreated: (p) =>
     set((s) => (s.projects.some((x) => x.id === p.id) ? s : { projects: [...s.projects, p] })),

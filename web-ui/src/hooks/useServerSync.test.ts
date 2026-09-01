@@ -457,3 +457,51 @@ describe("useServerSync — worktree:deleted tools-tile cleanup", () => {
     });
   });
 });
+
+// ─── Phase 2.T6: session:created → addChildSession ────────────────────────────
+
+describe("useServerSync — 2.T6: session:created with spawnedFrom updates childByParent", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false, childByParent: new Map() });
+    useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {} });
+  });
+
+  it("calls addChildSession when session:created has spawnedFrom", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "child-sess",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+        spawnedFrom: "parent-sess",
+      });
+    });
+
+    await waitFor(() => {
+      const { childByParent } = useServerStore.getState();
+      expect(childByParent.get("parent-sess")).toContain("child-sess");
+    });
+  });
+
+  it("does not update childByParent when spawnedFrom is absent", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "standalone-sess",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+      });
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(useServerStore.getState().childByParent.size).toBe(0);
+  });
+});

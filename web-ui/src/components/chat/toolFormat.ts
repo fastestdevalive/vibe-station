@@ -27,6 +27,9 @@ export interface ToolCallEntry {
   locations?: { path: string; line?: number }[];
   /** `tool_call`/`tool_call_update.kind`, structural (acp-normalize-superset Gap 4). */
   toolKind?: AcpToolKind;
+  /** For `task` tool entries: the child sessionId spawned by this tool call,
+   *  resolved via FIFO matching in groupEvents using childByParent from the store. */
+  childSessionId?: string;
 }
 
 /** One-line placeholder for a non-text content block, joined into a bubble's

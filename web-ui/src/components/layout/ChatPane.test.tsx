@@ -273,3 +273,54 @@ describe("ChatPane atBottom threading (MessageList → ChatPane → StatusBar)",
     expect(container.querySelector(".chat-statusbar__busy--hidden")).toBeTruthy();
   });
 });
+
+// ─── Phase 4.T4 integration ───────────────────────────────────────────────────
+
+import { useServerStore } from "@/hooks/useServerStore";
+import type { Session as SessionType } from "@/api/types";
+
+function parentSession(id: string): SessionType {
+  return {
+    id,
+    worktreeId: "wt-1",
+    projectId: "proj-a",
+    modeId: null,
+    type: "agent",
+    isMain: true,
+    name: "Parent Agent",
+    state: "idle",
+    lifecycleState: "idle",
+    tmuxName: id,
+    createdAt: "2024-01-01T00:00:00.000Z",
+    channel: "json",
+  };
+}
+
+describe("ChatPane — 4.T4: SubagentBanner mounts when session.spawnedFrom is set", () => {
+  it("shows SubagentBanner when the session has spawnedFrom", async () => {
+    // Seed the parent session into the store so SubagentBanner can resolve its name
+    useServerStore.setState({
+      projects: [],
+      worktrees: [],
+      sessions: [parentSession("parent-sess")],
+      loaded: true,
+      childByParent: new Map(),
+    });
+
+    const api = createMockApi();
+    const child: Session = { ...jsonSession("child-sess"), spawnedFrom: "parent-sess" };
+    render(<ChatPane api={api} session={child} visible />);
+
+    // SubagentBanner should be rendered with the parent name
+    expect(await screen.findByText(/Parent Agent/)).toBeTruthy();
+    expect(document.querySelector(".chat-subagent-banner")).toBeTruthy();
+  });
+
+  it("does NOT show SubagentBanner when spawnedFrom is absent", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("standalone-sess")} visible />);
+
+    await screen.findByText("Start chatting"); // wait for mount
+    expect(document.querySelector(".chat-subagent-banner")).toBeNull();
+  });
+});

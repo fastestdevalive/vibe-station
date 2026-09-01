@@ -106,6 +106,33 @@ describe("AcpConnection happy path", () => {
   });
 });
 
+describe("5.T1 — AcpConnection supportsSteering from initialize _meta", () => {
+  it("supportsSteering is true when initialize response carries _meta.steering.supported=true", async () => {
+    const conn = makeConnection("steering_supported");
+    await conn.initialize();
+    expect(conn.supportsSteering).toBe(true);
+    await conn.dispose();
+  });
+
+  it("supportsSteering is false when initialize response has no _meta", async () => {
+    const conn = makeConnection("normal");
+    await conn.initialize();
+    expect(conn.supportsSteering).toBe(false);
+    await conn.dispose();
+  });
+});
+
+describe("5.T2 — AcpConnection steer() returns 'unsupported' on method-not-found", () => {
+  it("steer() returns 'unsupported' when agent responds with -32601 method-not-found, does not throw", async () => {
+    const conn = makeConnection("steering_method_not_found");
+    await conn.initialize();
+    await conn.newSession("/tmp");
+    const result = await conn.steer([{ type: "text", text: "steer me" }]);
+    expect(result).toBe("unsupported");
+    await conn.dispose();
+  });
+});
+
 describe("AcpConnection self-healing (idle-dispose / crash respawn regression)", () => {
   it("isAlive() flips to false and onDispose fires exactly once when dispose() is called", async () => {
     let disposeCalls = 0;

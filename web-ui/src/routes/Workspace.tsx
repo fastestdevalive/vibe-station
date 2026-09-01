@@ -282,6 +282,31 @@ export function Workspace() {
     ? sessions.find((s) => s.id === activeTerminalSessionId)
     : undefined;
 
+  /**
+   * Navigate to a related session (e.g. a child task or parent via SubagentBanner).
+   * Finds the target session and activates its worktree + session slot.
+   * No-ops with a warning for unknown sessions.
+   */
+  const handleNavigateToSession = useCallback(
+    (targetSessionId: string) => {
+      const target = sessions.find((s) => s.id === targetSessionId);
+      if (!target) {
+        console.warn(`[Workspace] onNavigateToSession: unknown sessionId ${targetSessionId}`);
+        return;
+      }
+      if (target.worktreeId) {
+        // Worktree session: activate the worktree (which selects the session slot)
+        // then explicitly set the active session to the target.
+        useWorkspaceStore.getState().setActiveWorktree(target.projectId, target.worktreeId, sessions);
+        useWorkspaceStore.setState({ activeSessionId: targetSessionId });
+      } else {
+        // Direct (worktree-less) session: navigate to its URL
+        navigate(`/session/${targetSessionId}`);
+      }
+    },
+    [sessions, navigate],
+  );
+
   // Every live pane (agent/terminal/tools) for the active worktree — mounted
   // ONCE via a single, always-mounted <PaneHostLayer> below, regardless of
   // classic vs. workspace mode, so a mode toggle (or a tab switch) never
@@ -380,6 +405,7 @@ export function Workspace() {
             session={paneSession}
             branch={paneBranch}
             pr={panePr}
+            onNavigateToSession={handleNavigateToSession}
           />
         );
       }
@@ -516,7 +542,7 @@ export function Workspace() {
       {/* A direct session has no worktree, so no branch to guard a PR
           against — `branch` defaults to null, which unconditionally
           suppresses `session.pr` (a direct session can never show a PR). */}
-      <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} />
+      <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} onNavigateToSession={handleNavigateToSession} />
     </div>
   ) : null;
 

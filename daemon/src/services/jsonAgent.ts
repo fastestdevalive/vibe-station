@@ -381,6 +381,18 @@ export class JsonAgentSession {
    * `user` event immediately (so a client opening mid-turn replays it), then
    * kicks the sequential runner. Always accepted — never busy-rejects.
    */
+  /** Persist + broadcast the synthesized `user` event for a turn (Decision 12). */
+  private emitUserEvent(turnId: string, message: string, attachments: Attachment[]): void {
+    const userEvent = this.newEvent("user", {
+      role: "user",
+      text: message,
+      turnId,
+      ...(attachments.length ? { attachments } : {}),
+    });
+    this.persist(userEvent);
+    this.stream.emitMessage(userEvent);
+  }
+
   enqueue(input: {
     /** RAW user text (pre-injection); attachments are injected at run time (A1). */
     message: string;
@@ -401,14 +413,7 @@ export class JsonAgentSession {
 
     // Decision 12 — daemon-owned user event. Carries the RAW text (attachments
     // render as chips); the injected path header is a run-time concern only (A1).
-    const userEvent = this.newEvent("user", {
-      role: "user",
-      text: input.message,
-      turnId,
-      ...(attachments.length ? { attachments } : {}),
-    });
-    this.persist(userEvent);
-    this.stream.emitMessage(userEvent);
+    this.emitUserEvent(turnId, input.message, attachments);
 
     this.queue.push({
       turnId,
@@ -421,6 +426,52 @@ export class JsonAgentSession {
     this.emitMeta();
     this.kickDrain();
     return { turnId, queuePosition };
+  }
+
+  /**
+   * Submit a user turn, steering it mid-turn when possible. Steers iff ALL are
+   * true: running, activeAbort not aborted, queue empty, no attachments, not
+   * the first turn pending, and the connection is alive and supports steering.
+   *
+   * On `"injected"`: mints a fresh turnId, emits the user event, and returns
+   * `{ delivery: "steered" }` — does NOT touch the queue or kickDrain.
+   *
+   * On `"promptRequired"` / `"unsupported"` / any throw: falls through to
+   * `enqueue()` unchanged (delivery: "queued").
+   */
+  async submit(input: {
+    message: string;
+    attachments?: Attachment[];
+    systemPrompt?: string;
+    forkFromChatId?: string;
+  }): Promise<{ turnId: string; queuePosition: number; delivery: "queued" | "steered" }> {
+    const attachments = input.attachments ?? [];
+    const canAttemptSteer =
+      this.running &&
+      this.activeAbort !== null &&
+      !this.activeAbort.signal.aborted &&
+      this.queue.length === 0 &&
+      attachments.length === 0 &&
+      !this.isFirstTurnPending &&
+      this.connection?.isAlive() === true &&
+      this.connection.supportsSteering === true;
+
+    if (canAttemptSteer) {
+      const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text: input.message }];
+      try {
+        const outcome = await this.connection!.steer(blocks);
+        if (outcome === "injected") {
+          const turnId = randomUUID();
+          this.emitUserEvent(turnId, input.message, []);
+          return { turnId, queuePosition: 0, delivery: "steered" };
+        }
+      } catch {
+        // fall through to enqueue
+      }
+    }
+
+    const result = this.enqueue(input);
+    return { ...result, delivery: "queued" };
   }
 
   /** Resolves when the queue has fully drained (no active/queued turns). */
@@ -742,6 +793,7 @@ export class JsonAgentSession {
       editingTurnIds: [...this.holds.keys()],
       ...(this.usage ? { usage: this.usage } : {}),
       cwd: this.cwd,
+      canSteer: this.running && !!this.connection?.isAlive() && !!this.connection?.supportsSteering,
     };
   }
 

@@ -103,9 +103,10 @@ export function createClientApi() {
    *  payload to deduplicate. */
   const fileWatches = new Map<string, { worktreeId: string; path: string }>();
   const treeWatches = new Map<string, { worktreeId: string }>();
-  /** Open JSON-chat subscriptions — replayed on WS reconnect so the daemon
-   *  re-subscribes the connection (and re-sends chat:replay) after a drop. */
-  const chatSubs = new Set<string>();
+  /** Refcounted JSON-chat subscriptions — multiple components can subscribe to
+   *  the same sessionId without one cleanup tearing down the others.
+   *  Map<sessionId, refCount>; chat:open sent on 0→1, chat:close sent on 1→0. */
+  const chatSubs = new Map<string, number>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
@@ -180,7 +181,7 @@ export function createClientApi() {
         }
         // Re-open JSON chats so the daemon re-subscribes this connection and
         // replays the transcript (chat:replay) after a reconnect.
-        for (const sid of chatSubs) {
+        for (const sid of chatSubs.keys()) {
           socket.send(JSON.stringify({ type: "chat:open", sessionId: sid }));
         }
         // Notify consumers that a fresh handshake landed so they can refetch
@@ -815,15 +816,34 @@ export function createClientApi() {
     /** Subscribe to a JSON session's normalized event stream. The daemon replies
      *  with `chat:replay` (bounded tail-N turns) then live `session:message`/
      *  `session:meta`. Pass `sinceSeq` on reconnect to replay only the delta of
-     *  events newer than that `logSeq` instead of a fresh tail snapshot (R2.3). */
+     *  events newer than that `logSeq` instead of a fresh tail snapshot (R2.3).
+     *
+     *  Refcounted: multiple callers may open the same sessionId; chat:open is
+     *  only sent to the daemon on the first (0→1) open. */
     async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
-      chatSubs.add(sessionId);
-      await sendWs({ type: "chat:open", sessionId, ...(sinceSeq !== undefined ? { sinceSeq } : {}) });
+      const prev = chatSubs.get(sessionId) ?? 0;
+      chatSubs.set(sessionId, prev + 1);
+      if (prev === 0) {
+        await sendWs({ type: "chat:open", sessionId, ...(sinceSeq !== undefined ? { sinceSeq } : {}) });
+      }
     },
 
+    /** Refcounted close: chat:close is only sent to the daemon when the last
+     *  subscriber closes (count drops to 0). Guards against going negative. */
     async closeChat(sessionId: string): Promise<void> {
-      chatSubs.delete(sessionId);
-      await sendWs({ type: "chat:close", sessionId });
+      const prev = chatSubs.get(sessionId) ?? 0;
+      if (prev <= 0) {
+        console.warn(`[client] closeChat called with no open subscription for ${sessionId}`);
+        chatSubs.delete(sessionId);
+        return;
+      }
+      const next = prev - 1;
+      if (next === 0) {
+        chatSubs.delete(sessionId);
+        await sendWs({ type: "chat:close", sessionId });
+      } else {
+        chatSubs.set(sessionId, next);
+      }
     },
 
     /** Enqueue a user turn. Always accepted (202) — queued behind a running turn. */
