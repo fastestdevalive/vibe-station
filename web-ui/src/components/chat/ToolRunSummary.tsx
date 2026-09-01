@@ -12,6 +12,9 @@ import {
 } from "./toolFormat";
 
 const BASH_TOOL_NAMES = new Set(["bash", "terminal"]);
+// Read-only tools: start collapsed (no mutation happened, less urgent to surface).
+// Edit/Write tools stay expanded so diffs are immediately visible.
+const READ_ONLY_TOOL_NAMES = new Set(["read", "ls", "glob", "grep"]);
 
 interface ToolRunSummaryProps {
   tools: ToolCallEntry[];
@@ -83,9 +86,10 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
  */
 function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running: boolean; cwd?: string }) {
   const isBash = BASH_TOOL_NAMES.has(tool.toolName.toLowerCase());
-  // Bash/Terminal output is often verbose — start collapsed so it doesn't
-  // dominate the chat view; all other tool rows start expanded.
-  const [open, setOpen] = useState(!isBash);
+  const isReadOnly = READ_ONLY_TOOL_NAMES.has(tool.toolName.toLowerCase());
+  // Bash and read-only tools start collapsed (verbose / no mutation to surface);
+  // Edit/Write tools start expanded so diffs are immediately visible.
+  const [open, setOpen] = useState(!isBash && !isReadOnly);
   const inline = summarizeToolInput(tool.toolInput, tool.locations, cwd);
   const pretty = prettyToolInput(tool.toolInput);
   // `toolInput` is often `{}` for an ACP adapter that reports the target via
