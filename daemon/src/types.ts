@@ -253,6 +253,8 @@ export interface SessionMeta {
   /** turnIds withdrawn into the editing hold (drives the "editing" bubble state). */
   editingTurnIds: string[];
   usage?: UsageInfo;
+  /** Absolute working directory for the session (worktree or project root). */
+  cwd?: string;
 }
 
 export interface SessionRecord {

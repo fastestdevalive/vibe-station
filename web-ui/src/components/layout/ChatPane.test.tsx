@@ -65,8 +65,9 @@ describe("ChatPane (4.T2)", () => {
 
     // Assistant markdown text.
     expect(await screen.findByText("Here is the fix")).toBeTruthy();
-    // Tool card (name).
-    expect(screen.getByText("Bash")).toBeTruthy();
+    // Tool card: a Bash call renders as "Ran <command>", not the raw tool name.
+    expect(screen.getByText("Ran")).toBeTruthy();
+    expect(screen.getByText("ls -la")).toBeTruthy();
 
     // Thinking block collapsed by default; expands on click.
     const toggle = screen.getByRole("button", { name: /thinking/i });

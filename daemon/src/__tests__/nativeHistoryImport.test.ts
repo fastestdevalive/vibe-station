@@ -154,6 +154,83 @@ describe("P2.T1 — claude native-history adapter", () => {
     const r = await importer.import({ sessionId: SESSION_ID, agentChatId: "nope", cwd: CWD });
     expect(r.events).toEqual([]);
   });
+
+  it("keeps real prompts (origin.kind human, any promptSource) and drops harness injections", async () => {
+    const slug = CWD.replaceAll("/", "-").replaceAll(".", "-");
+    const dir = join(tmp, "projects", slug);
+    await mkdir(dir, { recursive: true });
+    const lines = [
+      // Real prompts: every genuine prompt carries `origin.kind === "human"`,
+      // whatever `promptSource` says — "typed", "sdk" and "queued" are all real.
+      { type: "user", uuid: "u1", promptSource: "typed", origin: { kind: "human" }, message: { role: "user", content: "typed prompt" } },
+      { type: "user", uuid: "u2", promptSource: "sdk", origin: { kind: "human" }, message: { role: "user", content: "sdk prompt" } },
+      { type: "user", uuid: "u3", promptSource: "queued", origin: { kind: "human" }, message: { role: "user", content: "queued prompt" } },
+      // Harness injections — never real user messages.
+      { type: "user", uuid: "x1", promptSource: "system", origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>…" } },
+      { type: "user", uuid: "x2", promptSource: "sdk", origin: { kind: "task-notification" }, message: { role: "user", content: "<task-notification>…" } },
+      // Turn 1's multi-block prompt: system-prompt prefix block + the real message.
+      {
+        type: "user",
+        uuid: "u4",
+        promptSource: "sdk",
+        origin: { kind: "human" },
+        message: { role: "user", content: [{ type: "text", text: "# Injected system prompt" }, { type: "text", text: "the real message" }] },
+      },
+    ];
+    await writeFile(join(dir, `${CHAT_ID}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+
+    const importer = createClaudeHistoryImporter({ projectsDir: join(tmp, "projects") });
+    const { events } = await importer.import({ sessionId: SESSION_ID, agentChatId: CHAT_ID, cwd: CWD });
+    expect(events.filter((e) => e.kind === "user").map((e) => e.text)).toEqual([
+      "typed prompt",
+      "sdk prompt",
+      "queued prompt",
+      "the real message",
+    ]);
+  });
+
+  it("reconstructs fragment diffs for imported Edit / MultiEdit calls", async () => {
+    const slug = CWD.replaceAll("/", "-").replaceAll(".", "-");
+    const dir = join(tmp, "projects", slug);
+    await mkdir(dir, { recursive: true });
+    const lines = [
+      { type: "user", uuid: "u1", origin: { kind: "human" }, message: { role: "user", content: "edit things" } },
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/p/a.ts", old_string: "a", new_string: "b" } },
+            { type: "tool_use", id: "e2", name: "MultiEdit", input: { file_path: "/p/b.ts", edits: [{ old_string: "1", new_string: "2" }, { old_string: "3", new_string: "4" }] } },
+            { type: "tool_use", id: "e3", name: "Read", input: { file_path: "/p/c.ts" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "e1", content: "ok" },
+            { type: "tool_result", tool_use_id: "e2", content: "ok" },
+            { type: "tool_result", tool_use_id: "e3", content: "ok" },
+          ],
+        },
+      },
+    ];
+    await writeFile(join(dir, `${CHAT_ID}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
+
+    const importer = createClaudeHistoryImporter({ projectsDir: join(tmp, "projects") });
+    const { events } = await importer.import({ sessionId: SESSION_ID, agentChatId: CHAT_ID, cwd: CWD });
+    const byId = new Map(events.filter((e) => e.kind === "tool_result").map((e) => [e.toolId, e]));
+    expect(byId.get("e1")!.toolDiffs).toEqual([{ path: "/p/a.ts", oldText: "a", newText: "b" }]);
+    // MultiEdit: EVERY edit in the array, each inheriting the call-level file_path.
+    expect(byId.get("e2")!.toolDiffs).toEqual([
+      { path: "/p/b.ts", oldText: "1", newText: "2" },
+      { path: "/p/b.ts", oldText: "3", newText: "4" },
+    ]);
+    // A non-edit tool never grows a diff.
+    expect(byId.get("e3")!.toolDiffs).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

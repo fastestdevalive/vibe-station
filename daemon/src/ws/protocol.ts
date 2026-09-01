@@ -226,6 +226,7 @@ export const SessionMetaSchema = z.object({
   queuedTurnIds: z.array(z.string()),
   editingTurnIds: z.array(z.string()),
   usage: UsageInfoSchema.optional(),
+  cwd: z.string().optional(),
 });
 
 /**

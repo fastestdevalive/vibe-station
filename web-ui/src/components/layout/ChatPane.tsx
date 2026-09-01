@@ -263,6 +263,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
               {...(sessionId ? { sessionId } : {})}
               onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
               onAtBottomChange={setAtBottom}
+              {...(meta?.cwd ? { cwd: meta.cwd } : {})}
             />
           )}
         </div>

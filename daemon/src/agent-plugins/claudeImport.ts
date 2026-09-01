@@ -44,6 +44,9 @@ const SKIP_TYPES = new Set([
   "attachment",
 ]);
 
+/** Tool names whose `tool_use` input can be replayed into a rendered diff. */
+const DIFF_TOOL_NAMES = new Set(["Edit", "MultiEdit"]);
+
 const num = (v: unknown): number => (typeof v === "number" ? v : 0);
 
 /**
@@ -103,6 +106,11 @@ export function parseClaudeNativeHistory(
   // Turn grouping: a `user` TEXT prompt opens a turn; every following event
   // (assistant blocks, tool results) inherits its `turnId` until the next prompt.
   let currentTurnId: string | undefined;
+  // Track tool_use name+input keyed by toolId so tool_result can compute toolDiffs.
+  // Imported diffs are fragment-level (the old_string/new_string pair), not whole-file;
+  // line numbers restart at 1 within each fragment. Entries are dropped as soon as
+  // their tool_result consumes them, so the map stays bounded on a large import.
+  const editToolCallById = new Map<string, { name: string; input: Record<string, unknown> }>();
 
   const mk = (kind: NormalizedEventKind, extra: Partial<NormalizedEvent> & { ts: string }): NormalizedEvent => ({
     id: randomUUID(),
@@ -136,9 +144,21 @@ export function parseClaudeNativeHistory(
     const content = msg.content;
 
     if (type === "user") {
+      // Is this a real prompt, or a harness-injected one? claude tags every
+      // genuine prompt with `origin.kind === "human"` (whatever `promptSource`
+      // says — "typed" / "sdk" / "queued" are all real), and tags its own
+      // injections (`<task-notification>` replies, etc.) with
+      // `promptSource: "system"` and/or a non-human `origin.kind`.
+      // NOTE: this gates the PROMPT TEXT only — `tool_result` lines carry no
+      // `origin` at all and must still be imported below.
+      const originKind = (d.origin as Record<string, unknown> | null | undefined)?.kind;
+      const harnessInjected =
+        d.promptSource === "system" || (originKind != null && originKind !== "human");
+
       // A `user` line is EITHER a real prompt (string / text blocks) OR tool
       // RESULTS (tool_result blocks) delivered back to the model.
       if (typeof content === "string") {
+        if (harnessInjected) continue;
         currentTurnId = typeof d.uuid === "string" ? d.uuid : randomUUID();
         events.push(mk("user", { role: "user", text: content, ts }));
         continue;
@@ -151,18 +171,45 @@ export function parseClaudeNativeHistory(
           if (block.type === "text" && typeof block.text === "string") textParts.push(block.text);
           else if (block.type === "tool_result") toolResults.push(block);
         }
-        if (textParts.length) {
+        if (textParts.length && !harnessInjected) {
           currentTurnId = typeof d.uuid === "string" ? d.uuid : randomUUID();
-          events.push(mk("user", { role: "user", text: textParts.join("\n"), ts }));
+          // Use only the last text block: multi-block user turns start with a
+          // harness-injected system-prompt prefix (turn 1 carries the skill /
+          // system prompt as its own block); the real user message is the last.
+          events.push(mk("user", { role: "user", text: textParts[textParts.length - 1]!, ts }));
         }
         for (const block of toolResults) {
           const stripped = stripInlineBase64(block.content);
           const contentStr =
             typeof stripped === "string" ? stripped : stripped != null ? JSON.stringify(stripped) : undefined;
+          const toolId = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+          // Restore toolDiffs for Edit/MultiEdit calls by looking up the corresponding
+          // tool_use input. Imported diffs are fragment-level (old_string/new_string pair),
+          // not whole-file; line numbers restart at 1 within each fragment.
+          let toolDiffs: NormalizedEvent["toolDiffs"] | undefined;
+          const call = toolId ? editToolCallById.get(toolId) : undefined;
+          if (toolId && call) {
+            editToolCallById.delete(toolId); // one result per call — keep the map bounded
+            const { name, input } = call;
+            if (name === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
+              toolDiffs = [{ path: String(input.file_path ?? ""), oldText: input.old_string, newText: input.new_string }];
+            } else if (name === "MultiEdit" && Array.isArray(input.edits)) {
+              const diffs = (input.edits as unknown[])
+                .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+                .filter((e) => typeof e.old_string === "string" && typeof e.new_string === "string")
+                .map((e) => ({
+                  path: String(e.file_path ?? input.file_path ?? ""),
+                  oldText: e.old_string as string,
+                  newText: e.new_string as string,
+                }));
+              if (diffs.length > 0) toolDiffs = diffs;
+            }
+          }
           events.push(
             mk("tool_result", {
-              toolId: typeof block.tool_use_id === "string" ? block.tool_use_id : undefined,
+              toolId,
               toolResult: { content: contentStr, isError: block.is_error === true },
+              ...(toolDiffs ? { toolDiffs } : {}),
               ts,
             }),
           );
@@ -180,12 +227,20 @@ export function parseClaudeNativeHistory(
         } else if (block.type === "thinking" && typeof block.thinking === "string") {
           events.push(mk("thinking", { role: "assistant", text: block.thinking, ts }));
         } else if (block.type === "tool_use") {
+          const toolId = typeof block.id === "string" ? block.id : undefined;
+          const toolInput = stripInlineBase64(block.input);
+          const toolName = typeof block.name === "string" ? block.name : undefined;
+          // Only edit tools can yield a reconstructed diff — don't retain every
+          // other tool's input for the whole import.
+          if (toolId && toolName && DIFF_TOOL_NAMES.has(toolName) && toolInput && typeof toolInput === "object") {
+            editToolCallById.set(toolId, { name: toolName, input: toolInput as Record<string, unknown> });
+          }
           events.push(
             mk("tool_use", {
               role: "assistant",
-              toolName: typeof block.name === "string" ? block.name : undefined,
-              toolId: typeof block.id === "string" ? block.id : undefined,
-              toolInput: stripInlineBase64(block.input),
+              toolName,
+              toolId,
+              toolInput,
               ts,
             }),
           );

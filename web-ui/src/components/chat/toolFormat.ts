@@ -51,24 +51,29 @@ export function blocksToPlaceholder(blocks: NormalizedContentBlock[]): string {
     .join(" ");
 }
 
+/** Strip the `cwd` prefix from an absolute path to produce a relative one. */
+export function relativize(p: string, cwd?: string): string {
+  return cwd && p.startsWith(cwd + "/") ? p.slice(cwd.length + 1) : p;
+}
+
 /** Common single-value tool inputs render inline (command / path / pattern).
  *  `locations` (ACP `tool_call.locations`, acp-normalize-superset Gap 3) is a
  *  fallback for adapters that report a structural edit/read via `locations`
  *  instead of an inspectable `toolInput` — e.g. claude's ACP adapter sends
  *  `toolInput: {}` for Edit/Read, with the actual file path arriving only via
  *  `locations`, so without this fallback those calls show no file name at all. */
-export function summarizeToolInput(input: unknown, locations?: { path: string; line?: number }[]): string {
+export function summarizeToolInput(input: unknown, locations?: { path: string; line?: number }[], cwd?: string): string {
   if (input != null) {
-    if (typeof input === "string") return input;
+    if (typeof input === "string") return relativize(input, cwd);
     if (typeof input === "object") {
       const obj = input as Record<string, unknown>;
       for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query"]) {
-        if (typeof obj[key] === "string") return obj[key] as string;
+        if (typeof obj[key] === "string") return relativize(obj[key] as string, cwd);
       }
     }
   }
   if (locations && locations.length > 0) {
-    return locations.map((l) => (l.line != null ? `${l.path}:${l.line}` : l.path)).join(", ");
+    return locations.map((l) => (l.line != null ? `${relativize(l.path, cwd)}:${l.line}` : relativize(l.path, cwd))).join(", ");
   }
   return "";
 }

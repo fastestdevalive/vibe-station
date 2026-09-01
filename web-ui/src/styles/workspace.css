@@ -4778,3 +4778,32 @@ a.dashboard-card.dashboard-card--session {
 .pane-holder--offscreen {
   display: none;
 }
+
+/* ── Chat pane overflow fixes ─────────────────────────────────────────────── */
+
+.chat-pane .chat-tool-entry__body {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.chat-pane .workspace-markdown-preview {
+  overflow-wrap: anywhere;
+}
+
+/* Chat-scoped diff overrides — tighter than the full preview pane */
+.chat-tool-entry__body .preview-diff-root {
+  padding: 2px 0;
+  line-height: 1.25;
+  min-height: 0;
+}
+.chat-tool-entry__body .preview-diff-hunk-header {
+  padding: 2px 4px;
+}
+.chat-tool-entry__body .diff-line {
+  grid-template-columns: 32px 32px 10px 1fr;
+  padding: 0 4px;
+  line-height: 1.25;
+}
+.chat-tool-entry__body .diff-gutter {
+  padding-right: var(--space-1);
+}

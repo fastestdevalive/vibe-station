@@ -57,6 +57,13 @@ import type {
 const RELEASE_DRAIN_TIMEOUT_MS = 2000;
 
 /**
+ * Quiet gap after which the next out-of-band ACP event (a task notification
+ * arriving between turns) starts a NEW pseudo-turn instead of appending to the
+ * previous one — see `handleOutOfBandEvent`.
+ */
+const OUT_OF_BAND_BURST_GAP_MS = 30_000;
+
+/**
  * Inject absolute attachment paths into a user message (Decision 5). The agent
  * reads the files by absolute path (they live under `sessionDataDir`, not the
  * checkout). Applied at RUN time (not enqueue) so the queued turn retains the
@@ -289,6 +296,10 @@ export class JsonAgentSession {
    * written only once the CLI has actually produced a conversation).
    */
   private connectionFirstTurnPending = false;
+  /** Stable turnId for the current burst of out-of-band ACP events (task notifications). */
+  private outOfBandTurnId: string | null = null;
+  /** `Date.now()` of the last out-of-band event — a long quiet gap opens a new burst. */
+  private outOfBandLastAt = 0;
 
   /**
    * Set by `release()` — this instance is being torn down and must never write
@@ -730,6 +741,7 @@ export class JsonAgentSession {
       queuedTurnIds: this.queue.map((t) => t.turnId),
       editingTurnIds: [...this.holds.keys()],
       ...(this.usage ? { usage: this.usage } : {}),
+      cwd: this.cwd,
     };
   }
 
@@ -843,6 +855,9 @@ export class JsonAgentSession {
 
     const abort = new AbortController();
     this.activeAbort = abort;
+    // A real turn closes any open out-of-band notification burst — notifications
+    // that arrive after it must not be folded back into the pre-turn pseudo-turn.
+    this.outOfBandTurnId = null;
     this.setTurnState("thinking");
     this.emitMeta();
 
@@ -1045,6 +1060,7 @@ export class JsonAgentSession {
     }
     this.connection = conn;
     this.connectionFirstTurnPending = true;
+    conn.outOfBandSink = this.handleOutOfBandEvent.bind(this);
     return conn;
   }
 
@@ -1105,6 +1121,32 @@ export class JsonAgentSession {
         ),
       };
     });
+  }
+
+  /**
+   * Routes out-of-band ACP events (task notifications sent by the agent outside
+   * of an active session/prompt turn) through the same persist+broadcast pipeline
+   * as normal turn events. Does NOT call updateTurnState to avoid spurious
+   * lifecycle transitions.
+   */
+  private handleOutOfBandEvent(ev: NormalizedEvent): void {
+    if (this.released) return;
+    // Mint a burst-stable turnId shared by every event of one notification
+    // burst. There is no end-of-burst marker to key off: `session/update`
+    // never normalizes to a `result`/`error` event (see normalizeSessionUpdate
+    // — only text/thinking/tool_*/status/mode/commands kinds exist), so a
+    // burst is closed by a long quiet gap, or by a real turn starting
+    // (`runOneTurn` clears the id). Without that, every notification for the
+    // whole life of the session would collapse into one endless turn.
+    const now = Date.now();
+    if (!this.outOfBandTurnId || now - this.outOfBandLastAt > OUT_OF_BAND_BURST_GAP_MS) {
+      this.outOfBandTurnId = `notif-${randomUUID()}`;
+    }
+    this.outOfBandLastAt = now;
+    ev.turnId = this.outOfBandTurnId;
+    capToolResultContent(ev);
+    this.persist(ev);
+    this.stream.emitMessage(ev);
   }
 
   private async handleEvent(ev: NormalizedEvent): Promise<void> {
@@ -1359,6 +1401,7 @@ export function buildMetaFromStoreMeta(opts: {
   modeId?: string;
   modeName?: string;
   modelOverride?: string;
+  cwd?: string;
   meta: TranscriptMeta;
 }): SessionMeta {
   return assembleMeta(opts, opts.meta);
@@ -1366,7 +1409,7 @@ export function buildMetaFromStoreMeta(opts: {
 
 /** Shared idle-meta assembly: apply the model override, then build the record. */
 function assembleMeta(
-  opts: { sessionId: string; cli: string; modeId?: string; modeName?: string; modelOverride?: string },
+  opts: { sessionId: string; cli: string; modeId?: string; modeName?: string; modelOverride?: string; cwd?: string },
   found: TranscriptMeta,
 ): SessionMeta {
   const model = opts.modelOverride ?? found.model;
@@ -1382,5 +1425,6 @@ function assembleMeta(
     queuedTurnIds: [],
     editingTurnIds: [],
     ...(found.usage ? { usage: found.usage } : {}),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
   };
 }
