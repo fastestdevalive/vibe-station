@@ -35,7 +35,7 @@ export function registerDoctor(program: Command): void {
         return true;
       }) && allOk;
 
-      const binaries = ["claude", "cursor", "opencode"];
+      const binaries = ["claude", "cursor", "opencode", "agy"];
       for (const bin of binaries) {
         check(`${bin} is on PATH`, () => {
           try {
@@ -48,19 +48,21 @@ export function registerDoctor(program: Command): void {
       }
 
       // bun/bunx is required by the agy plugin's ACP adapter
-      check("bun is on PATH (required for agy Rich Chat / ACP)", () => {
+      const bunFound = check("bun is on PATH (required for agy Rich Chat / ACP)", () => {
         try {
           execSync("which bun", { stdio: "pipe" });
           return true;
         } catch {
-          const installCmd =
-            process.platform === "darwin"
-              ? "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
-              : "curl -fsSL https://bun.sh/install | bash";
-          console.log(chalk.yellow("  →"), `Install: ${installCmd}`);
           return false;
         }
       });
+      if (!bunFound) {
+        const installCmd =
+          process.platform === "darwin"
+            ? "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
+            : "curl -fsSL https://bun.sh/install | bash";
+        console.log(chalk.yellow("  →"), `Install: ${installCmd}`);
+      }
 
       allOk = check("Daemon is running", () => {
         const url = getDaemonUrl();
