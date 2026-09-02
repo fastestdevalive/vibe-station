@@ -162,6 +162,13 @@ describe("5.T7 — Composer canSteer aria-label", () => {
     const btn = screen.getByLabelText("Interrupts and steers the running turn");
     expect(btn).toBeTruthy();
   });
+
+  it("busy && canSteer → no queue class (button looks like normal send, not dashed)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-steer-class" onSend={vi.fn()} busy canSteer initialText="text" />);
+    const btn = screen.getByLabelText("Interrupts and steers the running turn");
+    expect(btn.className).not.toContain("chat-composer__send--queue");
+  });
 });
 
 describe("Composer textarea auto-grow", () => {
