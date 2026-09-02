@@ -4794,3 +4794,11 @@ a.dashboard-card.dashboard-card--session {
 .chat-tool-entry__body .diff-gutter {
   padding-right: var(--space-1);
 }
+
+.settings-tabs-scroll {
+  scrollbar-width: none;
+}
+
+.settings-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
