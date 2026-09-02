@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useServerStore } from "./useServerStore";
-import type { Project, Session } from "@/api/types";
+import type { Project } from "@/api/types";
 
 function proj(id: string, hidden = false): Project {
   return {
@@ -43,71 +43,3 @@ describe("useServerStore.applyProjectUpdated", () => {
   });
 });
 
-// ─── childByParent — Phase 2 tests ───────────────────────────────────────────
-
-function sess(id: string, spawnedFrom?: string): Session {
-  return {
-    id,
-    worktreeId: "wt-1",
-    projectId: "proj-a",
-    modeId: null,
-    type: "agent",
-    isMain: false,
-    state: "idle",
-    lifecycleState: "idle",
-    tmuxName: id,
-    createdAt: "2024-01-01T00:00:00.000Z",
-    spawnedFrom: spawnedFrom ?? null,
-  };
-}
-
-describe("useServerStore.childByParent — 2.T5: replaceAll rebuilds map", () => {
-  beforeEach(() => {
-    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false, childByParent: new Map() });
-  });
-
-  it("populates childByParent from sessions with spawnedFrom", () => {
-    useServerStore.getState().replaceAll({
-      projects: [],
-      worktrees: [],
-      sessions: [
-        sess("parent-1"),
-        sess("child-1a", "parent-1"),
-        sess("child-1b", "parent-1"),
-        sess("child-2a", "parent-2"),
-      ],
-    });
-    const { childByParent } = useServerStore.getState();
-    expect(childByParent.get("parent-1")).toEqual(["child-1a", "child-1b"]);
-    expect(childByParent.get("parent-2")).toEqual(["child-2a"]);
-  });
-
-  it("produces an empty map when no sessions have spawnedFrom", () => {
-    useServerStore.getState().replaceAll({
-      projects: [],
-      worktrees: [],
-      sessions: [sess("s1"), sess("s2")],
-    });
-    expect(useServerStore.getState().childByParent.size).toBe(0);
-  });
-});
-
-describe("useServerStore.addChildSession", () => {
-  beforeEach(() => {
-    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false, childByParent: new Map() });
-  });
-
-  it("appends in FIFO order for the same parentId", () => {
-    useServerStore.getState().addChildSession("parent-1", "child-a");
-    useServerStore.getState().addChildSession("parent-1", "child-b");
-    expect(useServerStore.getState().childByParent.get("parent-1")).toEqual(["child-a", "child-b"]);
-  });
-
-  it("creates separate entries for different parentIds", () => {
-    useServerStore.getState().addChildSession("parent-1", "child-x");
-    useServerStore.getState().addChildSession("parent-2", "child-y");
-    const { childByParent } = useServerStore.getState();
-    expect(childByParent.get("parent-1")).toEqual(["child-x"]);
-    expect(childByParent.get("parent-2")).toEqual(["child-y"]);
-  });
-});

@@ -7,7 +7,6 @@ import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
-import { SubagentBanner } from "@/components/chat/SubagentBanner";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -33,10 +32,6 @@ interface ChatPaneProps {
   /** Whether the pane is the visible one in its slot (CSS visibility toggle —
    *  Decision 14; the sibling TerminalPane stays permanently mounted). */
   visible: boolean;
-  /** Called when the user requests navigation to a related session (e.g. a
-   *  child task session or the parent session via SubagentBanner). Optional so
-   *  existing callers don't need to change. */
-  onNavigateToSession?: (sessionId: string) => void;
 }
 
 /**
@@ -44,7 +39,7 @@ interface ChatPaneProps {
  * toggled by CSS visibility (never an if/else remount — Decision 14). Only opens
  * a chat when it's the visible pane for a `channel:"json"` session.
  */
-export function ChatPane({ api, session, visible, onNavigateToSession }: ChatPaneProps) {
+export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const isJson = session?.channel === "json";
   const sessionId = session?.id ?? null;
   const enabled = visible && isJson && !!sessionId;
@@ -269,7 +264,6 @@ export function ChatPane({ api, session, visible, onNavigateToSession }: ChatPan
               onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
               onAtBottomChange={setAtBottom}
               {...(meta?.cwd ? { cwd: meta.cwd } : {})}
-              {...(onNavigateToSession ? { onNavigateToSession } : {})}
             />
           )}
         </div>
@@ -297,9 +291,6 @@ export function ChatPane({ api, session, visible, onNavigateToSession }: ChatPan
           api={api}
           {...(sessionId ? { sessionId } : {})}
         />
-        {session?.spawnedFrom ? (
-          <SubagentBanner parentSessionId={session.spawnedFrom} onNavigate={onNavigateToSession} />
-        ) : null}
         {sessionId && archived ? (
           // Decision 4 / CUJ 3: an archived session is read-only in place — no
           // new turns can be sent. Exact copy from the original F5 mockup.
