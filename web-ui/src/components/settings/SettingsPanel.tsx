@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { motion } from "framer-motion";
 import type { ApiInstance } from "@/api";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -6,11 +6,11 @@ import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { ProjectsSetting } from "./ProjectsSetting";
 import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
+import { StorageSetting } from "./StorageSetting";
 
 interface Section {
   id: string;
   label: string;
-  ref: React.RefObject<HTMLElement | null>;
   content: React.ReactNode;
 }
 
@@ -20,48 +20,41 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ api }: SettingsPanelProps) {
   const isMobile = useMediaQuery("(max-width: 768px)");
-  const modesRef = useRef<HTMLElement | null>(null);
-  const appearanceRef = useRef<HTMLElement | null>(null);
-  const hiddenProjectsRef = useRef<HTMLElement | null>(null);
   const [activeTab, setActiveTab] = useState("modes");
   const tabLayoutId = useId();
-
-  const projectsRef = useRef<HTMLElement | null>(null);
 
   const sections: Section[] = [
     {
       id: "modes",
       label: "Modes",
-      ref: modesRef,
       content: <ModesSetting api={api} />,
     },
     {
       id: "appearance",
       label: "Appearance",
-      ref: appearanceRef,
       content: <AppearanceSetting />,
     },
     {
       id: "projects",
       label: "Projects",
-      ref: projectsRef,
       content: <ProjectsSetting api={api} />,
     },
     {
       id: "hidden-projects",
       label: "Hidden projects",
-      ref: hiddenProjectsRef,
       content: <HiddenProjectsSetting api={api} />,
+    },
+    {
+      id: "storage",
+      label: "Storage",
+      content: <StorageSetting api={api} />,
     },
   ];
 
-  const scrollTo = useCallback((ref: React.RefObject<HTMLElement | null>) => {
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, []);
+  const activeSection = sections.find((s) => s.id === activeTab) ?? sections[0]!;
 
   // ── Mobile: underline tabs ───────────────────────────────────────────────
   if (isMobile) {
-    const activeSection = sections.find((s) => s.id === activeTab) ?? sections[0]!;
     return (
       <div
         className="settings-panel"
@@ -73,7 +66,6 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
           overflow: "hidden",
         }}
       >
-        {/* Underline tab bar — matches design system `variant="underline"` */}
         <div
           role="tablist"
           style={{
@@ -127,7 +119,6 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
           ))}
         </div>
 
-        {/* Active section content */}
         <div
           role="tabpanel"
           style={{
@@ -143,7 +134,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     );
   }
 
-  // ── Desktop: side nav + scrollable content ───────────────────────────────
+  // ── Desktop: side nav + active section only ──────────────────────────────
   return (
     <div
       className="settings-panel"
@@ -180,7 +171,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
           <button
             key={section.id}
             type="button"
-            onClick={() => scrollTo(section.ref)}
+            onClick={() => setActiveTab(section.id)}
             className="settings-nav__link"
             style={{
               display: "block",
@@ -189,10 +180,14 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
               padding: "var(--space-2) var(--space-3)",
               borderRadius: "var(--radius-sm)",
               border: "none",
-              background: "transparent",
+              background: activeTab === section.id ? "var(--bg-hover)" : "transparent",
               color: "var(--fg-primary)",
               cursor: "pointer",
               font: "inherit",
+              fontWeight:
+                activeTab === section.id
+                  ? "var(--font-weight-medium)"
+                  : "var(--font-weight-normal)",
             }}
           >
             {section.label}
@@ -204,38 +199,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         className="settings-content"
         style={{ overflow: "auto", minHeight: 0 }}
       >
-        {sections.map((section, i) => (
-          <div
-            key={section.id}
-            style={{ marginBottom: i < sections.length - 1 ? "var(--space-6)" : 0 }}
-          >
-            <div
-              style={{
-                fontSize: "var(--font-size-xs)",
-                fontWeight: "var(--font-weight-medium)",
-                color: "var(--fg-muted)",
-                textTransform: "uppercase",
-                letterSpacing: "0.06em",
-                marginBottom: "var(--space-2)",
-              }}
-            >
-              {section.label}
-            </div>
-            <section
-              id={`settings-${section.id}`}
-              ref={section.ref}
-              style={{
-                scrollMarginTop: "var(--space-5)",
-                border: "var(--border-width) solid var(--border-default)",
-                borderRadius: "var(--radius-lg, var(--radius-md))",
-                background: "var(--bg-card)",
-                padding: "var(--space-4) var(--space-5)",
-              }}
-            >
-              {section.content}
-            </section>
-          </div>
-        ))}
+        {activeSection.content}
       </div>
     </div>
   );

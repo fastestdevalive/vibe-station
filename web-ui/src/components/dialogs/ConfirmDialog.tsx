@@ -47,7 +47,7 @@ export function ConfirmDialog({
         </>
       }
     >
-      <p style={{ margin: 0, fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
+      <p style={{ margin: 0, fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)", whiteSpace: "pre-wrap" }}>
         {message}
       </p>
     </Dialog>
