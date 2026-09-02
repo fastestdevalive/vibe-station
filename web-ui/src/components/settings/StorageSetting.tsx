@@ -84,14 +84,12 @@ export function StorageSetting({ api }: StorageSettingProps) {
   // Apply sort
   const sorted = [...filtered].sort((a, b) => {
     if (sort === "disk") return (diskMap[b.id] ?? 0) - (diskMap[a.id] ?? 0);
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
   });
 
   const hiddenCount = worktrees.length - filtered.length;
   const doneCount = worktrees.filter((wt) => doneMap[wt.id]).length;
   const totalFilteredDisk = filtered.reduce((sum, wt) => sum + (diskMap[wt.id] ?? 0), 0);
-
-  const maxDisk = Math.max(1, ...filtered.map((wt) => diskMap[wt.id] ?? 0));
 
   const allDoneVisible = sorted.filter((wt) => doneMap[wt.id]);
   const allChecked =
@@ -184,7 +182,7 @@ export function StorageSetting({ api }: StorageSettingProps) {
             style={{
               height: 8,
               borderRadius: 4,
-              background: "var(--bg-input)",
+              background: "var(--border-default)",
               overflow: "hidden",
               marginBottom: "var(--space-2)",
             }}
@@ -192,9 +190,12 @@ export function StorageSetting({ api }: StorageSettingProps) {
             <div
               style={{
                 height: "100%",
-                width: `${Math.min(100, (device.usedBytes / device.totalBytes) * 100).toFixed(1)}%`,
+                width: device.totalBytes > 0
+                  ? `${Math.min(100, (device.usedBytes / device.totalBytes) * 100).toFixed(1)}%`
+                  : "0%",
                 background: "var(--fg-accent)",
                 borderRadius: 4,
+                minWidth: 2,
               }}
             />
           </div>
@@ -231,7 +232,7 @@ export function StorageSetting({ api }: StorageSettingProps) {
             onChange={(e) => setSort(e.target.value as Sort)}
             style={{ font: "inherit", fontSize: "var(--font-size-sm)", background: "var(--bg-input)", border: "var(--border-width) solid var(--border-default)", borderRadius: "var(--radius-sm)", padding: "2px var(--space-2)" }}
           >
-            <option value="created">Creation date ↓</option>
+            <option value="created">Creation date ↑</option>
             <option value="disk">Disk usage ↓</option>
           </select>
         </label>
@@ -279,7 +280,6 @@ export function StorageSetting({ api }: StorageSettingProps) {
         {sorted.map((wt) => {
           const done = doneMap[wt.id] ?? false;
           const bytes = diskMap[wt.id] ?? 0;
-          const barPct = Math.min(100, (bytes / maxDisk) * 100);
           const wtSessions = sessionsByWorktree[wt.id] ?? [];
           const mainSession = wtSessions.find((s) => s.type === "agent") ?? wtSessions[0];
           const status = mainSession ? sessionStatus(mainSession.state) : "none";
@@ -287,43 +287,45 @@ export function StorageSetting({ api }: StorageSettingProps) {
           return (
             <div
               key={wt.id}
+              role={done ? "button" : undefined}
+              tabIndex={done ? 0 : undefined}
+              onClick={done ? () => toggleSelect(wt.id) : undefined}
+              onKeyDown={done ? (e) => { if (e.key === " " || e.key === "Enter") toggleSelect(wt.id); } : undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns: "auto 1fr auto",
-                alignItems: "center",
+                alignItems: "start",
                 gap: "var(--space-3)",
                 padding: "var(--space-3)",
                 border: "var(--border-width) solid var(--border-default)",
                 borderRadius: "var(--radius-md)",
                 background: "var(--bg-card)",
                 opacity: done ? 1 : 0.7,
+                cursor: done ? "pointer" : "default",
               }}
             >
               <input
                 type="checkbox"
                 checked={selected.has(wt.id)}
                 onChange={() => toggleSelect(wt.id)}
+                onClick={(e) => e.stopPropagation()}
                 disabled={!done}
                 title={done ? undefined : "Only done worktrees can be deleted"}
+                style={{ marginTop: 3 }}
               />
 
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-1)" }}>
                   <StatusDot status={status} />
-                  <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
                     {wt.id} · {wt.branch}
                   </span>
-                </div>
-                <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", marginBottom: "var(--space-1)" }}>
-                  Created {new Date(wt.createdAt).toLocaleDateString()} · {wtSessions.length} session{wtSessions.length !== 1 ? "s" : ""}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: "var(--bg-input)", overflow: "hidden", maxWidth: 120 }}>
-                    <div style={{ height: "100%", width: `${barPct.toFixed(1)}%`, background: "var(--fg-accent)", borderRadius: 2 }} />
-                  </div>
-                  <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
+                  <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", whiteSpace: "nowrap", flexShrink: 0 }}>
                     {formatBytes(bytes)}
                   </span>
+                </div>
+                <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+                  Created {new Date(wt.createdAt).toLocaleDateString()} · {wtSessions.length} session{wtSessions.length !== 1 ? "s" : ""}
                 </div>
               </div>
 
@@ -332,8 +334,8 @@ export function StorageSetting({ api }: StorageSettingProps) {
                 className="icon-btn"
                 disabled={!done}
                 title={done ? "Delete worktree" : "Only done worktrees can be deleted"}
-                onClick={() => setPendingDelete([wt])}
-                style={{ opacity: done ? 1 : 0.3, cursor: done ? "pointer" : "not-allowed" }}
+                onClick={(e) => { e.stopPropagation(); setPendingDelete([wt]); }}
+                style={{ opacity: done ? 1 : 0.3, cursor: done ? "pointer" : "not-allowed", marginTop: 1 }}
               >
                 ×
               </button>

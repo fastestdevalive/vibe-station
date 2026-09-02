@@ -351,7 +351,7 @@ export function LeftSidebar({
   const inlineInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (inlineRename) inlineInputRef.current?.select();
+    if (inlineRename) inlineInputRef.current?.focus();
   }, [inlineRename]);
 
   function startInlineRename(
