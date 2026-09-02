@@ -21,6 +21,20 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
  * a new id and the child-row list goes empty even though the children never
  * moved.
  */
+/**
+ * Wording for a SUBAGENT's state. `waiting_for_human` is the daemon's name for
+ * "blocked, needs a reply" — but a session spawned by an agent is blocked on
+ * that agent, not on the person reading this row. Saying "waiting for human"
+ * there actively misleads: it tells the user to go answer something that is
+ * really their own agent's job to answer. Only the wording changes; the
+ * underlying state and every status colour/glyph stay exactly as they are, so
+ * this needs no `docs/STATUS-INDICATORS.md` update (AGENTS.md two-file rule).
+ */
+function statusPhrase(state: SessionState): string {
+  if (state === "waiting_for_human") return "waiting for agent";
+  return state.replace(/_/g, " ");
+}
+
 export function ancestorIds(session: Session, all: Session[]): Set<string> {
   const ids = new Set<string>([session.id]);
   let cur = session;
@@ -110,6 +124,9 @@ export function SubagentRow({ session, onOpen }: SubagentRowProps) {
           <span className="chat-subagent-row__label">Parent · {sessionLabel(parent)}</span>
         </button>
       ) : null}
+      {visibleChildren.length > 0 ? (
+        <span className="chat-subagent-row__caption">Subagents:</span>
+      ) : null}
       {visibleChildren.map((child) => {
         const sameWorktree = child.worktreeId === session.worktreeId;
         return (
@@ -119,7 +136,11 @@ export function SubagentRow({ session, onOpen }: SubagentRowProps) {
             className={`chat-subagent-row__item${child.archivedAt ? " chat-subagent-row__item--archived" : ""}`}
             onClick={() => sameWorktree && onOpen(child)}
             disabled={!sameWorktree}
-            title={sameWorktree ? undefined : "This subagent is in a different worktree"}
+            title={
+              sameWorktree
+                ? `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
+                : "This subagent is in a different worktree"
+            }
           >
             <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>

@@ -6,6 +6,38 @@ You are running in Rich Chat, so a session you spawn shows up as a **subagent**
 — a visible row above the user's composer, one they can open and watch, right
 next to this conversation.
 
+**To spawn one, run this shell command:**
+
+```bash
+vst session create $VST_WORKTREE --type=agent --prompt "the sub-task"
+```
+
+That is the whole thing. No flags to look up, no tool to find.
+
+- **"Subagent" from the user means THIS, not your in-harness tool.** If the
+  user asks you to "spawn a subagent", "create a vst subagent", "start an
+  agent to do X", or corrects you with "I wanted a vst subagent" — they mean
+  the shell command above. Your own `Task`/`Agent` tool is NOT a vst subagent:
+  it runs inside this conversation, creates no session, and the user cannot
+  see or open it. Do not go looking through your tool list for a way to spawn
+  a session; there is no tool for it, only the command above.
+- **When to use which.** Use `Task` for a short internal lookup whose result
+  you will consume within this same turn. Spawn a vst subagent for anything
+  the user might want to watch, open, or keep running — and ALWAYS when the
+  user asked for a subagent by name, regardless of how small the task is.
+- **Your turn ends when you stop writing, and nothing will resume it.** So
+  never say "I'll check back once it's done" or "I'll report when it
+  finishes" — you cannot. There is no timer, no callback, and no one wakes
+  you. After you spawn a subagent you have exactly two honest options:
+  - **Block on it, now, inside this turn:** poll until it stops changing.
+    ```bash
+    vst session output <subagent-id>      # its work so far; repeat to poll
+    ```
+  - **Hand off:** tell the user the subagent is running, name its id, say
+    what to look for, and stop. The user can open its row and watch it.
+
+  Pick one and say which. Silently ending your turn with a promise to follow
+  up is the one thing that leaves the user waiting forever.
 - **Linking is automatic.** Do NOT pass `--source-agent`/`--parent` yourself —
   `vst session create`/`vst worktree create` already default it from
   `$VST_SESSION`, which is your own id. Passing it explicitly adds nothing.
@@ -14,12 +46,6 @@ next to this conversation.
   the user's instruction says otherwise (e.g. "review this in opus mode" —
   then pass `--mode` explicitly). You do not need to pass `--mode` or `--json`
   to get a Rich Chat sibling.
-- **When to delegate to a subagent vs. your own in-harness tool:** spawn a VST
-  subagent for a sub-task worth the user watching independently — something
-  that runs long, that the user may want to open and check on, or that should
-  keep running after this conversation moves on. For a short lookup or a
-  one-off internal step, use your own `Task` tool instead; that stays inside
-  this conversation and never needs a session of its own.
 - **You own its lifecycle.** The user does not know when a subagent's work is
   done — you do. Once you've consumed a subagent's output (read its result,
   merged its change, etc.), terminate it:

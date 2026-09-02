@@ -148,6 +148,33 @@ describe("SubagentRow — live WS update (3.T4)", () => {
   });
 });
 
+describe("row wording (Subagents caption, waiting-for-agent phrasing)", () => {
+  it("labels the chips with a 'Subagents:' caption, and omits it when there are none", () => {
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "kid" });
+    seedSessions([parent, child]);
+    const { rerender } = render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    expect(screen.getByText("Subagents:")).toBeInTheDocument();
+
+    seedSessions([parent]);
+    rerender(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    expect(screen.queryByText("Subagents:")).toBeNull();
+  });
+
+  it("a waiting subagent reads 'waiting for agent', never 'waiting for human'", () => {
+    // It is blocked on the agent that spawned it, not on the person reading
+    // the row — "waiting for human" would send them after their own agent's job.
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "kid" });
+    seedSessions([parent, child]);
+    useWorkspaceStore.setState({ sessionStates: { c1: "waiting_for_human" }, layoutByWorktree: {} });
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const btn = screen.getByTitle(/kid/);
+    expect(btn.getAttribute("title")).toContain("waiting for agent");
+    expect(btn.getAttribute("title")).not.toContain("human");
+  });
+});
+
 describe("openSubagentSession — classic vs workspace mode, cross-worktree guard (Decision 6, Requirement 7)", () => {
   const store = (over: Record<string, unknown> = {}) => ({
     layoutByWorktree: {},

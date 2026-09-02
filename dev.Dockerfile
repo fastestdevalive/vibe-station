@@ -74,6 +74,17 @@ ENV PATH="/home/vst/.bun/bin:${PATH}"
 
 USER root
 
+# Put the built CLI on PATH as `vst`. Every agent's system prompt
+# (daemon/src/assets/agent-system-prompt.md) instructs it to run `vst session
+# create` / `vst worktree create` / `vst send`, so without this the sandbox
+# silently lacks the one command those instructions depend on — an agent here
+# gets "vst: not found" and no session-spawning flow can be tested at all.
+# `cli/package.json` already declares the `vst` bin and the built entrypoint
+# carries a `#!/usr/bin/env node` shebang, but tsc emits it without the
+# executable bit, so a bare symlink alone would fail with EACCES.
+RUN chmod +x /app/cli/dist/main.js \
+    && ln -sf /app/cli/dist/main.js /usr/local/bin/vst
+
 EXPOSE 5173
 
 # Runs as root (PID 1) so it can chown volume mount points before dropping
