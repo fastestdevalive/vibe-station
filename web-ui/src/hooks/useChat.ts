@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
+import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** An optimistic user turn rendered immediately after send, before the daemon's
  *  authoritative `user` event arrives. Deduped by `turnId` (Decision 12). */
@@ -74,16 +75,26 @@ export interface UseChatResult {
  *
  * Pass `enabled=false` (e.g. the pane is hidden / session is a TTY) to keep the
  * hook mounted without opening a chat — no WS traffic, empty state.
+ *
+ * Pass `opts.cache=false` (e.g. child/subagent sessions in ToolRunSummary) to
+ * opt out of the snapshot cache so LRU-20 is not churned by transient mounts.
  */
 export function useChat(
   api: ApiInstance,
   sessionId: string | null,
   enabled = true,
+  opts?: { cache?: boolean },
 ): UseChatResult {
+  // Destructure to a primitive immediately — using the opts object in effect
+  // deps would cause infinite open/close loops when an inline `{ cache: false }`
+  // literal is passed (new object reference on every render).
+  const cacheEnabled = opts?.cache !== false;
+
   const [events, setEvents] = useState<NormalizedEvent[]>([]);
   const [meta, setMeta] = useState<SessionMeta | null>(null);
   const [pending, setPending] = useState<PendingTurn[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isDeltaLoading, setIsDeltaLoading] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [editingDrafts, setEditingDrafts] = useState<Record<string, EditingDraft>>({});
@@ -97,6 +108,18 @@ export function useChat(
   const oldestSeqRef = useRef<number | null>(null);
   const hasMoreRef = useRef(false);
 
+  // Snapshot-cache support refs — synced every render so the effect cleanup
+  // always reads the freshest values without needing them in its deps array.
+  const eventsRef = useRef<NormalizedEvent[]>([]);
+  const isDeltaLoadingRef = useRef(false);
+  /** `latestSeq` of the snapshot that was restored on the current mount; cleared
+   *  when a `chat:replay` is consumed so gap-detection is one-shot per mount. */
+  const restoredLatestSeqRef = useRef<number | null>(null);
+
+  // Sync snapshot-relevant refs on every render.
+  eventsRef.current = events;
+  isDeltaLoadingRef.current = isDeltaLoading;
+
   const active = enabled && !!sessionId;
 
   useEffect(() => {
@@ -105,24 +128,77 @@ export function useChat(
       setMeta(null);
       setPending([]);
       setLoading(false);
+      setIsDeltaLoading(false);
+      isDeltaLoadingRef.current = false;
       setHasMore(false);
       setLoadingEarlier(false);
       setEditingDrafts({});
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
+      restoredLatestSeqRef.current = null;
       return;
     }
 
-    setLoading(true);
-    setEvents([]);
-    setMeta(null);
-    setHasMore(false);
-    setLoadingEarlier(false);
-    setEditingDrafts({});
-    userTurnIdsRef.current = new Set();
-    oldestSeqRef.current = null;
-    hasMoreRef.current = false;
+    // ── Snapshot restore or cold start ──────────────────────────────────────
+    // Determine what openChat sinceSeq to use and set initial state.
+    // IMPORTANT: All api.on() listeners are registered BEFORE calling
+    // api.openChat() so that synchronous emits inside the mock (and real WS
+    // onopen replays) are never missed.
+    let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
+    let openChatSinceSeq: number | undefined = undefined;
+
+    const snapshot = cacheEnabled ? chatSnapshotCache.restore(sessionId) : null;
+
+    if (snapshot) {
+      // Restore cached state immediately — no spinner, events visible at once.
+      setEvents(snapshot.events);
+      setHasMore(snapshot.hasMore);
+      setMeta(null);
+      setPending([]);
+      setLoadingEarlier(false);
+      setEditingDrafts({});
+      // Copy the Set — mutating the live ref must not corrupt the cached snapshot.
+      userTurnIdsRef.current = new Set(snapshot.userTurnIds);
+      oldestSeqRef.current = snapshot.oldestSeq;
+      hasMoreRef.current = snapshot.hasMore;
+      setLoading(false); // suppress spinner; events already visible
+      setIsDeltaLoading(true);
+      isDeltaLoadingRef.current = true;
+      restoredLatestSeqRef.current = snapshot.latestSeq;
+
+      // If the snapshot is fresh (< 60 s) and has a valid cursor, request only
+      // the delta; otherwise fall back to a plain bounded tail replay.
+      openChatSinceSeq =
+        snapshot.latestSeq != null &&
+        snapshot.latestSeq > 0 &&
+        Date.now() - snapshot.savedAt < 60_000
+          ? snapshot.latestSeq
+          : undefined;
+
+      // Guard against a hung daemon / lost replay — clear the delta spinner
+      // after 5 s so the user isn't stuck (gap detection stays armed separately).
+      failsafeTimer = setTimeout(() => {
+        isDeltaLoadingRef.current = false;
+        setIsDeltaLoading(false);
+      }, 5000);
+    } else {
+      // Cold start (no cache) — full tail replay with loading spinner.
+      setLoading(true);
+      setEvents([]);
+      setMeta(null);
+      setPending([]);
+      setHasMore(false);
+      setLoadingEarlier(false);
+      setEditingDrafts({});
+      userTurnIdsRef.current = new Set();
+      oldestSeqRef.current = null;
+      hasMoreRef.current = false;
+      restoredLatestSeqRef.current = null;
+      openChatSinceSeq = undefined;
+    }
+
+    // ── Event helpers ────────────────────────────────────────────────────────
 
     const noteUserTurn = (ev: NormalizedEvent) => {
       if (ev.kind === "user" && ev.turnId) {
@@ -131,24 +207,62 @@ export function useChat(
       }
     };
 
+    // ── Listeners (registered BEFORE openChat so synchronous emits are caught) ──
+
     const offReplay = api.on("chat:replay", (e) => {
       if (e.type !== "chat:replay" || e.sessionId !== sessionId) return;
-      // Delta-MERGE, never replace (R2.7): the replay may arrive after a live
-      // gap event, or be a `sinceSeq` delta on reconnect. Union the user-turn
-      // bookkeeping so queued-tray dedup survives for turns outside the window.
-      for (const ev of e.events) {
-        if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+
+      if (e.hasMore === undefined) {
+        // ── sinceSeq delta path ──────────────────────────────────────────────
+        // Cursor fields absent → merge the delta, keep existing window top.
+        for (const ev of e.events) {
+          if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+        }
+        setEvents((prev) => mergeEvents([...e.events, ...prev]));
+        restoredLatestSeqRef.current = null;
+      } else {
+        // ── Plain bounded tail path ──────────────────────────────────────────
+        // Gap-check: if the fresh tail's oldest event is newer than the
+        // snapshot's latest seq the snapshot is stale — drop it and render
+        // only the fresh delta so there's no invisible hole in history.
+        const gapDetected =
+          e.oldestSeq != null &&
+          restoredLatestSeqRef.current != null &&
+          e.oldestSeq > restoredLatestSeqRef.current;
+
+        if (gapDetected) {
+          // Drop restored events; render only the fresh delta.
+          userTurnIdsRef.current = new Set();
+          for (const ev of e.events) {
+            if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+          }
+          setEvents(e.events.slice());
+          oldestSeqRef.current = e.oldestSeq ?? null;
+          hasMoreRef.current = e.hasMore;
+          setHasMore(e.hasMore);
+        } else {
+          // Normal merge: prepend fresh events, union bookkeeping.
+          for (const ev of e.events) {
+            if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
+          }
+          setEvents((prev) => mergeEvents([...e.events, ...prev]));
+          hasMoreRef.current = e.hasMore;
+          setHasMore(e.hasMore);
+          oldestSeqRef.current = e.oldestSeq ?? null;
+        }
+        restoredLatestSeqRef.current = null;
       }
-      setEvents((prev) => mergeEvents([...e.events, ...prev]));
-      // Cursor fields are present only on a bounded tail replay (omitted on a
-      // `sinceSeq` delta) — don't let a delta reset the window's top cursor.
-      if (e.hasMore !== undefined) {
-        hasMoreRef.current = e.hasMore;
-        setHasMore(e.hasMore);
-        oldestSeqRef.current = e.oldestSeq ?? null;
-      }
+
       setPending((prev) => prev.filter((p) => !userTurnIdsRef.current.has(p.turnId)));
       setLoading(false);
+
+      // Delta hydration complete — clear the spinner and cancel the failsafe.
+      if (failsafeTimer !== null) {
+        clearTimeout(failsafeTimer);
+        failsafeTimer = null;
+      }
+      isDeltaLoadingRef.current = false;
+      setIsDeltaLoading(false);
     });
 
     const offMsg = api.on("session:message", (e) => {
@@ -165,11 +279,25 @@ export function useChat(
       setMeta(e.meta);
     });
 
-    // A fork truncated some turns (R3.6): drop the superseded bubbles + any local
-    // pending/editing bookkeeping for them so this tab re-syncs to the new head.
-    // The new fork user event arrives separately via `session:message`.
+    const offError = api.on("session:error", (e) => {
+      if (e.type !== "session:error" || e.sessionId !== sessionId) return;
+      // Evict so a stale snapshot doesn't resurface on the next mount.
+      // Do NOT clear events — session:error also fires for transient TTY errors
+      // and the existing history is still valid.
+      chatSnapshotCache.evict(sessionId);
+      isDeltaLoadingRef.current = false;
+      setIsDeltaLoading(false);
+      setLoading(false);
+    });
+
+    // A fork truncated some turns (R3.6): drop the superseded bubbles + any
+    // local pending/editing bookkeeping for them so this tab re-syncs to the
+    // new head.  The new fork user event arrives separately via session:message.
+    // Evict BEFORE the `dropped.size === 0` early-return so a fork that only
+    // clears history (no supersededTurnIds) still invalidates the snapshot.
     const offFork = api.on("session:fork", (e) => {
       if (e.type !== "session:fork" || e.sessionId !== sessionId) return;
+      chatSnapshotCache.evict(sessionId);
       const dropped = new Set(e.supersededTurnIds);
       if (dropped.size === 0) return;
       for (const t of dropped) userTurnIdsRef.current.delete(t);
@@ -182,16 +310,46 @@ export function useChat(
       });
     });
 
-    void api.openChat(sessionId);
+    // auth:expired → wipe the whole cache so stale snapshots from the previous
+    // session don't bleed into a freshly-logged-in user.
+    const offAuthExpired = api.on(
+      "auth:expired" as unknown as Parameters<typeof api.on>[0],
+      () => {
+        chatSnapshotCache.clear();
+      },
+    );
+
+    // ── Open the chat (AFTER listeners are registered) ───────────────────────
+    void api.openChat(sessionId, openChatSinceSeq);
+
+    // ── Cleanup ──────────────────────────────────────────────────────────────
 
     return () => {
+      if (failsafeTimer !== null) clearTimeout(failsafeTimer);
       offReplay();
       offMsg();
       offMeta();
+      offError();
       offFork();
+      offAuthExpired();
+
+      // Persist a snapshot for the next mount — skip when:
+      //   • no events (nothing worth caching)
+      //   • delta is still in flight (isDeltaLoadingRef) — partial state
+      //   • caller opted out (cacheEnabled false)
+      if (eventsRef.current.length > 0 && !isDeltaLoadingRef.current && cacheEnabled) {
+        chatSnapshotCache.save(sessionId, {
+          events: eventsRef.current,
+          hasMore: hasMoreRef.current,
+          userTurnIds: userTurnIdsRef.current,
+          latestSeq: computeLatestSeq(eventsRef.current),
+          savedAt: Date.now(),
+        });
+      }
+
       void api.closeChat(sessionId);
     };
-  }, [api, sessionId, active]);
+  }, [api, sessionId, active, cacheEnabled]);
 
   const send = useCallback(
     async (message: string, attachmentIds?: string[]) => {
@@ -342,6 +500,16 @@ export function useChat(
     sendNow,
     forkTurn,
   };
+}
+
+/**
+ * Compute the maximum `logSeq` across all events. Returns `null` when no event
+ * has a `logSeq` (or the max is 0) so the caller can skip the `sinceSeq` field.
+ */
+function computeLatestSeq(events: NormalizedEvent[]): number | null {
+  const seqs = events.flatMap((e) => (e.logSeq != null ? [e.logSeq] : []));
+  const v = seqs.length ? Math.max(...seqs) : 0;
+  return v > 0 ? v : null;
 }
 
 /**

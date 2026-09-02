@@ -229,7 +229,7 @@ function TaskToolEntry({
   onNavigate?: (sessionId: string) => void;
 }) {
   const childSessionId = tool.childSessionId ?? null;
-  const { events: childEvents } = useChat(api, childSessionId, !!childSessionId);
+  const { events: childEvents } = useChat(api, childSessionId, !!childSessionId, { cache: false });
 
   const currentTool = useMemo(() => deriveCurrentTool(childEvents), [childEvents]);
 
