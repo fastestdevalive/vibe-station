@@ -182,7 +182,7 @@ export function StorageSetting({ api }: StorageSettingProps) {
             style={{
               height: 8,
               borderRadius: 4,
-              background: "var(--border-default)",
+              background: "var(--bg-input)",
               overflow: "hidden",
               marginBottom: "var(--space-2)",
             }}
@@ -191,15 +191,15 @@ export function StorageSetting({ api }: StorageSettingProps) {
               style={{
                 height: "100%",
                 width: device.totalBytes > 0
-                  ? `${Math.min(100, (device.usedBytes / device.totalBytes) * 100).toFixed(1)}%`
+                  ? `${Math.min(100, ((device.totalBytes - device.availableBytes) / device.totalBytes) * 100).toFixed(1)}%`
                   : "0%",
-                background: "var(--fg-accent)",
+                background: "var(--accent)",
                 borderRadius: 4,
               }}
             />
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            <span>{formatBytes(device.usedBytes)} / {formatBytes(device.totalBytes)}</span>
+            <span>{formatBytes(device.totalBytes - device.availableBytes)} / {formatBytes(device.totalBytes)}</span>
             <span>{formatBytes(device.availableBytes)} free</span>
           </div>
         </div>
