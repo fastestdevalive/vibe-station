@@ -265,7 +265,7 @@ export function Composer({
           ) : (
             <button
               type="button"
-              className={`chat-composer__send${busy ? " chat-composer__send--queue" : ""}`}
+              className={`chat-composer__send${busy && !canSteer ? " chat-composer__send--queue" : ""}`}
               aria-label={
                 busy && canSteer
                   ? "Interrupts and steers the running turn"
