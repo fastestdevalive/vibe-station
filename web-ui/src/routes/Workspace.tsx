@@ -302,7 +302,7 @@ export function Workspace() {
   // own sessions + tools.
   //
   // Plus any FOREIGN tile its scratch canvas happens to carry: a child agent
-  // auto-inserted next to its spawning parent (`spawnedFrom`, useServerSync)
+  // auto-inserted next to its spawning parent (`parentSessionId`, useServerSync)
   // can belong to a different worktree entirely (`vst worktree create`). Those
   // tiles render live content only if their pane is mounted here — otherwise
   // they're empty ghost windows. Mirrors `detachedWorkspacePaneKeys` below.

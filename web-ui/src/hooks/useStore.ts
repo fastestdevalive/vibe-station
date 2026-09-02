@@ -487,7 +487,7 @@ export function findWorkspacesTilingSession(
  * worktree ids (the scratch canvas's key), not canvases.
  *
  * The everyday canvas mode is a scratch canvas, not a saved doc, so without
- * this the `spawnedFrom` auto-insert only ever fired for saved workspaces —
+ * this the `parentSessionId` auto-insert only ever fired for saved workspaces —
  * i.e. essentially never in normal use.
  */
 export function findScratchCanvasesTilingSession(

@@ -100,7 +100,7 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.initialPrompt != null ? { initialPrompt: row.initialPrompt } : {}),
     ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
     ...(row.handoffSummary != null ? { handoffSummary: row.handoffSummary } : {}),
-    ...(row.spawnedFrom != null ? { spawnedFrom: row.spawnedFrom } : {}),
+    ...(row.spawnedFrom != null ? { parentSessionId: row.spawnedFrom } : {}),
     ...(row.supersededBy != null ? { supersededBy: row.supersededBy } : {}),
     ...(legacyPr ? { pr: legacyPr } : {}),
   };
@@ -147,7 +147,7 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     initialPrompt: session.initialPrompt ?? null,
     archivedAt: session.archivedAt ?? null,
     handoffSummary: session.handoffSummary ?? null,
-    spawnedFrom: session.spawnedFrom ?? null,
+    spawnedFrom: session.parentSessionId ?? null,
     supersededBy: session.supersededBy ?? null,
     prState: session.pr?.state ?? null,
     prNumber: session.pr?.number ?? null,

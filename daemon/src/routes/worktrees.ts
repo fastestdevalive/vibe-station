@@ -466,7 +466,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           lastTransitionAt: new Date().toISOString(),
         },
         ...(result.data.prompt ? { initialPrompt: result.data.prompt } : {}),
-        spawnedFrom: result.data.sourceAgentId ?? null,
+        parentSessionId: result.data.sourceAgentId ?? null,
       };
 
       const worktreeRecord: WorktreeRecord = {
@@ -518,7 +518,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         projectId,
         sessionType: "agent",
         mode: modeId,
-        spawnedFrom: mainSession.spawnedFrom ?? null,
+        parentSessionId: mainSession.parentSessionId ?? null,
         snapshot: serializeSession(wtId, projectId, mainSession),
       });
 

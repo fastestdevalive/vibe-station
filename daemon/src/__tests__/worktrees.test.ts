@@ -139,7 +139,7 @@ describe("Worktree routes", () => {
     expect(wt.baseSha).toMatch(/^[0-9a-f]{40}$/);
   });
 
-  it("4a.T1 — POST /worktrees with sourceAgentId persists it as spawnedFrom on the main session", async () => {
+  it("4a.T1 — POST /worktrees with sourceAgentId persists it as parentSessionId on the main session", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
@@ -155,10 +155,10 @@ describe("Worktree routes", () => {
 
     const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
     expect(sessRes.statusCode).toBe(200);
-    expect(sessRes.json<{ spawnedFrom: string | null }>().spawnedFrom).toBe("sess-source-agent-1");
+    expect(sessRes.json<{ parentSessionId: string | null }>().parentSessionId).toBe("sess-source-agent-1");
   });
 
-  it("4a.T2 — POST /worktrees omitting sourceAgentId creates a session with spawnedFrom: null (regression)", async () => {
+  it("4a.T2 — POST /worktrees omitting sourceAgentId creates a session with parentSessionId: null (regression)", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
@@ -168,7 +168,7 @@ describe("Worktree routes", () => {
     const wt = res.json<{ mainSessionId: string }>();
 
     const sessRes = await app.inject({ method: "GET", url: `/sessions/${wt.mainSessionId}` });
-    expect(sessRes.json<{ spawnedFrom: string | null }>().spawnedFrom).toBeNull();
+    expect(sessRes.json<{ parentSessionId: string | null }>().parentSessionId).toBeNull();
   });
 
   it("3.T5 — POST /worktrees {prompt} (no name) derives the same slug for both worktree.name and the main session's name", async () => {

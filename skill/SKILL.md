@@ -194,7 +194,7 @@ Returns sessions for a worktree (omit query to return all).
 → 200 {
     id, worktreeId, isMain, sortOrder, type, modeId,
     name, nameSource, channel, tmuxName, state, lifecycleState,
-    createdAt, pinnedAt, archivedAt, handoffSummary, spawnedFrom,
+    createdAt, pinnedAt, archivedAt, handoffSummary, parentSessionId,
     supersededBy, pr
   }
 → 404 { error: "Session '…' not found" }

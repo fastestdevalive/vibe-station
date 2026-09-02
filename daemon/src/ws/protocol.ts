@@ -295,7 +295,7 @@ const SessionCreatedEvent = z.object({
    *  it's genuinely unset" apart from "old daemon, field absent entirely" —
    *  both are treated identically client-side (skip the auto-insert scan),
    *  but the distinction matters for future debugging. */
-  spawnedFrom: z.string().nullable().optional(),
+  parentSessionId: z.string().nullable().optional(),
 });
 
 const SessionStateEvent = z.object({

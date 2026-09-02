@@ -119,7 +119,7 @@ export interface Session {
   handoffSummary?: string | null;
   /** SessionId this session was spawned from, or null (agent-interaction-
    *  workspaces/04-workspaces Phase 4). Write-once, set at creation. */
-  spawnedFrom?: string | null;
+  parentSessionId?: string | null;
   /** Set once a reset archives this session — the replacement session's id.
    *  Distinct from `archivedAt` (`/done` also sets that; only a reset sets
    *  this). */
@@ -127,7 +127,7 @@ export interface Session {
   /** VCS outcome axis — orthogonal to `state`/`lifecycleState` (mirrors
    *  daemon `SessionRecord.pr`). Absent ≡ never checked (e.g. legacy/test
    *  fixtures); REST (`sessions.ts`'s `serializeSession`) always sends an
-   *  explicit `null` when there's no PR yet, matching `spawnedFrom`. */
+   *  explicit `null` when there's no PR yet, matching `parentSessionId`. */
   pr?: PrStatus | null;
 }
 
@@ -384,7 +384,7 @@ export type WSEvent =
       /** SessionId this session was spawned from, or null (agent-interaction-
        *  workspaces/04-workspaces Phase 4b). Absent ≡ pre-upgrade daemon —
        *  treat identically to null (skip the auto-insert scan, Phase 4c). */
-      spawnedFrom?: string | null;
+      parentSessionId?: string | null;
     }
   | {
       type: "session:state";

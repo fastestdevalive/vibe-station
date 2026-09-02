@@ -391,7 +391,7 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     archivedAt: s.archivedAt ?? null,
     sortOrder: s.sortOrder,
     handoffSummary: s.handoffSummary ?? null,
-    spawnedFrom: s.spawnedFrom ?? null,
+    parentSessionId: s.parentSessionId ?? null,
     supersededBy: s.supersededBy ?? null,
     pr: s.pr ?? null,
   };
@@ -577,7 +577,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           lastTransitionAt: new Date().toISOString(),
         },
         ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
-        spawnedFrom: data.sourceAgentId ?? null,
+        parentSessionId: data.sourceAgentId ?? null,
       };
 
       // Spawn terminal immediately if type=terminal
@@ -623,7 +623,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         worktreeId: null,
         sessionType: type,
         mode: typeof modeId === "string" ? modeId : undefined,
-        spawnedFrom: sessionRecord.spawnedFrom ?? null,
+        parentSessionId: sessionRecord.parentSessionId ?? null,
         snapshot: serializeSession(null, project.id, sessionRecord),
       });
 
@@ -717,7 +717,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         lastTransitionAt: new Date().toISOString(),
       },
       ...(type === "agent" && prompt ? { initialPrompt: prompt } : {}),
-      spawnedFrom: data.sourceAgentId ?? null,
+      parentSessionId: data.sourceAgentId ?? null,
     };
 
     // Spawn terminal session immediately if type=terminal
@@ -773,7 +773,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       worktreeId,
       sessionType: type,
       mode: typeof modeId === "string" ? modeId : undefined,
-      spawnedFrom: sessionRecord.spawnedFrom ?? null,
+      parentSessionId: sessionRecord.parentSessionId ?? null,
       snapshot: serializeSession(worktreeId, project.id, sessionRecord),
     });
 
