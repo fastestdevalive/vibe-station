@@ -16,16 +16,16 @@ describe("parseHostsYml", () => {
   it("extracts login + oauth_token for every user under every host's users: block", () => {
     const text = `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         fastestdevalive:
             oauth_token: gho_bbb
     git_protocol: ssh
-    user: techwithnidhi
+    user: alice
     oauth_token: gho_aaa
 `;
     expect(parseHostsYml(text)).toEqual([
-      { login: "techwithnidhi", token: "gho_aaa" },
+      { login: "alice", token: "gho_aaa" },
       { login: "fastestdevalive", token: "gho_bbb" },
     ]);
   });
@@ -117,7 +117,7 @@ describe("listAccounts", () => {
       join(configDir, "hosts.yml"),
       `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         fastestdevalive:
             oauth_token: gho_bbb
@@ -126,8 +126,8 @@ describe("listAccounts", () => {
 
     const accounts = await listAccounts();
     expect(accounts.sort((a, b) => a.login.localeCompare(b.login))).toEqual([
+      { login: "alice", token: "gho_aaa" },
       { login: "fastestdevalive", token: "gho_bbb" },
-      { login: "techwithnidhi", token: "gho_aaa" },
     ]);
   });
 
@@ -137,17 +137,17 @@ describe("listAccounts", () => {
       join(configDir, "hosts.yml"),
       `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         fastestdevalive:
             oauth_token: gho_bbb
 `,
     );
-    process.env.GH_TOKEN_TECHWITHNIDHI = "gho_override";
+    process.env.GH_TOKEN_ALICE = "gho_override";
 
     const accounts = await listAccounts();
     const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
-    expect(byLogin.get("techwithnidhi")).toBe("gho_override");
+    expect(byLogin.get("alice")).toBe("gho_override");
     expect(byLogin.get("fastestdevalive")).toBe("gho_bbb");
   });
 
@@ -161,7 +161,7 @@ describe("listAccounts", () => {
       join(configDir, "hosts.yml"),
       `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         fastestdevalive:
             oauth_token: gho_bbb
@@ -171,7 +171,7 @@ describe("listAccounts", () => {
 
     const accounts = await listAccounts();
     const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
-    expect(byLogin.get("techwithnidhi")).toBe("gho_aaa");
+    expect(byLogin.get("alice")).toBe("gho_aaa");
     expect(byLogin.get("fastestdevalive")).toBe("gho_bbb");
   });
 
@@ -181,7 +181,7 @@ describe("listAccounts", () => {
       join(configDir, "hosts.yml"),
       `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         keyring-user: {}
 `,
@@ -190,7 +190,7 @@ describe("listAccounts", () => {
 
     const accounts = await listAccounts();
     const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
-    expect(byLogin.get("techwithnidhi")).toBe("gho_aaa");
+    expect(byLogin.get("alice")).toBe("gho_aaa");
     expect(byLogin.get("keyring-user")).toBe("gho_generic_fallback");
   });
 
@@ -206,7 +206,7 @@ describe("listAccounts", () => {
       join(configDir, "hosts.yml"),
       `github.com:
     users:
-        techwithnidhi:
+        alice:
             oauth_token: gho_aaa
         keyring-user: {}
 `,
@@ -234,7 +234,7 @@ exit 1
 
     const accounts = await listAccounts();
     const byLogin = new Map(accounts.map((a) => [a.login, a.token]));
-    expect(byLogin.get("techwithnidhi")).toBe("gho_aaa");
+    expect(byLogin.get("alice")).toBe("gho_aaa");
     expect(byLogin.get("keyring-user")).toBe("gho_from_gh_cli");
 
     await rm(binDir, { recursive: true, force: true });
