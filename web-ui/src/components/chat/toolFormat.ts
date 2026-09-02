@@ -27,6 +27,13 @@ export interface ToolCallEntry {
   locations?: { path: string; line?: number }[];
   /** `tool_call`/`tool_call_update.kind`, structural (acp-normalize-superset Gap 4). */
   toolKind?: AcpToolKind;
+  /** Native `Task` sub-thread (subagent-ux-v2 Phase 6, Decision 4) — every
+   *  tool call bracketed between this Task's own `tool_use` and its
+   *  `completed` `tool_result`. Display-only: never used for identity,
+   *  navigation, or lifecycle (no payload carries a real parent link). One
+   *  level deep only — a Task opening while another is already open closes
+   *  the first rather than nesting task-in-task. */
+  children?: ToolCallEntry[];
 }
 
 /** One-line placeholder for a non-text content block, joined into a bubble's

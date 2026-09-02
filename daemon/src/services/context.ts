@@ -33,7 +33,7 @@
  * or infer "direct" from an unrelated null.
  */
 
-import type { ProjectRecord, WorktreeRecord } from "../types.js";
+import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 import {
   worktreePath,
   sessionDataDir,
@@ -109,4 +109,34 @@ export function opencodeConfigPathFor(ctx: ResolvedContext, sessionId: string): 
   return ctx.worktree
     ? opencodeConfigPath(ctx.project.id, ctx.worktree.id, sessionId)
     : directOpencodeConfigPath(ctx.project.id, sessionId);
+}
+
+export interface BuildVstEnvOptions {
+  project: ProjectRecord;
+  /** Null for a direct session — VST_WORKTREE is omitted entirely (not an empty string). */
+  worktree: WorktreeRecord | null;
+  session: SessionRecord;
+  daemonPort: number;
+}
+
+/**
+ * The single source of "which VST_* vars does an agent process get" —
+ * subagent-ux-v2 Decision 1. Every spawn path (tmux, direct-PTY, ACP) calls
+ * this instead of hand-rolling the same object, so a fifth CLI or channel
+ * gets the vars for free and there is exactly one answer to the question.
+ *
+ * Callers merge this UNDER their plugin's own env (`...buildVstEnv(...),
+ * ...plugin.getEnvironment(...)`) so a plugin keeps the last word on its own
+ * vars (e.g. claude's CLAUDE_CODE_EXECUTABLE, opencode's OPENCODE_CONFIG).
+ */
+export function buildVstEnv(opts: BuildVstEnvOptions): Record<string, string> {
+  const { project, worktree, session, daemonPort } = opts;
+  return {
+    VST_SESSION: session.id,
+    VST_SPAWN_TOKEN: session.id,
+    ...(worktree ? { VST_WORKTREE: worktree.id } : {}),
+    VST_PROJECT: project.id,
+    VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
+    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+  };
 }
