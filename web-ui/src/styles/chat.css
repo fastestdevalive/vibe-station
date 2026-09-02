@@ -821,6 +821,14 @@
   color: var(--fg-muted);
 }
 
+/* Names what the chips after it are, so the row isn't a bare cluster of
+   session names with no indication of what relationship they represent. */
+.chat-subagent-row__caption {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  flex: 0 0 auto;
+}
+
 /* ── Persistent working indicator (last item in the feed while busy) ───────── */
 
 .chat-working-indicator {

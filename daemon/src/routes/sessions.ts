@@ -23,6 +23,7 @@ import { broadcastAll } from "../broadcaster.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 import { resolveChannel, sessionChannel, channelTransition } from "../services/channel.js";
+import { noteHumanTurn, forgetSubagentNotify } from "../services/subagentNotify.js";
 import { hasNativeHistoryImporter } from "../services/nativeHistoryImporter.js";
 import { persistLifecycleState, clearIdleTracking } from "../services/lifecycle.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
@@ -457,6 +458,51 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
     const n = Math.min(Math.max(parseInt(lines ?? "100", 10) || 100, 1), 10000);
 
+    // A Rich Chat (json) session has NEITHER a tmux pane NOR a direct-PTY
+    // stream — its output lives only in the ACP transcript. Without this
+    // branch the two paths below both yield "" and the route answers 200
+    // with an empty string, which is exactly how a parent agent reading its
+    // subagent's work sees nothing at all. That is not hypothetical: a Rich
+    // Chat parent's subagent inherits `channel: "json"`, so EVERY subagent
+    // spawned from Rich Chat lands here.
+    if (sessionChannel(ctx.session) === "json") {
+      const jsonCtx = findJsonSessionContext(id);
+      // Unreachable in practice — both finders walk getAllProjects() the same
+      // way and match the same id, differing only in return shape, and `ctx`
+      // is already non-null above. Throwing rather than returning "" so that
+      // if the two ever DO diverge it surfaces, instead of silently
+      // reproducing the empty-output bug this branch exists to fix.
+      if (!jsonCtx) throw new Error(`json session context missing for '${id}'`);
+      // Bounded read: the caller is typically a parent agent POLLING its
+      // child, so reading the whole history each time would be O(transcript)
+      // on a hot path. `n` is turns here, not pane rows — the json channel
+      // has no rows to count.
+      const page = readSessionTail(jsonCtx, n);
+      // Assistant prose only — that is what "output" means to a caller
+      // reading a session's work. Tool calls and user turns are available in
+      // full via GET /sessions/:id/transcript.
+      //
+      // Grouped by turn: each `text` event is one streamed chunk, so chunks
+      // WITHIN a turn must be concatenated bare, but consecutive turns must
+      // NOT be — otherwise separate answers minutes apart weld into one
+      // sentence ("...deciding next steps.The subagent finished...") and the
+      // reader cannot tell where one answer ends and the next begins.
+      const turns: string[] = [];
+      let currentTurn: string | undefined;
+      let buf = "";
+      for (const e of page.events) {
+        if (e.kind !== "text" || typeof e.text !== "string" || e.text.length === 0) continue;
+        if (e.turnId !== currentTurn) {
+          if (buf) turns.push(buf);
+          currentTurn = e.turnId;
+          buf = "";
+        }
+        buf += e.text;
+      }
+      if (buf) turns.push(buf);
+      return reply.send({ id, output: turns.join("\n\n") });
+    }
+
     if (!ctx.session.useTmux) {
       const stream = directPtyRegistry.get(id);
       const output = stream ? (stream.getRecentOutput?.(n * 200) ?? "") : "";
@@ -832,6 +878,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         ...p,
         directSessions: p.directSessions.filter((s) => s.id !== id),
       }));
+      forgetSubagentNotify(id);
       broadcastAll({ type: "session:deleted", sessionId: id });
       return reply.send({ ok: true });
     }
@@ -937,6 +984,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (promotedAtCommit) {
       broadcastAll({ type: "session:updated", sessionId: promotedId!, isMain: true, pr: promotedPr ?? null });
     }
+    forgetSubagentNotify(id);
     broadcastAll({ type: "session:deleted", sessionId: id });
     return reply.send({ ok: true });
   });
@@ -1535,6 +1583,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       worktreeId: wtIdForSerialize,
       sessionType: "agent",
       mode: newSession.modeId,
+      // Every other session:created carries this at the top level, and
+      // `useServerSync`'s auto-tile reads `ev.parentSessionId` while
+      // `TabsStrip` reads `ev.snapshot.parentSessionId` — omitting it here
+      // made the two consumers disagree on the reset path alone.
+      parentSessionId: newSession.parentSessionId ?? null,
       snapshot: serializeSession(wtIdForSerialize, project.id, newSession),
     });
 
@@ -1591,6 +1644,39 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const { data, sendEnter = false } = result.data;
     const { session } = ctx;
+
+    // A Rich Chat (json) session has no PTY to write bytes into — "input" for
+    // it means a chat turn. Without this branch `vst send` 409s on every json
+    // session, even though the shared system prompt
+    // (`daemon/src/assets/agent-system-prompt.md`), `skill/SKILL.md` and the
+    // README all present it as THE channel-agnostic way to message a session.
+    // That made agent-to-agent messaging impossible in exactly the channel
+    // where subagents live. `sendEnter` is meaningless here and is ignored.
+    if (sessionChannel(session) === "json") {
+      if (session.archivedAt) {
+        return reply.status(400).send({ error: "Session is archived — start a new session instead" });
+      }
+      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      const res = await enqueueChatTurn({ sessionId: id, message: data, daemonPort });
+      if (!res.ok) {
+        return reply.status(res.reason === "not_found" ? 404 : 400).send({ error: res.message });
+      }
+      // Mark it working, exactly as POST /chat does. Without this the session
+      // stays at `waiting_for_human` for the whole turn, which breaks two
+      // things at once: `vst send --wait` polls for idle|waiting_for_human and
+      // so returns before the turn even starts, and `subagentNotify` sees no
+      // state EDGE (waiting_for_human → waiting_for_human) and never wakes the
+      // parent — so "parent sends to child, child answers, parent is woken"
+      // silently does nothing.
+      const jctx = findJsonSessionContext(id);
+      if (jctx) await persistLifecycleState(jctx.project.id, jctx.worktree?.id, id, "working");
+      // A turn addressed to this session by a human or a sibling is real
+      // engagement, so the unattended-notice budget starts over. The notifier
+      // enqueues directly on the agent and never reaches this route, so its
+      // own notices cannot reset the budget they are bounded by.
+      noteHumanTurn(id);
+      return reply.send({ ok: true });
+    }
 
     if (!session.useTmux) {
       const stream = directPtyRegistry.get(id);
@@ -1668,6 +1754,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (ctx) {
       await persistLifecycleState(ctx.project.id, ctx.worktree?.id, id, "working");
     }
+    // Someone is actively driving this session, so the unattended
+    // subagent-notice budget starts over (see `subagentNotify`). Without this
+    // the budget only ever counts up and a long-lived supervising parent goes
+    // permanently deaf to its subagents after 25 notices, with no signal.
+    noteHumanTurn(id);
 
     return reply.status(202).send(res.result);
   });

@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { buildServer } from "./server.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
-import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
+import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "./services/lifecycle.js";
 import { startPrPoller, stopPrPoller } from "./services/prPoller.js";
 
 const VST_HOME = join(homedir(), ".vibe-station");
@@ -169,6 +169,9 @@ async function main() {
 
   const app = await buildServer({ port, logger: true, token, noAuth });
 
+  // Subagent → parent notifications resolve the parent's agent lazily and need
+  // the port to do it (subagent-ux-v2).
+  setNotifyDaemonPort(port);
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
   // Poll for PR outcome (open/merged/closed) on the orthogonal `session.pr`

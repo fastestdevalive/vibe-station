@@ -986,6 +986,113 @@ describe("TabsStrip", () => {
     expect(listSpy).not.toHaveBeenCalled();
   });
 
+  it("an agent-spawned subagent appears as a tab but does NOT steal focus", async () => {
+    // The user is reading the parent when its agent spawns a subagent. Yanking
+    // them into a session they did not open loses their place mid-sentence, at
+    // a moment they did not choose. A user-created session still focuses —
+    // covered by the sibling test below.
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const existing = snapshot.find((s) => s.type === "agent")!;
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBeTruthy());
+    const focusedBefore = useWorkspaceStore.getState().activeSessionId;
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:created",
+        sessionId: "sess-kid",
+        worktreeId: existing.worktreeId,
+        sessionType: existing.type,
+        snapshot: {
+          ...existing,
+          id: "sess-kid",
+          name: "Spawned Kid",
+          isMain: false,
+          sortOrder: Date.now(),
+          parentSessionId: existing.id,
+        },
+      });
+    });
+
+    // Visible and reachable...
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /spawned kid/i })).toBeInTheDocument();
+    });
+    // ...but focus never moved.
+    expect(useWorkspaceStore.getState().activeSessionId).toBe(focusedBefore);
+  });
+
+  it("focuses a subagent anyway when nothing valid is currently active", async () => {
+    // Otherwise closing the last tab and then having an agent spawn one leaves
+    // a populated tab strip beside an empty "No session" pane.
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const existing = snapshot.find((s) => s.type === "agent")!;
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBeTruthy());
+    // Nothing valid selected (simulates the last tab having been closed).
+    act(() => useWorkspaceStore.getState().setActiveSession("sess-that-is-gone"));
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:created",
+        sessionId: "sess-kid2",
+        worktreeId: existing.worktreeId,
+        sessionType: existing.type,
+        snapshot: {
+          ...existing,
+          id: "sess-kid2",
+          name: "Orphan Kid",
+          isMain: false,
+          sortOrder: Date.now(),
+          parentSessionId: existing.id,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-kid2");
+    });
+  });
+
+  it("a user-created session (no parentSessionId) still takes focus", async () => {
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const existing = snapshot.find((s) => s.type === "agent")!;
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(useWorkspaceStore.getState().activeSessionId).toBeTruthy());
+
+    await act(async () => {
+      localApi.__test.emit({
+        type: "session:created",
+        sessionId: "sess-mine",
+        worktreeId: existing.worktreeId,
+        sessionType: existing.type,
+        snapshot: { ...existing, id: "sess-mine", name: "My Agent", isMain: false, sortOrder: Date.now() },
+      });
+    });
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-mine");
+    });
+  });
+
   it("keeps a session announced by session:created while the initial fetch was still in flight", async () => {
     // Regression: "sometimes a second agent session doesn't show up in the tab
     // bar". The mount effect fetched `listSessions` and REPLACED state with the
