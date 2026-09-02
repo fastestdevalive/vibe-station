@@ -39,14 +39,19 @@ describe("MermaidView hardening (RA2)", () => {
     expect(mockedMermaid.parse).not.toHaveBeenCalled();
   });
 
-  it("renders a chart that parse() would reject but render() can handle (e.g. | in diamond node)", async () => {
-    // Simulate the case where parse() would have returned false (|  in diamond)
-    // but render() succeeds — this is the fix for plan diagrams with such syntax.
-    mockedMermaid.parse.mockResolvedValueOnce(false); // Would have blocked render in old code.
+  it("renders a chart with | in diamond node by sanitizing before render()", async () => {
+    // The sanitizer replaces `|` inside `{…}` with " or " so mermaid can render
+    // the diamond. render() receives the sanitized source; the original chart
+    // is preserved for the fallback display path.
     const chart = "flowchart LR\n    DeleteRoute --> Guard{done|exited?}\n    Guard --yes--> Purge";
     const { container } = render(<MermaidView chart={chart} theme="dark" />);
     await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
-    // parse() must never be called — render() is the only gate now.
+    // render() must have been called with "or" replacing "|" inside {…}
+    expect(mockedMermaid.render).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("Guard{done or exited?}"),
+    );
+    // parse() must never be called
     expect(mockedMermaid.parse).not.toHaveBeenCalled();
   });
 

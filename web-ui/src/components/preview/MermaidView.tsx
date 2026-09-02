@@ -6,17 +6,24 @@ interface MermaidViewProps {
   theme: "dark" | "light";
 }
 
+// Mermaid's lexer tokenizes `|` as PIPE even inside `{diamond}` node labels,
+// causing a render failure. Replace `|` with " or " inside curly-brace node
+// labels so the diagram renders. The original source is preserved for the
+// fallback <pre> block.
+function sanitizeMermaidSource(src: string): string {
+  return src.replace(/\{([^}\n]*\|[^}\n]*)\}/g, (_, label: string) =>
+    `{${label.replace(/\|/g, " or ")}}`
+  );
+}
+
 export function MermaidView({ chart, theme }: MermaidViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const uid = useId().replace(/:/g, "");
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    // Skip the mermaid.parse() pre-check — it is more conservative than
-    // render() (e.g. it rejects `|` inside `{diamond}` nodes even though
-    // render() recovers and produces valid SVG). render() is already wrapped in
-    // try/catch, so it is the sole gate; falling back to the raw source block
-    // on any render failure is enough.
+    // Skip the mermaid.parse() pre-check — render() is the sole gate, already
+    // wrapped in try/catch; fall back to the raw source block on failure.
     setFailed(false);
     let cancelled = false;
     mermaid.initialize({
@@ -27,9 +34,10 @@ export function MermaidView({ chart, theme }: MermaidViewProps) {
     const el = hostRef.current;
     if (!el) return;
     el.innerHTML = "";
+    const sanitized = sanitizeMermaidSource(chart);
     const run = async () => {
       try {
-        const { svg } = await mermaid.render(`mmd-${uid}`, chart);
+        const { svg } = await mermaid.render(`mmd-${uid}`, sanitized);
         if (cancelled) return;
         el.innerHTML = svg;
       } catch {
