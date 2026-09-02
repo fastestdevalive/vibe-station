@@ -85,6 +85,10 @@ function makeGatePlugin(): {
     supportsJson() {
       return true;
     },
+    // Stands in for claude — the only plugin whose mid-turn steering is trusted.
+    supportsMidTurnSteering() {
+      return true;
+    },
     async *runTurn(input: TurnInput, ctx: TurnContext, signal: AbortSignal): AsyncIterable<NormalizedEvent> {
       const idx = started.length;
       started.push(input.message);
@@ -933,6 +937,53 @@ describe("Phase 5 — submit() steer-vs-enqueue gate", () => {
     expect(agent.getMeta().queueDepth).toBe(0);
 
     release(1);
+    await agent.settled();
+  });
+
+  // 5.T7 — a plugin that does NOT declare supportsMidTurnSteering never steers,
+  // even when the connection advertises steering and would answer "injected".
+  // This is the opencode case: it claims the capability and acknowledges the
+  // request, but the injected text never reaches the model, so queueing (which
+  // is lossless) is the only correct behaviour.
+  it("5.T7 — plugin without supportsMidTurnSteering always enqueues, never steers", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { plugin, release, gatesReady } = makeGatePlugin();
+    // Drop the claude-only opt-in → stands in for opencode/cursor.
+    delete (plugin as { supportsMidTurnSteering?: () => boolean }).supportsMidTurnSteering;
+    const session = project.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "opencode" });
+
+    agent.enqueue({ message: "A" });
+    await waitFor(() => gatesReady() >= 1);
+    release(0);
+    await agent.settled();
+
+    agent.enqueue({ message: "B" });
+    await waitFor(() => gatesReady() >= 2); // B running
+
+    let steerCalls = 0;
+    const fakeConn = {
+      isAlive: () => true,
+      supportsSteering: true,
+      steer: async (_blocks: unknown[]) => {
+        steerCalls++;
+        return "injected" as const;
+      },
+    };
+    (agent as unknown as { connection: unknown }).connection = fakeConn;
+
+    // The meta flag the composer reads must also be false, so the UI never
+    // promises steering for a CLI that cannot honour it.
+    expect(agent.getMeta().canSteer).toBe(false);
+
+    const result = await agent.submit({ message: "no steering please" });
+    expect(result.delivery).toBe("queued");
+    expect(result.queuePosition).toBe(1);
+    expect(steerCalls).toBe(0);
+
+    release(1);
+    await waitFor(() => gatesReady() >= 3);
+    release(2);
     await agent.settled();
   });
 
