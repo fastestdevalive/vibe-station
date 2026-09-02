@@ -861,28 +861,28 @@ describe("Session routes", () => {
     expect(startJsonCreateTurnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("4a.T1 — POST /sessions with sourceAgentId persists it as spawnedFrom on the new record", async () => {
+  it("4a.T1 — POST /sessions with sourceAgentId persists it as parentSessionId on the new record", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/sessions",
       payload: { worktreeId, type: "agent", modeId: "bugfix", sourceAgentId: "sess-source-2" },
     });
     expect(res.statusCode).toBe(201);
-    const created = res.json<{ id: string; spawnedFrom: string | null }>();
-    expect(created.spawnedFrom).toBe("sess-source-2");
+    const created = res.json<{ id: string; parentSessionId: string | null }>();
+    expect(created.parentSessionId).toBe("sess-source-2");
 
     const getRes = await app.inject({ method: "GET", url: `/sessions/${created.id}` });
-    expect(getRes.json<{ spawnedFrom: string | null }>().spawnedFrom).toBe("sess-source-2");
+    expect(getRes.json<{ parentSessionId: string | null }>().parentSessionId).toBe("sess-source-2");
   });
 
-  it("4a.T2 — POST /sessions omitting sourceAgentId still creates a session with spawnedFrom: null (regression)", async () => {
+  it("4a.T2 — POST /sessions omitting sourceAgentId still creates a session with parentSessionId: null (regression)", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/sessions",
       payload: { worktreeId, type: "agent", modeId: "bugfix" },
     });
     expect(res.statusCode).toBe(201);
-    expect(res.json<{ spawnedFrom: string | null }>().spawnedFrom).toBeNull();
+    expect(res.json<{ parentSessionId: string | null }>().parentSessionId).toBeNull();
   });
 
   it("JSON gate — channel:json with a claude (supported) mode → 201", async () => {

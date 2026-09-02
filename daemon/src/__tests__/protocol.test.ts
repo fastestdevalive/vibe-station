@@ -46,10 +46,10 @@ describe("ws protocol — session:state accepts the new LifecycleState values (1
   });
 });
 
-// 4b.T3 (plan 04, "Workspaces"): session:created gains `spawnedFrom` —
+// 4b.T3 (plan 04, "Workspaces"): session:created gains `parentSessionId` —
 // present as a string, present as null, or absent entirely (pre-upgrade-
 // daemon compat) must all parse.
-describe("ws protocol — session:created accepts spawnedFrom (4b.T3)", () => {
+describe("ws protocol — session:created accepts parentSessionId (4b.T3)", () => {
   const base = {
     type: "session:created" as const,
     sessionId: "sess-1",
@@ -57,19 +57,19 @@ describe("ws protocol — session:created accepts spawnedFrom (4b.T3)", () => {
     sessionType: "agent",
   };
 
-  it("parses with spawnedFrom as a session id string", () => {
-    const msg = { ...base, spawnedFrom: "sess-source" };
+  it("parses with parentSessionId as a session id string", () => {
+    const msg = { ...base, parentSessionId: "sess-source" };
     expect(() => ServerMessage.parse(msg)).not.toThrow();
-    expect(ServerMessage.parse(msg)).toMatchObject({ spawnedFrom: "sess-source" });
+    expect(ServerMessage.parse(msg)).toMatchObject({ parentSessionId: "sess-source" });
   });
 
-  it("parses with spawnedFrom: null (no source)", () => {
-    const msg = { ...base, spawnedFrom: null };
+  it("parses with parentSessionId: null (no source)", () => {
+    const msg = { ...base, parentSessionId: null };
     expect(() => ServerMessage.parse(msg)).not.toThrow();
-    expect(ServerMessage.parse(msg)).toMatchObject({ spawnedFrom: null });
+    expect(ServerMessage.parse(msg)).toMatchObject({ parentSessionId: null });
   });
 
-  it("parses with spawnedFrom absent entirely (pre-upgrade daemon compat)", () => {
+  it("parses with parentSessionId absent entirely (pre-upgrade daemon compat)", () => {
     expect(() => ServerMessage.parse(base)).not.toThrow();
   });
 });

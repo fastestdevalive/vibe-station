@@ -106,6 +106,21 @@ describe("session row <-> record round-trip", () => {
     expect(back.worktreeId).toBeUndefined();
     expect(back.transcriptRef).toBeUndefined();
   });
+
+  it("0.T2 — a record written with parentSessionId reads back from the spawnedFrom column and round-trips", () => {
+    const withParent: SessionRecord = { ...session, parentSessionId: "sess-parent-1" };
+    const row = sessionToRow(withParent, "proj-1", "vs-1");
+    expect(row.spawnedFrom).toBe("sess-parent-1");
+    const back = rowToSession(row);
+    expect(back.parentSessionId).toBe("sess-parent-1");
+    expect(back).toEqual(withParent);
+  });
+
+  it("0.T3 — a row persisted before this change (spawnedFrom column, no parentSessionId in code) still loads its parent link", () => {
+    const legacyRow: SessionRow = { ...baseRow, spawnedFrom: "sess-legacy-parent" };
+    const back = rowToSession(legacyRow);
+    expect(back.parentSessionId).toBe("sess-legacy-parent");
+  });
 });
 
 describe("rowToSession — needs_review back-compat (R10, 4.T4)", () => {

@@ -365,12 +365,12 @@ export interface SessionRecord {
    * leaving a dangling id is harmless (the web-ui's workspace-tile scan
    * simply finds no match, S5).
    */
-  spawnedFrom?: string | null;
+  parentSessionId?: string | null;
   /**
    * Set once a reset (`/vst reset --handoff`) archives this session — the
    * replacement session's id. Distinct from `archivedAt` (`/done` also sets
    * that; only a reset sets this). No FK enforcement — same rationale as
-   * `spawnedFrom` above.
+   * `parentSessionId` above.
    */
   supersededBy?: string | null;
   /**
