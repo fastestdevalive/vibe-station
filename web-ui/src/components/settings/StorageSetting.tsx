@@ -195,7 +195,6 @@ export function StorageSetting({ api }: StorageSettingProps) {
                   : "0%",
                 background: "var(--fg-accent)",
                 borderRadius: 4,
-                minWidth: 2,
               }}
             />
           </div>
@@ -287,10 +286,7 @@ export function StorageSetting({ api }: StorageSettingProps) {
           return (
             <div
               key={wt.id}
-              role={done ? "button" : undefined}
-              tabIndex={done ? 0 : undefined}
               onClick={done ? () => toggleSelect(wt.id) : undefined}
-              onKeyDown={done ? (e) => { if (e.key === " " || e.key === "Enter") toggleSelect(wt.id); } : undefined}
               style={{
                 display: "grid",
                 gridTemplateColumns: "auto 1fr auto",

@@ -68,6 +68,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
       >
         <div
           role="tablist"
+          className="settings-tabs-scroll"
           style={{
             flexShrink: 0,
             display: "flex",
@@ -76,7 +77,6 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
             padding: "0 var(--space-3)",
             overflowX: "auto",
             WebkitOverflowScrolling: "touch",
-            scrollbarWidth: "none",
           }}
         >
           {sections.map((section) => (
