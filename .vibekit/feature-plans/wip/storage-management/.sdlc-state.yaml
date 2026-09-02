@@ -1,0 +1,14 @@
+feature: storage-management
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-72
+master:
+  prd: skipped   # PRD authored manually in docs/STORAGE-MANAGEMENT-PRD.md
+  plan: in_progress
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: planning
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: "plan+implement"
