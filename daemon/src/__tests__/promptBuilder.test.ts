@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPrompt, _resetSkillCacheForTest } from "../services/promptBuilder.js";
+import { buildPrompt, buildDirectPrompt, _resetSkillCacheForTest } from "../services/promptBuilder.js";
 import type { ProjectRecord, WorktreeRecord } from "../types.js";
 
 const makeProject = (path: string): ProjectRecord => ({
@@ -121,5 +121,43 @@ describe("buildPrompt", () => {
     };
     const result = await buildPrompt({ project: makeProject(tempDir), worktree });
     expect(result.systemPrompt).toContain("sess-1");
+  });
+});
+
+describe("buildPrompt / buildDirectPrompt — richChat (subagent-ux-v2 Decision 10)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-prompt-richchat-test-"));
+    _resetSkillCacheForTest();
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+    _resetSkillCacheForTest();
+  });
+
+  it("2.T1 — richChat: true output contains the subagent section; default output does not", async () => {
+    const withRichChat = await buildPrompt({ project: makeProject(tempDir), worktree: makeWorktree(), richChat: true });
+    const withoutRichChat = await buildPrompt({ project: makeProject(tempDir), worktree: makeWorktree() });
+    expect(withRichChat.systemPrompt).toContain("Subagents (Rich Chat only)");
+    expect(withoutRichChat.systemPrompt).not.toContain("Subagents (Rich Chat only)");
+  });
+
+  it("2.T1 — buildDirectPrompt: richChat: true output contains the subagent section; default does not", async () => {
+    const withRichChat = await buildDirectPrompt({ project: makeProject(tempDir), richChat: true });
+    const withoutRichChat = await buildDirectPrompt({ project: makeProject(tempDir) });
+    expect(withRichChat.systemPrompt).toContain("Subagents (Rich Chat only)");
+    expect(withoutRichChat.systemPrompt).not.toContain("Subagents (Rich Chat only)");
+  });
+
+  it("2.T2 — default (no flag) output is byte-identical to the explicit richChat: false output, for both builders", async () => {
+    const defaultPrompt = await buildPrompt({ project: makeProject(tempDir), worktree: makeWorktree() });
+    const explicitFalse = await buildPrompt({ project: makeProject(tempDir), worktree: makeWorktree(), richChat: false });
+    expect(defaultPrompt.systemPrompt).toBe(explicitFalse.systemPrompt);
+
+    const defaultDirect = await buildDirectPrompt({ project: makeProject(tempDir) });
+    const explicitFalseDirect = await buildDirectPrompt({ project: makeProject(tempDir), richChat: false });
+    expect(defaultDirect.systemPrompt).toBe(explicitFalseDirect.systemPrompt);
   });
 });

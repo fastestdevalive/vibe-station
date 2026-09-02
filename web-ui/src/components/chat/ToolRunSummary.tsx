@@ -33,19 +33,51 @@ const TOOL_ALIASES: Record<string, string> = {
   grep: "search",
   glob: "search",
   multiedit: "edit",
+  // One-line insurance (5.5): any session reporting no `toolKind` at all
+  // still buckets "terminal" with bash instead of regressing to the
+  // unbounded per-command header.
+  terminal: "bash",
 };
+
+// Decision 11 — `toolKind` is low-cardinality and reliable (real transcripts
+// contain only execute/read/edit/think/other/fetch); `toolName` is often the
+// FULL COMMAND STRING in an ACP session, so keying on it (the old bug)
+// guarantees one clause per call and an unbounded header. Task is matched by
+// NAME first — its `toolKind` is "think", shared with the plain Think tool.
+const KIND_BUCKET: Record<string, string> = {
+  execute: "bash",
+  read: "read",
+  edit: "edit",
+  search: "search",
+  fetch: "fetch",
+  think: "think",
+};
+
+function isTask(t: ToolCallEntry): boolean {
+  return t.toolName.toLowerCase() === "task";
+}
 
 // Order in which phrases appear when several kinds of tools ran in the same
 // burst (mirrors Claude Code's own ordering, e.g. "Read 1 file, ran 1 shell
 // command").
-const PHRASE_ORDER = ["read", "write", "edit", "bash", "search"];
+const PHRASE_ORDER = ["read", "write", "edit", "bash", "search", "task"];
 const PHRASE_FNS: Record<string, (n: number) => string> = {
   read: (n) => `read ${n} file${n === 1 ? "" : "s"}`,
   write: (n) => `wrote ${n} file${n === 1 ? "" : "s"}`,
   edit: (n) => `edited ${n} file${n === 1 ? "" : "s"}`,
   bash: (n) => `ran ${n} shell command${n === 1 ? "" : "s"}`,
   search: (n) => `searched ${n} time${n === 1 ? "" : "s"}`,
+  task: (n) => `delegated to ${n} subagent${n === 1 ? "" : "s"}`,
 };
+
+// Header is bounded at four clauses plus "+N more" (5.4), independent of run
+// length — a 20-call or 200-call run of the same kinds must produce the
+// exact same header text.
+const MAX_CLAUSES = 4;
+// A name-derived fallback label is truncated (5.3) so one stray tool with a
+// very long name (or, on an ACP session, a full command string) can never
+// restore the old per-call-clause behavior.
+const FALLBACK_LABEL_MAX = 24;
 
 function summarizeGroup(tools: ToolCallEntry[]): string {
   const counts = new Map<string, number>();
@@ -55,7 +87,7 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
   const displayName = new Map<string, string>();
   for (const t of tools) {
     const raw = t.toolName.toLowerCase();
-    const key = TOOL_ALIASES[raw] ?? raw;
+    const key = isTask(t) ? "task" : (KIND_BUCKET[t.toolKind ?? ""] ?? TOOL_ALIASES[raw] ?? raw);
     counts.set(key, (counts.get(key) ?? 0) + 1);
     if (!displayName.has(key)) displayName.set(key, t.toolName);
   }
@@ -67,11 +99,19 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
     const n = counts.get(key);
     if (!n) return;
     const fn = PHRASE_FNS[key];
-    parts.push(fn ? fn(n) : `used ${displayName.get(key) ?? key} ${n} time${n === 1 ? "" : "s"}`);
+    if (fn) {
+      parts.push(fn(n));
+      return;
+    }
+    const rawLabel = displayName.get(key) ?? key;
+    const label = rawLabel.length > FALLBACK_LABEL_MAX ? `${rawLabel.slice(0, FALLBACK_LABEL_MAX)}…` : rawLabel;
+    parts.push(`used ${label} ${n} time${n === 1 ? "" : "s"}`);
   };
   for (const key of PHRASE_ORDER) pushKey(key);
   for (const key of counts.keys()) pushKey(key);
-  const text = parts.join(", ");
+  const shown = parts.length > MAX_CLAUSES ? parts.slice(0, MAX_CLAUSES) : parts;
+  const overflow = parts.length - shown.length;
+  const text = overflow > 0 ? `${shown.join(", ")}, +${overflow} more` : shown.join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
@@ -114,7 +154,10 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   const hasDiffs = !!tool.diffs && tool.diffs.length > 0;
   // Structured diffs win over the heuristic text-sniffing path (Decision 3).
   const isDiff = !hasDiffs && !isError && hasResultBody && looksLikeUnifiedDiff(resultText);
-  const hasBody = hasInputBody || hasResultBody || hasDiffs;
+  // Phase 6 — a Task's bracketed sub-thread (Decision 4) also expands the row,
+  // even when the Task call itself has no input/result/diff body of its own.
+  const hasChildren = !!tool.children && tool.children.length > 0;
+  const hasBody = hasInputBody || hasResultBody || hasDiffs || hasChildren;
   const done = tool.status ? tool.status === "completed" : (!hasBody && !!result);
 
   return (
@@ -138,6 +181,11 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
         </span>
         <span className="chat-tool-entry__name">{isBash ? "Ran" : tool.toolName}</span>
         {inline ? <code className="chat-tool-entry__inline">{inline}</code> : null}
+        {hasChildren ? (
+          <span className="chat-tool-entry__child-count">
+            {tool.children!.length} tool{tool.children!.length === 1 ? "" : "s"}
+          </span>
+        ) : null}
         <span className="chat-tool-entry__status">
           {running ? (
             <span className="chat-spinner" aria-label="running" />
@@ -177,6 +225,13 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
                 <code>{resultText}</code>
               </pre>
             )
+          ) : null}
+          {hasChildren ? (
+            <div className="chat-tool-entry__children">
+              {tool.children!.map((child) => (
+                <ToolRunEntryRow key={child.id} tool={child} running={false} cwd={cwd} />
+              ))}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -222,7 +277,7 @@ export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
           {open ? "▾" : "▸"}
         </span>
         <span className={`chat-tool-run__text${hasError ? " chat-tool-run__text--error" : ""}`}>
-          {summarizeGroup(tools) || (tools.length === 1 ? "Delegated to subagent" : `Delegated to ${tools.length} subagents`)}
+          {summarizeGroup(tools)}
         </span>
         {hasPending ? <span className="chat-spinner" aria-label="running" /> : null}
       </button>

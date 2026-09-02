@@ -52,8 +52,18 @@ function thinkingEvent(id: string, turnId: string, text: string, ts = ""): Norma
   return { id, sessionId: "s1", ts, provider: "claude", kind: "thinking", text, turnId };
 }
 
-function toolUseEvent(id: string, turnId: string, ts = ""): NormalizedEvent {
-  return { id, sessionId: "s1", ts, provider: "claude", kind: "tool_use", toolName: "Bash", toolId: id, turnId };
+function toolUseEvent(id: string, turnId: string, ts = "", toolName = "Bash"): NormalizedEvent {
+  return { id, sessionId: "s1", ts, provider: "claude", kind: "tool_use", toolName, toolId: id, turnId };
+}
+
+function toolResultEvent(
+  id: string,
+  toolId: string,
+  turnId: string,
+  status: "completed" | "failed" | "in_progress" | "pending" = "completed",
+  ts = "",
+): NormalizedEvent {
+  return { id, sessionId: "s1", ts, provider: "claude", kind: "tool_result", toolId, toolStatus: status, turnId };
 }
 
 describe("groupEvents assistant turn boundaries", () => {
@@ -844,6 +854,79 @@ describe("MessageList auto load-earlier on scroll near top (infinite scroll upwa
     container.scrollTop = 0; // user is still up at the top of the loaded window
     fireEvent.scroll(container);
     expect(onLoadEarlier).toHaveBeenCalledTimes(2);
+  });
+});
+
+type ToolItem = { type: "tool"; id: string; toolName: string; children?: ToolItem[] };
+
+describe("groupEvents — native Task sub-thread (Phase 6, Decision 4)", () => {
+  it("6.T1 — events between a Task's start and its completed result nest under it", () => {
+    const items = groupEvents([
+      toolUseEvent("task1", "t1", "1", "Task"),
+      toolUseEvent("child1", "t1", "2", "Bash"),
+      toolResultEvent("child1-r", "child1", "t1", "completed", "3"),
+      toolUseEvent("child2", "t1", "4", "Read"),
+      toolResultEvent("child2-r", "child2", "t1", "completed", "5"),
+      toolResultEvent("task1-r", "task1", "t1", "completed", "6"),
+    ]);
+    const tools = items.filter((i) => i.type === "tool") as unknown as ToolItem[];
+    // Only the Task itself is a top-level tool item — its two children are
+    // NOT siblings in the flat list.
+    expect(tools).toHaveLength(1);
+    const task = tools[0]!;
+    expect(task.toolName).toBe("Task");
+    expect(task.children).toHaveLength(2);
+    expect(task.children![0]!.toolName).toBe("Bash");
+    expect(task.children![1]!.toolName).toBe("Read");
+  });
+
+  it("6.T2 — an unterminated Task closes at the end of its turnId and does not swallow later turns", () => {
+    const items = groupEvents([
+      toolUseEvent("task1", "t1", "1", "Task"),
+      toolUseEvent("child1", "t1", "2", "Bash"),
+      // No completed result for the Task — turn t1 just ends.
+      toolUseEvent("later1", "t2", "3", "Read"),
+    ]);
+    const tools = items.filter((i) => i.type === "tool") as unknown as ToolItem[];
+    // Task + its one child nested, and the later turn's tool is its OWN
+    // top-level sibling — never swallowed into the unterminated Task.
+    expect(tools).toHaveLength(2);
+    const task = tools.find((t) => t.toolName === "Task")!;
+    expect(task.children).toHaveLength(1);
+    const later = tools.find((t) => t.toolName === "Read")!;
+    expect(later.children ?? []).toHaveLength(0);
+  });
+
+  it("6.T3 — a second Task opening while one is open closes the first and stops nesting", () => {
+    const items = groupEvents([
+      toolUseEvent("task1", "t1", "1", "Task"),
+      toolUseEvent("child1", "t1", "2", "Bash"),
+      toolUseEvent("task2", "t1", "3", "Task"),
+      toolUseEvent("child2", "t1", "4", "Read"),
+    ]);
+    const tools = items.filter((i) => i.type === "tool") as unknown as ToolItem[];
+    // Both Tasks are top-level siblings — task2 does NOT nest inside task1.
+    expect(tools).toHaveLength(2);
+    const [task1, task2] = tools;
+    expect(task1!.toolName).toBe("Task");
+    expect(task1!.children).toHaveLength(1);
+    expect(task1!.children![0]!.toolName).toBe("Bash");
+    expect(task2!.toolName).toBe("Task");
+    // child2 nests under the SECOND (now-open) Task, not task1.
+    expect(task2!.children).toHaveLength(1);
+    expect(task2!.children![0]!.toolName).toBe("Read");
+  });
+
+  it("6.T4 — a transcript with no Task events groups exactly as before (regression)", () => {
+    const items = groupEvents([
+      toolUseEvent("t1", "t1", "1", "Bash"),
+      toolResultEvent("t1-r", "t1", "t1", "completed", "2"),
+      toolUseEvent("t2", "t1", "3", "Read"),
+    ]);
+    const tools = items.filter((i) => i.type === "tool") as unknown as ToolItem[];
+    expect(tools).toHaveLength(2);
+    expect(tools[0]!.children ?? []).toHaveLength(0);
+    expect(tools[1]!.children ?? []).toHaveLength(0);
   });
 });
 

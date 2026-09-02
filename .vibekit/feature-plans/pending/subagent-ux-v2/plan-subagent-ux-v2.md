@@ -171,6 +171,8 @@ RULES — read before writing or implementing:
 - Across 26 sampled Task calls (vs-62, vs-64, vs-66) no two Tasks were ever concurrently open, so positional bracketing is correct on all observed data.
 - One counter-example exists: vs-64 seq 18 opens a Task and seq 23 opens a `Terminal` before it closes at seq 24 — hence the guards in Decision 4.
 - Match on `toolName.toLowerCase() === "task"`; `toolKind` is `"think"`, shared with the Think tool.
+- **No task description is recoverable — this corrects an earlier assumption.** `toolInput` is `{}`, and the `tool_result` either omits `toolResult` entirely or carries the subagent's *result* (`<task id=… state="completed"><task_result>…`) — never the prompt.
+  - Verified across every session DB on this machine; the row therefore shows `Task · N tools` and nothing more.
 
 ---
 
@@ -241,7 +243,7 @@ After Phase 6 — the subagent's calls nest under the Task that spawned them:
 
 ```
 ▾ Ran 3 shell commands, delegated to 1 subagent
-  ▾ 🔧 Task · review the LRU retain plan · 6 tools · 41s   ✓
+  ▾ 🔧 Task · 6 tools   ✓          ← no description exists in the stream (see Research)
       ↳ Ran  find . -name useChat.ts        ✓
       ↳ Read web-ui/src/hooks/useChat.ts    ✓
       ↳ Ran  grep -n "chatSubs" …           ✓
@@ -530,115 +532,115 @@ after Phase 1:           creates a RICH CHAT session in the parent's mode,
                           parentSessionId = parent id, and it survives a reset
 ```
 
-- [ ] **1.1** Add `buildVstEnv({project, worktree, session, daemonPort})` to `daemon/src/services/context.ts`
-- [ ] **1.2** Use it at `spawn.ts:511-516` and `:709-713`, replacing the six VST keys and **keeping** the `...plugin.getEnvironment(launchCfg)` spread
-- [ ] **1.3** Merge it under `spec.env` in `daemon/src/services/jsonAgent.ts:1062` (`getOrCreateConnection`)
-- [ ] **1.4** Carry the link through reset: `parentSessionId: session.parentSessionId ?? null` at `daemon/src/routes/sessions.ts:1445-1470`
-- [ ] **1.5** Inherit `modeId` and `channel` from `sourceAgentId` at `daemon/src/routes/sessions.ts:481-488`, before the 400 check
-- [ ] **1.6** Warn only when `--source-agent` was passed explicitly and resolved blank (`cli/src/commands/session/create.ts:58`); stay silent when it was never passed
-- [ ] **1.7** Add `--parent <sessionId>` as the documented alias of `--source-agent` on `session create` and `worktree create`
+- [x] **1.1** Add `buildVstEnv({project, worktree, session, daemonPort})` to `daemon/src/services/context.ts`
+- [x] **1.2** Use it at `spawn.ts:511-516` and `:709-713`, replacing the six VST keys and **keeping** the `...plugin.getEnvironment(launchCfg)` spread
+- [x] **1.3** Merge it under `spec.env` in `daemon/src/services/jsonAgent.ts:1062` (`getOrCreateConnection`)
+- [x] **1.4** Carry the link through reset: `parentSessionId: session.parentSessionId ?? null` at `daemon/src/routes/sessions.ts:1445-1470`
+- [x] **1.5** Inherit `modeId` and `channel` from `sourceAgentId` at `daemon/src/routes/sessions.ts:481-488`, before the 400 check
+- [x] **1.6** Warn only when `--source-agent` was passed explicitly and resolved blank (`cli/src/commands/session/create.ts:58`); stay silent when it was never passed
+- [x] **1.7** Add `--parent <sessionId>` as the documented alias of `--source-agent` on `session create` and `worktree create`
 
 **Verify phase 1:**
-- [ ] **1.T1** Unit — `buildVstEnv`: returns all six vars for a worktree session; omits `VST_WORKTREE` when `worktree` is null
-- [ ] **1.T2** Integration — ACP spawn: a plugin with empty `spec.env` gets `VST_SESSION` equal to the session id
-- [ ] **1.T3** Regression — ACP spawn: `CLAUDE_CODE_EXECUTABLE` still wins over the VST block; opencode's `getEnvironment` side effect still runs once
-- [ ] **1.T4** Integration — `sessions.reset`: resetting a session with `parentSessionId` set yields a new record with the same value
-- [ ] **1.T5** Integration — `sessions.create`: `sourceAgentId` pointing at a json-channel session with no `modeId`/`channel` creates a json child with the parent's mode
-- [ ] **1.T6** Regression — `sessions.create`: no `sourceAgentId` and no `modeId` still 400s with `'modeId' is required for agent sessions`
-- [ ] **1.T7** Unit — `session create`: an explicit `--source-agent ""` warns and still creates the session
-- [ ] **1.T8** Regression — `session create`: no flag and no `$VST_SESSION` (human terminal) creates the session with no warning and no `sourceAgentId`
-- [ ] **1.T9** Integration — the invariant: a child's `parentSessionId` equals the parent's `VST_SESSION`
-- [ ] **1.T10** Unit — `session create`: `--parent` and `--source-agent` produce an identical request body
+- [x] **1.T1** Unit — `buildVstEnv`: returns all six vars for a worktree session; omits `VST_WORKTREE` when `worktree` is null
+- [x] **1.T2** Integration — ACP spawn: a plugin with empty `spec.env` gets `VST_SESSION` equal to the session id
+- [x] **1.T3** Regression — ACP spawn: `CLAUDE_CODE_EXECUTABLE` still wins over the VST block; opencode's `getEnvironment` side effect still runs once
+- [x] **1.T4** Integration — `sessions.reset`: resetting a session with `parentSessionId` set yields a new record with the same value
+- [x] **1.T5** Integration — `sessions.create`: `sourceAgentId` pointing at a json-channel session with no `modeId`/`channel` creates a json child with the parent's mode
+- [x] **1.T6** Regression — `sessions.create`: no `sourceAgentId` and no `modeId` still 400s with `'modeId' is required for agent sessions`
+- [x] **1.T7** Unit — `session create`: an explicit `--source-agent ""` warns and still creates the session
+- [x] **1.T8** Regression — `session create`: no flag and no `$VST_SESSION` (human terminal) creates the session with no warning and no `sourceAgentId`
+- [x] **1.T9** Integration — the invariant: a child's `parentSessionId` equals the parent's `VST_SESSION`
+- [x] **1.T10** Unit — `session create`: `--parent` and `--source-agent` produce an identical request body
 
 ---
 
 ### Phase 2 — Teach Rich Chat agents only
 
-- [ ] **2.1** New `daemon/src/assets/agent-subagent-richchat.md` — spawning a session here creates a visible subagent, linked automatically (no `--source-agent` to pass)
-- [ ] **2.2** State that mode and channel are inherited and that an explicit user instruction overrides them (Decision 8)
-- [ ] **2.3** State when to delegate: a VST subagent for work worth watching, the CLI's own `Task` tool for short lookups
-- [ ] **2.3b** State that the spawning agent owns its subagents' lifecycle — run `vst session terminate <id>` when a sub-task is done (Decision 5)
-- [ ] **2.4** Add `richChat?: boolean` to `BuildPromptInput`/`BuildDirectPromptInput` and append the fragment when true (`promptBuilder.ts:46-57`, `:67`, `:120`)
-- [ ] **2.5** Set `richChat: true` at `jsonAgentChat.ts:173` and `:181` — and nowhere else
-- [ ] **2.6** Leave `agent-system-prompt.md` unchanged; leave `skill/SKILL.md` unchanged unless an external agent needs the same command
+- [x] **2.1** New `daemon/src/assets/agent-subagent-richchat.md` — spawning a session here creates a visible subagent, linked automatically (no `--source-agent` to pass)
+- [x] **2.2** State that mode and channel are inherited and that an explicit user instruction overrides them (Decision 8)
+- [x] **2.3** State when to delegate: a VST subagent for work worth watching, the CLI's own `Task` tool for short lookups
+- [x] **2.3b** State that the spawning agent owns its subagents' lifecycle — run `vst session terminate <id>` when a sub-task is done (Decision 5)
+- [x] **2.4** Add `richChat?: boolean` to `BuildPromptInput`/`BuildDirectPromptInput` and append the fragment when true (`promptBuilder.ts:46-57`, `:67`, `:120`)
+- [x] **2.5** Set `richChat: true` at `jsonAgentChat.ts:173` and `:181` — and nowhere else
+- [x] **2.6** Leave `agent-system-prompt.md` unchanged; leave `skill/SKILL.md` unchanged unless an external agent needs the same command
 
 **Verify phase 2:**
-- [ ] **2.T1** Unit — `promptBuilder`: `richChat: true` output contains the subagent section; default output does not
-- [ ] **2.T2** Regression — `promptBuilder`: default (no flag) output is byte-identical to today's for both `buildPrompt` and `buildDirectPrompt`
-- [ ] **2.T3** Unit — `jsonAgentChat`: `buildSystemPrompt` passes `richChat: true` for both the worktree and direct paths
-- [ ] **2.T4** Integration — live spawn: a Rich Chat agent told "delegate X to a subagent" produces a session whose `parentSessionId` is the parent id and whose channel is `json`
+- [x] **2.T1** Unit — `promptBuilder`: `richChat: true` output contains the subagent section; default output does not
+- [x] **2.T2** Regression — `promptBuilder`: default (no flag) output is byte-identical to today's for both `buildPrompt` and `buildDirectPrompt`
+- [x] **2.T3** Unit — `jsonAgentChat`: `buildSystemPrompt` passes `richChat: true` for both the worktree and direct paths
+- [x] **2.T4** Integration — live spawn: a Rich Chat agent told "delegate X to a subagent" produces a session whose `parentSessionId` is the parent id and whose channel is `json`
 
 ---
 
 ### Phase 3 — Subagent row + opening
 
-- [ ] **3.1** New `web-ui/src/components/chat/SubagentRow.tsx` — one row per live child, `StatusDot` with `pr={null}`, `QueuedTray` styling
-- [ ] **3.2** Row derivation: every non-deleted child whose `parentSessionId` matches the parent's id or any archived predecessor (Decision 7), collapsing a reset predecessor into its successor
-- [ ] **3.3** Render in `ChatPane.tsx` between `StatusBar` (`:286`) and the `archived` ternary (`:294`), so archived parents still show rows
-- [ ] **3.4** Tap handler — tile via `useStore.ts:270`/`:288` in workspace mode, else `setActiveSession` (`:734`); a different-worktree child renders disabled with a tooltip
-- [ ] **3.5** Cap at 5 rows with a `+N more` affordance
-- [ ] **3.6** Parent link: when `session.parentSessionId` is set, render one row "↑ Parent · <name>" above any child rows
-- [ ] **3.7** Resolve a reset parent by following `supersededBy` forward; render nothing when the parent was deleted
+- [x] **3.1** New `web-ui/src/components/chat/SubagentRow.tsx` — one row per live child, `StatusDot` with `pr={null}`, `QueuedTray` styling
+- [x] **3.2** Row derivation: every non-deleted child whose `parentSessionId` matches the parent's id or any archived predecessor (Decision 7), collapsing a reset predecessor into its successor
+- [x] **3.3** Render in `ChatPane.tsx` between `StatusBar` (`:286`) and the `archived` ternary (`:294`), so archived parents still show rows
+- [x] **3.4** Tap handler — tile via `useStore.ts:270`/`:288` in workspace mode, else `setActiveSession` (`:734`); a different-worktree child renders disabled with a tooltip
+- [x] **3.5** Cap at 5 rows with a `+N more` affordance
+- [x] **3.6** Parent link: when `session.parentSessionId` is set, render one row "↑ Parent · <name>" above any child rows
+- [x] **3.7** Resolve a reset parent by following `supersededBy` forward; render nothing when the parent was deleted
 
 **Verify phase 3:**
-- [ ] **3.T1** Unit — `SubagentRow`: renders nothing when the parent has no children; one row per child
-- [ ] **3.T1b** Unit — `SubagentRow`: a child in state `done` still renders, with a done dot — the row is not removed on completion
-- [ ] **3.T2** Unit — `SubagentRow`: a reset child shows once, as its successor; an archived-but-not-superseded child still shows, styled archived
-- [ ] **3.T3** Unit — `SubagentRow`: after a parent reset, children carrying the predecessor id still render
-- [ ] **3.T4** Integration — WS: a `session:created` carrying `parentSessionId` adds a row with no refetch
-- [ ] **3.T5** Integration — open: tapping a same-worktree row in classic mode calls `setActiveSession` with the child id
-- [ ] **3.T6** Unit — `SubagentRow`: a session with `parentSessionId` set renders exactly one "↑ Parent" row; a root session renders none
-- [ ] **3.T7** Unit — `SubagentRow`: a parent that was reset resolves through `supersededBy` to the live successor; a deleted parent renders nothing
-- [ ] **3.T8** Integration — open: tapping the parent row activates the parent session
-- [ ] **3.T9** Regression — `ChatPane`: composer position, queued tray, and the archived banner are unchanged when no subagents exist
+- [x] **3.T1** Unit — `SubagentRow`: renders nothing when the parent has no children; one row per child
+- [x] **3.T1b** Unit — `SubagentRow`: a child in state `done` still renders, with a done dot — the row is not removed on completion
+- [x] **3.T2** Unit — `SubagentRow`: a reset child shows once, as its successor; an archived-but-not-superseded child still shows, styled archived
+- [x] **3.T3** Unit — `SubagentRow`: after a parent reset, children carrying the predecessor id still render
+- [x] **3.T4** Integration — WS: a `session:created` carrying `parentSessionId` adds a row with no refetch
+- [x] **3.T5** Integration — open: tapping a same-worktree row in classic mode calls `setActiveSession` with the child id
+- [x] **3.T6** Unit — `SubagentRow`: a session with `parentSessionId` set renders exactly one "↑ Parent" row; a root session renders none
+- [x] **3.T7** Unit — `SubagentRow`: a parent that was reset resolves through `supersededBy` to the live successor; a deleted parent renders nothing
+- [x] **3.T8** Integration — open: tapping the parent row activates the parent session
+- [x] **3.T9** Regression — `ChatPane`: composer position, queued tray, and the archived banner are unchanged when no subagents exist
 
 ---
 
 ### Phase 4 — Detach-on-kill dialog (wording only)
 
-- [ ] **4.1** When the terminate target has live subagents, name them in the `ConfirmDialog` body and state they will keep running (`TabsStrip.tsx:752-786`)
-- [ ] **4.2** Change the confirm label to "Detach subagents & terminate" in that case only
-- [ ] **4.3** Leave `api.terminateSession` and the delete path untouched (`TabsStrip.tsx:777`)
+- [x] **4.1** When the terminate target has live subagents, name them in the `ConfirmDialog` body and state they will keep running (`TabsStrip.tsx:752-786`)
+- [x] **4.2** Change the confirm label to "Detach subagents & terminate" in that case only
+- [x] **4.3** Leave `api.terminateSession` and the delete path untouched (`TabsStrip.tsx:777`)
 
 **Verify phase 4:**
-- [ ] **4.T1** Unit — `TabsStrip`: a target with live subagents shows their names and the "Detach subagents & terminate" label
-- [ ] **4.T2** Integration — confirm: only the parent is deleted; the subagents remain in the store and in the tab strip
-- [ ] **4.T3** Regression — `TabsStrip`: a target with no subagents shows today's dialog, label, and delete behavior unchanged
+- [x] **4.T1** Unit — `TabsStrip`: a target with live subagents shows their names and the "Detach subagents & terminate" label
+- [x] **4.T2** Integration — confirm: only the parent is deleted; the subagents remain in the store and in the tab strip
+- [x] **4.T3** Regression — `TabsStrip`: a target with no subagents shows today's dialog, label, and delete behavior unchanged
 
 ---
 
 ### Phase 5 — Fix the run header (independent; ship first)
 
-- [ ] **5.1** Bucket `summarizeGroup` by `toolKind` via `KIND_BUCKET`, falling back to `TOOL_ALIASES`/`toolName` only when `toolKind` is absent (`ToolRunSummary.tsx:50-76`)
-- [ ] **5.2** Detect Task by name before kind and give it a `task` bucket — "delegated to N subagents"
-- [ ] **5.3** Truncate any name-derived fallback label to 24 chars
-- [ ] **5.4** Cap the header at 4 clauses, appending `+N more`
-- [ ] **5.5** Add `"terminal": "bash"` to `TOOL_ALIASES` (`:32`) — one-line insurance for any session reporting no `toolKind`, which would otherwise regress to the unbounded header
-- [ ] **5.6** In `ToolRunEntryRow`, fall back to `toolName` when `tool.toolKind === "execute" && !BASH_TOOL_NAMES.has(name)` — the ACP case where `toolName` IS the command
-- [ ] **5.7** Drop the now-dead `|| "Delegated to N subagents"` fallback at `:225`
+- [x] **5.1** Bucket `summarizeGroup` by `toolKind` via `KIND_BUCKET`, falling back to `TOOL_ALIASES`/`toolName` only when `toolKind` is absent (`ToolRunSummary.tsx:50-76`)
+- [x] **5.2** Detect Task by name before kind and give it a `task` bucket — "delegated to N subagents"
+- [x] **5.3** Truncate any name-derived fallback label to 24 chars
+- [x] **5.4** Cap the header at 4 clauses, appending `+N more`
+- [x] **5.5** Add `"terminal": "bash"` to `TOOL_ALIASES` (`:32`) — one-line insurance for any session reporting no `toolKind`, which would otherwise regress to the unbounded header
+- [x] **5.6** ~~`toolName` fallback for bash rows~~ — **unnecessary; verified not needed.** Every ACP `execute` event carries `toolInput.command`, so `summarizeToolInput` already renders the command inline (checked against `vs-64/messages.db`).
+- [x] **5.7** Drop the now-dead `|| "Delegated to N subagents"` fallback at `:225`
 
 **Verify phase 5:**
-- [ ] **5.T1** Unit — `summarizeGroup`: 12 `execute` + 4 `read` calls with distinct command-string `toolName`s produce "Ran 12 shell commands, read 4 files"
-- [ ] **5.T2** Unit — `summarizeGroup`: header length is unchanged between a 20-call and a 200-call run of the same kinds
-- [ ] **5.T3** Unit — `summarizeGroup`: six distinct kinds render 4 clauses plus "+2 more"
-- [ ] **5.T4** Unit — `summarizeGroup`: a Task call reads "delegated to 1 subagent", not "thought 1 time"
-- [ ] **5.T5** Unit — `summarizeGroup`: a tool with no `toolKind` and a 200-char `toolName` yields a clause ≤ 40 chars
-- [ ] **5.T6** Regression — `ToolRunSummary`: native (non-ACP) runs with real tool names summarize exactly as before
+- [x] **5.T1** Unit — `summarizeGroup`: 12 `execute` + 4 `read` calls with distinct command-string `toolName`s produce "Ran 12 shell commands, read 4 files"
+- [x] **5.T2** Unit — `summarizeGroup`: header length is unchanged between a 20-call and a 200-call run of the same kinds
+- [x] **5.T3** Unit — `summarizeGroup`: six distinct kinds render 4 clauses plus "+2 more"
+- [x] **5.T4** Unit — `summarizeGroup`: a Task call reads "delegated to 1 subagent", not "thought 1 time"
+- [x] **5.T5** Unit — `summarizeGroup`: a tool with no `toolKind` and a 200-char `toolName` yields a clause ≤ 40 chars
+- [x] **5.T6** Regression — `ToolRunSummary`: native (non-ACP) runs with real tool names summarize exactly as before
 
 ---
 
 ### Phase 6 — Native Task sub-thread
 
-- [ ] **6.1** Add a children field to the `RenderItem` tool variant (`MessageList.tsx:13`) and bracket Task groups in `groupEvents` (`:101`, `:230-266`)
-- [ ] **6.2** Apply the three guards from Decision 4
-- [ ] **6.3** Read the task description from the first result chunk; label `Task` until it arrives
-- [ ] **6.4** Render nested children under their Task row in `ToolRunSummary`
+- [x] **6.1** Add a children field to the `RenderItem` tool variant (`MessageList.tsx:13`) and bracket Task groups in `groupEvents` (`:101`, `:230-266`)
+- [x] **6.2** Apply the three guards from Decision 4
+- [x] **6.3** ~~Read the task description from the first result chunk~~ — **not implementable; the premise was wrong.** See Research: no description exists anywhere in the stream, so the row shows `Task · N tools` with no description.
+- [x] **6.4** Render nested children under their Task row in `ToolRunSummary`
 
 **Verify phase 6:**
-- [ ] **6.T1** Unit — `groupEvents`: events between a Task's start and its completed result nest under it
-- [ ] **6.T2** Unit — `groupEvents`: an unterminated Task closes at the end of its `turnId` and does not swallow later turns
-- [ ] **6.T3** Unit — `groupEvents`: a second Task opening while one is open closes the first and stops nesting
-- [ ] **6.T4** Regression — `MessageList`: a transcript with no Task events groups exactly as before
+- [x] **6.T1** Unit — `groupEvents`: events between a Task's start and its completed result nest under it
+- [x] **6.T2** Unit — `groupEvents`: an unterminated Task closes at the end of its `turnId` and does not swallow later turns
+- [x] **6.T3** Unit — `groupEvents`: a second Task opening while one is open closes the first and stops nesting
+- [x] **6.T4** Regression — `MessageList`: a transcript with no Task events groups exactly as before
 
 ---
 

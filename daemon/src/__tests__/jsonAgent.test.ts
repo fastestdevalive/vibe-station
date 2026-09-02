@@ -18,6 +18,21 @@ import type {
 
 let tempDir: string;
 
+// 1.T2/1.T3 support — spy on AcpConnection's constructor to capture the
+// (already-merged) env each connection is built with, without altering real
+// behavior (the spy subclass delegates straight to the real implementation).
+const acpEnvCaptures = vi.hoisted(() => [] as Array<Record<string, string> | undefined>);
+vi.mock("../services/acp/acpTransport.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../services/acp/acpTransport.js")>();
+  class SpyAcpConnection extends original.AcpConnection {
+    constructor(...args: ConstructorParameters<typeof original.AcpConnection>) {
+      acpEnvCaptures.push(args[0]?.env);
+      super(...args);
+    }
+  }
+  return { ...original, AcpConnection: SpyAcpConnection };
+});
+
 vi.mock("../services/paths.js", async () => {
   const { join: pathJoin } = await import("node:path");
   const base = () => tempDir || "/tmp/vst-json-test";
@@ -974,6 +989,107 @@ describe("JsonAgentSession — 1.T4 stopActiveTurn cancels an ACP connection, ne
 
       const results = agent.readTranscript().filter((e) => e.kind === "result");
       expect(results.filter((e) => e.text === "end_turn")).toHaveLength(2);
+    } finally {
+      await agent.release();
+    }
+  });
+});
+
+describe("JsonAgentSession — ACP connections get $VST_SESSION (1.T2/1.T3, subagent-ux-v2 Phase 1)", () => {
+  let project: ProjectRecord;
+  const FAKE_AGENT = join(__dirname, "fixtures", "fakeAcpAgent.mjs");
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-acp-env-"));
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(tempDir, "repo"), { recursive: true });
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+    acpEnvCaptures.length = 0;
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  function acpPluginWithEnv(pluginEnv: Record<string, string>): AgentPlugin {
+    return {
+      ...mockPlugin(""),
+      supportsAcp() {
+        return true;
+      },
+      async *runTurn(_input, ctx, signal) {
+        const conn = await ctx.getAcpConnection!({
+          command: process.execPath,
+          args: [FAKE_AGENT],
+          cwd: ctx.cwd,
+          env: { FAKE_ACP_MODE: "normal", ...pluginEnv },
+          ...(ctx.onSpawn ? { onSpawn: ctx.onSpawn } : {}),
+        });
+        const sessionId = conn.currentSessionId ?? (await conn.newSession(ctx.cwd));
+        const { updates, result } = conn.sendPrompt(sessionId, [{ type: "text", text: "hi" }], signal);
+        for await (const ev of updates) yield ev;
+        const { stopReason } = await result;
+        yield { id: "r1", sessionId: ctx.session.id, ts: new Date().toISOString(), provider: "claude", kind: "result", text: stopReason } as NormalizedEvent;
+      },
+    } as unknown as AgentPlugin;
+  }
+
+  it("1.T2 — a plugin with empty spec.env gets VST_SESSION equal to the session id", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: acpPluginWithEnv({}),
+      daemonPort: 7421,
+      cli: "claude",
+    });
+    try {
+      agent.enqueue({ message: "hi" });
+      await agent.settled();
+      expect(acpEnvCaptures).toHaveLength(1);
+      expect(acpEnvCaptures[0]?.VST_SESSION).toBe(session.id);
+      expect(acpEnvCaptures[0]?.VST_DAEMON_URL).toBe("http://127.0.0.1:7421");
+    } finally {
+      await agent.release();
+    }
+  });
+
+  it("1.T3 — a plugin's own env var wins over the VST block (merged UNDER spec.env, Decision 1)", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      // Simulates a plugin like claude's CLAUDE_CODE_EXECUTABLE — a plugin
+      // var that must survive the VST env merge untouched. Overriding
+      // VST_SESSION itself is the sharpest way to prove "under", not "over".
+      plugin: acpPluginWithEnv({ VST_SESSION: "plugin-owns-this" }),
+      daemonPort: 7421,
+      cli: "claude",
+    });
+    try {
+      agent.enqueue({ message: "hi" });
+      await agent.settled();
+      expect(acpEnvCaptures[0]?.VST_SESSION).toBe("plugin-owns-this");
     } finally {
       await agent.release();
     }

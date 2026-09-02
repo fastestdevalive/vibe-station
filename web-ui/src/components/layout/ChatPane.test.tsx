@@ -159,6 +159,22 @@ describe("ChatPane (4.T2)", () => {
       screen.queryByText("This session has been archived. Start a new agent to continue."),
     ).toBeNull();
   });
+
+  // 3.T9 — the new SubagentRow renders unconditionally in the footer, but
+  // must render NOTHING (not even an empty wrapper) when there is no
+  // parent/child relation, so it can never perturb the composer/tray/
+  // archived-banner layout that existed before this feature.
+  it("3.T9 — composer, queued tray, and archived banner are unchanged when no subagents exist", async () => {
+    const api = createMockApi();
+    const { container } = render(<ChatPane api={api} session={jsonSession("js-no-subagents")} visible />);
+    await screen.findByRole("textbox", { name: /message/i });
+    expect(container.querySelector(".chat-subagent-row")).toBeNull();
+
+    const archived: Session = { ...jsonSession("js-archived-no-subagents"), archivedAt: new Date().toISOString() };
+    const { container: archivedContainer } = render(<ChatPane api={api} session={archived} visible />);
+    await screen.findByText("This session has been archived. Start a new agent to continue.");
+    expect(archivedContainer.querySelector(".chat-subagent-row")).toBeNull();
+  });
 });
 
 describe("ChatPane thinking-state debounce (1.T7 — Decision 2 anti-flicker)", () => {

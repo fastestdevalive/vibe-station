@@ -29,6 +29,7 @@ import {
   directSystemPromptPath,
 } from "./paths.js";
 import { mutateProject } from "../state/project-store.js";
+import { buildVstEnv } from "./context.js";
 import { JsonAgentStream } from "../ws/streams/jsonAgentStream.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import { AcpConnection, SessionLoadFailed, type AcpLaunchSpec } from "./acp/acpTransport.js";
@@ -1073,7 +1074,18 @@ export class JsonAgentSession {
     if (this.connection?.isAlive()) return this.connection;
     this.connection = undefined;
 
-    const conn: AcpConnection = new AcpConnection(spec, this.cli, enrich, () => {
+    // Merged UNDER spec.env (Decision 1) so a plugin keeps the last word on
+    // its own vars — this is the only Rich Chat spawn path, and without it
+    // $VST_SESSION is empty for every ACP-driven agent.
+    const specWithVstEnv: AcpLaunchSpec = {
+      ...spec,
+      env: {
+        ...buildVstEnv({ project: this.project, worktree: this.worktree, session: this.session, daemonPort: this.daemonPort }),
+        ...spec.env,
+      },
+    };
+
+    const conn: AcpConnection = new AcpConnection(specWithVstEnv, this.cli, enrich, () => {
       // Self-healing lazy respawn: notified whenever THIS connection disposes
       // (idle TTL, explicit teardown, or the child process exiting/crashing
       // on its own) so the next getOrCreateConnection() call spawns fresh
