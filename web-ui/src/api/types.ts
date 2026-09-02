@@ -781,3 +781,20 @@ export interface FsCheckResponse {
    *  `isGit` is true — null otherwise (not a repo, or path doesn't exist). */
   hasCommits: boolean | null;
 }
+
+export interface DeviceDiskInfo {
+  usedBytes: number;
+  totalBytes: number;
+  availableBytes: number;
+  mountPoint: string;
+}
+
+export interface WorktreeDiskUsage {
+  id: string;
+  diskBytes: number;
+}
+
+export interface DiskUsageResponse {
+  device: DeviceDiskInfo;
+  worktrees: WorktreeDiskUsage[];
+}

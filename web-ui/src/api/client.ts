@@ -14,6 +14,7 @@ import type {
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DiskUsageResponse,
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
@@ -327,19 +328,16 @@ export function createClientApi() {
 
     async deleteWorktree(id: string): Promise<{ ok: true }> {
       const root = baseUrl();
-      // UI always purges (removes files from disk)
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}?purge=true`, {
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
     },
 
-    async dismissWorktree(id: string): Promise<{ ok: true }> {
+    async getDiskUsage(): Promise<DiskUsageResponse> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      return parseJson<{ ok: true }>(res);
+      const res = await apiFetch(`${root}/worktrees/disk-usage`);
+      return parseJson<DiskUsageResponse>(res);
     },
 
     /**
