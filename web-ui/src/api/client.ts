@@ -161,7 +161,25 @@ export function createClientApi() {
       socket.onmessage = (ev) => {
         try {
           const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
-          if (msg.type) emit(msg as WSEvent);
+          if (msg.type) {
+            emit(msg as WSEvent);
+            // Fix 3: advance the stored sinceSeq cursor as live session:message
+            // events arrive so WS-reconnect uses the delta from the latest seen
+            // event rather than replaying everything since mount (unbounded replay
+            // regression introduced by snapshot-cache feature).
+            if (msg.type === "session:message") {
+              const sm = msg as unknown as { sessionId?: string; logSeq?: number };
+              if (sm.sessionId != null && sm.logSeq != null) {
+                const entry = chatSubs.get(sm.sessionId);
+                if (entry) {
+                  const current = entry.sinceSeq ?? 0;
+                  if (sm.logSeq > current) {
+                    chatSubs.set(sm.sessionId, { ...entry, sinceSeq: sm.logSeq });
+                  }
+                }
+              }
+            }
+          }
         } catch {
           /* ignore */
         }
