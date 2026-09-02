@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
-import { useServerStore } from "@/hooks/useServerStore";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -99,19 +98,9 @@ function isBenignRateLimit(text: string): boolean {
   return /^rate limit:\s*(unknown|allowed)/i.test(text.trim());
 }
 
-export function groupEvents(
-  events: NormalizedEvent[],
-  parentSessionId?: string | null,
-  childByParent?: ReadonlyMap<string, readonly string[]>,
-): RenderItem[] {
+export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
   const items: RenderItem[] = [];
   const toolIndexById = new Map<string, number>();
-  // Mutable FIFO clone of childByParent[parentSessionId] used to assign
-  // childSessionId to task tool_use entries in arrival order.
-  const pendingChildren: string[] =
-    parentSessionId && childByParent
-      ? [...(childByParent.get(parentSessionId) ?? [])]
-      : [];
   // A superseding (edited) `user` event carries the same turnId — keep the bubble
   // at its FIRST position but update to the LATEST text/attachments (A7).
   const userIndexByTurnId = new Map<string, number>();
@@ -240,12 +229,6 @@ export function groupEvents(
       }
       case "tool_use": {
         markToolCallDuringThinking(ev.turnId);
-        const isTask = (ev.toolName ?? "").toLowerCase() === "task";
-        // FIFO-consume from pendingChildren to correlate task tool_use entries
-        // with the child sessions they spawned. Only consumes when there's an
-        // unresolved result (the entry is in-progress or just arrived, not a
-        // completed task whose result already carries the child session info).
-        const childSessionId = isTask ? pendingChildren.shift() : undefined;
         items.push({
           type: "tool",
           id: ev.id,
@@ -256,7 +239,6 @@ export function groupEvents(
           diffs: ev.toolDiffs,
           locations: ev.toolLocations,
           toolKind: ev.toolKind,
-          ...(childSessionId !== undefined ? { childSessionId } : {}),
         });
         if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
         break;
@@ -402,10 +384,6 @@ interface MessageListProps {
   onAtBottomChange?: (atBottom: boolean) => void;
   /** Absolute working directory — tool-call paths are shown relative to it. */
   cwd?: string;
-  /** Called when the user clicks a child session link (TaskToolEntry). Threaded
-   *  through to ToolRunSummary; optional so existing callers without navigation
-   *  don't need to change. */
-  onNavigateToSession?: (sessionId: string) => void;
 }
 
 export function MessageList({
@@ -425,7 +403,6 @@ export function MessageList({
   onForkTurn,
   onAtBottomChange,
   cwd,
-  onNavigateToSession,
 }: MessageListProps) {
   // Which answered user turn (if any) this tab is editing → fork. Local to the
   // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
@@ -433,11 +410,7 @@ export function MessageList({
   // Forking is only offered when the session is idle (no turn in flight) — an
   // "answered" message (J6). Attachments/composer reuse the queued-turn editor.
   const canFork = !!onForkTurn && !!api && !!sessionId && !turnActive;
-  const childByParent = useServerStore((s) => s.childByParent);
-  const grouped = useMemo(
-    () => groupEvents(events, sessionId, childByParent),
-    [events, sessionId, childByParent],
-  );
+  const grouped = useMemo(() => groupEvents(events), [events]);
   // The turnId of the turn that is actually running RIGHT NOW — the last
   // event carrying one, since turns are strictly sequential (one active
   // turnId at a time per session). Only meaningful while `turnActive`.
@@ -830,7 +803,7 @@ export function MessageList({
             // any tool inside it still missing a result is genuinely running
             // (turns can fire several tool calls before results land), not
             // just the last one in the run.
-            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} cwd={cwd} api={api} onNavigate={onNavigateToSession} />;
+            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} cwd={cwd} />;
             break;
           case "error":
             node = <ErrorCard key={key} text={item.text} onRetry={onRetry} />;

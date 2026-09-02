@@ -176,11 +176,6 @@ export function useServerSync(api: ApiInstance): void {
         applySessionCreated(ev.snapshot);
         patchSessionState(ev.snapshot.id, ev.snapshot.state);
       }
-      // Record child→parent relationship so groupEvents can correlate task
-      // tool_use entries with their spawned child sessions via FIFO matching.
-      if (ev.spawnedFrom) {
-        useServerStore.getState().addChildSession(ev.spawnedFrom, ev.sessionId);
-      }
       // Phase 4c (agent-interaction-workspaces/04-workspaces): a session
       // spawned from a currently-tiled source auto-inserts as a new tile,
       // splitting the source's own tile (S4/S6/Decision 8). `spawnedFrom`
