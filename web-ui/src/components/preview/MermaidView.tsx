@@ -12,9 +12,11 @@ export function MermaidView({ chart, theme }: MermaidViewProps) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    // Models emit invalid mermaid routinely; a bare render() rejection would be
-    // an unhandled promise + blank host. Parse-check first, then guard render,
-    // and fall back to the raw source as a code block on any failure.
+    // Skip the mermaid.parse() pre-check — it is more conservative than
+    // render() (e.g. it rejects `|` inside `{diamond}` nodes even though
+    // render() recovers and produces valid SVG). render() is already wrapped in
+    // try/catch, so it is the sole gate; falling back to the raw source block
+    // on any render failure is enough.
     setFailed(false);
     let cancelled = false;
     mermaid.initialize({
@@ -26,12 +28,6 @@ export function MermaidView({ chart, theme }: MermaidViewProps) {
     if (!el) return;
     el.innerHTML = "";
     const run = async () => {
-      const ok = await mermaid.parse(chart, { suppressErrors: true });
-      if (cancelled) return;
-      if (!ok) {
-        setFailed(true);
-        return;
-      }
       try {
         const { svg } = await mermaid.render(`mmd-${uid}`, chart);
         if (cancelled) return;

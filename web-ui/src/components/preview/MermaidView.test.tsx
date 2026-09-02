@@ -25,17 +25,32 @@ describe("MermaidView hardening (RA2)", () => {
     await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
   });
 
-  it("falls back to a <pre> code block when parse reports invalid", async () => {
-    mockedMermaid.parse.mockResolvedValueOnce(false);
+  it("falls back to a <pre> code block when render() throws", async () => {
+    mockedMermaid.render.mockRejectedValueOnce(new Error("parse error"));
     const { container } = render(<MermaidView chart="not a diagram" theme="dark" />);
     await waitFor(() => expect(container.querySelector(".mermaid-fallback")).toBeTruthy());
     expect(container.querySelector(".mermaid-fallback")?.textContent).toContain("not a diagram");
-    // render() must never be attempted on an unparseable chart.
-    expect(mockedMermaid.render).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call parse() before render() — render is the sole gate", async () => {
+    const { container } = render(<MermaidView chart="graph TD; A-->B" theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
+    // parse() must never be called — render() is the only gate now.
+    expect(mockedMermaid.parse).not.toHaveBeenCalled();
+  });
+
+  it("renders a chart that parse() would reject but render() can handle (e.g. | in diamond node)", async () => {
+    // Simulate the case where parse() would have returned false (|  in diamond)
+    // but render() succeeds — this is the fix for plan diagrams with such syntax.
+    mockedMermaid.parse.mockResolvedValueOnce(false); // Would have blocked render in old code.
+    const chart = "flowchart LR\n    DeleteRoute --> Guard{done|exited?}\n    Guard --yes--> Purge";
+    const { container } = render(<MermaidView chart={chart} theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
+    // parse() must never be called — render() is the only gate now.
+    expect(mockedMermaid.parse).not.toHaveBeenCalled();
   });
 
   it("falls back without an unhandled rejection when render() throws", async () => {
-    mockedMermaid.parse.mockResolvedValueOnce(true);
     mockedMermaid.render.mockRejectedValueOnce(new Error("boom"));
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
