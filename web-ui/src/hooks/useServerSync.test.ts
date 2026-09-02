@@ -107,7 +107,7 @@ describe("useServerSync — session:updated reconciliation", () => {
   });
 });
 
-// --- Phase 4c: auto-insert a tile for a session:created carrying spawnedFrom
+// --- Phase 4c: auto-insert a tile for a session:created carrying parentSessionId
 // (agent-interaction-workspaces/04-workspaces) ---
 describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   const DOC_ID = "doc-1";
@@ -151,7 +151,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {} });
   });
 
-  it("4c.T1 — a session:created with spawnedFrom matching exactly one workspace's tile auto-inserts a new tile there", async () => {
+  it("4c.T1 — a session:created with parentSessionId matching exactly one workspace's tile auto-inserts a new tile there", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
     renderHook(() => useServerSync(api));
@@ -163,7 +163,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        spawnedFrom: SOURCE_ID,
+        parentSessionId: SOURCE_ID,
       });
     });
 
@@ -174,7 +174,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     });
   });
 
-  it("4c.T2 — a session:created with spawnedFrom matching no tile anywhere results in no tile insert, no error (S5)", async () => {
+  it("4c.T2 — a session:created with parentSessionId matching no tile anywhere results in no tile insert, no error (S5)", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
     renderHook(() => useServerSync(api));
@@ -186,7 +186,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        spawnedFrom: "sess-nobody-tiles-this",
+        parentSessionId: "sess-nobody-tiles-this",
       });
     });
 
@@ -196,7 +196,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     expect(doc.tiles).toHaveLength(1);
   });
 
-  it("4c.T3 — a session:created with spawnedFrom absent behaves identically to pre-Phase-4 (no scan attempted, CUJ 6)", async () => {
+  it("4c.T3 — a session:created with parentSessionId absent behaves identically to pre-Phase-4 (no scan attempted, CUJ 6)", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
     renderHook(() => useServerSync(api));
@@ -208,7 +208,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        // spawnedFrom omitted entirely — old-daemon / no-source create.
+        // parentSessionId omitted entirely — old-daemon / no-source create.
       });
     });
 
@@ -244,7 +244,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        spawnedFrom: SOURCE_ID,
+        parentSessionId: SOURCE_ID,
       });
     });
 
@@ -268,7 +268,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        spawnedFrom: SOURCE_ID,
+        parentSessionId: SOURCE_ID,
       });
     });
 
@@ -297,7 +297,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         // still lands next to its parent's tile.
         worktreeId: "wt-2",
         sessionType: "agent",
-        spawnedFrom: SOURCE_ID,
+        parentSessionId: SOURCE_ID,
       });
     });
 
@@ -321,7 +321,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
         sessionId: "sess-new",
         worktreeId: "wt-1",
         sessionType: "agent",
-        spawnedFrom: SOURCE_ID,
+        parentSessionId: SOURCE_ID,
       });
     });
 

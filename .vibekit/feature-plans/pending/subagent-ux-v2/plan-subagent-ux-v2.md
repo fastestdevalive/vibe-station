@@ -476,20 +476,20 @@ const key = isTask(t) ? "task"
 
 ### Phase 0 — Rename `spawnedFrom` → `parentSessionId` (mechanical; land first)
 
-- [ ] **0.1** Rename the field on `SessionRecord` (`daemon/src/types.ts:368`) and in `web-ui/src/api/types.ts`
-- [ ] **0.2** Rename in both route files (`daemon/src/routes/sessions.ts` ×5, `worktrees.ts` ×2) and `daemon/src/ws/protocol.ts`
-- [ ] **0.3** Translate at the DB seam only — `daemon/src/state/sqliteRowMappers.ts` maps `row.spawnedFrom` ↔ `parentSessionId`; leave `dbSchema.ts` untouched
-- [ ] **0.4** Rename in web-ui consumers: `useServerSync.ts`, `useStore.ts`, `routes/Workspace.tsx`
-- [ ] **0.5** Rename in `daemon/src/state/project-store.ts` and update the ~33 test references
-- [ ] **0.6** Update the documented session JSON shape in `skill/SKILL.md:197` — an external contract read by non-vibe-station agents
-- [ ] **0.7** Delete `docs/SUBAGENT-UX-PREVIEW.md` — it describes the reverted `c905422` UI in the present tense and would mislead every future reader of this feature
+- [x] **0.1** Rename the field on `SessionRecord` (`daemon/src/types.ts:368`) and in `web-ui/src/api/types.ts`
+- [x] **0.2** Rename in both route files (`daemon/src/routes/sessions.ts` ×5, `worktrees.ts` ×2) and `daemon/src/ws/protocol.ts`
+- [x] **0.3** Translate at the DB seam only — `daemon/src/state/sqliteRowMappers.ts` maps `row.spawnedFrom` ↔ `parentSessionId`; leave `dbSchema.ts` untouched
+- [x] **0.4** Rename in web-ui consumers: `useServerSync.ts`, `useStore.ts`, `routes/Workspace.tsx`
+- [x] **0.5** Rename in `daemon/src/state/project-store.ts` and update the ~33 test references
+- [x] **0.6** Update the documented session JSON shape in `skill/SKILL.md:197` — an external contract read by non-vibe-station agents
+- [x] **0.7** Delete `docs/SUBAGENT-UX-PREVIEW.md` — it describes the reverted `c905422` UI in the present tense and would mislead every future reader of this feature
 
 **Verify phase 0:**
-- [ ] **0.T1** Regression — full suite green with no behavior change (`cd cli && npx vitest run`, `cd web-ui && npx vitest run`)
-- [ ] **0.T2** Integration — `sqliteRowMappers`: a row written with `parentSessionId` reads back from the `spawnedFrom` column and round-trips
-- [ ] **0.T3** Regression — an existing DB created before this change still loads its parent links
-- [ ] **0.T4** Grep gate — `spawnedFrom` appears in exactly two files: `sqliteRowMappers.ts` and `dbSchema.ts`
-- [ ] **0.T5** Grep gate — no remaining source or doc file describes `spawnedFrom` as part of the session payload
+- [x] **0.T1** Regression — full suite green with no behavior change (`cd cli && npx vitest run`, `cd web-ui && npx vitest run`)
+- [x] **0.T2** Integration — `sqliteRowMappers`: a row written with `parentSessionId` reads back from the `spawnedFrom` column and round-trips
+- [x] **0.T3** Regression — an existing DB created before this change still loads its parent links
+- [x] **0.T4** Grep gate — `spawnedFrom` appears in exactly two files: `sqliteRowMappers.ts` and `dbSchema.ts`
+- [x] **0.T5** Grep gate — no remaining source or doc file describes `spawnedFrom` as part of the session payload
 
 ---
 

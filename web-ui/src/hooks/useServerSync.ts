@@ -178,7 +178,7 @@ export function useServerSync(api: ApiInstance): void {
       }
       // Phase 4c (agent-interaction-workspaces/04-workspaces): a session
       // spawned from a currently-tiled source auto-inserts as a new tile,
-      // splitting the source's own tile (S4/S6/Decision 8). `spawnedFrom`
+      // splitting the source's own tile (S4/S6/Decision 8). `parentSessionId`
       // absent or null (CUJ 6 — no source, the common case today) skips this
       // entirely — no scan, no behavior change from before Phase 4.
       //
@@ -188,11 +188,11 @@ export function useServerSync(api: ApiInstance): void {
       // a session tiled in two places is tiled deliberately, and skipping
       // silently produced no tile at all, which read as the feature being
       // broken.
-      if (ev.spawnedFrom) {
+      if (ev.parentSessionId) {
         const store = useWorkspaceStore.getState();
         // The everyday canvas mode is a scratch canvas; scanning only saved
         // docs meant this almost never fired in normal use.
-        for (const wtId of findScratchCanvasesTilingSession(ev.spawnedFrom, store.layoutByWorktree)) {
+        for (const wtId of findScratchCanvasesTilingSession(ev.parentSessionId, store.layoutByWorktree)) {
           store.insertTileIntoScratchCanvas(
             wtId,
             ev.sessionType,
@@ -200,7 +200,7 @@ export function useServerSync(api: ApiInstance): void {
             ev.worktreeId ?? undefined,
           );
         }
-        for (const doc of findWorkspacesTilingSession(ev.spawnedFrom, store.workspaceDocs)) {
+        for (const doc of findWorkspacesTilingSession(ev.parentSessionId, store.workspaceDocs)) {
           store.insertTileIntoWorkspaceDoc(
             doc.id,
             ev.sessionType,
