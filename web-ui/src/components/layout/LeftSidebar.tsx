@@ -606,7 +606,6 @@ export function LeftSidebar({
   /** Id of the project whose "Hidden worktrees" dialog is open, or null when closed. */
   const [hiddenWtDialogProjectId, setHiddenWtDialogProjectId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
-  const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const [pendingTerminateSession, setPendingTerminateSession] = useState<Session | null>(null);
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = useState<WorkspaceDoc | null>(null);
 
@@ -757,20 +756,6 @@ export function LeftSidebar({
       }
       // Store stays current via the `worktree:deleted` WS event handled in
       // useServerSync — no manual refresh needed.
-    } catch {
-      /* surface errors later */
-    }
-  }
-
-  async function confirmDismissWorktree() {
-    if (!pendingDismiss) return;
-    const worktree = pendingDismiss;
-    setPendingDismiss(null);
-    try {
-      await api.dismissWorktree(worktree.id);
-      if (activeWorktreeId === worktree.id) {
-        clearWorkspaceSelection();
-      }
     } catch {
       /* surface errors later */
     }
@@ -1857,19 +1842,6 @@ export function LeftSidebar({
       />
 
       <ConfirmDialog
-        open={pendingDismiss !== null}
-        title="Dismiss worktree?"
-        message={
-          pendingDismiss
-            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk. Any running sessions will be stopped.`
-            : ""
-        }
-        confirmLabel="Dismiss"
-        onConfirm={() => void confirmDismissWorktree()}
-        onCancel={() => setPendingDismiss(null)}
-      />
-
-      <ConfirmDialog
         open={pendingTerminateSession !== null}
         title="Terminate agent?"
         message={
@@ -1983,18 +1955,6 @@ export function LeftSidebar({
                 }}
               >
                 Mark as done
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-pop__item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPendingDismiss(wtMenu.worktree);
-                  setWtMenu(null);
-                }}
-              >
-                Dismiss (keep files)
               </button>
               <button
                 type="button"

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Columns3, EyeOff, LayoutList } from "lucide-react";
+import { Columns3, LayoutList } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
 import type { ConnectionState } from "@/api/client";
-import type { HealthResponse, PrStatus, Session, Worktree } from "@/api/types";
-import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+import type { HealthResponse, PrStatus, Session } from "@/api/types";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -80,11 +79,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
   const projects = useServerStore((s) => s.projects);
   const worktrees = useServerStore((s) => s.worktrees);
   const sessions = useServerStore((s) => s.sessions);
-  const [pendingDismiss, setPendingDismiss] = useState<Worktree | null>(null);
   const setActiveWorktree = useWorkspaceStore((s) => s.setActiveWorktree);
-  const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
-  const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
-
   const isMobile = useMediaQuery("(max-width: 768px)");
 
   const [dashboardView, setDashboardView] = useState<"list" | "kanban">(() => {
@@ -215,7 +210,6 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
       const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
       const proj = projectById[s.projectId];
-      const showDismiss = wt != null && (status === "done" || status === "exited");
       if (!wt) {
         // Direct (worktree-less) session — no worktree context to show, no
         // dismiss affordance (nothing to dismiss).
@@ -239,10 +233,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       }
       const sessionsForWt = sessions.filter((s2) => s2.worktreeId === wt.id);
       return (
-        <div
-          key={s.id}
-          className={`dashboard-card-shell${showDismiss ? " dashboard-card-shell--dismissable" : ""}`}
-        >
+        <div key={s.id} className="dashboard-card-shell">
           <Link
             to={`/worktree/${wt.id}`}
             className="dashboard-card dashboard-card--session dashboard-card--worktree"
@@ -259,21 +250,6 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
             </span>
             <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
           </Link>
-          {showDismiss ? (
-            <button
-              type="button"
-              className="icon-btn dashboard-card__dismiss"
-              aria-label={`Dismiss ${sessionLabel(s)} (${wt.branch}) from tracking`}
-              title="Dismiss from tracking (keep files)"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setPendingDismiss(wt);
-              }}
-            >
-              <EyeOff size={16} />
-            </button>
-          ) : null}
         </div>
       );
     },
@@ -438,32 +414,6 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
         ) : null}
       </div>
 
-      <ConfirmDialog
-        open={pendingDismiss !== null}
-        title="Dismiss worktree?"
-        message={
-          pendingDismiss
-            ? `Remove “${pendingDismiss.branch}” from vst tracking? Files and git branch stay on disk.`
-            : ""
-        }
-        confirmLabel="Dismiss"
-        onConfirm={() => {
-          void (async () => {
-            const wt = pendingDismiss;
-            if (!wt) return;
-            setPendingDismiss(null);
-            try {
-              await api.dismissWorktree(wt.id);
-              if (activeWorktreeId === wt.id) clearWorkspaceSelection();
-              // Store stays current via the `worktree:deleted` WS event handled
-              // by useServerSync.
-            } catch {
-              /* surface errors later */
-            }
-          })();
-        }}
-        onCancel={() => setPendingDismiss(null)}
-      />
     </div>
   );
 }

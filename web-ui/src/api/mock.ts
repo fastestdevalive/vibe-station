@@ -15,6 +15,7 @@ import type {
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DiskUsageResponse,
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
@@ -404,6 +405,19 @@ export function createMockApi() {
     async deleteWorktree(id: string): Promise<{ ok: true }> {
       const idx = worktrees.findIndex((w) => w.id === id);
       if (idx === -1) throw new ApiError("not found", 404);
+      const wt = worktrees[idx]!;
+      const wtSessions = sessions.filter((s) => s.worktreeId === wt.id);
+      const notDone = wtSessions.filter((s) =>
+        s.type === "agent"
+          ? s.state !== "done"
+          : s.state !== "done" && s.state !== "exited",
+      );
+      if (notDone.length > 0) {
+        throw new ApiError(
+          JSON.stringify({ error: "worktree_not_done", sessions: notDone.map((s) => s.id) }),
+          409,
+        );
+      }
       worktrees.splice(idx, 1);
       for (let i = sessions.length - 1; i >= 0; i--) {
         if (sessions[i]!.worktreeId === id) sessions.splice(i, 1);
@@ -413,15 +427,21 @@ export function createMockApi() {
       return { ok: true };
     },
 
-    async dismissWorktree(id: string): Promise<{ ok: true }> {
-      const idx = worktrees.findIndex((w) => w.id === id);
-      if (idx === -1) throw new ApiError("not found", 404);
-      worktrees.splice(idx, 1);
-      for (let i = sessions.length - 1; i >= 0; i--) {
-        if (sessions[i]!.worktreeId === id) sessions.splice(i, 1);
-      }
-      emit({ type: "worktree:deleted", worktreeId: id });
-      return { ok: true };
+    async getDiskUsage(): Promise<DiskUsageResponse> {
+      const TOTAL = 100 * 1024 * 1024 * 1024; // 100 GB
+      const USED = 52 * 1024 * 1024 * 1024;   // 52 GB
+      return {
+        device: {
+          totalBytes: TOTAL,
+          usedBytes: USED,
+          availableBytes: TOTAL - USED,
+          mountPoint: "~/.vibe-station",
+        },
+        worktrees: worktrees.map((wt, i) => ({
+          id: wt.id,
+          diskBytes: (i + 1) * 400 * 1024 * 1024, // 400 MB, 800 MB, ...
+        })),
+      };
     },
 
     async markWorktreeDone(

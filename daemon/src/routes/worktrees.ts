@@ -21,7 +21,7 @@ import {
 import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
-import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir } from "../services/paths.js";
+import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir, vstHome, projectDir } from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
 import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
 import { broadcastAll } from "../broadcaster.js";
@@ -857,16 +857,31 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
   });
 
   // DELETE /worktrees/:id
+  // Always purges (removes the git checkout from disk). The ?purge param is
+  // accepted but ignored for backward compat with existing callers.
+  // Only deletable when all agent sessions are `done` and all terminal sessions
+  // are `done` or `exited` — mirrors what POST /worktrees/:id/done produces.
   app.delete("/worktrees/:id", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
-    const { purge } = req.query as { purge?: string };
-    const shouldPurge = purge === "true" || purge === "1";
 
     // Find the project that owns this worktree
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
 
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
+
+    // Done guard: agents must be `done`; terminals accept `done` or `exited`
+    const notDone = worktree.sessions.filter((s) =>
+      s.type === "agent"
+        ? s.lifecycle.state !== "done"
+        : s.lifecycle.state !== "done" && s.lifecycle.state !== "exited",
+    );
+    if (notDone.length > 0) {
+      return reply.status(409).send({
+        error: "worktree_not_done",
+        sessions: notDone.map((s) => s.id),
+      });
+    }
 
     // Kill all sessions (tmux or direct-pty)
     for (const session of worktree.sessions) {
@@ -878,16 +893,13 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       cleanupSessionDataDir(project.id, wtId, session.id);
     }
 
-    if (shouldPurge) {
-      // Hard delete: remove the git worktree checkout from disk
-      const wtPath = getWorktreePath(project.id, wtId);
-      try {
-        await worktreeRemove(project.absolutePath, wtPath);
-      } catch {
-        // best-effort — might already be gone
-      }
+    // Hard delete: remove the git worktree checkout from disk
+    const wtPath = getWorktreePath(project.id, wtId);
+    try {
+      await worktreeRemove(project.absolutePath, wtPath);
+    } catch {
+      // best-effort — might already be gone
     }
-    // Without purge: files stay on disk, branch stays. User can recover manually.
 
     // Remove from manifest (always)
     await mutateProject(project.id, (p) => ({
@@ -906,6 +918,65 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     }
     broadcastAll({ type: "worktree:deleted", worktreeId: wtId });
     return reply.send({ ok: true });
+  });
+
+  // GET /worktrees/disk-usage
+  // Static segment "disk-usage" is preferred over ":id" by Fastify's radix router.
+  app.get("/worktrees/disk-usage", async (_req, reply) => {
+    try {
+      const { statfs } = await import("node:fs/promises");
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execFileAsync = promisify(execFile);
+      const { join: pathJoin } = await import("node:path");
+
+      async function diskUsageBytes(path: string): Promise<number> {
+        try {
+          const args = process.platform === "darwin" ? ["-sk", path] : ["-sb", path];
+          const { stdout } = await execFileAsync("du", args);
+          const n = parseInt(stdout.split("\t")[0] ?? "0", 10);
+          return process.platform === "darwin" ? n * 1024 : n;
+        } catch {
+          return 0;
+        }
+      }
+
+      const home = vstHome();
+      const fs = await statfs(home);
+      const totalBytes = fs.bsize * fs.blocks;
+      const availableBytes = fs.bsize * fs.bavail;
+      const usedBytes = totalBytes - fs.bsize * fs.bfree;
+
+      const allWorktrees = getAllProjects().flatMap((p) =>
+        p.worktrees.map((w) => ({ projectId: p.id, worktreeId: w.id })),
+      );
+
+      const worktreeUsages = await Promise.all(
+        allWorktrees.map(async ({ projectId, worktreeId }) => {
+          const checkoutPath = getWorktreePath(projectId, worktreeId);
+          const sessionDataParent = pathJoin(projectDir(projectId), "session-data", worktreeId);
+          const [checkoutBytes, sessionBytes] = await Promise.all([
+            diskUsageBytes(checkoutPath),
+            diskUsageBytes(sessionDataParent),
+          ]);
+          return { id: worktreeId, diskBytes: checkoutBytes + sessionBytes };
+        }),
+      );
+
+      return reply.send({
+        device: {
+          usedBytes,
+          totalBytes,
+          availableBytes,
+          mountPoint: home,
+        },
+        worktrees: worktreeUsages,
+      });
+    } catch (err) {
+      return reply
+        .status(500)
+        .send({ error: "disk_usage_failed", details: String(err) });
+    }
   });
 
   // GET /worktrees/:id/tree?path=&showHidden=true
