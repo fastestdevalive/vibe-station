@@ -29,8 +29,8 @@ import {
 } from "../../services/jsonAgentChat.js";
 import type { NormalizedEvent, SessionMeta } from "../../types.js";
 
-/** Default bounded replay window on open (turns). Open decision #1: N=20. */
-const TAIL_TURNS = 20;
+/** Default bounded replay window on open (turns). Reduced from 20 → 15 (Part B). */
+const TAIL_TURNS = 15;
 
 export async function handleChatOpen(
   conn: WSConnection,

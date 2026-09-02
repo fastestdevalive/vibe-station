@@ -1,8 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
 import type { NormalizedEvent, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
 import { useChat } from "./useChat";
+import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** Minimal fake api with controllable WS emission for deterministic ordering. */
 function makeApi(sendChatResult = { turnId: "t1", queuePosition: 0 }) {
@@ -41,12 +42,17 @@ function ev(id: string, extra: Partial<NormalizedEvent>): NormalizedEvent {
   return { id, sessionId: "s1", ts: "", provider: "claude", kind: "text", ...extra };
 }
 
+// Prevent snapshot bleed between tests.
+beforeEach(() => {
+  chatSnapshotCache.clear();
+});
+
 describe("useChat (4.T1)", () => {
   it("merges chat:replay then live session:message into ordered events, and updates meta", async () => {
     const api = makeApi();
     const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
 
-    expect(api.openChat).toHaveBeenCalledWith("s1");
+    expect(api.openChat).toHaveBeenCalledWith("s1", undefined);
 
     act(() => {
       api.emit({
@@ -284,5 +290,104 @@ describe("useChat queue controls (2.T2/2.T4)", () => {
     });
     expect(result.current.queuedTurnIds).toEqual(["t1", "t2"]);
     expect(result.current.editingTurnIds).toEqual(["t3"]);
+  });
+});
+
+describe("useChat snapshot cache", () => {
+  it("(a) restores from cache immediately — no spinner, events visible, openChat uses sinceSeq", async () => {
+    // Pre-seed the cache with a fresh snapshot.
+    const cachedEvent = ev("e10", { kind: "text", role: "assistant", text: "cached", logSeq: 10 });
+    chatSnapshotCache.save("s1", {
+      events: [cachedEvent],
+      hasMore: false,
+      userTurnIds: new Set(),
+      latestSeq: 10,
+      savedAt: Date.now(), // fresh — within 60 s
+    });
+
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    // Events and loading state are set synchronously from the snapshot.
+    expect(result.current.loading).toBe(false);
+    expect(result.current.events.map((e) => e.id)).toEqual(["e10"]);
+
+    // openChat should have been called with sinceSeq=10 (the snapshot's latestSeq).
+    expect(api.openChat).toHaveBeenCalledWith("s1", 10);
+  });
+
+  it("(b) gap-drop path — stale snapshot replaced by fresh tail when oldestSeq > restoredLatestSeq", async () => {
+    // Snapshot has latestSeq=5 but the fresh tail starts at oldestSeq=10 → gap.
+    const cachedEvent = ev("e5", { kind: "text", role: "assistant", text: "old", logSeq: 5 });
+    chatSnapshotCache.save("s1", {
+      events: [cachedEvent],
+      hasMore: false,
+      userTurnIds: new Set(),
+      latestSeq: 5,
+      savedAt: Date.now() - 90_000, // stale → sinceSeq omitted → plain tail
+    });
+
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    // Snapshot was restored (no spinner).
+    expect(result.current.loading).toBe(false);
+    expect(result.current.events.map((e) => e.id)).toEqual(["e5"]);
+
+    // Plain tail replay arrives with a gap: oldestSeq=10 > restoredLatestSeq=5.
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [ev("e10", { kind: "text", role: "assistant", text: "fresh", logSeq: 10 })],
+        oldestSeq: 10,
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // Stale cached event should be gone; only the fresh tail event remains.
+    expect(result.current.events.map((e) => e.id)).toEqual(["e10"]);
+  });
+
+  it("(c) stale (>60 s) snapshot without a gap — fresh tail merges normally, no content hole", async () => {
+    // Snapshot has latestSeq=5; tail reply has oldestSeq=3 ≤ 5 → no gap → merge.
+    const cachedEvent = ev("e5", { kind: "text", role: "assistant", text: "old", logSeq: 5 });
+    chatSnapshotCache.save("s1", {
+      events: [cachedEvent],
+      hasMore: false,
+      userTurnIds: new Set(),
+      latestSeq: 5,
+      savedAt: Date.now() - 90_000, // stale
+    });
+
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    expect(result.current.loading).toBe(false);
+
+    // Fresh tail: oldestSeq=3, so e5 is within the covered window → merge.
+    act(() => {
+      api.emit({
+        type: "chat:replay",
+        sessionId: "s1",
+        events: [
+          ev("e3", { kind: "user", role: "user", text: "q", logSeq: 3 }),
+          ev("e6", { kind: "text", role: "assistant", text: "a", logSeq: 6 }),
+        ],
+        oldestSeq: 3,
+        hasMore: false,
+      });
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // Both the cached event and new events are present, ordered by logSeq.
+    const ids = result.current.events.map((e) => e.id);
+    expect(ids).toContain("e3");
+    expect(ids).toContain("e5");
+    expect(ids).toContain("e6");
+    // Correct order: e3 < e5 < e6
+    expect(ids.indexOf("e3")).toBeLessThan(ids.indexOf("e5"));
+    expect(ids.indexOf("e5")).toBeLessThan(ids.indexOf("e6"));
   });
 });

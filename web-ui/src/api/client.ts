@@ -105,8 +105,10 @@ export function createClientApi() {
   const treeWatches = new Map<string, { worktreeId: string }>();
   /** Refcounted JSON-chat subscriptions — multiple components can subscribe to
    *  the same sessionId without one cleanup tearing down the others.
-   *  Map<sessionId, refCount>; chat:open sent on 0→1, chat:close sent on 1→0. */
-  const chatSubs = new Map<string, number>();
+   *  Map<sessionId, { refs, sinceSeq? }>; chat:open sent on 0→1, chat:close sent on 1→0.
+   *  `sinceSeq` is stored on the 0→1 transition so WS-reconnect replays can use
+   *  the same delta cursor instead of requesting a full tail (cold-start double-open fix). */
+  const chatSubs = new Map<string, { refs: number; sinceSeq?: number }>();
   let wsReadyPromise: Promise<void> | null = null;
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
 
@@ -180,9 +182,16 @@ export function createClientApi() {
           socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
         }
         // Re-open JSON chats so the daemon re-subscribes this connection and
-        // replays the transcript (chat:replay) after a reconnect.
-        for (const sid of chatSubs.keys()) {
-          socket.send(JSON.stringify({ type: "chat:open", sessionId: sid }));
+        // replays the transcript (chat:replay) after a reconnect.  Use the
+        // stored `sinceSeq` so the reconnect only fetches the delta (R2.3).
+        for (const [sid, entry] of chatSubs.entries()) {
+          socket.send(
+            JSON.stringify({
+              type: "chat:open",
+              sessionId: sid,
+              ...(entry.sinceSeq != null ? { sinceSeq: entry.sinceSeq } : {}),
+            }),
+          );
         }
         // Notify consumers that a fresh handshake landed so they can refetch
         // any server state that might have drifted (persisted caches go stale
@@ -821,17 +830,23 @@ export function createClientApi() {
      *  Refcounted: multiple callers may open the same sessionId; chat:open is
      *  only sent to the daemon on the first (0→1) open. */
     async openChat(sessionId: string, sinceSeq?: number): Promise<void> {
-      const prev = chatSubs.get(sessionId) ?? 0;
-      chatSubs.set(sessionId, prev + 1);
+      const entry = chatSubs.get(sessionId);
+      const prev = entry?.refs ?? 0;
       if (prev === 0) {
-        await sendWs({ type: "chat:open", sessionId, ...(sinceSeq !== undefined ? { sinceSeq } : {}) });
+        // First subscriber: store sinceSeq for WS-reconnect replays.
+        chatSubs.set(sessionId, { refs: 1, sinceSeq });
+        await sendWs({ type: "chat:open", sessionId, ...(sinceSeq != null ? { sinceSeq } : {}) });
+      } else {
+        // Subsequent subscriber: increment ref-count, preserve stored sinceSeq.
+        chatSubs.set(sessionId, { refs: prev + 1, sinceSeq: entry?.sinceSeq });
       }
     },
 
     /** Refcounted close: chat:close is only sent to the daemon when the last
      *  subscriber closes (count drops to 0). Guards against going negative. */
     async closeChat(sessionId: string): Promise<void> {
-      const prev = chatSubs.get(sessionId) ?? 0;
+      const entry = chatSubs.get(sessionId);
+      const prev = entry?.refs ?? 0;
       if (prev <= 0) {
         console.warn(`[client] closeChat called with no open subscription for ${sessionId}`);
         chatSubs.delete(sessionId);
@@ -842,7 +857,7 @@ export function createClientApi() {
         chatSubs.delete(sessionId);
         await sendWs({ type: "chat:close", sessionId });
       } else {
-        chatSubs.set(sessionId, next);
+        chatSubs.set(sessionId, { refs: next, sinceSeq: entry?.sinceSeq });
       }
     },
 
