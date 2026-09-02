@@ -27,9 +27,6 @@ export interface ToolCallEntry {
   locations?: { path: string; line?: number }[];
   /** `tool_call`/`tool_call_update.kind`, structural (acp-normalize-superset Gap 4). */
   toolKind?: AcpToolKind;
-  /** For `task` tool entries: the child sessionId spawned by this tool call,
-   *  resolved via FIFO matching in groupEvents using childByParent from the store. */
-  childSessionId?: string;
 }
 
 /** One-line placeholder for a non-text content block, joined into a bubble's
@@ -70,7 +67,7 @@ export function summarizeToolInput(input: unknown, locations?: { path: string; l
     if (typeof input === "string") return relativize(input, cwd);
     if (typeof input === "object") {
       const obj = input as Record<string, unknown>;
-      for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query"]) {
+      for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query", "description", "prompt"]) {
         if (typeof obj[key] === "string") return relativize(obj[key] as string, cwd);
       }
     }

@@ -1,8 +1,7 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DiffView } from "@/components/preview/DiffView";
-import { useChat } from "@/hooks/useChat";
 import {
   capForDisplay,
   looksLikeUnifiedDiff,
@@ -25,11 +24,6 @@ interface ToolRunSummaryProps {
   live?: boolean;
   /** Absolute working directory — paths are shown relative to it. */
   cwd?: string;
-  /** API instance — required by TaskToolEntry to subscribe to child session events.
-   *  Optional so existing test call-sites without an API continue to compile. */
-  api?: import("@/api").ApiInstance;
-  /** Called when the user navigates to a related session (e.g. a child task). */
-  onNavigate?: (sessionId: string) => void;
 }
 
 // Tool names that describe the same kind of action fold into one bucket so
@@ -61,10 +55,6 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
   const displayName = new Map<string, string>();
   for (const t of tools) {
     const raw = t.toolName.toLowerCase();
-    // Skip `task` entries — they are rendered by TaskToolEntry as a dedicated
-    // component; "Used task 1 time" in the summary header is redundant and
-    // confusing alongside the dedicated TaskToolEntry row.
-    if (raw === "task") continue;
     const key = TOOL_ALIASES[raw] ?? raw;
     counts.set(key, (counts.get(key) ?? 0) + 1);
     if (!displayName.has(key)) displayName.set(key, t.toolName);
@@ -108,7 +98,10 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
     READ_ONLY_TOOL_NAMES.has(name);
   // Edit/Write/Delete/Move tools start expanded so diffs are immediately visible.
   const [open, setOpen] = useState(!isBash && !isReadOnly);
-  const inline = summarizeToolInput(tool.toolInput, tool.locations, cwd);
+  const inlineFull = summarizeToolInput(tool.toolInput, tool.locations, cwd);
+  // Cap long inline text (e.g. Task tool prompts) so it doesn't overflow the row.
+  const INLINE_CAP = 80;
+  const inline = inlineFull.length > INLINE_CAP ? `${inlineFull.slice(0, INLINE_CAP)}…` : inlineFull;
   const pretty = prettyToolInput(tool.toolInput);
   // `toolInput` is often `{}` for an ACP adapter that reports the target via
   // `locations` instead (see summarizeToolInput) — an empty-object body adds
@@ -192,97 +185,6 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
 }
 
 /**
- * Derives the "current tool" label from a flat list of child session events.
- * Returns the last tool_use whose toolId does NOT have a matching tool_result.
- */
-function deriveCurrentTool(events: import("@/api/types").NormalizedEvent[]): { toolName: string; inline: string } | null {
-  const resolved = new Set<string>();
-  for (const ev of events) {
-    if (ev.kind === "tool_result" && ev.toolId) resolved.add(ev.toolId);
-  }
-  let last: { toolName: string; inline: string } | null = null;
-  for (const ev of events) {
-    if (ev.kind === "tool_use" && ev.toolId && !resolved.has(ev.toolId)) {
-      last = {
-        toolName: ev.toolName ?? "tool",
-        inline: summarizeToolInput(ev.toolInput, ev.toolLocations),
-      };
-    }
-  }
-  return last;
-}
-
-/**
- * Live task-tool entry: subscribes to the child session's event stream and
- * shows `↳ {currentToolName} {title}` while the child runs. Clicking navigates
- * to the child session. Only rendered when `live === true && !tool.result` (the
- * task is in-progress). Completed/historical task entries fall back to the
- * standard `ToolRunEntryRow` so no live subscription is opened for old turns.
- */
-function TaskToolEntry({
-  tool,
-  api,
-  onNavigate,
-}: {
-  tool: ToolCallEntry;
-  api: import("@/api").ApiInstance;
-  onNavigate?: (sessionId: string) => void;
-}) {
-  const childSessionId = tool.childSessionId ?? null;
-  const { events: childEvents } = useChat(api, childSessionId, !!childSessionId, { cache: false });
-
-  const currentTool = useMemo(() => deriveCurrentTool(childEvents), [childEvents]);
-
-  // Count of completed tool calls (tool_use with a matching tool_result)
-  const toolUseCount = useMemo(() => {
-    const resolved = new Set<string>();
-    for (const ev of childEvents) {
-      if (ev.kind === "tool_result" && ev.toolId) resolved.add(ev.toolId);
-    }
-    return resolved.size;
-  }, [childEvents]);
-
-  // Elapsed time from first to last child event (rough proxy for child run time)
-  const elapsedMs = useMemo(() => {
-    if (childEvents.length < 2) return null;
-    const first = childEvents[0]?.ts;
-    const last = childEvents[childEvents.length - 1]?.ts;
-    if (!first || !last) return null;
-    const diff = Date.parse(last) - Date.parse(first);
-    return isNaN(diff) ? null : diff;
-  }, [childEvents]);
-
-  const taskDescription = summarizeToolInput(tool.toolInput);
-  const title = taskDescription ? `Task · ${taskDescription}` : "Task";
-
-  return (
-    <div className="chat-tool-entry chat-tool-entry--task">
-      <button
-        type="button"
-        className="chat-tool-entry__header"
-        onClick={() => childSessionId && onNavigate?.(childSessionId)}
-        disabled={!childSessionId}
-        aria-label={childSessionId ? `Navigate to child session for: ${title}` : title}
-      >
-        <span className="chat-spinner" aria-label="running" />
-        <span className="chat-tool-entry__name">{title}</span>
-      </button>
-      {currentTool ? (
-        <div className="chat-tool-entry__task-status" aria-live="polite">
-          ↳ {currentTool.toolName}
-          {currentTool.inline ? ` ${currentTool.inline}` : ""}
-        </div>
-      ) : toolUseCount > 0 ? (
-        <div className="chat-tool-entry__task-status">
-          ↳ {toolUseCount} tool{toolUseCount === 1 ? "" : "s"}
-          {elapsedMs !== null ? ` · ${elapsedMs}ms` : ""}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
  * A run of consecutive tool calls (no text/thinking between them) collapses
  * into one integrated, borderless summary line — matching Claude Code's
  * native terminal transcript (e.g. "Read 1 file, ran 1 shell command")
@@ -293,7 +195,7 @@ function TaskToolEntry({
  * under the summary line; each tool's call and result render as ONE
  * element, not a separate card pair.
  */
-export function ToolRunSummary({ tools, live, cwd, api, onNavigate }: ToolRunSummaryProps) {
+export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
   // A singleton run's summary line is a generic phrase ("Ran 1 shell
   // command") — start it expanded so the actual tool name + inline args
   // (in the entry row below) are visible without a click, matching what a
@@ -326,16 +228,9 @@ export function ToolRunSummary({ tools, live, cwd, api, onNavigate }: ToolRunSum
       </button>
       {open ? (
         <div className="chat-tool-run__body">
-          {tools.map((t) => {
-            // Live, result-less task entries get the dedicated TaskToolEntry component
-            // which subscribes to the child session and shows live ↳ status.
-            // Completed/historical task entries fall back to ToolRunEntryRow
-            // (the result text already contains a summary).
-            if (t.toolName.toLowerCase() === "task" && live === true && !t.result && api) {
-              return <TaskToolEntry key={t.id} tool={t} api={api} onNavigate={onNavigate} />;
-            }
-            return <ToolRunEntryRow key={t.id} tool={t} running={!!live && isPending(t)} cwd={cwd} />;
-          })}
+          {tools.map((t) => (
+            <ToolRunEntryRow key={t.id} tool={t} running={!!live && isPending(t)} cwd={cwd} />
+          ))}
         </div>
       ) : null}
     </div>
