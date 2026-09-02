@@ -690,6 +690,16 @@ export function createClaudePlugin(): AgentPlugin {
     },
 
     /**
+     * Claude is the ONE CLI whose `_session/steering` was verified end-to-end
+     * (the injected message actually reaches the running turn). Every other
+     * plugin omits this and therefore always enqueues — see the interface
+     * doc on `AgentPlugin.supportsMidTurnSteering`.
+     */
+    supportsMidTurnSteering(): boolean {
+      return true;
+    },
+
+    /**
      * Run ONE JSON-channel turn (Decision 2/3/8). Decision 8: an edit-a-sent-
      * message fork (`ctx.forkFromChatId` set) stays on the legacy one-shot
      * spawn — ACP has no fork primitive. Every other turn drives the

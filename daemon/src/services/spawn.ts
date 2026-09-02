@@ -236,6 +236,20 @@ export interface AgentPlugin {
    * omits this or returns false.
    */
   supportsAcp?(): boolean;
+  /**
+   * True when this CLI's mid-turn steering (`_session/steering`) is trusted to
+   * actually reach the running turn. This is a SECOND gate on top of the
+   * connection's own `supportsSteering` capability flag, and it exists because
+   * that flag is not trustworthy for every CLI: opencode advertises steering
+   * during `initialize` and answers `_session/steering` with `injected`, but
+   * the injected message never reaches the model — the text is silently
+   * dropped, so the user sees their steer accepted and then ignored. Queueing
+   * is the correct, lossless fallback, so a plugin that omits this method (or
+   * returns false) never steers and always enqueues. Only implement it,
+   * returning true, for a CLI whose steering has been empirically verified
+   * end-to-end (currently: claude).
+   */
+  supportsMidTurnSteering?(): boolean;
   // --- The two session identities (ACP migration, Decision 6) ---
   //
   // Once a session runs in Rich Chat over ACP it carries TWO distinct ids, and

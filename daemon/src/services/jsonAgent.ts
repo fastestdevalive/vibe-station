@@ -454,7 +454,8 @@ export class JsonAgentSession {
       attachments.length === 0 &&
       !this.isFirstTurnPending &&
       this.connection?.isAlive() === true &&
-      this.connection.supportsSteering === true;
+      this.connection.supportsSteering === true &&
+      this.plugin.supportsMidTurnSteering?.() === true;
 
     if (canAttemptSteer) {
       const blocks: Array<{ type: "text"; text: string }> = [{ type: "text", text: input.message }];
@@ -793,7 +794,11 @@ export class JsonAgentSession {
       editingTurnIds: [...this.holds.keys()],
       ...(this.usage ? { usage: this.usage } : {}),
       cwd: this.cwd,
-      canSteer: this.running && !!this.connection?.isAlive() && !!this.connection?.supportsSteering,
+      canSteer:
+        this.running &&
+        !!this.connection?.isAlive() &&
+        !!this.connection?.supportsSteering &&
+        this.plugin.supportsMidTurnSteering?.() === true,
     };
   }
 
