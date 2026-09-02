@@ -74,6 +74,9 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
             gap: "var(--space-1)",
             borderBottom: "var(--border-width) solid var(--border-default)",
             padding: "0 var(--space-3)",
+            overflowX: "auto",
+            WebkitOverflowScrolling: "touch",
+            scrollbarWidth: "none",
           }}
         >
           {sections.map((section) => (

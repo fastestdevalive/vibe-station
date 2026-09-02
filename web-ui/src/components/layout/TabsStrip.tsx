@@ -181,7 +181,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const renameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (renamingId) renameInputRef.current?.select();
+    if (renamingId) renameInputRef.current?.focus();
   }, [renamingId]);
 
   // --- Long-press (touch) opens the same reset menu as right-click ---
