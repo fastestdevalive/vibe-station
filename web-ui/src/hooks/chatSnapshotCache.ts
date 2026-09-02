@@ -68,7 +68,9 @@ export function save(
     events,
     oldestSeq,
     hasMore,
-    userTurnIds: snapshot.userTurnIds,
+    // Minor Fix B: copy the Set to avoid storing the caller's live reference
+    // (defensive — the ref is reassigned not mutated, but this is fragile).
+    userTurnIds: new Set(snapshot.userTurnIds),
     latestSeq: snapshot.latestSeq,
     savedAt: snapshot.savedAt,
   });

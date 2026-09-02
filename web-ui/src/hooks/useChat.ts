@@ -115,6 +115,9 @@ export function useChat(
   /** `latestSeq` of the snapshot that was restored on the current mount; cleared
    *  when a `chat:replay` is consumed so gap-detection is one-shot per mount. */
   const restoredLatestSeqRef = useRef<number | null>(null);
+  /** Set by `session:error` to prevent the cleanup from re-saving a poisoned
+   *  snapshot that would undo the eviction just performed. */
+  const poisonedRef = useRef(false);
 
   // Sync snapshot-relevant refs on every render.
   eventsRef.current = events;
@@ -145,6 +148,7 @@ export function useChat(
     // IMPORTANT: All api.on() listeners are registered BEFORE calling
     // api.openChat() so that synchronous emits inside the mock (and real WS
     // onopen replays) are never missed.
+    poisonedRef.current = false;
     let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
     let openChatSinceSeq: number | undefined = undefined;
 
@@ -194,6 +198,10 @@ export function useChat(
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
+      // Fix 1: explicitly reset delta-loading state so a previous cache-hit
+      // session's flag doesn't bleed into this cold-start session.
+      setIsDeltaLoading(false);
+      isDeltaLoadingRef.current = false;
       restoredLatestSeqRef.current = null;
       openChatSinceSeq = undefined;
     }
@@ -236,7 +244,7 @@ export function useChat(
           for (const ev of e.events) {
             if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
           }
-          setEvents(e.events.slice());
+          setEvents(_prev => e.events.slice());
           oldestSeqRef.current = e.oldestSeq ?? null;
           hasMoreRef.current = e.hasMore;
           setHasMore(e.hasMore);
@@ -246,9 +254,21 @@ export function useChat(
             if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
           }
           setEvents((prev) => mergeEvents([...e.events, ...prev]));
-          hasMoreRef.current = e.hasMore;
-          setHasMore(e.hasMore);
-          oldestSeqRef.current = e.oldestSeq ?? null;
+          // Fix 2: only widen hasMore, never narrow it — the snapshot may have
+          // already loaded more history than the fresh tail knows about.
+          if (e.hasMore) {
+            hasMoreRef.current = true;
+            setHasMore(true);
+          }
+          // Fix 2: only move the cursor backward (lower seq = older = further
+          // back in history) — never let a fresh tail rewind a pre-loaded cursor.
+          const newOldestSeq = e.oldestSeq ?? null;
+          if (newOldestSeq !== null) {
+            const current = oldestSeqRef.current;
+            if (current === null || newOldestSeq < current) {
+              oldestSeqRef.current = newOldestSeq;
+            }
+          }
         }
         restoredLatestSeqRef.current = null;
       }
@@ -285,6 +305,8 @@ export function useChat(
       // Do NOT clear events — session:error also fires for transient TTY errors
       // and the existing history is still valid.
       chatSnapshotCache.evict(sessionId);
+      // Fix 4: poison the hook so the cleanup doesn't re-save and undo the eviction.
+      poisonedRef.current = true;
       isDeltaLoadingRef.current = false;
       setIsDeltaLoading(false);
       setLoading(false);
@@ -337,7 +359,8 @@ export function useChat(
       //   • no events (nothing worth caching)
       //   • delta is still in flight (isDeltaLoadingRef) — partial state
       //   • caller opted out (cacheEnabled false)
-      if (eventsRef.current.length > 0 && !isDeltaLoadingRef.current && cacheEnabled) {
+      //   • session:error poisoned the hook (would undo the eviction)
+      if (eventsRef.current.length > 0 && !isDeltaLoadingRef.current && cacheEnabled && !poisonedRef.current) {
         chatSnapshotCache.save(sessionId, {
           events: eventsRef.current,
           hasMore: hasMoreRef.current,
