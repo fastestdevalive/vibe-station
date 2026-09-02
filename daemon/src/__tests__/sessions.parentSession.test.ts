@@ -207,6 +207,43 @@ describe("Session routes — parentSessionId (subagent-ux-v2 Phase 1)", () => {
     expect(child.useTmux).toBe(true);
   });
 
+  it("1.T12 — /output serves a json session's transcript, with turns separated (review regression)", async () => {
+    // A json session has no tmux pane and no direct-PTY stream, so before the
+    // json branch this returned 200 with output:"" — a parent agent reading
+    // its subagent's work saw nothing. Every Rich Chat subagent is json.
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "json" },
+    });
+    const s = res.json<{ id: string; channel: string }>();
+    expect(s.channel).toBe("json");
+
+    // Seed a real transcript: two turns, each streamed as two chunks. An
+    // empty transcript would make this test vacuous — the PRE-fix code also
+    // answered 200 with a string for that input.
+    const { openSqliteTranscriptStore } = await import("../services/sqliteTranscriptStore.js");
+    const { sessionDataDirFor, findJsonSessionContext } = await import("../services/jsonAgentChat.js");
+    const jsonCtx = findJsonSessionContext(s.id)!;
+    const store = openSqliteTranscriptStore(sessionDataDirFor(jsonCtx), s.id);
+    const ev = (id: string, turnId: string, text: string) =>
+      ({ id, sessionId: s.id, ts: new Date().toISOString(), kind: "text", text, turnId }) as never;
+    store.append(ev("e1", "t1", "first "));
+    store.append(ev("e2", "t1", "answer."));
+    store.append(ev("e3", "t2", "second "));
+    store.append(ev("e4", "t2", "answer."));
+    store.close?.();
+
+    const out = await app.inject({ method: "GET", url: `/sessions/${s.id}/output` });
+    expect(out.statusCode).toBe(200);
+    const output = out.json<{ output: string }>().output;
+    // Chunks within a turn concatenate bare; separate turns must NOT weld
+    // together ("...next steps.The subagent finished...").
+    expect(output).toContain("first answer.");
+    expect(output).toContain("second answer.");
+    expect(output).toBe("first answer.\n\nsecond answer.");
+  });
+
   it("1.T6 — no sourceAgentId and no modeId still 400s with 'modeId is required for agent sessions' (regression)", async () => {
     const res = await app.inject({
       method: "POST",

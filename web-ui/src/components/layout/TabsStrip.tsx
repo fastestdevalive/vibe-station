@@ -132,6 +132,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
   const [localSessions, setSessions] = useState<Session[]>([]);
+  // Mirrors the rendered `sessions` list so the WS effect — whose deps are
+  // deliberately stable — can read it without re-subscribing on every change.
+  const sessionsRef = useRef<Session[]>([]);
   /** Worktree list finished (project scope is always ready from the server store). */
   const [sessionsLoaded, setSessionsLoaded] = useState(isProject);
   const [newOpen, setNewOpen] = useState(false);
@@ -247,6 +250,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     [isProject, worktreeId, serverSessions, kind],
   );
   const sessions = isProject ? projectSessions : localSessions;
+  // Keep the ref in step so the WS `session:created` effect — whose deps are
+  // deliberately stable — can tell whether the currently-active id still
+  // refers to a session that exists.
+  sessionsRef.current = sessions;
   // Reorder purely by re-sorting this array before render, by each session's
   // REAL server `sortOrder` — sessions stay keyed by `s.id` in the .map()
   // below, so this never causes a remount of anything (and TabsStrip doesn't
@@ -402,7 +409,25 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       // shows "Starting…" while state is "not_started", instead of skipping
       // straight to "Reconnecting…" when session:state working arrives later.
       useWorkspaceStore.getState().patchSessionState(ev.snapshot.id, ev.snapshot.state);
-      setActiveSession(ev.snapshot.id);
+      // Focus a session the USER created — they asked for it and expect to
+      // land in it. Never focus one an AGENT spawned: the user is mid-read in
+      // the parent, and yanking them into a subagent they did not open loses
+      // their place, mid-sentence, at a moment they did not choose. A
+      // `parentSessionId` is exactly the "an agent spawned this" signal (the
+      // CLI sets it from $VST_SESSION only when run from inside an agent's
+      // own shell). The tab is still added, and the subagent row above the
+      // composer points at it — it is reachable, just not intrusive.
+      // ...unless nothing valid is focused right now (e.g. the user closed the
+      // last tab in this strip), in which case an unfocused arrival would leave
+      // a populated tab strip beside an empty "No session" pane.
+      const st = useWorkspaceStore.getState();
+      const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
+      const curIsValid =
+        !!cur &&
+        (cur === ev.snapshot.id ||
+          arrivedDuringFetch.current.some((s) => s.id === cur) ||
+          sessionsRef.current.some((s) => s.id === cur));
+      if (!ev.snapshot.parentSessionId || !curIsValid) setActiveSession(ev.snapshot.id);
     });
 
     const offDeleted = api.on("session:deleted", (ev) => {

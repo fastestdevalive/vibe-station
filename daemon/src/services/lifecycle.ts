@@ -23,6 +23,7 @@ import { broadcastAll } from "../broadcaster.js";
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { sessionChannel } from "./channel.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
+import { noteSubagentStateChange, type NotifyDeps } from "./subagentNotify.js";
 
 export const POLL_INTERVAL_MS = 1000;
 
@@ -110,6 +111,18 @@ export async function persistLifecycleState(
     sessionId,
     state: newState,
   });
+
+  // subagent-ux-v2: a subagent's state change is the ONLY thing that can wake
+  // an idle parent — its own turn ended long ago and nothing else resumes it.
+  // Read the previous state BEFORE the update below so this sees edges, not
+  // repeated writes. Fire-and-forget: a notification failure must never break
+  // a lifecycle write.
+  try {
+    const prev = findSessionRecord(sessionId)?.lifecycle?.state;
+    noteSubagentStateChange(sessionId, prev, newState, notifyDeps);
+  } catch {
+    /* never let notification break lifecycle persistence */
+  }
 
   // Single-row UPDATE, not a `mutateProject` read-modify-write. The latter
   // routes through `writeProjectFull`, which DELETEs and re-INSERTs every
@@ -408,4 +421,56 @@ export function stopLifecyclePoller(): void {
     pollerHandle = null;
   }
   idleTracking.clear();
+}
+
+
+/** Locate a session record anywhere in the store (worktree or direct). */
+function findSessionRecord(sessionId: string): SessionRecord | null {
+  for (const project of getAllProjects()) {
+    for (const wt of project.worktrees ?? []) {
+      const hit = wt.sessions?.find((s) => s.id === sessionId);
+      if (hit) return hit;
+    }
+    const direct = project.directSessions?.find((s) => s.id === sessionId);
+    if (direct) return direct;
+  }
+  return null;
+}
+
+/**
+ * Wiring for `subagentNotify`. Kept here rather than inside that module so it
+ * stays a leaf with no dependency on the agent runtime — which would otherwise
+ * be a cycle (jsonAgent → lifecycle → subagentNotify → jsonAgent).
+ */
+const notifyDeps: NotifyDeps = {
+  lookup: (id) => {
+    const rec = findSessionRecord(id);
+    if (!rec) return null;
+    return {
+      id: rec.id,
+      name: rec.name ?? null,
+      parentSessionId: rec.parentSessionId ?? null,
+      archivedAt: rec.archivedAt ?? null,
+      supersededBy: rec.supersededBy ?? null,
+      ...(rec.channel !== undefined ? { channel: rec.channel } : {}),
+      ...(rec.useTmux !== undefined ? { useTmux: rec.useTmux } : {}),
+      ...(rec.lifecycle?.state !== undefined ? { lifecycleState: rec.lifecycle.state } : {}),
+    };
+  },
+  enqueueTurn: async (parentSessionId, message) => {
+    // `enqueue`, never `submit`: submit() steers on claude, which would inject
+    // this notice into whatever turn the parent is currently running and
+    // derail it. A queued turn lets the parent finish first.
+    const { resolveJsonAgent } = await import("./jsonAgentChat.js");
+    const resolved = await resolveJsonAgent(parentSessionId, daemonPortForNotify);
+    if (!resolved.ok) return;
+    resolved.agent.enqueue({ message });
+  },
+};
+
+/** Set once at boot so the notifier can resolve agents without threading the
+ *  port through every lifecycle call site. */
+let daemonPortForNotify = 0;
+export function setNotifyDaemonPort(port: number): void {
+  daemonPortForNotify = port;
 }

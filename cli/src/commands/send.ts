@@ -57,7 +57,14 @@ export function registerSend(program: Command): void {
               );
             }
 
-            if (statusResult.data.state === "idle") {
+            // A tmux session settles on "idle"; a Rich Chat (json) session
+            // settles on "waiting_for_human" and NEVER reports "idle", so
+            // waiting only for "idle" burned the full timeout and warned on
+            // every single json send.
+            if (
+              statusResult.data.state === "idle" ||
+              statusResult.data.state === "waiting_for_human"
+            ) {
               return;
             }
 
@@ -66,7 +73,7 @@ export function registerSend(program: Command): void {
             );
           }
 
-          warn("Session did not return to idle state within timeout");
+          warn("Session did not settle (idle / waiting_for_human) within timeout");
         }
       }
     );

@@ -258,6 +258,66 @@ describe("JSON chat REST + WS", () => {
     expect(kinds).toEqual(["user", "session_init", "text", "usage", "result"]);
   });
 
+  it("vst send — POST /input reaches a json session instead of 409ing", async () => {
+    // `vst send` posts to /input, which branched on useTmux only. A json
+    // session has no PTY and is never in directPtyRegistry, so it always took
+    // the "Session not running" 409 — while the shared system prompt,
+    // skill/SKILL.md and the README all present `vst send` as THE
+    // channel-agnostic way to message a session. Subagents are json, so
+    // agent-to-agent messaging was impossible in the only channel that has them.
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/input`,
+      payload: { data: "hello from a sibling", sendEnter: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ ok: boolean }>().ok).toBe(true);
+
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    // It must land as a real user turn, not be silently swallowed.
+    const tr = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript` });
+    const texts = tr
+      .json<{ events: NormalizedEvent[] }>()
+      .events.filter((e) => e.kind === "user")
+      .map((e) => (e as { text?: string }).text);
+    expect(texts).toContain("hello from a sibling");
+  });
+
+  it("vst send — /input drives the same lifecycle as /chat (working, then settled)", async () => {
+    // /input must not just enqueue: without the `working` write the session
+    // stays at waiting_for_human for the whole turn, so `vst send --wait`
+    // returns before the turn starts and subagentNotify sees no state EDGE, so
+    // a parent that messaged its child is never woken by the reply. Asserting
+    // equivalence with /chat rather than sampling mid-turn, which races the
+    // (very fast) mock plugin's drain.
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "via chat" } });
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+    const afterChat = (await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}` })).json<{
+      state: string;
+    }>().state;
+
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/input`, payload: { data: "via send" } });
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+    const afterSend = (await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}` })).json<{
+      state: string;
+    }>().state;
+
+    expect(afterSend).toBe(afterChat);
+
+    // And both landed as real user turns.
+    const tr = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript` });
+    const texts = tr
+      .json<{ events: NormalizedEvent[] }>()
+      .events.filter((e) => e.kind === "user")
+      .map((e) => (e as { text?: string }).text);
+    expect(texts).toContain("via chat");
+    expect(texts).toContain("via send");
+  });
+
   it("3.T2b — POST /chat returns 202 { turnId, queuePosition }", async () => {
     const res = await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "yo" } });
     expect(res.statusCode).toBe(202);
