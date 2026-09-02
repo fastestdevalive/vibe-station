@@ -477,11 +477,31 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const data = result.data;
     const { type, prompt, useTmux: rawUseTmux } = data;
     let { modeId } = data;
+    // Decision 2: a subagent inherits its parent's mode + channel unless the
+    // caller passes an explicit value — resolved BEFORE the 400 check below,
+    // so a Rich Chat agent's taught one-liner (no --mode) creates a Rich Chat
+    // child instead of failing or falling back to a tmux terminal.
+    let inheritedChannel: Channel | undefined;
+    if (data.sourceAgentId) {
+      const sourceCtx = findSessionContext(data.sourceAgentId);
+      if (sourceCtx) {
+        if (!modeId && sourceCtx.session.modeId) modeId = sourceCtx.session.modeId;
+        if (data.channel === undefined && sourceCtx.session.channel) inheritedChannel = sourceCtx.session.channel;
+      }
+    }
     // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false;
     // otherwise fall back to the tmux/pty split.
-    const isJson = data.channel === "json";
-    const useTmux = isJson ? false : resolveUseTmux(rawUseTmux);
-    const channel: Channel = data.channel ?? resolveChannel(useTmux);
+    const resolvedChannel = data.channel ?? inheritedChannel;
+    const isJson = resolvedChannel === "json";
+    // `useTmux` MUST agree with `channel`, or the record is self-contradictory:
+    // `spawnSession` branches on `useTmux` while every read path goes through
+    // `sessionChannel(session)`, and `normalizeChannel` only repairs the json
+    // case — so a `{channel:"pty", useTmux:true}` row spawns tmux forever while
+    // the UI drives the direct-PTY stream. Derive it from the channel whenever
+    // one is known (explicitly given OR inherited); only fall back to the
+    // request's `useTmux` when no channel was supplied at all.
+    const useTmux = isJson ? false : resolvedChannel ? resolvedChannel === "tmux" : resolveUseTmux(rawUseTmux);
+    const channel: Channel = resolvedChannel ?? resolveChannel(useTmux);
 
     if (type === "agent" && !modeId) {
       return reply.status(400).send({ error: "'modeId' is required for agent sessions" });
@@ -1457,6 +1477,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       channel: newChannel,
       lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
       ...(newInitialPrompt ? { initialPrompt: newInitialPrompt } : {}),
+      parentSessionId: session.parentSessionId ?? null,
       ...(isJsonChannel
         ? {
             transcriptRef: {

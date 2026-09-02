@@ -7,6 +7,8 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import { createMockApi } from "@/api/mock";
 import { TabsStrip } from "./TabsStrip";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
+import type { Session } from "@/api/types";
 
 /**
  * Capture the `onDragEnd` callback TabsStrip hands to dnd-kit's DndContext,
@@ -145,6 +147,104 @@ describe("TabsStrip", () => {
     // (sortOrder 2, the lowest among eligible siblings) — same rule the
     // daemon uses for authoritative selection (Decision 1).
     expect(within(dialog).getByText(/agent-2.*will become the new main session/i)).toBeInTheDocument();
+  });
+
+  it("4.T1 — a terminate target with live subagents shows their names and the 'Detach subagents & terminate' label", async () => {
+    const subagent: Session = {
+      id: "sess-subagent-1",
+      worktreeId: "wt-2",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      name: "review-the-plan",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-subagent-1",
+      createdAt: new Date().toISOString(),
+      parentSessionId: "sess-agent2",
+    };
+    useServerStore.setState({ sessions: [subagent] });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /Terminate agent-2/i });
+    await user.click(screen.getByRole("button", { name: /Terminate agent-2/i }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/review-the-plan/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/keep running/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Detach subagents & terminate" })).toBeInTheDocument();
+
+    useServerStore.setState({ sessions: [] });
+  });
+
+  it("4.T2 — confirming detaches only the parent; the subagent remains in the store", async () => {
+    const subagent: Session = {
+      id: "sess-subagent-2",
+      worktreeId: "wt-2",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      name: "keeps-running",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-subagent-2",
+      createdAt: new Date().toISOString(),
+      parentSessionId: "sess-agent2",
+    };
+    useServerStore.setState({ sessions: [subagent] });
+    // mockResolvedValue (not a pass-through spy): `api` is a module-level
+    // singleton shared by every test in this file, and the mock's real
+    // terminateSession permanently removes the session from its fixture
+    // data — a real call here would silently break every later test that
+    // still expects "agent-2" to exist.
+    const terminateSpy = vi.spyOn(api, "terminateSession").mockResolvedValue({ ok: true });
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /Terminate agent-2/i });
+    await user.click(screen.getByRole("button", { name: /Terminate agent-2/i }));
+    await user.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Detach subagents & terminate" }),
+    );
+
+    await waitFor(() => {
+      expect(terminateSpy).toHaveBeenCalledWith("sess-agent2");
+    });
+    expect(terminateSpy).toHaveBeenCalledTimes(1);
+    // The subagent itself is never targeted — detach is free (Decision 5).
+    expect(terminateSpy).not.toHaveBeenCalledWith("sess-subagent-2");
+    expect(useServerStore.getState().sessions.some((s) => s.id === "sess-subagent-2")).toBe(true);
+
+    useServerStore.setState({ sessions: [] });
+    terminateSpy.mockRestore();
+  });
+
+  it("4.T3 — a terminate target with no subagents shows today's dialog, label, and delete behavior unchanged (regression)", async () => {
+    useServerStore.setState({ sessions: [] });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={api} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /Terminate agent-2/i });
+    await user.click(screen.getByRole("button", { name: /Terminate agent-2/i }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText(/keep running/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Terminate" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Detach subagents & terminate" })).not.toBeInTheDocument();
   });
 
   it("M4 — a session:updated{isMain:true} WS event propagates through TabsStrip's local reconciliation (A2.3) and is read by dependent UI (A2.5's dialog naming)", async () => {

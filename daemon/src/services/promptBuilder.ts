@@ -23,7 +23,14 @@ function assetPath(): string {
   return join(here, "..", "assets", "agent-system-prompt.md");
 }
 
+// subagent-ux-v2 Decision 10 — appended to L1 ONLY when richChat is true, so
+// the shared L1 file stays byte-identical for every tmux/direct-PTY caller.
+function subagentAssetPath(): string {
+  return join(here, "..", "assets", "agent-subagent-richchat.md");
+}
+
 let cachedSkillMd: string | undefined;
+let cachedSubagentMd: string | undefined;
 
 async function loadSkillMd(): Promise<string> {
   if (cachedSkillMd !== undefined) return cachedSkillMd;
@@ -38,9 +45,22 @@ async function loadSkillMd(): Promise<string> {
   }
 }
 
+async function loadSubagentMd(): Promise<string> {
+  if (cachedSubagentMd !== undefined) return cachedSubagentMd;
+  try {
+    const content = await readFile(subagentAssetPath(), "utf8");
+    cachedSubagentMd = content;
+    return content;
+  } catch {
+    cachedSubagentMd = "";
+    return cachedSubagentMd;
+  }
+}
+
 /** Force-reload the skill.md cache (useful for tests). */
 export function _resetSkillCacheForTest(): void {
   cachedSkillMd = undefined;
+  cachedSubagentMd = undefined;
 }
 
 export interface BuildPromptInput {
@@ -48,12 +68,16 @@ export interface BuildPromptInput {
   worktree: WorktreeRecord;
   modeContext?: string;
   userPrompt?: string;
+  /** Rich Chat only (Decision 10). Default false — every tmux call site keeps today's L1 byte-for-byte. */
+  richChat?: boolean;
 }
 
 export interface BuildDirectPromptInput {
   project: ProjectRecord;
   modeContext?: string;
   userPrompt?: string;
+  /** Rich Chat only (Decision 10). Default false — every tmux call site keeps today's L1 byte-for-byte. */
+  richChat?: boolean;
 }
 
 export interface BuiltPrompt {
@@ -65,10 +89,10 @@ export interface BuiltPrompt {
  * Build the layered prompt for an agent spawn.
  */
 export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt> {
-  const { project, worktree, modeContext, userPrompt } = input;
+  const { project, worktree, modeContext, userPrompt, richChat } = input;
 
-  // L1 — base skill
-  const l1 = await loadSkillMd();
+  // L1 — base skill (+ Rich-Chat-only subagent fragment, Decision 10)
+  const l1 = richChat ? `${await loadSkillMd()}\n${await loadSubagentMd()}` : await loadSkillMd();
 
   // L2 — project + worktree + mode context
   const wtPath = worktreePath(project.id, worktree.id);
@@ -118,10 +142,10 @@ export async function buildPrompt(input: BuildPromptInput): Promise<BuiltPrompt>
  * Simpler context — just project, no branch/worktree info.
  */
 export async function buildDirectPrompt(input: BuildDirectPromptInput): Promise<BuiltPrompt> {
-  const { project, modeContext, userPrompt } = input;
+  const { project, modeContext, userPrompt, richChat } = input;
 
-  // L1 — base skill
-  const l1 = await loadSkillMd();
+  // L1 — base skill (+ Rich-Chat-only subagent fragment, Decision 10)
+  const l1 = richChat ? `${await loadSkillMd()}\n${await loadSubagentMd()}` : await loadSkillMd();
 
   // L2 — project context (no worktree)
   const l2Lines: string[] = [

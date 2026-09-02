@@ -28,8 +28,12 @@ export function registerWorktreeCreate(worktree: Command): void {
     )
     .option("--json", "Use the JSON agent-chat channel for the main agent (channel: json)")
     .option(
-      "--source-agent <sessionId>",
+      "--parent <sessionId>",
       "SessionId this worktree's main agent was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
+    )
+    .option(
+      "--source-agent <sessionId>",
+      "Alias of --parent (legacy name; still supported for external callers)",
     )
     .action(
       async (
@@ -44,6 +48,7 @@ export function registerWorktreeCreate(worktree: Command): void {
           prompt?: string;
           promptFile?: string;
           json?: boolean;
+          parent?: string;
           sourceAgent?: string;
         }
       ) => {
@@ -64,7 +69,11 @@ export function registerWorktreeCreate(worktree: Command): void {
         // without passing --source-agent explicitly. From a human's own
         // terminal (not inside an agent), $VST_SESSION is unset, so this is
         // simply omitted — no side effect (S5).
-        const sourceAgentId = opts.sourceAgent ?? process.env.VST_SESSION ?? undefined;
+        const explicitParent = opts.parent ?? opts.sourceAgent;
+        const explicitlyPassed = opts.parent !== undefined || opts.sourceAgent !== undefined;
+        const sourceAgentId = explicitlyPassed
+          ? explicitParent || undefined
+          : process.env.VST_SESSION || undefined;
 
         try {
           const result = await daemonPost<WorktreeCreateResponse>(

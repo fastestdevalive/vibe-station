@@ -23,8 +23,12 @@ export function registerSessionCreate(session: Command): void {
     )
     .option("--json", "Use the JSON agent-chat channel (channel: json)")
     .option(
-      "--source-agent <sessionId>",
+      "--parent <sessionId>",
       "SessionId this session was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
+    )
+    .option(
+      "--source-agent <sessionId>",
+      "Alias of --parent (legacy name; still supported for external callers)",
     )
     .action(
       async (
@@ -37,6 +41,7 @@ export function registerSessionCreate(session: Command): void {
           prompt?: string;
           promptFile?: string;
           json?: boolean;
+          parent?: string;
           sourceAgent?: string;
         }
       ) => {
@@ -55,8 +60,27 @@ export function registerSessionCreate(session: Command): void {
 
         // Same defaulting rule as `vst worktree create` (agent-interaction-
         // workspaces/04-workspaces Phase 4b, S3) — see that command for the
-        // full rationale.
-        const sourceAgentId = opts.sourceAgent ?? process.env.VST_SESSION ?? undefined;
+        // full rationale. `--parent` and `--source-agent` are the same flag
+        // (Decision 15); `--parent` wins if somehow both are passed.
+        //
+        // Test truthiness, not nullishness (Decision 3): an agent never
+        // passes either flag and instead relies on $VST_SESSION — warning
+        // here is reserved for a caller who passed the flag explicitly and
+        // it resolved blank (e.g. `--source-agent ""`), not for an unset
+        // $VST_SESSION in a plain human terminal.
+        const explicitParent = opts.parent ?? opts.sourceAgent;
+        const explicitlyPassed = opts.parent !== undefined || opts.sourceAgent !== undefined;
+        let sourceAgentId: string | undefined;
+        if (explicitlyPassed) {
+          sourceAgentId = explicitParent || undefined;
+          if (!sourceAgentId) {
+            console.warn(
+              "Warning: --parent/--source-agent was passed but resolved to an empty value — creating the session unlinked.",
+            );
+          }
+        } else {
+          sourceAgentId = process.env.VST_SESSION || undefined;
+        }
 
         try {
           const result = await daemonPost<SessionCreateResponse>("/sessions", {

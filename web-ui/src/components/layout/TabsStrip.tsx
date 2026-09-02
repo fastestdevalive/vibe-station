@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { ancestorIds } from "@/components/chat/SubagentRow";
 import { motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -260,6 +261,26 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
   }, [sessions]);
+
+  // subagent-ux-v2 Decision 5 — deleting a parent detaches, never cascades.
+  // Live subagents of the terminate target, named in the confirm dialog so
+  // the user knows they'll keep running rather than silently vanishing.
+  const terminateTargetSubagents = useMemo(() => {
+    if (!terminateTarget) return [];
+    // Match against the target's ancestry, not just its current id: a reset
+    // parent keeps its children pointing at the ARCHIVED predecessor's id
+    // (Decision 7), so an id-only filter would silently announce nothing for
+    // any parent that has ever been reset. Archived children are excluded —
+    // they are not "live subagents" and must not be named as such.
+    const ids = ancestorIds(terminateTarget, serverSessions);
+    return serverSessions.filter(
+      (s) =>
+        s.parentSessionId != null &&
+        ids.has(s.parentSessionId) &&
+        s.supersededBy == null &&
+        s.archivedAt == null,
+    );
+  }, [terminateTarget, serverSessions]);
 
   /** Optimistically patch a session's `sortOrder` in whichever local store
    *  backs this scope, so the reorder is reflected immediately (before the
@@ -752,24 +773,31 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         open={!!terminateTarget}
         title={isAgent ? "Terminate agent?" : "Terminate terminal?"}
         message={
-          isAgent && terminateTarget?.isMain
-            ? // Client-side prediction only (display purposes) — mirrors the
-              // daemon's own eligibility rule (lowest sortOrder, type "agent",
-              // not archived); the daemon's own selection at commit time is
-              // authoritative and may differ in a rare race (Risk 3).
-              (() => {
-                const candidate = orderedSessions
-                  .filter((s) => s.id !== terminateTarget.id && s.archivedAt == null)
-                  .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
-                return candidate
-                  ? `Terminate this agent session? "${sessionLabel(candidate)}" will become the new main session.`
-                  : "Terminate this agent session?";
-              })()
-            : isAgent
-              ? "Terminate this agent session?"
-              : "Terminate this terminal?"
+          // Decision 5 — a cascade would kill work the user can still see and
+          // use, so the dialog says explicitly that subagents survive. This is
+          // APPENDED to (not substituted for) the main-session sentence below,
+          // which the user still needs in order to know what becomes main.
+          (terminateTargetSubagents.length > 0
+            ? `This session has ${terminateTargetSubagents.length === 1 ? "a live subagent" : `${terminateTargetSubagents.length} live subagents`} (${terminateTargetSubagents.map((s) => sessionLabel(s)).join(", ")}). Terminating it will NOT stop them — they'll keep running. `
+            : "") +
+          (isAgent && terminateTarget?.isMain
+              ? // Client-side prediction only (display purposes) — mirrors the
+                // daemon's own eligibility rule (lowest sortOrder, type "agent",
+                // not archived); the daemon's own selection at commit time is
+                // authoritative and may differ in a rare race (Risk 3).
+                (() => {
+                  const candidate = orderedSessions
+                    .filter((s) => s.id !== terminateTarget.id && s.archivedAt == null)
+                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
+                  return candidate
+                    ? `Terminate this agent session? "${sessionLabel(candidate)}" will become the new main session.`
+                    : "Terminate this agent session?";
+                })()
+              : isAgent
+                ? "Terminate this agent session?"
+                : "Terminate this terminal?")
         }
-        confirmLabel="Terminate"
+        confirmLabel={terminateTargetSubagents.length > 0 ? "Detach subagents & terminate" : "Terminate"}
         onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
           if (terminateTarget) {

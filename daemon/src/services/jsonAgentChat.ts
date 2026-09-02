@@ -174,6 +174,7 @@ async function buildSystemPrompt(ctx: JsonSessionContext, mode: ResolvedMode): P
       project: ctx.project,
       worktree: ctx.worktree,
       ...(mode.context ? { modeContext: mode.context } : {}),
+      richChat: true,
     });
     return built.systemPrompt;
   }
@@ -181,9 +182,13 @@ async function buildSystemPrompt(ctx: JsonSessionContext, mode: ResolvedMode): P
   const built = await buildDirectPrompt({
     project: ctx.project,
     ...(mode.context ? { modeContext: mode.context } : {}),
+    richChat: true,
   });
   return built.systemPrompt;
 }
+
+/** Test-only: exercise `buildSystemPrompt` directly (2.T3, subagent-ux-v2). */
+export const _buildSystemPromptForTest = buildSystemPrompt;
 
 /** Re-exported from `jsonAgent.ts` (injection is applied at run time — A1). */
 export { injectAttachments };

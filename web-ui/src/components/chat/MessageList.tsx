@@ -100,7 +100,25 @@ function isBenignRateLimit(text: string): boolean {
 
 export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
   const items: RenderItem[] = [];
-  const toolIndexById = new Map<string, number>();
+  // Maps a toolId to the ACTUAL tool RenderItem object (not an index) — a
+  // nested (Task-bracketed) tool call lives inside another item's `children`
+  // array, not in `items` itself, so an index into `items` couldn't find it
+  // again for its `tool_result`. Object identity works regardless of nesting.
+  type ToolItem = Extract<RenderItem, { type: "tool" }>;
+  const toolRefById = new Map<string, ToolItem>();
+  // Phase 6 (Decision 4) — native `Task` sub-thread bracketing. Display-only:
+  // positional bracketing renders a sub-thread and never decides identity,
+  // navigation, or lifecycle. Matches on toolName, NEVER toolKind (Task's
+  // `toolKind` is "think", shared with the plain Think tool).
+  let openTask: ToolItem | null = null;
+  let openTaskTurnId: string | undefined;
+  function isTaskName(name: string | undefined): boolean {
+    return (name ?? "").toLowerCase() === "task";
+  }
+  function closeOpenTask(): void {
+    openTask = null;
+    openTaskTurnId = undefined;
+  }
   // A superseding (edited) `user` event carries the same turnId — keep the bubble
   // at its FIRST position but update to the LATEST text/attachments (A7).
   const userIndexByTurnId = new Map<string, number>();
@@ -142,6 +160,9 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
       for (const openTurnId of thinkingOpenByTurnId.keys()) {
         if (openTurnId !== ev.turnId) closeOpenThinking(openTurnId, ev.ts);
       }
+      // Guard 1 (Decision 4) — an unterminated Task closes at the end of its
+      // own turnId rather than swallowing every later turn's events too.
+      if (openTask && ev.turnId !== openTaskTurnId) closeOpenTask();
     }
     switch (ev.kind) {
       case "user": {
@@ -229,7 +250,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
       }
       case "tool_use": {
         markToolCallDuringThinking(ev.turnId);
-        items.push({
+        const toolItem: ToolItem = {
           type: "tool",
           id: ev.id,
           toolName: ev.toolName ?? "tool",
@@ -239,15 +260,33 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           diffs: ev.toolDiffs,
           locations: ev.toolLocations,
           toolKind: ev.toolKind,
-        });
-        if (ev.toolId) toolIndexById.set(ev.toolId, items.length - 1);
+        };
+        const opensTask = isTaskName(ev.toolName);
+        if (openTask) {
+          // Guard 2 — a second Task opening while one is open closes the
+          // first and stops nesting (never task-in-task).
+          if (opensTask) {
+            closeOpenTask();
+            items.push(toolItem);
+            openTask = toolItem;
+            openTaskTurnId = ev.turnId;
+          } else {
+            (openTask.children ??= []).push(toolItem);
+          }
+        } else {
+          items.push(toolItem);
+          if (opensTask) {
+            openTask = toolItem;
+            openTaskTurnId = ev.turnId;
+          }
+        }
+        if (ev.toolId) toolRefById.set(ev.toolId, toolItem);
         break;
       }
       case "tool_result": {
         markToolCallDuringThinking(ev.turnId);
-        const idx = ev.toolId ? toolIndexById.get(ev.toolId) : undefined;
-        const target = idx != null ? items[idx] : undefined;
-        if (target && target.type === "tool") {
+        const target = ev.toolId ? toolRefById.get(ev.toolId) : undefined;
+        if (target) {
           if (ev.toolResult !== undefined) {
             target.result = { content: ev.toolResult.content, isError: ev.toolResult.isError };
           }
@@ -255,12 +294,28 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
           if (ev.toolDiffs !== undefined) target.diffs = ev.toolDiffs;
           if (ev.toolLocations !== undefined) target.locations = ev.toolLocations;
           if (ev.toolKind !== undefined) target.toolKind = ev.toolKind;
+          // A Task's OWN completed/failed result closes its bracket — this is
+          // the terminal signal the research found: a subagent's tool calls
+          // appear strictly between the Task's tool_use and its completed
+          // tool_result (never after).
+          // Closed on ANY result for the Task's own toolId, not only a
+          // terminal status: an imported/cold-loaded transcript can carry
+          // events with no turnId (so the end-of-turn guard never fires) and
+          // an adapter may omit `status` on its terminal update — together
+          // those would leave the bracket open and nest the entire rest of the
+          // transcript under this Task.
+          if (openTask === target) {
+            closeOpenTask();
+          }
         } else {
-          items.push({
+          const toolItem: ToolItem = {
             type: "tool", id: ev.id, toolName: ev.toolName ?? "tool", turnId: ev.turnId,
             result: ev.toolResult !== undefined ? { content: ev.toolResult.content, isError: ev.toolResult.isError } : undefined,
             status: ev.toolStatus, diffs: ev.toolDiffs, locations: ev.toolLocations, toolKind: ev.toolKind,
-          });
+          };
+          if (openTask) (openTask.children ??= []).push(toolItem);
+          else items.push(toolItem);
+          if (ev.toolId) toolRefById.set(ev.toolId, toolItem);
         }
         break;
       }

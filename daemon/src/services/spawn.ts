@@ -20,7 +20,7 @@ import { newSession, hasSession, killSession, capturePane, pasteBuffer, sendKeys
 import { DirectPtyBackend } from "./directPty.js";
 import type { ProjectRecord, WorktreeRecord, SessionRecord, NormalizedEvent } from "../types.js";
 import type { ResolvedContext } from "./context.js";
-import { resolvedContextOf, systemPromptPathFor, sessionDataDirFor } from "./context.js";
+import { resolvedContextOf, systemPromptPathFor, sessionDataDirFor, buildVstEnv } from "./context.js";
 import type { AcpConnection, AcpLaunchSpec } from "./acp/acpTransport.js";
 import type { AcpEnrichHook } from "./acp/normalize.js";
 
@@ -508,12 +508,7 @@ export async function spawnSession(opts: SpawnOptions): Promise<void> {
 
   // Step 4: Resolve env
   const baseEnv: Record<string, string> = {
-    VST_SESSION: session.id,
-    VST_SPAWN_TOKEN: session.id,
-    VST_WORKTREE: worktree.id,
-    VST_PROJECT: project.id,
-    VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
-    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    ...buildVstEnv({ project, worktree, session, daemonPort }),
     ...plugin.getEnvironment(launchCfg),
   };
 
@@ -706,11 +701,7 @@ export async function spawnDirectSession(opts: DirectSpawnOptions): Promise<void
 
   // Resolve env (no worktree env vars for direct sessions)
   const baseEnv: Record<string, string> = {
-    VST_SESSION: session.id,
-    VST_SPAWN_TOKEN: session.id,
-    VST_PROJECT: project.id,
-    VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
-    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    ...buildVstEnv({ project, worktree: null, session, daemonPort }),
     ...plugin.getEnvironment(launchCfg),
   };
 

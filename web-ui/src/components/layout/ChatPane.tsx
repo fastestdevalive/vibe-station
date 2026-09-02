@@ -7,6 +7,7 @@ import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
+import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -45,6 +46,12 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const enabled = visible && isJson && !!sessionId;
 
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+  const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
+  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
+  const insertTileIntoWorkspaceDoc = useWorkspaceStore((s) => s.insertTileIntoWorkspaceDoc);
+  const insertTileIntoScratchCanvas = useWorkspaceStore((s) => s.insertTileIntoScratchCanvas);
+  const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
+  const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
   const chatFontVars = useMemo(() => {
     const vars: Record<string, string> = {};
     for (const [name, base] of Object.entries(CHAT_FONT_BASE_PX)) {
@@ -291,6 +298,21 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
           api={api}
           {...(sessionId ? { sessionId } : {})}
         />
+        {session ? (
+          <SubagentRow
+            session={session}
+            onOpen={(target) =>
+              openSubagentSession(target, session, {
+                layoutByWorktree,
+                workspaceDocs,
+                insertTileIntoWorkspaceDoc,
+                insertTileIntoScratchCanvas,
+                setActiveSession,
+                setActiveTerminalSession,
+              })
+            }
+          />
+        ) : null}
         {sessionId && archived ? (
           // Decision 4 / CUJ 3: an archived session is read-only in place — no
           // new turns can be sent. Exact copy from the original F5 mockup.
