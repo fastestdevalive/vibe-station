@@ -17,6 +17,8 @@ import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "./services/lifecycle.js";
 import { startPrPoller, stopPrPoller } from "./services/prPoller.js";
+import { readSettings } from "./services/config.js";
+import { setSkillPaths } from "./services/userSkillCatalog.js";
 
 const VST_HOME = join(homedir(), ".vibe-station");
 const CONFIG_PATH = join(VST_HOME, "config.json");
@@ -171,6 +173,21 @@ async function main() {
   }
 
   const app = await buildServer({ port, logger: true, token, noAuth });
+
+  // Initialize the user skill catalog from persisted settings (skillPaths
+  // defaults to ~/.claude/skills, Decision 11) so the popover/GET /skills
+  // catalog is populated on a fresh install without requiring the user to
+  // first open Skills settings and trigger a PATCH /settings. Done here —
+  // the real daemon entry point — rather than inside buildServer(), since
+  // buildServer() is called directly by ~90 daemon test files and starting
+  // a chokidar watcher there would leak watchers into every one of them.
+  // Best-effort: a scan/watch failure must never prevent daemon boot.
+  try {
+    const settings = await readSettings();
+    await setSkillPaths(settings.skillPaths ?? []);
+  } catch (err) {
+    console.error("Failed to initialize skill catalog (non-fatal):", err);
+  }
 
   // Subagent → parent notifications resolve the parent's agent lazily and need
   // the port to do it (subagent-ux-v2).

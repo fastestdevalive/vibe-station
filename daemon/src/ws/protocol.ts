@@ -149,6 +149,13 @@ export const AttachmentSchema = z.object({
   mime: z.string(),
 });
 
+/** A slash command/skill catalog entry (`commands_update`, skill-invocation-in-chat). */
+export const CommandSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  argumentHint: z.string().optional(),
+});
+
 export const NormalizedEventSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
@@ -211,7 +218,7 @@ export const NormalizedEventSchema = z.object({
     .optional(),
   toolStatus: z.enum(["pending", "in_progress", "completed", "failed"]).optional(),
   modeId: z.string().optional(),
-  commands: z.array(z.object({ name: z.string(), description: z.string() })).optional(),
+  commands: z.array(CommandSchema).optional(),
 });
 
 export const SessionMetaSchema = z.object({
@@ -227,6 +234,7 @@ export const SessionMetaSchema = z.object({
   editingTurnIds: z.array(z.string()),
   usage: UsageInfoSchema.optional(),
   cwd: z.string().optional(),
+  commands: z.array(CommandSchema).optional(),
 });
 
 /**

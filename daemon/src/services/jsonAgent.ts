@@ -34,6 +34,9 @@ import { JsonAgentStream } from "../ws/streams/jsonAgentStream.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 import { AcpConnection, SessionLoadFailed, type AcpLaunchSpec } from "./acp/acpTransport.js";
 import type { AcpEnrichHook } from "./acp/normalize.js";
+import { getMergedSkillCatalog, type MergedSkillEntry } from "./userSkillCatalog.js";
+import { parseSkillSegments } from "./skillTokens.js";
+import { resolvePlugin, type CliId } from "../agent-plugins/registry.js";
 import type {
   ProjectRecord,
   WorktreeRecord,
@@ -81,13 +84,208 @@ function hasRealUsage(usage: UsageInfo | undefined): usage is UsageInfo {
   return !!usage && usage.totalTokens > 0;
 }
 
-export function injectAttachments(message: string, attachments: Attachment[]): string {
+/** A single resolved `{/name args}` token, feeding `formatSkillDirective`'s
+ *  `<skill-invocations>` block. `path` is omitted for an ACP-only catalog
+ *  entry (no directory-scanned path) — see `MergedSkillEntry`. */
+export interface ResolvedSkillInvocation {
+  name: string;
+  args: string;
+  path?: string;
+}
+
+export interface SkillResolutionResult {
+  /** `rawMessage` with every token substituted inline for `/name args`
+   *  (RESOLVED or not — skill-invocation-in-chat REPLAN Phase 7A.3/D5).
+   *  A message with no tokens at all (v1 fallback, 7A.5) passes through
+   *  byte-identical. */
+  message: string;
+  /** One entry per RESOLVED token, in document order. An unresolved token
+   *  still substitutes into `message` but contributes no entry here — it
+   *  degrades to plain `/name args` text, no directive, no error. */
+  skillInvocations: ResolvedSkillInvocation[];
+}
+
+/**
+ * v1 fallback (7A.5): resolve line 1 of a raw turn message against the
+ * merged skill catalog — longest-match name, followed by a space or
+ * end-of-line (never mid-word). Returns `undefined` when line 1 doesn't
+ * start with "/" + a catalog name, which covers BOTH "not a skill
+ * invocation" and "the skill was removed from the catalog between send and
+ * run" — both degrade identically to plain text, no directive, no error.
+ * `path` is omitted for an ACP-only catalog entry (no directory-scanned
+ * path). Only consulted by `resolveSkillInvocations` when the message
+ * contains NO `{/...}` tokens — i.e. a pre-Phase-7 queued turn, or a user
+ * typing raw slash text.
+ */
+function resolveLeadingLineInvocation(
+  rawMessage: string,
+  catalog: MergedSkillEntry[],
+): ResolvedSkillInvocation | undefined {
+  if (!rawMessage.startsWith("/")) return undefined;
+  const nl = rawMessage.indexOf("\n");
+  const firstLine = nl === -1 ? rawMessage : rawMessage.slice(0, nl);
+
+  let best: MergedSkillEntry | undefined;
+  for (const entry of catalog) {
+    if (!entry.name) continue;
+    const token = "/" + entry.name;
+    const matches = firstLine === token || firstLine.startsWith(token + " ");
+    if (matches && (!best || entry.name.length > best.name.length)) best = entry;
+  }
+  if (!best) return undefined;
+
+  const rest = firstLine.slice(1 + best.name.length);
+  const args = rest.startsWith(" ") ? rest.slice(1) : rest;
+  return { name: best.name, args, ...(best.path ? { path: best.path } : {}) };
+}
+
+/**
+ * Resolve every `{/name args}` token in `rawMessage` against the merged
+ * skill catalog (ACP + directory-scanned) at TURN-RUN time (never enqueue
+ * time — `jsonAgent.ts`'s `runOneTurn` is the only caller) — a queued turn
+ * can sit minutes before running, and catalog membership (or an ACP-only
+ * entry's resolvability) may have changed by then.
+ *
+ * Inline substitution (D5/7A.3): every token — resolved or not — is
+ * replaced in `message` by `/name args` (or bare `/name` when args is
+ * empty), so the model reads the user's real sentence. A RESOLVED token
+ * additionally contributes a `{name, args, path?}` entry to
+ * `skillInvocations`, which `formatSkillDirective` turns into the single
+ * `<skill-invocations>` execution block. An unresolved token (unknown name,
+ * or removed from the catalog between send and run) substitutes the same
+ * way but contributes no entry — degrade to plain text, no directive, no
+ * error.
+ *
+ * D7: when the FIRST segment of the message is a RESOLVED token and it is
+ * followed by same-line prose, the substitution forces a newline after it
+ * (`/name args\n<rest>`) instead of running the prose onto the same line.
+ * This preserves the CLI's own `prompt[0]` leading-slash-command dispatch
+ * byte-identically for the v1 case that already works (claude.ts's
+ * `runTurnAcp` relies on `prompt[0]` being exactly this shape).
+ *
+ * v1 fallback (7A.5): a message with NO tokens at all is handed to
+ * `resolveLeadingLineInvocation` instead — old queued turns (persisted
+ * before Phase 7 shipped) and users typing raw `/name args` text both keep
+ * working; `message` is returned unchanged either way.
+ */
+export function resolveSkillInvocations(
+  rawMessage: string,
+  catalog: MergedSkillEntry[],
+): SkillResolutionResult {
+  const segments = parseSkillSegments(rawMessage);
+  const hasToken = segments.some((s) => s.type === "token");
+
+  if (!hasToken) {
+    const legacy = resolveLeadingLineInvocation(rawMessage, catalog);
+    return { message: rawMessage, skillInvocations: legacy ? [legacy] : [] };
+  }
+
+  const skillInvocations: ResolvedSkillInvocation[] = [];
+  const pieces: string[] = [];
+
+  for (const seg of segments) {
+    if (seg.type === "text") {
+      pieces.push(seg.text);
+      continue;
+    }
+    const entry = catalog.find((e) => e.name === seg.name);
+    if (entry) {
+      skillInvocations.push({ name: seg.name, args: seg.args, ...(entry.path ? { path: entry.path } : {}) });
+    }
+    pieces.push(seg.args.length > 0 ? `/${seg.name} ${seg.args}` : `/${seg.name}`);
+  }
+
+  const first = segments[0];
+  const firstIsResolvedToken =
+    first !== undefined && first.type === "token" && catalog.some((e) => e.name === first.name);
+  if (firstIsResolvedToken) {
+    const head = pieces[0]!;
+    const rest = pieces.slice(1).join("");
+    let message: string;
+    if (rest.length === 0 || rest.startsWith("\n")) {
+      // Nothing follows on the same line — already fine as-is, or the user's
+      // own newline already separates the chip from what follows.
+      message = head + rest;
+    } else {
+      // Same-line prose: force the newline (D7). The natural word-boundary
+      // space right after the chip becomes that newline instead of a
+      // dangling leading space on the new line.
+      message = `${head}\n${rest.startsWith(" ") ? rest.slice(1) : rest}`;
+    }
+    return { message, skillInvocations };
+  }
+
+  return { message: pieces.join(""), skillInvocations };
+}
+
+/**
+ * Overlay `userSkillCatalog`'s directory-scanned entries onto the session's
+ * ACP `commands_update` catalog for the popover-facing `SessionMeta.commands`
+ * field (skill-invocation-in-chat Decision 7/4.6). Per-field merge: ACP wins
+ * `description`/`argumentHint` on a name collision; `path` is resolved
+ * separately, daemon-side, at turn-run time (Decision 10) — it never appears
+ * on `SessionMeta.commands`.
+ *
+ * M6: a directory-scanned entry (`entry.path` set — i.e. NOT also present in
+ * the ACP catalog) only actually dispatches through `formatSkillDirective`'s
+ * `<skill-invocations>` directive; a plugin that doesn't implement it (every
+ * CLI but claude, currently) would offer the skill in the popover, commit
+ * the chip, and then send a bare `/name args` with no directive — a silent
+ * no-op. `supportsSkillDirective` gates that: false omits every path-bearing
+ * entry, leaving only ACP-native commands (which the CLI resolves itself).
+ *
+ * m9: returns `undefined` only when NEITHER source has answered yet
+ * (`acpCommands === undefined` AND the merge is empty) — that is the one
+ * genuinely transient "still loading" state the Composer hint gates on.
+ * Once the ACP catalog has answered even once (`acpCommands !== undefined`,
+ * including an explicit empty array), or the directory scan alone already
+ * supplies entries, the result is settled and callers must emit `[]` rather
+ * than reuse `undefined` for "legitimately empty" too.
+ */
+function mergeWithSkillCatalog(
+  acpCommands: { name: string; description: string; argumentHint?: string }[] | undefined,
+  supportsSkillDirective: boolean,
+): { name: string; description: string; argumentHint?: string }[] | undefined {
+  const merged = getMergedSkillCatalog(acpCommands).filter(
+    (entry) => supportsSkillDirective || !entry.path,
+  );
+  if (merged.length === 0 && acpCommands === undefined) return undefined;
+  return merged.map((entry) => ({
+    name: entry.name,
+    description: entry.description ?? "",
+    ...(entry.argumentHint ? { argumentHint: entry.argumentHint } : {}),
+  }));
+}
+
+/** M6: whether `cli`'s plugin implements `formatSkillDirective` — the gate
+ *  `mergeWithSkillCatalog` uses to decide whether directory-scanned skills
+ *  (which need the directive to actually dispatch) are offered at all.
+ *  Resolves via the plugin registry, never a bare `if (cli === ...)`. */
+function cliSupportsSkillDirective(cli: string): boolean {
+  try {
+    return typeof resolvePlugin(cli as CliId).formatSkillDirective === "function";
+  } catch {
+    return false;
+  }
+}
+
+export function injectAttachments(
+  message: string,
+  attachments: Attachment[],
+  hasResolvedInvocation = false,
+): string {
   if (attachments.length === 0) return message;
   const list = attachments.map((a) => a.path).join("\n");
   const header = `[Attached files:]\n${list}`;
   // Files-only turn (empty prompt): the attachment block IS the message body —
-  // never send a literally empty prompt to the CLI (Fix #2).
-  return message.trim().length > 0 ? `${message}\n\n${header}` : header;
+  // never send a literally empty prompt to the CLI (Fix #2). EXCEPT when at
+  // least one skill invocation resolved (skill-invocation-in-chat REPLAN
+  // Phase 7A.6, generalized from the single-invocation "skill prefix" guard):
+  // `message` there always starts with "/name" (substituted inline by
+  // `resolveSkillInvocations`) and so is never empty after trim, but the
+  // guard is kept explicit — always take the non-empty branch with a
+  // resolved invocation so line 1 can never become "[Attached files:]" alone.
+  return message.trim().length > 0 || hasResolvedInvocation ? `${message}\n\n${header}` : header;
 }
 
 export interface JsonAgentSessionOptions {
@@ -263,6 +461,13 @@ export class JsonAgentSession {
   private usage?: UsageInfo;
   private turnState: TurnState = "idle";
   private firstTurnDone = false;
+  /**
+   * Latest `commands_update` catalog (skill-invocation-in-chat Decision 7) —
+   * full-replace, written from BOTH `handleEvent` and `handleOutOfBandEvent`
+   * (the catalog can arrive on either path). Recovered on restart from the
+   * persisted transcript by `buildMetaFromTranscript`/`buildMetaFromStoreMeta`.
+   */
+  private commands?: { name: string; description: string; argumentHint?: string }[];
 
   private queue: QueuedTurn[] = [];
   /** Turns withdrawn for editing (queue-controls) — out of the run queue. */
@@ -370,11 +575,12 @@ export class JsonAgentSession {
     this.emitMeta();
   }
 
-  /** Rebuild `usage`/`model` from the last usage/result/model-bearing events. */
+  /** Rebuild `usage`/`model`/`commands` from the last usage/result/model/commands_update events. */
   private rebuildMetaFromTranscript(): void {
     const meta = this.store.lastMeta();
     if (meta.model) this.model = meta.model;
     if (meta.usage) this.usage = meta.usage;
+    if (meta.commands) this.commands = meta.commands;
   }
 
   /**
@@ -782,6 +988,10 @@ export class JsonAgentSession {
 
   /** Latest cross-harness meta (rebuilt from transcript tail on construction). */
   getMeta(): SessionMeta {
+    const commands = mergeWithSkillCatalog(
+      this.commands,
+      typeof this.plugin.formatSkillDirective === "function",
+    );
     return {
       sessionId: this.session.id,
       channel: "json",
@@ -795,6 +1005,7 @@ export class JsonAgentSession {
       editingTurnIds: [...this.holds.keys()],
       ...(this.usage ? { usage: this.usage } : {}),
       cwd: this.cwd,
+      ...(commands ? { commands } : {}),
       canSteer:
         this.running &&
         !!this.connection?.isAlive() &&
@@ -919,13 +1130,27 @@ export class JsonAgentSession {
     this.setTurnState("thinking");
     this.emitMeta();
 
-    // Build the plugin input at RUN time: inject attachment paths into the raw
-    // text now, and decide isFirstTurn from live state (the first turn to RUN —
-    // not enqueue order — carries the system prompt, robust to reorders) (A1).
+    // Resolve every skill invocation (if any) AT RUN TIME, never at enqueue
+    // time — a queued turn can sit minutes before running, and the catalog
+    // (or an ACP-only entry's resolvability) may have changed by then
+    // (skill-invocation-in-chat REPLAN Phase 7A). Re-resolving here also
+    // covers the "skill deleted between send and run" degrade path for
+    // free: no match → the token still substitutes inline, just with no
+    // entry in `skillInvocations` below.
+    const { message: resolvedMessage, skillInvocations } = resolveSkillInvocations(
+      turn.rawMessage,
+      getMergedSkillCatalog(this.commands),
+    );
+
+    // Build the plugin input at RUN time: inject attachment paths into the
+    // (already token-substituted) text now, and decide isFirstTurn from live
+    // state (the first turn to RUN — not enqueue order — carries the system
+    // prompt, robust to reorders) (A1).
     const input: TurnInput = {
-      message: injectAttachments(turn.rawMessage, turn.attachments),
+      message: injectAttachments(resolvedMessage, turn.attachments, skillInvocations.length > 0),
       ...(turn.attachments.length ? { attachmentPaths: turn.attachments.map((a) => a.path) } : {}),
       isFirstTurn: !this.firstTurnDone,
+      ...(skillInvocations.length ? { skillInvocations } : {}),
     };
 
     // A fork turn branches the harness's own session (--fork-session) instead of
@@ -1227,6 +1452,14 @@ export class JsonAgentSession {
     capToolResultContent(ev);
     this.persist(ev);
     this.stream.emitMessage(ev);
+    // A `commands_update` can arrive out-of-band, BEFORE the first turn ever
+    // runs (skill-invocation-in-chat Decision 7) — capture it onto session
+    // meta and broadcast, gated to this one kind so a routine notification
+    // burst doesn't trigger a meta emit on every event.
+    if (ev.kind === "commands_update") {
+      this.commands = ev.commands;
+      this.emitMeta();
+    }
   }
 
   private async handleEvent(ev: NormalizedEvent): Promise<void> {
@@ -1248,6 +1481,9 @@ export class JsonAgentSession {
     // reports usage with totalTokens 0. Don't let that clobber the running
     // token count — keep the last real usage instead.
     if (hasRealUsage(ev.usage)) this.usage = ev.usage;
+    // Full-replace, never merged (Decision 7) — a mid-session republish on
+    // this path overwrites any catalog already captured out-of-band.
+    if (ev.kind === "commands_update") this.commands = ev.commands;
 
     capToolResultContent(ev);
     this.persist(ev);
@@ -1462,11 +1698,17 @@ export function buildMetaFromTranscript(opts: {
 }): SessionMeta {
   let model = opts.model;
   let usage: UsageInfo | undefined;
+  let commands: { name: string; description: string; argumentHint?: string }[] | undefined;
   for (const ev of opts.events) {
     if (ev.model) model = ev.model;
     if (hasRealUsage(ev.usage)) usage = ev.usage;
+    if (ev.kind === "commands_update" && ev.commands) commands = ev.commands;
   }
-  return assembleMeta(opts, { ...(model ? { model } : {}), ...(usage ? { usage } : {}) });
+  return assembleMeta(opts, {
+    ...(model ? { model } : {}),
+    ...(usage ? { usage } : {}),
+    ...(commands ? { commands } : {}),
+  });
 }
 
 /**
@@ -1493,6 +1735,7 @@ function assembleMeta(
   found: TranscriptMeta,
 ): SessionMeta {
   const model = opts.modelOverride ?? found.model;
+  const commands = mergeWithSkillCatalog(found.commands, cliSupportsSkillDirective(opts.cli));
   return {
     sessionId: opts.sessionId,
     channel: "json",
@@ -1506,5 +1749,6 @@ function assembleMeta(
     editingTurnIds: [],
     ...(found.usage ? { usage: found.usage } : {}),
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    ...(commands ? { commands } : {}),
   };
 }
