@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment } from "@/api/types";
+import type { Attachment, Command } from "@/api/types";
 import type { EditingDraft } from "@/hooks/useChat";
+import { renderSkillMessageText } from "@/lib/skillInvocation";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
 
 export type QueuedTrayStatus = "queued" | "editing" | "pending";
@@ -29,6 +30,8 @@ export interface QueuedTrayProps {
   onSalvage: (message: string, attachments: Attachment[]) => void;
   /** Return focus to the composer (Escape from a row). */
   focusComposer?: () => void;
+  /** Session's slash-command/skill catalog, threaded into `QueuedTurnEditor`. */
+  commands?: Command[];
 }
 
 /**
@@ -50,6 +53,7 @@ export function QueuedTray({
   onDiscard,
   onSalvage,
   focusComposer,
+  commands,
 }: QueuedTrayProps) {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -91,6 +95,11 @@ export function QueuedTray({
       {rows.map((row, i) => {
         const editing = row.status === "editing";
         const localEdit = editing && row.draft;
+        // `row.text` is the RAW wire string (Decision 2) — a queued turn that
+        // carries chips holds `{/name args}` tokens and `\{`-escaped braces.
+        // Never render it directly (Phase 7 Risk 5, escape leakage): the tray
+        // shows the same `/name args` form the transcript bubble does.
+        const displayText = renderSkillMessageText(row.text);
         return (
           <div
             key={row.turnId}
@@ -100,14 +109,16 @@ export function QueuedTray({
             className={`chat-queued-tray__row chat-queued-tray__row--${row.status}`}
             role="listitem"
             tabIndex={i === focusedIndex ? 0 : -1}
-            aria-label={`Queued message: ${row.text || "(attachments only)"}`}
+            aria-label={`Queued message: ${displayText || "(attachments only)"}`}
           >
             {localEdit ? (
               <QueuedTurnEditor
                 api={api}
                 sessionId={sessionId}
+                turnId={row.turnId}
                 initialText={row.draft!.message}
                 initialAttachments={row.draft!.attachments}
+                commands={commands}
                 onSave={async (message, attachments) => {
                   try {
                     await onSave(row.turnId, message, attachments.map((a) => a.id));
@@ -121,8 +132,8 @@ export function QueuedTray({
               />
             ) : (
               <>
-                <div className="chat-queued-tray__text" title={row.text}>
-                  {row.text || "(attachments only)"}
+                <div className="chat-queued-tray__text" title={displayText}>
+                  {displayText || "(attachments only)"}
                 </div>
                 {editing ? (
                   <div className="chat-queued-tray__badge">editing…</div>

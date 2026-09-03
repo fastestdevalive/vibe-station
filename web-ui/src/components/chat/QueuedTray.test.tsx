@@ -42,6 +42,24 @@ describe("QueuedTray", () => {
     expect(onCancel).toHaveBeenCalledWith("t1");
   });
 
+  it("renders a queued turn's skill tokens as `/name args`, never the raw wire braces (Risk 5)", () => {
+    renderTray([
+      {
+        turnId: "t1",
+        text: "Use {/code-review high --fix} then tidy a \\{ literal brace",
+        status: "queued",
+      },
+    ]);
+    const row = screen.getAllByRole("listitem")[0]!;
+    expect(row.textContent).toContain("Use /code-review high --fix then tidy a { literal brace");
+    expect(row.textContent).not.toContain("{/");
+    expect(row.textContent).not.toContain("\\{");
+    // The tooltip and the a11y label go through the same unescaping.
+    expect(row.getAttribute("aria-label")).toBe(
+      "Queued message: Use /code-review high --fix then tidy a { literal brace",
+    );
+  });
+
   it("renders rows oldest-first in the given order", () => {
     renderTray([
       { turnId: "t1", text: "first msg", status: "queued" },
@@ -56,9 +74,28 @@ describe("QueuedTray", () => {
     renderTray([
       { turnId: "t1", text: "queued msg", status: "editing", draft: { message: "draft text", attachments: [] } },
     ]);
-    expect((screen.getByLabelText("Edit queued message") as HTMLTextAreaElement).value).toBe("draft text");
+    expect(screen.getByLabelText("Edit queued message").textContent).toBe("draft text");
     expect(screen.getByText("Save")).toBeTruthy();
     expect(screen.getByText("Discard")).toBeTruthy();
+  });
+
+  it("m10 — threads `commands` through to the QueuedTurnEditor mount site (skill row renders)", () => {
+    renderTray(
+      [
+        {
+          turnId: "t1",
+          text: "/code-review high",
+          status: "editing",
+          draft: { message: "{/code-review high}and open a PR", attachments: [] },
+        },
+      ],
+      { commands: [{ name: "code-review", description: "Review the diff", argumentHint: "[severity]" }] },
+    );
+    // The skill row only renders when `commands` actually reached
+    // QueuedTurnEditor — this is the regression m10 asks for: nothing
+    // previously verified `commands` crosses the QueuedTray -> QueuedTurnEditor
+    // boundary, only that QueuedTurnEditor works correctly in isolation.
+    expect(screen.getByLabelText("Arguments for code-review")).toBeTruthy();
   });
 
   it("shows a passive 'editing…' badge when another tab is editing (no local draft)", () => {
