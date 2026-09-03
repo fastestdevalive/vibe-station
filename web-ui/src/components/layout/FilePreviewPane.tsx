@@ -2,12 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import type { ApiInstance } from "@/api";
 import type { DiffScope, FileScope } from "@/api/types";
 import { ApiError } from "@/api/errors";
-import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
-import { MermaidView } from "@/components/preview/MermaidView";
 import { CodeView } from "@/components/preview/CodeView";
 import { DiffView } from "@/components/preview/DiffView";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
@@ -234,18 +232,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       return <div className="empty-state">Loading…</div>;
     }
     if (isMd) {
-      const segments = segmentMarkdownWithMermaid(fileBody);
-      return (
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-          {segments.map((seg, i) =>
-            seg.type === "markdown" ? (
-              <MarkdownView key={i} source={seg.content} api={api} worktreeId={worktreeId} scope={fileScope} filePath={path} />
-            ) : (
-              <MermaidView key={i} chart={seg.content} theme={themeMode} />
-            ),
-          )}
-        </div>
-      );
+      return <MarkdownView source={fileBody} api={api} worktreeId={worktreeId} scope={fileScope} filePath={path} />;
     }
     return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
   })();
