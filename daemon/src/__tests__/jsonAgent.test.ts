@@ -1095,3 +1095,286 @@ describe("JsonAgentSession — ACP connections get $VST_SESSION (1.T2/1.T3, suba
     }
   });
 });
+
+describe("JsonAgentSession — 5.T9 regression: a normal message round-trips byte-identical", () => {
+  let project: ProjectRecord;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-test-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("a message with no leading '/' reaches the plugin's runTurn as `message` byte-identical, with no `skillInvocations` field", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const capturedInputs: unknown[] = [];
+    const plugin = {
+      ...mockPlugin([INIT, TEXT, RESULT].join("\n")),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async *runTurn(input: any, ctx: any, signal: any) {
+        capturedInputs.push(input);
+        for await (const ev of mockPlugin([INIT, TEXT, RESULT].join("\n")).runTurn!(input, ctx, signal)) {
+          yield ev;
+        }
+      },
+    };
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.enqueue({ message: "fix the parser" });
+    await agent.settled();
+
+    expect(capturedInputs).toHaveLength(1);
+    const input = capturedInputs[0] as { message: string; skillInvocations?: unknown };
+    expect(input.message).toBe("fix the parser");
+    expect(input.skillInvocations).toBeUndefined();
+
+    // Transcript persists the raw text unchanged too.
+    const userEv = agent.readTranscript().find((e) => e.kind === "user");
+    expect(userEv?.text).toBe("fix the parser");
+
+    await agent.release();
+  });
+});
+
+describe("JsonAgentSession — M6: commands filtered by plugin.formatSkillDirective support", () => {
+  let project: ProjectRecord;
+  let skillsDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-test-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    skillsDir = join(tempDir, "skills");
+    await mkdir(join(skillsDir, "code-review"), { recursive: true });
+    await writeFile(
+      join(skillsDir, "code-review", "SKILL.md"),
+      "---\nname: code-review\ndescription: Review the diff\n---\n",
+      "utf8",
+    );
+    const { setSkillPaths } = await import("../services/userSkillCatalog.js");
+    await setSkillPaths([skillsDir]);
+  });
+
+  afterEach(async () => {
+    const { resetSkillCatalogForTests } = await import("../services/userSkillCatalog.js");
+    resetSkillCatalogForTests();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("a directory-scanned skill is OMITTED from SessionMeta.commands for a plugin without formatSkillDirective", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    // mockPlugin's plain object literal never implements `formatSkillDirective`
+    // — matching cursor/opencode/agy, which can't dispatch a directory-only
+    // skill (M6): offering it in the popover would commit a chip whose turn
+    // goes out as a bare `/name args` with no directive, a silent no-op.
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "cursor",
+    });
+
+    expect(agent.getMeta().commands ?? []).toEqual([]);
+    await agent.release();
+  });
+
+  it("the same directory-scanned skill IS included for a plugin that implements formatSkillDirective", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const plugin = { ...mockPlugin(""), formatSkillDirective: (m: string) => m };
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    expect(agent.getMeta().commands).toEqual([{ name: "code-review", description: "Review the diff" }]);
+    await agent.release();
+  });
+});
+
+describe("JsonAgentSession — commands_update catalog capture (skill-invocation-in-chat Phase 2)", () => {
+  let project: ProjectRecord;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-json-test-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pj",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeDirectSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const COMMANDS = [{ name: "code-review", description: "Review the diff", argumentHint: "[effort]" }];
+
+  it("2.T2 — a commands_update arriving via handleOutOfBandEvent (no turn in flight) lands on session meta AND triggers an emitMeta() broadcast", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const metaBroadcasts: Array<ReturnType<typeof agent.getMeta>> = [];
+    agent.stream.on("meta", (m) => metaBroadcasts.push(m));
+
+    // No turn ever ran — this is the out-of-band path, exercised directly
+    // (mirrors how conn.outOfBandSink is wired in getOrCreateConnection).
+    const ev: NormalizedEvent = {
+      id: "ev-1",
+      sessionId: session.id,
+      ts: new Date().toISOString(),
+      provider: "claude",
+      kind: "commands_update",
+      commands: COMMANDS,
+    };
+    (agent as unknown as { handleOutOfBandEvent(e: NormalizedEvent): void }).handleOutOfBandEvent(ev);
+
+    expect(agent.getMeta().commands).toEqual(COMMANDS);
+    expect(metaBroadcasts).toHaveLength(1);
+    expect(metaBroadcasts[0]?.commands).toEqual(COMMANDS);
+
+    await agent.release();
+  });
+
+  it("does not broadcast meta for an out-of-band event that isn't commands_update", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const metaBroadcasts: unknown[] = [];
+    agent.stream.on("meta", (m) => metaBroadcasts.push(m));
+
+    const ev: NormalizedEvent = {
+      id: "ev-2",
+      sessionId: session.id,
+      ts: new Date().toISOString(),
+      provider: "claude",
+      kind: "status",
+      text: "some notification",
+    };
+    (agent as unknown as { handleOutOfBandEvent(e: NormalizedEvent): void }).handleOutOfBandEvent(ev);
+
+    expect(metaBroadcasts).toHaveLength(0);
+    expect(agent.getMeta().commands).toBeUndefined();
+
+    await agent.release();
+  });
+
+  it("2.T5 — a session restarted with a persisted commands_update in its transcript still reports commands via buildMetaFromTranscript/buildMetaFromStoreMeta", async () => {
+    const {
+      JsonAgentSession,
+      readTranscriptFromDataDir,
+      readMetaFromDataDir,
+      buildMetaFromTranscript,
+      buildMetaFromStoreMeta,
+    } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+    const ev: NormalizedEvent = {
+      id: "ev-3",
+      sessionId: session.id,
+      ts: new Date().toISOString(),
+      provider: "claude",
+      kind: "commands_update",
+      commands: COMMANDS,
+    };
+    (agent as unknown as { handleOutOfBandEvent(e: NormalizedEvent): void }).handleOutOfBandEvent(ev);
+    await agent.release();
+
+    const dataDir = join(tempDir, "projects", PROJECT_ID, "sessions", session.id);
+
+    const events = readTranscriptFromDataDir(dataDir, session.id);
+    const metaFromTranscript = buildMetaFromTranscript({ sessionId: session.id, cli: "claude", events });
+    expect(metaFromTranscript.commands).toEqual(COMMANDS);
+
+    const storeMeta = readMetaFromDataDir(dataDir, session.id);
+    const metaFromStoreMeta = buildMetaFromStoreMeta({ sessionId: session.id, cli: "claude", meta: storeMeta });
+    expect(metaFromStoreMeta.commands).toEqual(COMMANDS);
+  });
+});

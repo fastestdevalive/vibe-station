@@ -225,7 +225,7 @@ export interface NormalizedEvent {
   /** `mode_update` only — the new `currentModeId` (Gap 6). */
   modeId?: string;
   /** `commands_update` only — the available slash commands (Gap 7). */
-  commands?: { name: string; description: string }[];
+  commands?: { name: string; description: string; argumentHint?: string }[];
 }
 
 /** Derived turn state driving the composer status indicator. */
@@ -257,6 +257,12 @@ export interface SessionMeta {
   cwd?: string;
   /** True when the connection supports mid-turn steering (`_session/steering`). */
   canSteer?: boolean;
+  /**
+   * Latest `commands_update` catalog for this session (skill-invocation-in-chat
+   * Decision 7) — full-replace, never merged. Empty/absent until the CLI has
+   * published one (out-of-band before turn 1, or in-turn on republish).
+   */
+  commands?: { name: string; description: string; argumentHint?: string }[];
 }
 
 export interface SessionRecord {

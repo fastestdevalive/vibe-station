@@ -13,6 +13,8 @@ import type { NormalizedEvent, UsageInfo } from "../types.js";
 export interface TranscriptMeta {
   model?: string;
   usage?: UsageInfo;
+  /** Latest `commands_update` catalog persisted in the transcript, if any. */
+  commands?: { name: string; description: string; argumentHint?: string }[];
 }
 
 /**

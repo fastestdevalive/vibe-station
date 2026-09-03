@@ -233,18 +233,36 @@ export function normalizeSessionUpdate(
       base = stamp({
         kind: "commands_update",
         commands: availableCommands
-          .map((c) =>
-            c && typeof c === "object" && typeof (c as Record<string, unknown>).name === "string"
-              ? {
-                  name: (c as Record<string, unknown>).name as string,
-                  description:
-                    typeof (c as Record<string, unknown>).description === "string"
-                      ? ((c as Record<string, unknown>).description as string)
-                      : "",
-                }
-              : undefined,
-          )
-          .filter((c): c is { name: string; description: string } => c !== undefined),
+          .map((c) => {
+            if (!c || typeof c !== "object" || typeof (c as Record<string, unknown>).name !== "string") {
+              return undefined;
+            }
+            const rec = c as Record<string, unknown>;
+            // ACP's `AvailableCommandInput` (currently only the "unstructured"
+            // variant) carries a `hint` string to show as a placeholder before
+            // the user has typed arguments — surface it as `argumentHint`
+            // rather than dropping it (plan Decision 7 / 2.1).
+            const input = rec.input;
+            const argumentHint =
+              input && typeof input === "object" && typeof (input as Record<string, unknown>).hint === "string"
+                ? ((input as Record<string, unknown>).hint as string)
+                : undefined;
+            // Strip ONE leading "/" here — the single choke point where an
+            // ACP command entry is built. Names flow downstream into a
+            // catalog of BARE names (skillInvocation.ts's `matchLongestName`
+            // prepends its own "/"); leaving it in doubles up everywhere
+            // else (popover renders "//plan", selection inserts "//plan ",
+            // and the message never dispatches). acpNormalize.test.ts 2.T1
+            // feeds "/plan" and asserts the stripped "plan" form.
+            const rawName = rec.name as string;
+            const name = rawName.startsWith("/") ? rawName.slice(1) : rawName;
+            return {
+              name,
+              description: typeof rec.description === "string" ? (rec.description as string) : "",
+              ...(argumentHint !== undefined ? { argumentHint } : {}),
+            };
+          })
+          .filter((c): c is { name: string; description: string; argumentHint?: string } => c !== undefined),
       });
       break;
     }
