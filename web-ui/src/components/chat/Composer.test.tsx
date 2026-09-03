@@ -1,19 +1,34 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
 import { Composer } from "./Composer";
 
+/**
+ * Phase 7B rewrote the composer's message field from a `<textarea>` to a
+ * Lexical contenteditable (`<SkillEditor>`). jsdom does not implement the
+ * `beforeinput` machinery Lexical's own text-insertion path relies on, so
+ * `userEvent.type`/`fireEvent.paste` into the contenteditable are no-ops
+ * here (verified empirically — this is a jsdom limitation, not a product
+ * bug; real-browser typing is exercised by Lexical's own test suite and by
+ * manual/E2E verification of this feature). Tests below that used to type
+ * into the box instead mount with the final content via `initialText` (the
+ * same seeding path a real mount already uses for a stored draft) and
+ * exercise editing through the one thing jsdom CAN drive reliably — a
+ * chip's native `<input>` arg field — to verify the draft-save/send wiring.
+ * The caret/selection contract itself (arrows, Backspace/Delete, popover,
+ * collapse-to-`/`) has its own dedicated suite: `SkillEditor.test.tsx`.
+ */
+
 beforeEach(() => {
   localStorage.clear();
 });
 
-describe("Composer attachments + send (5.T1)", () => {
+describe("Composer attachments + send", () => {
   it("uploads a dropped file → chip appears → send includes the attachment id", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(message: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
-    render(<Composer api={api} sessionId="s1" onSend={onSend} />);
+    render(<Composer api={api} sessionId="s1" onSend={onSend} initialText="check this" />);
 
     const file = new File(["hello"], "log.txt", { type: "text/plain" });
     const dropzone = document.querySelector(".chat-composer")!;
@@ -22,7 +37,6 @@ describe("Composer attachments + send (5.T1)", () => {
     // Chip appears once the upload resolves.
     expect(await screen.findByText("log.txt")).toBeTruthy();
 
-    await userEvent.setup().type(screen.getByLabelText("Message"), "check this");
     fireEvent.click(screen.getByLabelText("Send message"));
 
     await waitFor(() => expect(onSend).toHaveBeenCalled());
@@ -35,7 +49,7 @@ describe("Composer attachments + send (5.T1)", () => {
     const api = createMockApi();
     vi.spyOn(api, "uploadAttachments").mockRejectedValueOnce(new ApiError("too big", 413));
     const onSend = vi.fn<(message: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
-    render(<Composer api={api} sessionId="s1" onSend={onSend} />);
+    render(<Composer api={api} sessionId="s1" onSend={onSend} initialText="send anyway" />);
 
     const file = new File(["x".repeat(10)], "big.bin", { type: "application/octet-stream" });
     fireEvent.drop(document.querySelector(".chat-composer")!, { dataTransfer: { files: [file] } });
@@ -43,7 +57,6 @@ describe("Composer attachments + send (5.T1)", () => {
     expect(await screen.findByText(/File too large/i)).toBeTruthy();
 
     // The message is still sendable (errored attachment excluded).
-    await userEvent.setup().type(screen.getByLabelText("Message"), "send anyway");
     fireEvent.click(screen.getByLabelText("Send message"));
     await waitFor(() => expect(onSend).toHaveBeenCalled());
     const [, ids] = onSend.mock.calls[0]!;
@@ -52,50 +65,64 @@ describe("Composer attachments + send (5.T1)", () => {
 });
 
 describe("Composer draft persistence (RA1)", () => {
-  it("seeds the textarea from a stored draft", () => {
+  it("seeds the editor from a stored draft", () => {
     localStorage.setItem("vst-chat-draft-s1", "half-written thought");
     const api = createMockApi();
     render(<Composer api={api} sessionId="s1" onSend={vi.fn()} />);
-    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe(
-      "half-written thought",
-    );
+    expect(screen.getByLabelText("Message").textContent).toBe("half-written thought");
   });
 
   it("salvaged initialText wins over a stored draft", () => {
     localStorage.setItem("vst-chat-draft-s1", "stored");
     const api = createMockApi();
     render(<Composer api={api} sessionId="s1" onSend={vi.fn()} initialText="salvaged" />);
-    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("salvaged");
+    expect(screen.getByLabelText("Message").textContent).toBe("salvaged");
   });
 
-  it("persists edits and clears the key on a successful send", async () => {
+  it("persists edits (via a chip's arg input) and clears the key on a successful send", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
-    render(<Composer api={api} sessionId="s1" onSend={onSend} />);
+    render(
+      <Composer
+        api={api}
+        sessionId="s1"
+        onSend={onSend}
+        initialText="{/code-review}"
+        commands={[{ name: "code-review", description: "Review" }]}
+      />,
+    );
 
-    await userEvent.setup().type(screen.getByLabelText("Message"), "draft me");
-    await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBe("draft me"));
+    const argInput = screen.getByLabelText("Arguments for code-review");
+    await act(async () => {
+      fireEvent.change(argInput, { target: { value: "high" } });
+    });
+    await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBe("{/code-review high}"));
 
     fireEvent.click(screen.getByLabelText("Send message"));
-    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("{/code-review high}", []));
     await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBeNull());
   });
 
-  it("keeps drafts isolated per session", async () => {
+  it("keeps drafts isolated per session", () => {
     localStorage.setItem("vst-chat-draft-s2", "session two draft");
     const api = createMockApi();
     render(<Composer api={api} sessionId="s1" onSend={vi.fn()} />);
     // s1 has no stored draft — must not read s2's.
-    expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("");
-
-    await userEvent.setup().type(screen.getByLabelText("Message"), "session one");
-    await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBe("session one"));
+    expect(screen.getByLabelText("Message").textContent).toBe("");
     expect(localStorage.getItem("vst-chat-draft-s2")).toBe("session two draft");
+  });
+
+  it("migrates a v1 (`/name args\\nprose`) draft to a chip on load", () => {
+    localStorage.setItem("vst-chat-draft-s1", "/code-review high\nplease look");
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s1" onSend={vi.fn()} commands={[{ name: "code-review", description: "Review" }]} />);
+    expect(screen.getByLabelText("Arguments for code-review")).toBeTruthy();
+    expect((screen.getByLabelText("Arguments for code-review") as HTMLInputElement).value).toBe("high");
   });
 });
 
-describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw busy)", () => {
-  it("4.T1 — busy=true, empty box → Stop button renders (the one real busy-with-nothing-to-send case)", () => {
+describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () => {
+  it("busy=true, empty box → Stop button renders (the one real busy-with-nothing-to-send case)", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-busy-empty" onSend={vi.fn()} busy onStop={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy();
@@ -103,7 +130,7 @@ describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw 
     expect(screen.queryByLabelText(/queues after current turn/i)).toBeNull();
   });
 
-  it("4.T2 — busy=true, text ready → Send (queue variant) renders instead of Stop, and clicking it calls onSend", async () => {
+  it("busy=true, text ready → Send (queue variant) renders instead of Stop, and clicking it calls onSend", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
     render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
@@ -114,7 +141,7 @@ describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("follow-up", []));
   });
 
-  it("4.T2b — a busy send that clears the box does NOT flip the button to Stop at the same position", async () => {
+  it("a busy send that clears the box does NOT flip the button to Stop at the same position", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
     render(<Composer api={api} sessionId="s-busy-swap" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
@@ -131,7 +158,7 @@ describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw 
     await waitFor(() => expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy(), { timeout: 2000 });
   });
 
-  it("4.T3 — busy=false, text ready → plain Send renders (no queue class)", () => {
+  it("busy=false, text ready → plain Send renders (no queue class)", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-idle-text" onSend={vi.fn()} initialText="hello" />);
     const button = screen.getByLabelText("Send message");
@@ -139,16 +166,30 @@ describe("Composer Send/Stop branching (Phase 4 — Decision 9, canSend not raw 
     expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("4.T4 — regression: busy=false, empty box → Send renders disabled (unchanged existing behavior)", () => {
+  it("busy=false, empty box → Send renders disabled (unchanged existing behavior)", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-idle-empty" onSend={vi.fn()} />);
     const button = screen.getByLabelText("Send message") as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     expect(button.className).not.toContain("chat-composer__send--queue");
   });
+
+  it("a parked skill chip with empty args/prose is still sendable (Decision 5 / M2 parity)", () => {
+    const api = createMockApi();
+    render(
+      <Composer
+        api={api}
+        sessionId="s-parked"
+        onSend={vi.fn()}
+        initialText="{/code-review}"
+        commands={[{ name: "code-review", description: "Review" }]}
+      />,
+    );
+    expect((screen.getByLabelText("Send message") as HTMLButtonElement).disabled).toBe(false);
+  });
 });
 
-describe("5.T7 — Composer canSteer aria-label", () => {
+describe("Composer canSteer aria-label", () => {
   it("busy && !canSteer → aria-label is queuing label (unchanged)", () => {
     const api = createMockApi();
     render(<Composer api={api} sessionId="s-q" onSend={vi.fn()} busy initialText="text" />);
@@ -171,53 +212,14 @@ describe("5.T7 — Composer canSteer aria-label", () => {
   });
 });
 
-describe("Composer textarea auto-grow", () => {
-  // jsdom has no real layout, so `scrollHeight` is stubbed per-assertion.
-  // `getComputedStyle`'s line-height/padding/border resolve to jsdom's UA
-  // defaults, NOT this project's CSS (vitest doesn't apply stylesheets) —
-  // read the same computed style the component reads, rather than assuming a
-  // specific pixel cap, so this test isn't coupled to jsdom's UA defaults.
-  function expectedCapPx(textarea: HTMLTextAreaElement): number {
-    const style = window.getComputedStyle(textarea);
-    const lineHeight = parseFloat(style.lineHeight) || 20;
-    const extra =
-      (parseFloat(style.paddingTop) || 0) +
-      (parseFloat(style.paddingBottom) || 0) +
-      (parseFloat(style.borderTopWidth) || 0) +
-      (parseFloat(style.borderBottomWidth) || 0);
-    return lineHeight * 10 + extra;
-  }
-
-  it("grows to fit content up to the ~10-line cap, then caps and scrolls", () => {
+describe("Composer editor autosize (Phase 7B.8 — CSS max-height, replaces JS autosizeComposerTextarea)", () => {
+  it("the editor shell caps growth via CSS max-height + overflow-y auto, not inline JS height", () => {
     const api = createMockApi();
-    render(<Composer api={api} sessionId="s-grow" onSend={vi.fn()} />);
-    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
-    const cap = expectedCapPx(textarea);
-
-    Object.defineProperty(textarea, "scrollHeight", { value: 90, configurable: true });
-    fireEvent.change(textarea, { target: { value: "line1\nline2\nline3" } });
-    expect(textarea.style.height).toBe("90px");
-    expect(textarea.style.overflowY).toBe("hidden");
-
-    Object.defineProperty(textarea, "scrollHeight", { value: cap + 300, configurable: true });
-    fireEvent.change(textarea, { target: { value: "a\n".repeat(20) } });
-    expect(textarea.style.height).toBe(`${cap}px`);
-    expect(textarea.style.overflowY).toBe("auto");
-  });
-
-  it("shrinks back down as content is deleted", () => {
-    const api = createMockApi();
-    render(<Composer api={api} sessionId="s-shrink" onSend={vi.fn()} />);
-    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
-    const cap = expectedCapPx(textarea);
-
-    Object.defineProperty(textarea, "scrollHeight", { value: cap + 100, configurable: true });
-    fireEvent.change(textarea, { target: { value: "a\n".repeat(15) } });
-    expect(textarea.style.height).toBe(`${cap}px`);
-
-    Object.defineProperty(textarea, "scrollHeight", { value: 40, configurable: true });
-    fireEvent.change(textarea, { target: { value: "short" } });
-    expect(textarea.style.height).toBe("40px");
-    expect(textarea.style.overflowY).toBe("hidden");
+    render(<Composer api={api} sessionId="s-autosize" onSend={vi.fn()} />);
+    const shell = document.querySelector(".chat-composer__textarea.chat-skill-editor") as HTMLElement;
+    expect(shell.style.overflowY).toBe("auto");
+    expect(shell.style.maxHeight).toContain("10");
+    // No JS-driven inline `height` — that mechanism was deleted.
+    expect(shell.style.height).toBe("");
   });
 });
