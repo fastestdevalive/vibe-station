@@ -1,11 +1,14 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { Children, isValidElement } from "react";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
+import { MermaidView } from "./MermaidView";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
+import { useTheme } from "@/hooks/useTheme";
 
 interface MarkdownImageProps {
   src?: string;
@@ -69,9 +72,18 @@ interface MarkdownViewProps {
 
 export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null }: MarkdownViewProps) {
   const fileDir = filePath ? filePath.split("/").slice(0, -1).join("/") || null : null;
+  const { theme } = useTheme();
 
   const markdownComponents = useMemo(() => ({
     pre({ children }: { children?: ReactNode }) {
+      const codeEl = Children.toArray(children).find(
+        (c) => isValidElement<{ className?: string }>(c) && c.type === "code" &&
+               (c.props.className ?? "").includes("language-mermaid")
+      );
+      if (isValidElement<{ children?: ReactNode }>(codeEl)) {
+        const chart = String(codeEl.props.children ?? "").trim();
+        return <MermaidView chart={chart} theme={theme} />;
+      }
       return <CodeBlock>{children}</CodeBlock>;
     },
     code({ className, children, ...props }: ComponentPropsWithoutRef<"code">) {
@@ -80,7 +92,7 @@ export function MarkdownView({ source, api = null, worktreeId = null, scope = "w
     img({ src, alt }: ComponentPropsWithoutRef<"img">) {
       return <MarkdownImage src={src} alt={alt} api={api} worktreeId={worktreeId} scope={scope} fileDir={fileDir} />;
     },
-  }), [api, worktreeId, scope, fileDir]);
+  }), [api, worktreeId, scope, fileDir, theme]);
 
   return (
     <div className="workspace-markdown-preview">
