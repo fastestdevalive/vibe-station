@@ -291,7 +291,14 @@ export interface NormalizedEvent {
   /** `mode_update` only — the new `currentModeId`. */
   modeId?: string;
   /** `commands_update` only — the available slash commands. */
-  commands?: { name: string; description: string }[];
+  commands?: Command[];
+}
+
+/** A slash command/skill catalog entry (`commands_update`, session meta). */
+export interface Command {
+  name: string;
+  description: string;
+  argumentHint?: string;
 }
 
 export type TurnState = "idle" | "queued" | "thinking" | "responding" | "tool" | "error";
@@ -354,6 +361,8 @@ export interface SessionMeta {
   cwd?: string;
   /** True when the connection supports mid-turn steering (`_session/steering`). */
   canSteer?: boolean;
+  /** Latest `commands_update` catalog for this session, if any (full-replace). */
+  commands?: Command[];
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -756,6 +765,33 @@ export interface Settings {
   defaultProjectsDir: string;
   /** Runtime-computed home dir (not persisted) — for `~` display/expansion. */
   homeDir?: string;
+  /** Directories scanned for `<dir>/*\/SKILL.md` user skills (Decision 11). */
+  skillPaths?: string[];
+}
+
+/** A directory-scanned skill catalog entry from GET /skills (Settings panel only). */
+export interface Skill {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  path: string;
+}
+
+/** Per-directory scan outcome from GET /skills. */
+export interface SkillDirectory {
+  path: string;
+  skillCount: number;
+  /** A real failure (permissions, I/O) — rendered as an error. */
+  error?: string;
+  /** Directory is absent. Normal for a shipped default whose CLI is not
+   *  installed; rendered muted, never as an error. */
+  missing?: boolean;
+}
+
+/** Response from GET /skills. */
+export interface SkillsResponse {
+  skills: Skill[];
+  directories: SkillDirectory[];
 }
 
 /** Body for POST /projects/create — create a brand new project directory. */

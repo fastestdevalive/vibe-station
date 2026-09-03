@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, NormalizedEvent } from "@/api/types";
+import type { Attachment, Command, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
@@ -439,6 +439,9 @@ interface MessageListProps {
   onAtBottomChange?: (atBottom: boolean) => void;
   /** Absolute working directory — tool-call paths are shown relative to it. */
   cwd?: string;
+  /** Session's slash-command/skill catalog, threaded into the fork editor's
+   *  `QueuedTurnEditor` mount. */
+  commands?: Command[];
 }
 
 export function MessageList({
@@ -458,6 +461,7 @@ export function MessageList({
   onForkTurn,
   onAtBottomChange,
   cwd,
+  commands,
 }: MessageListProps) {
   // Which answered user turn (if any) this tab is editing → fork. Local to the
   // list; a fork closes the editor and the daemon truncates + re-runs (R3.1).
@@ -790,8 +794,10 @@ export function MessageList({
                   <QueuedTurnEditor
                     api={api!}
                     sessionId={sessionId!}
+                    turnId={item.turnId}
                     initialText={item.text}
                     initialAttachments={item.attachments ?? []}
+                    commands={commands}
                     onSave={async (message, attachments) => {
                       setForkEditingTurnId(null);
                       await onForkTurn!(item.turnId!, message, attachments.map((a) => a.id));
