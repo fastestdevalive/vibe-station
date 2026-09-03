@@ -147,7 +147,15 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | DELETE | `/sessions/:id/chat/queue/:turnId` | — | `{ ok }` | Cancels one not-yet-started queued turn. 404 if not queued. |
 | POST | `/sessions/:id/attachments` | `multipart/form-data` `files[]` | `201 { attachments: Attachment[] }` | Saved under `sessionDataDir/uploads/` (outside the checkout). 413 too big; 400 no files. |
 | GET | `/sessions/:id/transcript` | — | `{ events: NormalizedEvent[] }` | Full normalized history (replay / fallback). **404** if the target session's channel is not `json` (a tmux/pty session has no event log — was previously a convincing empty `200 {events:[]}`). |
-| GET | `/sessions/:id/meta` | — | `SessionMeta` | Latest tokens/model/turn-state/queueDepth; rebuilt from the transcript tail after a restart. |
+| GET | `/sessions/:id/meta` | — | `SessionMeta` | Latest tokens/model/turn-state/queueDepth; rebuilt from the transcript tail after a restart. `meta.commands?: { name, description, argumentHint? }[]` is the session's slash-command/skill catalog — the CLI's own ACP `available_commands_update` (full-replace, captured in-turn AND out-of-band) merged per-field with the directories scanned from `skillPaths`: on a name collision ACP wins `description`/`argumentHint`, and directory-only entries are withheld from CLIs whose plugin cannot dispatch them. Absent until either source has answered; `[]` once one has and the catalog is genuinely empty. |
+
+### Settings & Skills
+
+| Method | Path | Query / Body | Returns | Notes |
+|---|---|---|---|---|
+| GET | `/settings` | — | `{ defaultProjectsDir, homeDir, skillPaths }` | User settings from `~/.vibe-station/config.json`, with defaults filled in for missing fields (`skillPaths` defaults to `~/.claude/skills` + `~/.gemini/skills`). |
+| PATCH | `/settings` | `{ defaultProjectsDir?, skillPaths? }` | `{ ok }` | Both fields must be absolute paths — 400 otherwise. `skillPaths` is deduped on write and triggers an immediate rescan + rewatch of the new directory set (awaited, so a following `GET /skills` sees the fresh scan). |
+| GET | `/skills` | — | `{ skills: Skill[], directories: SkillDirectory[] }` | Settings-panel view of the DIRECTORY-scanned user skill catalog (`<dir>/<name>/SKILL.md` under each `skillPaths` entry). `Skill = { name, description, argumentHint?, path }`. **Never returns a 4xx/5xx for a scan problem** — a per-directory outcome is reported in `directories[]` instead: `{ path, skillCount, error?, missing? }`, where `missing: true` (directory absent) is normal for a shipped default whose CLI is not installed and is not an error. The composer's `/` popover does NOT read this route — it reads `SessionMeta.commands`, which is the merged (ACP + directory) view. |
 
 ### Modes
 
@@ -221,7 +229,7 @@ Backpressure: if the server's WS write buffer exceeds ~1 MB queued (slow consume
 | `session:error` | `{ sessionId, message }` | Attach / stream failure. |
 | `chat:replay` | `{ sessionId, events: NormalizedEvent[] }` | Full JSON transcript on `chat:open`. |
 | `session:message` | `{ sessionId, event: NormalizedEvent }` | One live normalized JSON-chat event (user/thinking/text/tool_use/tool_result/result/error). |
-| `session:meta` | `{ sessionId, meta: SessionMeta }` | JSON-chat usage/model/turn-state/queueDepth update. |
+| `session:meta` | `{ sessionId, meta: SessionMeta }` | JSON-chat usage/model/turn-state/queueDepth update. Also fires on a `commands_update` (and only on that event kind, including out-of-band before turn 1) so the composer's skill catalog stays current. |
 
 ### Server → Client — file / tree (file or tree watchers only)
 

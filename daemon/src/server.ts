@@ -13,6 +13,7 @@ import { registerSessionRoutes } from "./routes/sessions.js";
 import { registerAttachmentRoutes } from "./routes/attachments.js";
 import { registerModeRoutes } from "./routes/modes.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
+import { registerSkillsRoutes } from "./routes/skills.js";
 import { registerOrderedListsRoutes } from "./routes/orderedLists.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerAuthRoutes } from "./routes/auth.js";
@@ -197,6 +198,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   registerAttachmentRoutes(app);
   registerModeRoutes(app);
   registerSettingsRoutes(app);
+  registerSkillsRoutes(app);
   registerOrderedListsRoutes(app);
   registerFsRoutes(app);
 
