@@ -56,4 +56,4 @@ VST_DATA_DIR    ~/.vibe-station/projects/<project-id>
 VST_DAEMON_URL  http://127.0.0.1:<port>
 ```
 
-Agents use these to call `vst send`, `vst session output`, etc. without needing to know their own identity.
+Agents use these to call `vst session send`, `vst session output`, etc. without needing to know their own identity.

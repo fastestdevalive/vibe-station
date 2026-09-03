@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Command } from "commander";
 
-// --- 4b.T1/T2: --source-agent flag + $VST_SESSION defaulting (agent-interaction-
+// --- 4b.T1/T2: --parent flag + $VST_SESSION defaulting (agent-interaction-
 // workspaces/04-workspaces Phase 4b) for both `vst worktree create` and
 // `vst session create`. No CLI-command test harness existed in this codebase
 // before this file — mock the two daemon-facing modules directly and drive
@@ -19,8 +19,8 @@ vi.mock("../lib/daemon-client.js", () => ({
 }));
 vi.mock("../lib/preflight.js", () => ({ preflight: vi.fn(async () => {}) }));
 
-const { registerWorktreeCreate } = await import("./worktree/create.js");
-const { registerSessionCreate } = await import("./session/create.js");
+const { registerWorktreeCreate } = await import("../commands/worktree/create.js");
+const { registerSessionCreate } = await import("../commands/session/create.js");
 
 function buildWorktreeProgram(): Command {
   const program = new Command();
@@ -38,7 +38,7 @@ function buildSessionProgram(): Command {
   return program;
 }
 
-describe("vst worktree create --source-agent", () => {
+describe("vst worktree create --parent", () => {
   const originalVstSession = process.env.VST_SESSION;
 
   beforeEach(() => {
@@ -50,10 +50,10 @@ describe("vst worktree create --source-agent", () => {
     else process.env.VST_SESSION = originalVstSession;
   });
 
-  it("4b.T1 — explicit --source-agent sends sourceAgentId in the POST body", async () => {
+  it("4b.T1 — explicit --parent sends sourceAgentId in the POST body", async () => {
     const program = buildWorktreeProgram();
     await program.parseAsync(
-      ["worktree", "create", "proj1", "--mode", "m1", "--source-agent", "sess-explicit"],
+      ["worktree", "create", "proj1", "--mode", "m1", "--parent", "sess-explicit"],
       { from: "user" },
     );
     expect(daemonPostMock).toHaveBeenCalledWith(
@@ -62,7 +62,7 @@ describe("vst worktree create --source-agent", () => {
     );
   });
 
-  it("4b.T1 — no --source-agent but $VST_SESSION set in env defaults sourceAgentId to it", async () => {
+  it("4b.T1 — no --parent but $VST_SESSION set in env defaults sourceAgentId to it", async () => {
     process.env.VST_SESSION = "sess-from-env";
     const program = buildWorktreeProgram();
     await program.parseAsync(["worktree", "create", "proj1", "--mode", "m1"], { from: "user" });
@@ -72,11 +72,11 @@ describe("vst worktree create --source-agent", () => {
     );
   });
 
-  it("4b.T2 — explicit --source-agent overrides $VST_SESSION when both are present", async () => {
+  it("4b.T2 — explicit --parent overrides $VST_SESSION when both are present", async () => {
     process.env.VST_SESSION = "sess-from-env";
     const program = buildWorktreeProgram();
     await program.parseAsync(
-      ["worktree", "create", "proj1", "--mode", "m1", "--source-agent", "sess-explicit"],
+      ["worktree", "create", "proj1", "--mode", "m1", "--parent", "sess-explicit"],
       { from: "user" },
     );
     expect(daemonPostMock).toHaveBeenCalledWith(
@@ -85,7 +85,7 @@ describe("vst worktree create --source-agent", () => {
     );
   });
 
-  it("omitting both --source-agent and $VST_SESSION sends no sourceAgentId at all (S5, no side effect)", async () => {
+  it("omitting both --parent and $VST_SESSION sends no sourceAgentId at all (S5, no side effect)", async () => {
     const program = buildWorktreeProgram();
     await program.parseAsync(["worktree", "create", "proj1", "--mode", "m1"], { from: "user" });
     const [, body] = daemonPostMock.mock.calls[0]!;
@@ -93,7 +93,7 @@ describe("vst worktree create --source-agent", () => {
   });
 });
 
-describe("vst session create --source-agent", () => {
+describe("vst session create --parent", () => {
   const originalVstSession = process.env.VST_SESSION;
 
   beforeEach(() => {
@@ -105,9 +105,9 @@ describe("vst session create --source-agent", () => {
     else process.env.VST_SESSION = originalVstSession;
   });
 
-  it("4b.T1 — explicit --source-agent sends sourceAgentId in the POST body", async () => {
+  it("4b.T1 — explicit --parent sends sourceAgentId in the POST body", async () => {
     const program = buildSessionProgram();
-    await program.parseAsync(["session", "create", "wt-1", "--source-agent", "sess-explicit"], {
+    await program.parseAsync(["session", "create", "wt-1", "--parent", "sess-explicit"], {
       from: "user",
     });
     expect(daemonPostMock).toHaveBeenCalledWith(
@@ -116,7 +116,7 @@ describe("vst session create --source-agent", () => {
     );
   });
 
-  it("4b.T1 — no --source-agent but $VST_SESSION set in env defaults sourceAgentId to it", async () => {
+  it("4b.T1 — no --parent but $VST_SESSION set in env defaults sourceAgentId to it", async () => {
     process.env.VST_SESSION = "sess-from-env";
     const program = buildSessionProgram();
     await program.parseAsync(["session", "create", "wt-1"], { from: "user" });
@@ -126,10 +126,10 @@ describe("vst session create --source-agent", () => {
     );
   });
 
-  it("4b.T2 — explicit --source-agent overrides $VST_SESSION when both are present", async () => {
+  it("4b.T2 — explicit --parent overrides $VST_SESSION when both are present", async () => {
     process.env.VST_SESSION = "sess-from-env";
     const program = buildSessionProgram();
-    await program.parseAsync(["session", "create", "wt-1", "--source-agent", "sess-explicit"], {
+    await program.parseAsync(["session", "create", "wt-1", "--parent", "sess-explicit"], {
       from: "user",
     });
     expect(daemonPostMock).toHaveBeenCalledWith(
@@ -138,7 +138,7 @@ describe("vst session create --source-agent", () => {
     );
   });
 
-  it("omitting both --source-agent and $VST_SESSION sends no sourceAgentId at all (S5, no side effect)", async () => {
+  it("omitting both --parent and $VST_SESSION sends no sourceAgentId at all (S5, no side effect)", async () => {
     const program = buildSessionProgram();
     await program.parseAsync(["session", "create", "wt-1"], { from: "user" });
     const [, body] = daemonPostMock.mock.calls[0]!;

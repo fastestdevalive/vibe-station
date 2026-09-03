@@ -23,7 +23,6 @@ import type {
   Project,
   ProjectBranchesResponse,
   SendChatResponse,
-  SendInputBody,
   Session,
   SessionMeta,
   Settings,
@@ -562,18 +561,6 @@ export function createClientApi() {
       return parseJson<Session>(res);
     },
 
-    async sendInput(sessionId: string, body: SendInputBody): Promise<{ ok: true }> {
-      const root = baseUrl();
-      const res = await apiFetch(
-        `${root}/sessions/${encodeURIComponent(sessionId)}/input`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-      return parseJson<{ ok: true }>(res);
-    },
 
     async getFileBlob(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<Blob> {
       const path = filePath.replace(/^\/+/, "");
