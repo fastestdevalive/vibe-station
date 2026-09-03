@@ -31,10 +31,6 @@ export function registerWorktreeCreate(worktree: Command): void {
       "--parent <sessionId>",
       "SessionId this worktree's main agent was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
     )
-    .option(
-      "--source-agent <sessionId>",
-      "Alias of --parent (legacy name; still supported for external callers)",
-    )
     .action(
       async (
         projectId: string,
@@ -49,7 +45,6 @@ export function registerWorktreeCreate(worktree: Command): void {
           promptFile?: string;
           json?: boolean;
           parent?: string;
-          sourceAgent?: string;
         }
       ) => {
         if (!opts.mode) {
@@ -65,12 +60,12 @@ export function registerWorktreeCreate(worktree: Command): void {
         // Defaults to $VST_SESSION (agent-interaction-workspaces/04-workspaces
         // Phase 4b, S3) — set by the daemon on every spawned agent's own
         // process env (routes/sessions.ts), so an agent running `vst worktree
-        // create` from its own shell gets source-agent affinity for free
-        // without passing --source-agent explicitly. From a human's own
+        // create` from its own shell gets parent affinity for free
+        // without passing --parent explicitly. From a human's own
         // terminal (not inside an agent), $VST_SESSION is unset, so this is
         // simply omitted — no side effect (S5).
-        const explicitParent = opts.parent ?? opts.sourceAgent;
-        const explicitlyPassed = opts.parent !== undefined || opts.sourceAgent !== undefined;
+        const explicitParent = opts.parent;
+        const explicitlyPassed = opts.parent !== undefined;
         const sourceAgentId = explicitlyPassed
           ? explicitParent || undefined
           : process.env.VST_SESSION || undefined;

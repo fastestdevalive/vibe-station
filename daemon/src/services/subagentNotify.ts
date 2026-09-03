@@ -183,7 +183,10 @@ async function flush(parentId: string, deps: NotifyDeps): Promise<void> {
     `${lines.join("\n")}\n\n` +
     `Read a subagent's work with \`vst session output <id>\`. If it has finished ` +
     `and you have consumed its result, terminate it with \`vst session terminate <id>\`. ` +
-    `If it is waiting for a reply, answer it with \`vst chat <id> "..."\`. ` +
+    // `vst session send`, not `vst chat`: send is the verb the shared system
+    // prompt teaches and the only one that works on every channel. Telling the
+    // parent otherwise made the daemon's own guidance contradict the prompt.
+    `If it is waiting for a reply, answer it with \`vst session send <id> "..."\`. ` +
     `If nothing here needs action from you, say so briefly and stop.`;
 
   noticeCount.set(parentId, (noticeCount.get(parentId) ?? 0) + 1);

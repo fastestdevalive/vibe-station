@@ -258,16 +258,17 @@ describe("JSON chat REST + WS", () => {
     expect(kinds).toEqual(["user", "session_init", "text", "usage", "result"]);
   });
 
-  it("vst send — POST /input reaches a json session instead of 409ing", async () => {
-    // `vst send` posts to /input, which branched on useTmux only. A json
+  it("vst session send — POST /send reaches a json session instead of 409ing", async () => {
+    // `vst session send` posts to /send. Before this route existed the CLI hit
+    // /input, which branched on useTmux only. A json
     // session has no PTY and is never in directPtyRegistry, so it always took
     // the "Session not running" 409 — while the shared system prompt,
-    // skill/SKILL.md and the README all present `vst send` as THE
+    // skill/SKILL.md and the README all present `vst session send` as THE
     // channel-agnostic way to message a session. Subagents are json, so
     // agent-to-agent messaging was impossible in the only channel that has them.
     const res = await app.inject({
       method: "POST",
-      url: `/sessions/${SESSION_ID}/input`,
+      url: `/sessions/${SESSION_ID}/send`,
       payload: { data: "hello from a sibling", sendEnter: true },
     });
     expect(res.statusCode).toBe(200);
@@ -285,9 +286,9 @@ describe("JSON chat REST + WS", () => {
     expect(texts).toContain("hello from a sibling");
   });
 
-  it("vst send — /input drives the same lifecycle as /chat (working, then settled)", async () => {
+  it("vst session send — /send drives the same lifecycle as /chat (working, then settled)", async () => {
     // /input must not just enqueue: without the `working` write the session
-    // stays at waiting_for_human for the whole turn, so `vst send --wait`
+    // stays at waiting_for_human for the whole turn, so `vst session send --wait`
     // returns before the turn starts and subagentNotify sees no state EDGE, so
     // a parent that messaged its child is never woken by the reply. Asserting
     // equivalence with /chat rather than sampling mid-turn, which races the
@@ -300,7 +301,7 @@ describe("JSON chat REST + WS", () => {
       state: string;
     }>().state;
 
-    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/input`, payload: { data: "via send" } });
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/send`, payload: { data: "via send" } });
     await jsonAgentRegistry.get(SESSION_ID)?.settled();
     const afterSend = (await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}` })).json<{
       state: string;
@@ -316,6 +317,144 @@ describe("JSON chat REST + WS", () => {
       .map((e) => (e as { text?: string }).text);
     expect(texts).toContain("via chat");
     expect(texts).toContain("via send");
+  });
+
+  it("D7 — POST /input is GONE, not aliased", async () => {
+    // The first cut of this change kept /input as a route alias; it was then
+    // removed outright. Pin that, so the alias cannot quietly come back.
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/input`,
+      payload: { data: "should not route", sendEnter: true },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("D8 — POST /send with queue:true calls agent.enqueue, never agent.submit", async () => {
+    // Seed the agent (turn 1) so it exists in the registry before we spy on it.
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "seed" } });
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    const agent = jsonAgentRegistry.get(SESSION_ID)!;
+    const submitSpy = vi.spyOn(agent, "submit");
+    const enqueueSpy = vi.spyOn(agent, "enqueue");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/send`,
+      payload: { data: "queued explicitly", queue: true },
+    });
+    expect(res.statusCode).toBe(200);
+    // The CONTRACT under test: `queue: true` must reach `enqueueChatTurn` as
+    // `steer: false`, which takes the `agent.enqueue()` branch and never
+    // calls `agent.submit()` (submit is what attempts ACP steering).
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(submitSpy).not.toHaveBeenCalled();
+
+    await agent.settled();
+    const tr = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript` });
+    const texts = tr
+      .json<{ events: NormalizedEvent[] }>()
+      .events.filter((e) => e.kind === "user")
+      .map((e) => (e as { text?: string }).text);
+    expect(texts).toContain("queued explicitly");
+
+    submitSpy.mockRestore();
+    enqueueSpy.mockRestore();
+  });
+
+  it("D8 — POST /send without queue calls agent.submit (default steer-attempt path)", async () => {
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "seed" } });
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    const agent = jsonAgentRegistry.get(SESSION_ID)!;
+    const submitSpy = vi.spyOn(agent, "submit");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/send`,
+      payload: { data: "default steer path" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+
+    await agent.settled();
+    submitSpy.mockRestore();
+  });
+
+  it("D5 — POST /send resolves attachmentIds on a json session (same as POST /chat)", async () => {
+    const boundary = "----vsttest2";
+    const body =
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="files"; filename="attach-via-send.txt"\r\n` +
+      `Content-Type: text/plain\r\n\r\n` +
+      `attached-content\r\n` +
+      `--${boundary}--\r\n`;
+    const up = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/attachments`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(up.statusCode).toBe(201);
+    const { attachments } = up.json<{ attachments: Array<{ id: string; path: string }> }>();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/send`,
+      payload: { data: "look at this via send", attachmentIds: [attachments[0]!.id] },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    expect(hoisted.lastMessage).toContain("[Attached files:]");
+    expect(hoisted.lastMessage).toContain(attachments[0]!.path);
+  });
+
+  it("D5 — POST /send with an unknown attachmentId on a json session → 400", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/send`,
+      payload: { data: "x", attachmentIds: ["nope"] },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("D7 — POST /send reaches the non-json branch for a direct-pty target", async () => {
+    // TTY_SESSION_ID is a direct-pty session (useTmux: false, channel: "pty").
+    // A 409 here ("no live process registered" in this test — no tmux fixture
+    // available) proves /send reached the non-json branch rather than the json
+    // one, i.e. the channel split inside `sendHandler` works.
+    // The tmux paste-buffer branch itself is byte-for-byte unchanged code
+    // (only the attachmentIds guard was inserted before it) — no existing
+    // suite has a tmux-fixture test for it via either route name, so this
+    // isn't a coverage regression from the /send rename.
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${TTY_SESSION_ID}/send`,
+      payload: { data: "tmux via send", sendEnter: true },
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: string }>().error).toBe("Session not running");
+  });
+
+  it("D5 — POST /send rejects attachmentIds on a non-json (pty) session", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${TTY_SESSION_ID}/send`,
+      payload: { data: "review this", attachmentIds: ["some-upload-id"] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toMatch(/Rich Chat/);
+  });
+
+  it("D4 — GET /transcript 404s on a non-json (pty) session instead of a convincing empty 200", async () => {
+    const res = await app.inject({ method: "GET", url: `/sessions/${TTY_SESSION_ID}/transcript` });
+    expect(res.statusCode).toBe(404);
   });
 
   it("3.T2b — POST /chat returns 202 { turnId, queuePosition }", async () => {

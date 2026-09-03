@@ -165,7 +165,7 @@ export function NewSessionDialog({
           // (fire-and-forget runMainSpawnJob). Fixing this for real needs a
           // queue-based delivery for the initial terminal prompt (mirroring
           // how /sessions/:id/chat is "always accepted" for JSON), since
-          // /sessions/:id/input 409s if the CLI process isn't registered yet.
+          // /sessions/:id/send 409s if the CLI process isn't registered yet.
           const wt = await api.createWorktree({
             projectId,
             branch: newWtBranch.trim() || undefined,

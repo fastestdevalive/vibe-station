@@ -24,7 +24,7 @@ async function run(args: string[]): Promise<void> {
   await session.parseAsync(["node", "session", ...args]);
 }
 
-describe("session create — --parent/--source-agent (Decision 3, 14, 15)", () => {
+describe("session create — --parent (Decision 3, 14, 15)", () => {
   const originalVstSession = process.env.VST_SESSION;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -43,8 +43,8 @@ describe("session create — --parent/--source-agent (Decision 3, 14, 15)", () =
     else process.env.VST_SESSION = originalVstSession;
   });
 
-  it("1.T7 — an explicit --source-agent '' warns and still creates the session", async () => {
-    await run(["create", "wt-1", "--mode", "bugfix", "--source-agent", ""]);
+  it("1.T7 — an explicit --parent '' warns and still creates the session", async () => {
+    await run(["create", "wt-1", "--mode", "bugfix", "--parent", ""]);
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]?.[0]).toMatch(/parent|source-agent/i);
@@ -61,17 +61,6 @@ describe("session create — --parent/--source-agent (Decision 3, 14, 15)", () =
     expect(body.sourceAgentId).toBeUndefined();
   });
 
-  it("1.T10 — --parent and --source-agent produce an identical request body", async () => {
-    await run(["create", "wt-1", "--mode", "bugfix", "--parent", "sess-abc"]);
-    const [, parentBody] = daemonPostMock.mock.calls[0] as [string, Record<string, unknown>];
-
-    daemonPostMock.mockClear();
-    await run(["create", "wt-1", "--mode", "bugfix", "--source-agent", "sess-abc"]);
-    const [, sourceAgentBody] = daemonPostMock.mock.calls[0] as [string, Record<string, unknown>];
-
-    expect(parentBody).toEqual(sourceAgentBody);
-    expect(parentBody.sourceAgentId).toBe("sess-abc");
-  });
 
   it("defaults to $VST_SESSION when no flag is passed (Decision 14)", async () => {
     process.env.VST_SESSION = "sess-env-parent";

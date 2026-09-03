@@ -21,7 +21,6 @@ import { registerSessionCreate } from "./commands/session/create.js";
 import { registerSessionLs } from "./commands/session/ls.js";
 import { registerSessionInfo } from "./commands/session/info.js";
 import { registerSessionTranscript } from "./commands/session/transcript.js";
-import { registerSessionMeta } from "./commands/session/meta.js";
 import { registerSessionTerminate } from "./commands/session/terminate.js";
 import { registerSessionAttach } from "./commands/session/attach.js";
 import { registerSessionRestore } from "./commands/session/restore.js";
@@ -29,8 +28,8 @@ import { registerSessionOutput } from "./commands/session/output.js";
 import { registerSessionReset } from "./commands/session/reset.js";
 import { registerSessionHandoff } from "./commands/session/handoff.js";
 import { registerSessionRename } from "./commands/session/rename.js";
-import { registerSend } from "./commands/send.js";
-import { registerChat } from "./commands/chat.js";
+import { registerSessionSend } from "./commands/session/send.js";
+import { registerSessionStop } from "./commands/session/stop.js";
 import { registerModeLs } from "./commands/mode/ls.js";
 import { registerModeAdd } from "./commands/mode/add.js";
 import { registerModeRm } from "./commands/mode/rm.js";
@@ -103,16 +102,12 @@ export function buildProgram(): Command {
   registerSessionRestore(session);
   registerSessionOutput(session);
   registerSessionTranscript(session);
-  registerSessionMeta(session);
   registerSessionReset(session);
   registerSessionHandoff(session);
   registerSessionRename(session);
+  registerSessionSend(session);
+  registerSessionStop(session);
 
-  // Send command
-  registerSend(program);
-
-  // Chat (JSON agent-chat) command
-  registerChat(program);
 
   // Mode commands
   const mode = program

@@ -11,10 +11,12 @@ interface SessionOutput {
 export function registerSessionOutput(session: Command): void {
   session
     .command("output <id>")
-    .description("Get session output")
+    .description(
+      "Print recent output — pane text (tmux/pty) or assistant prose (Rich Chat); " +
+        "not an event log (see `session transcript` for that)",
+    )
     .option("--lines <n>", "Last N lines", "100")
-    .option("--follow", "Follow output")
-    .action(async (id: string, opts: { lines?: string; follow?: boolean }) => {
+    .action(async (id: string, opts: { lines?: string }) => {
       await preflight();
 
       const result = await daemonGet<SessionOutput>(
@@ -26,10 +28,5 @@ export function registerSessionOutput(session: Command): void {
       }
 
       console.log(result.data.output);
-
-      if (opts.follow) {
-        // TODO: implement WebSocket follow mode
-        console.log("(--follow not yet implemented)");
-      }
     });
 }

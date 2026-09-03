@@ -201,27 +201,25 @@ Once a session is running, send it a follow-up message:
 
 ```bash
 # Inline message
-vst send <session-id> "Add error handling for the network timeout case"
+vst session send <session-id> "Add error handling for the network timeout case"
 
 # From a file
-vst send <session-id> --file=./instructions.md
+vst session send <session-id> --file=./instructions.md
 
-# Wait for the agent to go idle before returning
-vst send <session-id> "Refactor the data layer" --wait
+# Wait for the agent to settle before returning (also prints the reply)
+vst session send <session-id> "Refactor the data layer" --wait
 ```
+
 
 ---
 
 ## Monitoring agents
 
-Stream an agent's output to your terminal:
+Read an agent's recent output:
 
 ```bash
 # Show last 100 lines
 vst session output <session-id> --lines=100
-
-# Follow live (like tail -f)
-vst session output <session-id> --follow
 ```
 
 Check overall status across all your projects:
@@ -419,9 +417,8 @@ The project is a monorepo with three sibling directories at the root:
 ```
 vst project   add | rm | ls | info
 vst worktree  create | rm | ls | info
-vst session   create | terminate | ls | info | attach | restore | output
+vst session   create | terminate | ls | info | attach | restore | output | transcript | send | stop
 vst mode      add | rm | ls
-vst send      <session-id> [message] [--file] [--wait]
 vst status    [--project] [--json]
 vst open      [target]
 vst daemon    start | stop | restart | status

@@ -38,7 +38,7 @@ That is the whole thing. No flags to look up, no tool to find.
 
   Pick one and say which. Silently ending your turn with a promise to follow
   up is the one thing that leaves the user waiting forever.
-- **Linking is automatic.** Do NOT pass `--source-agent`/`--parent` yourself —
+- **Linking is automatic.** Do NOT pass `--parent` yourself —
   `vst session create`/`vst worktree create` already default it from
   `$VST_SESSION`, which is your own id. Passing it explicitly adds nothing.
 - **Mode and channel are inherited.** A subagent you spawn in your own
