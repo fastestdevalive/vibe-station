@@ -87,7 +87,7 @@ describe("Mode routes", () => {
       importsNativeHistory: false,
       supportsJsonToTerminalResume: true,
     });
-    expect(body.map((c) => c.id).sort()).toEqual(["agy", "claude", "cursor", "opencode"]);
+    expect(body.map((c) => c.id).sort()).toEqual(["agy", "claude", "cursor", "opencode", "pi"]);
   });
 
   it("POST /modes accepts cli agy", async () => {
