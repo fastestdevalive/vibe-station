@@ -32,8 +32,9 @@
  *   cmdline matching (`/proc/<pid>/cmdline`) for Node-based adapters.
  */
 
-import { promises as fs, mkdirSync } from "node:fs";
+import { promises as fs, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import path from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -91,10 +92,24 @@ export function validatePiAcpPresence(): void {
         `Install with: npm install -g ${PI_ACP_PACKAGE_NAME}@${PI_ACP_MIN_VERSION}`,
     );
   }
-  // Version output may be "0.17.1" or "pi-acp/0.17.1 node/..." — extract semver.
+  // Version output may be "0.17.1", "pi-acp/0.17.1 node/...", or empty.
+  // @victor-software-house/pi-acp exits 0 but emits nothing on --version,
+  // so fall back to reading its package.json via the binary's resolved path.
   const m = versionOutput.match(/(\d+\.\d+\.\d+)/);
-  const version = (m && m[1]) ? m[1] : versionOutput;
-  if (!semverGte(version, PI_ACP_MIN_VERSION)) {
+  let version = m?.[1] ?? "";
+  if (!version) {
+    try {
+      const binPath = execFileSync("which", [PI_ACP_BINARY], { encoding: "utf8", stdio: "pipe" }).trim();
+      // bin is <prefix>/bin/pi-acp; package.json is <prefix>/lib/node_modules/<pkg>/package.json
+      const pkgJson = path.join(path.dirname(path.dirname(binPath)), "lib", "node_modules", PI_ACP_PACKAGE_NAME, "package.json");
+      const { version: v } = JSON.parse(readFileSync(pkgJson, "utf8")) as { version: string };
+      version = v ?? "";
+    } catch {
+      // Cannot determine version — binary is present, skip version gate.
+      return;
+    }
+  }
+  if (version && !semverGte(version, PI_ACP_MIN_VERSION)) {
     throw new Error(
       `pi-acp ${version} is older than the tested minimum ${PI_ACP_MIN_VERSION}. ` +
         `Upgrade with: npm install -g ${PI_ACP_PACKAGE_NAME}@${PI_ACP_MIN_VERSION}`,
