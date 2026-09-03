@@ -10,10 +10,21 @@ interface MermaidViewProps {
 // causing a render failure. Replace `|` with " or " inside curly-brace node
 // labels so the diagram renders. The original source is preserved for the
 // fallback <pre> block.
+//
+// Mermaid also treats `;` as a statement terminator, so a `;` inside a
+// sequenceDiagram message (e.g. "Set-Cookie: x=y; Path=/") kills the parse.
+// Escape it with mermaid's numeric entity #59; which renders as a literal ";".
 function sanitizeMermaidSource(src: string): string {
-  return src.replace(/\{([^}\n]*\|[^}\n]*)\}/g, (_, label: string) =>
+  const pipeFix = src.replace(/\{([^}\n]*\|[^}\n]*)\}/g, (_, label: string) =>
     `{${label.replace(/\|/g, " or ")}}`
   );
+  // Only escape `;` in the message part (after the first `:`) of arrow lines.
+  const arrowRe = /(--?>>?|-{1,2}x|-\)|<<-)/;
+  return pipeFix.split("\n").map((line) => {
+    const colon = line.indexOf(":");
+    if (colon < 0 || !arrowRe.test(line.slice(0, colon))) return line;
+    return line.slice(0, colon + 1) + line.slice(colon + 1).replace(/;/g, "#59;");
+  }).join("\n");
 }
 
 export function MermaidView({ chart, theme }: MermaidViewProps) {
