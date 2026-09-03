@@ -68,9 +68,6 @@ vst session info $VST_SESSION --json
 
 # Recent output from another session
 vst session output <session-id> --lines=50
-
-# Follow another session's output live
-vst session output <session-id> --follow
 ```
 
 ### Spawn more work
@@ -122,12 +119,13 @@ SESSION_ID=$(vst session ls --worktree=$VST_WORKTREE --name="reviewer" --json | 
   disambiguate by hand (e.g. by `state`/`type`/`id`).
 
 ```bash
-# Send a message and wait for the session to go idle
-vst send <session-id> "message text" --wait
+# Send a message and wait for the session to go idle (also prints the reply)
+vst session send <session-id> "message text" --wait
 
 # Send from a file
-vst send <session-id> --file=./instructions.md --wait
+vst session send <session-id> --file=./instructions.md --wait
 ```
+
 
 ### Daemon / health
 

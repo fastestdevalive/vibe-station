@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";
 import { generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
@@ -60,7 +60,7 @@ const WorktreeSessionBody = z.object({
   channel: z.enum(["tmux", "pty", "json"]).optional(),
   name: z.string().trim().max(60).optional(),
   /** SessionId this session was spawned from (agent-interaction-workspaces/
-   *  04-workspaces Phase 4a) — from an agent's own `vst --source-agent`
+   *  04-workspaces Phase 4a) — from an agent's own `vst --parent`
    *  invocation, or (future) an in-app dialog's source picker. Stored
    *  as-is, never validated against a real session — an unknown/dangling
    *  id is harmless (S5). */
@@ -100,6 +100,11 @@ const ResetBody = z.object({
 const InputBody = z.object({
   data: z.string().min(1),
   sendEnter: z.boolean().optional(),
+  // Rich Chat only (D5) — validated against the target's channel in the route.
+  attachmentIds: z.array(z.string()).optional(),
+  // D8 — default (undefined/false) steers a running Rich Chat turn when
+  // possible; `queue: true` opts out and always enqueues FIFO.
+  queue: z.boolean().optional(),
 });
 
 const ChatBody = z
@@ -1632,8 +1637,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, handoffSummary });
   });
 
-  // POST /sessions/:id/input
-  app.post("/sessions/:id/input", async (req, reply) => {
+  // POST /sessions/:id/send — the one way to deliver a message to a session:
+  // raw bytes to a pane for tmux/pty, a chat turn for Rich Chat.
+  const sendHandler = async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
@@ -1642,12 +1648,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
     }
-    const { data, sendEnter = false } = result.data;
+    const { data, sendEnter = false, attachmentIds, queue } = result.data;
     const { session } = ctx;
 
     // A Rich Chat (json) session has no PTY to write bytes into — "input" for
-    // it means a chat turn. Without this branch `vst send` 409s on every json
-    // session, even though the shared system prompt
+    // it means a chat turn. Without this branch `vst session send` 409s on
+    // every json session, even though the shared system prompt
     // (`daemon/src/assets/agent-system-prompt.md`), `skill/SKILL.md` and the
     // README all present it as THE channel-agnostic way to message a session.
     // That made agent-to-agent messaging impossible in exactly the channel
@@ -1656,15 +1662,41 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       if (session.archivedAt) {
         return reply.status(400).send({ error: "Session is archived — start a new session instead" });
       }
+
+      // Resolve attachment ids → Attachment records (D5), same as POST /chat.
+      const attachments: Attachment[] = [];
+      for (const uploadId of attachmentIds ?? []) {
+        const att = getAttachment(id, uploadId);
+        if (!att) {
+          return reply.status(400).send({ error: `Attachment '${uploadId}' not found` });
+        }
+        attachments.push(att);
+      }
+
       const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
-      const res = await enqueueChatTurn({ sessionId: id, message: data, daemonPort });
+      // D8 — steer a running turn by default; `queue: true` opts out.
+      let res;
+      try {
+        res = await enqueueChatTurn({
+          sessionId: id,
+          message: data,
+          ...(attachments.length ? { attachments } : {}),
+          steer: !queue,
+          daemonPort,
+        });
+      } catch (err) {
+        // Matches POST /chat's error handling — an unresolved mode or a
+        // steer/enqueue throw should 500 cleanly, not bubble as an
+        // unhandled rejection past the route.
+        return reply.status(500).send({ error: `Failed to enqueue turn: ${String(err)}` });
+      }
       if (!res.ok) {
         return reply.status(res.reason === "not_found" ? 404 : 400).send({ error: res.message });
       }
       // Mark it working, exactly as POST /chat does. Without this the session
       // stays at `waiting_for_human` for the whole turn, which breaks two
-      // things at once: `vst send --wait` polls for idle|waiting_for_human and
-      // so returns before the turn even starts, and `subagentNotify` sees no
+      // things at once: `vst session send --wait` polls for idle|waiting_for_human
+      // and so returns before the turn even starts, and `subagentNotify` sees no
       // state EDGE (waiting_for_human → waiting_for_human) and never wakes the
       // parent — so "parent sends to child, child answers, parent is woken"
       // silently does nothing.
@@ -1676,6 +1708,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // own notices cannot reset the budget they are bounded by.
       noteHumanTurn(id);
       return reply.send({ ok: true });
+    }
+
+    // Attachments only make sense on the json channel (draft-then-inject into
+    // the next turn) — a tmux/pty target has no such concept via this route,
+    // so refuse rather than silently dropping the file (D5).
+    if (attachmentIds && attachmentIds.length > 0) {
+      return reply.status(400).send({ error: "Attachments require a Rich Chat (json) session" });
     }
 
     if (!session.useTmux) {
@@ -1705,7 +1744,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
 
     return reply.send({ ok: true });
-  });
+  };
+  app.post("/sessions/:id/send", sendHandler);
 
   // --- JSON agent chat (Decision 8/12) ---
 
@@ -2297,6 +2337,18 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findJsonSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    // D4 — findJsonSessionContext does no channel check (it's shared with
+    // /meta, /chat, /chat/stop, which must keep working off-channel). A
+    // tmux/pty session has no event log; answering with a convincing empty
+    // `200 {events:[]}` reads as "this session has no history" instead of
+    // "you asked the wrong endpoint" — 404 like any other unsupported target.
+    if (sessionChannel(ctx.session) !== "json") {
+      // Name the real reason: the session EXISTS, so "not found" would send
+      // the caller hunting for a bad id.
+      return reply
+        .status(404)
+        .send({ error: `Session '${id}' has no event log (not a Rich Chat session)` });
+    }
 
     const q = req.query as { beforeSeq?: string; limit?: string; since?: string; all?: string };
 

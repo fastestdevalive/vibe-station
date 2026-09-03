@@ -229,7 +229,7 @@ interface AgentPlugin {
   isProcessRunning(handle: TmuxHandle): Promise<boolean>;
 
   // First-ready signal: how the daemon knows the agent has booted enough to receive
-  // post-launch input (for the optional `prompt` and for `vst send`). Either:
+  // post-launch input (for the optional `prompt` and for `vst session send`). Either:
   //   - a substring sentinel the plugin expects in pty output, OR
   //   - a fallback wait time in ms (after which we assume ready).
   getReadySignal(): { sentinel?: string; fallbackMs: number };
@@ -464,7 +464,7 @@ In addition to the inline prompt, the skill file is dropped on disk in the workt
 The complete contract — CLI commands, REST endpoints, WebSocket events — lives in **`docs/API-CONTRACT.md`**. Single source of truth.
 
 Summary of shape:
-- **CLI** (noun-verb groups): `vst project {add,rm,ls,info}`, `vst worktree {create,rm,ls,info}`, `vst session {create,ls,info,terminate,attach,restore,output}`, `vst send`, `vst mode {ls,add,rm}`, `vst daemon {start,stop,status,restart}`, `vst open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VST_PROJECT`/`VST_WORKTREE`/`VST_SESSION`/`VST_DAEMON_URL` env vars; non-destructive commands default to those, and `session terminate` is the one destructive exception, defaulting to `$VST_SESSION`.
+- **CLI** (noun-verb groups): `vst project {add,rm,ls,info}`, `vst worktree {create,rm,ls,info}`, `vst session {create,ls,info,terminate,attach,restore,output,transcript,send,stop}`, `vst mode {ls,add,rm}`, `vst daemon {start,stop,status,restart}`, `vst open|status|doctor`. All `ls`/`info` accept `--json`. Agents inherit `VST_PROJECT`/`VST_WORKTREE`/`VST_SESSION`/`VST_DAEMON_URL` env vars; non-destructive commands default to those, and `session terminate` is the one destructive exception, defaulting to `$VST_SESSION`.
 - **REST** (localhost, no auth in v1): CRUD for `/projects`, `/worktrees`, `/sessions`, `/modes`; file/diff/tree under `/worktrees/:id/...`; resume + full-message-send on `/sessions/:id/...`.
 - **WebSocket** (`/ws`): three multiplexed channels — state subscription (`subscribe`), output stream (`session:open/input/resize/close`), file/tree watching (`file:watch`, `tree:watch`). Server pushes per-session lifecycle, output, file/tree mutations, and broadcast structural events.
 

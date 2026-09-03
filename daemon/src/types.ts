@@ -357,7 +357,7 @@ export interface SessionRecord {
   /**
    * SessionId this session was spawned from — set from `sourceAgentId` in the
    * create request body (in-app dialogs, or a running agent's own shell via
-   * `vst ... --source-agent`), or absent/null when created with no source
+   * `vst ... --parent`), or absent/null when created with no source
    * (the common case today: Out of Scope this round for the in-app dialogs,
    * which have no source-agent picker UI yet). Write-once: set at creation,
    * never mutated afterward (agent-interaction-workspaces/04-workspaces

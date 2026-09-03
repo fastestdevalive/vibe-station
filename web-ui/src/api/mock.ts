@@ -24,7 +24,6 @@ import type {
   Project,
   ProjectBranchesResponse,
   SendChatResponse,
-  SendInputBody,
   Session,
   SessionMeta,
   Settings,
@@ -759,16 +758,6 @@ export function createMockApi() {
       return structuredClone(s);
     },
 
-    async sendInput(sessionId: string, body: SendInputBody): Promise<{ ok: true }> {
-      const s = sessions.find((x) => x.id === sessionId);
-      if (!s) throw new ApiError("not found", 404);
-      emit({
-        type: "session:output",
-        sessionId,
-        chunk: body.data,
-      });
-      return { ok: true };
-    },
 
     async send(message: {
       type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";

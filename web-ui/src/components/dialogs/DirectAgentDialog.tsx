@@ -109,7 +109,7 @@ export function DirectAgentDialog({
         // finishes writing them, so attachments can be missing from turn 1.
         // Fixing this for real needs queue-based delivery for the initial
         // terminal prompt (mirroring how /sessions/:id/chat is "always
-        // accepted" for JSON) — /sessions/:id/input 409s if the CLI process
+        // accepted" for JSON) — /sessions/:id/send 409s if the CLI process
         // isn't registered yet.
         const sess = await api.createDirectSession({
           target: "direct",

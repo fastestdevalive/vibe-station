@@ -122,7 +122,7 @@ export function ensureSchema(db: Database): void {
   addColumnIfMissing(db, "worktrees", "hiddenAt", "TEXT");
   // spawnedFrom (agent-interaction-workspaces/04-workspaces Phase 4a) — the
   // sessionId this session was spawned from (via the in-app dialogs or a
-  // running agent's own `vst --source-agent` shell), or NULL when spawned
+  // running agent's own `vst --parent` shell), or NULL when spawned
   // with no source (the common case: a human via the dialogs with no source
   // picker yet, Out of Scope this round). Write-once (Decision 7) — set at
   // insert time, never updated. No FK enforcement: a deleted source session

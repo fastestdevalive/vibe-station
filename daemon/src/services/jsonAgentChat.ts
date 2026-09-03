@@ -210,6 +210,12 @@ export async function enqueueChatTurn(opts: {
   message: string;
   attachments?: Attachment[];
   daemonPort: number;
+  /** D8 — default (undefined/true) steers a running turn when possible
+   *  (`agent.submit`, existing behavior for POST /chat and /send). `false`
+   *  skips steering and always enqueues FIFO (`agent.enqueue`) — the choice
+   *  `vst session send --queue` gives its caller, and `subagentNotify` takes
+   *  for itself by calling `agent.enqueue` directly (untouched by this flag). */
+  steer?: boolean;
 }): Promise<
   | { ok: true; result: EnqueueChatResult }
   | { ok: false; reason: "not_found" | "not_json"; message: string }
@@ -226,13 +232,19 @@ export async function enqueueChatTurn(opts: {
     ? await buildSystemPrompt(ctx, mode)
     : undefined;
 
-  // Submit the RAW message + attachment records; steers mid-turn when possible
-  // (ACP steering), otherwise enqueues normally (queue-controls A1).
-  const result = await agent.submit({
+  const submitInput = {
     message: opts.message,
     ...(attachments.length ? { attachments } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-  });
+  };
+
+  // Submit the RAW message + attachment records; steers mid-turn when possible
+  // (ACP steering), otherwise enqueues normally (queue-controls A1). `steer:
+  // false` skips the attempt entirely and always enqueues (D8).
+  const result =
+    opts.steer === false
+      ? { ...agent.enqueue(submitInput), delivery: "queued" as const }
+      : await agent.submit(submitInput);
   return { ok: true, result };
 }
 

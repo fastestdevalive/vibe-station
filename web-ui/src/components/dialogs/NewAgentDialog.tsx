@@ -801,7 +801,7 @@ export function NewAgentDialog({
       // once the upload response comes back — see `sendJsonFirstTurn` below.
       // Fixing this for real needs queue-based delivery for the initial
       // terminal prompt (mirroring how /sessions/:id/chat is "always
-      // accepted" for JSON) — /sessions/:id/input 409s if the CLI process
+      // accepted" for JSON) — /sessions/:id/send 409s if the CLI process
       // isn't registered yet.
       if (!isJson && files.length > 0) {
         const sessId = result.session?.id ?? result.worktree?.mainSessionId;

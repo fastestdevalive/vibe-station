@@ -112,40 +112,47 @@ doesn't exist. Names aren't guaranteed unique — `.[0]` picks an arbitrary
 match among duplicates.
 
 ```bash
-# CLI — send message and wait for agent to go idle
-vst send <sessionId> "Add tests for the login handler" --wait
+# CLI — send message and wait for agent to go idle (also prints the reply)
+vst session send <sessionId> "Add tests for the login handler" --wait
 
 # Send from a file
-vst send <sessionId> --file=./instructions.md --wait
+vst session send <sessionId> --file=./instructions.md --wait
 
-# HTTP — POST /sessions/:id/input
-curl -X POST "http://127.0.0.1:7421/sessions/<sessionId>/input" \
+
+# HTTP — POST /sessions/:id/send
+curl -X POST "http://127.0.0.1:7421/sessions/<sessionId>/send" \
   -H "Content-Type: application/json" \
   -d '{ "data": "Add tests for the login handler\n", "sendEnter": false }'
 # → 200 { "ok": true }
 ```
 
-**Schema for POST /sessions/:id/input body:**
+**Schema for POST /sessions/:id/send body:**
 ```json
 {
-  "data":      "string (required, min 1) — text to paste into the session",
-  "sendEnter": "boolean (optional) — append a newline"
+  "data":          "string (required, min 1) — message text (tmux/pty: pasted into the pane; json: chat turn)",
+  "sendEnter":      "boolean (optional) — tmux/pty only: append a newline",
+  "attachmentIds": "string[] (optional) — json (Rich Chat) sessions only, from POST /sessions/:id/attachments",
+  "queue":          "boolean (optional) — json only: skip mid-turn steering and always enqueue FIFO"
 }
 ```
+
+- On a **json** (Rich Chat) session, a running turn is **steered** by default (injected into the live turn); `queue: true` opts out.
+- `attachmentIds` on a non-json session → `400`, not silently dropped.
 
 ---
 
 ## 6. Read session output
 
 ```bash
-# CLI — capture last N lines of pane output
+# CLI — capture last N lines of pane output (tmux/pty) or assistant prose (json)
 vst session output <sessionId> --lines=200
 
-# Follow live (streams until Ctrl-C)
-vst session output <sessionId> --follow
+# HTTP — GET /sessions/:id/output?lines=<n>
+curl "http://127.0.0.1:7421/sessions/<sessionId>/output?lines=200"
+# → 200 { "id": "<sessionId>", "output": "..." }
 ```
 
-TODO(api): There is no REST endpoint for `GET /sessions/:id/output` at this time; use the CLI command or the WebSocket pane stream (§7) instead.
+This is prose/pane text, not an event log — for a json session's raw events (roles, tool calls, turn ids), use `vst session transcript` / `GET /sessions/:id/transcript` instead, which 404s on a tmux/pty session (it has no event log to read).
 
 ---
 
@@ -239,11 +246,21 @@ Resume an exited session (agent re-launches; terminal gets a new pane).
 → 500 { error: "Failed to resume session: …" }
 ```
 
-### POST /sessions/:id/input
-Paste text into a session's tmux pane (§5).
+### POST /sessions/:id/send
+Channel-agnostic message send (§5): pastes text into a tmux/pty pane, or enqueues/steers a Rich Chat (json) turn.
 ```
 → 200 { ok: true }
+→ 400 { error: "…" }  (validation, archived session, attachmentIds on non-json)
+→ 404 { error: "Session '…' not found" }
+→ 409 { error: "Session not running" }  (direct-pty session with no live process)
 → 500 { error: "Failed to send input: …" }
+```
+
+### GET /sessions/:id/output?lines=\<n\>
+Recent output (§6): pane text (tmux/pty) or assistant prose (json). Default `lines=100`.
+```
+→ 200 { id, output: string }
+→ 404 { error: "Session '…' not found" }
 ```
 
 ### WS /ws

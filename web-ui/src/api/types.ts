@@ -697,11 +697,6 @@ export interface AddProjectBody {
  *  stays registered regardless — see daemon routes/projects.ts). */
 export type AddProjectResponse = Project & { warning?: string };
 
-export interface SendInputBody {
-  data: string;
-  sendEnter?: boolean;
-}
-
 export interface CreateModeBody {
   name: string;
   cli: CliId;

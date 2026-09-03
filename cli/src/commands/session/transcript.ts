@@ -19,7 +19,10 @@ interface TranscriptResponse {
 export function registerSessionTranscript(session: Command): void {
   session
     .command("transcript <id>")
-    .description("Print a JSON session's normalized transcript")
+    .description(
+      "Print a Rich Chat session's normalized event log (not prose — see `session output` for " +
+        "that); 404s on a tmux/pty session, which has no event log",
+    )
     .option("--json", "Output raw NDJSON events")
     .action(async (id: string, opts: { json?: boolean }) => {
       await preflight();
