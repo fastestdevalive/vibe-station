@@ -79,6 +79,9 @@ services:
       - ${OPENCODE_BIN:-${HOME}/.opencode/bin/opencode}:/usr/local/bin/opencode:ro
       - ${CLAUDE_BIN:-${HOME}/.local/bin/claude}:/usr/local/bin/claude:ro
       - ${AGY_BIN:-${HOME}/.local/bin/agy}:/usr/local/bin/agy:ro
+      # Pi ACP stub: fake adapter for smoke-testing Pi plugin without real Pi credentials.
+      # Override with PI_ACP_BIN if you have the real @victor-software-house/pi-acp installed.
+      - ${PI_ACP_BIN:-./scripts/fake-pi-acp.js}:/usr/local/bin/pi-acp:ro
       # cursor-agent is NOT a single-file mount like the others — its own
       # launcher script does `realpath "$0"` and expects a bundled `node`
       # binary + numbered chunk `.js` files to sit in the SAME directory as

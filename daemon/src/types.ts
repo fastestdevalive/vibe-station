@@ -64,7 +64,7 @@ export interface TranscriptRef {
 export type Channel = "tmux" | "pty" | "json";
 
 /** Provider (CLI harness) that produced a normalized event. */
-export type NormalizedEventProvider = "claude" | "cursor" | "opencode" | "agy";
+export type NormalizedEventProvider = "claude" | "cursor" | "opencode" | "agy" | "pi";
 
 /**
  * Provider-agnostic chat event kind. Every JSON-channel plugin maps its CLI's

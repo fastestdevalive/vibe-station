@@ -716,10 +716,6 @@ export function MessageList({
       }
     });
     ro.observe(container);
-    // Also observe the list content itself: streaming tokens grow the list
-    // without changing the container's own size, so container-only observation
-    // misses every mid-block token append during markdown streaming.
-    if (listRef.current) ro.observe(listRef.current);
     return () => ro.disconnect();
   }, []);
 
