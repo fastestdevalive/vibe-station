@@ -97,6 +97,12 @@
 
   --destructive: #dc2626;
   --destructive-muted: #7f1d1d;
+  /* Inline failure TEXT (a failed command, a tool error) — deliberately softer
+     than `--destructive`, which stays saturated for genuinely destructive
+     affordances (delete buttons, confirm dialogs). On a dark ground #dc2626 is
+     both harsh and low-contrast; a lighter, desaturated red reads calmer and
+     is easier to read. */
+  --destructive-soft: #e89b96;
   --success: #16a34a;
   --success-muted: #14532d;
   --warning: #ca8a04;
@@ -142,6 +148,9 @@
 
   --destructive: #dc2626;
   --destructive-muted: #fecaca;
+  /* See the dark-theme note: softer inline failure text. On a light ground the
+     softer variant is slightly DARKER and desaturated, to keep contrast. */
+  --destructive-soft: #b5544f;
   --success: #16a34a;
   --success-muted: #bbf7d0;
   --warning: #ca8a04;
