@@ -18,11 +18,13 @@ function sanitizeMermaidSource(src: string): string {
   const pipeFix = src.replace(/\{([^}\n]*\|[^}\n]*)\}/g, (_, label: string) =>
     `{${label.replace(/\|/g, " or ")}}`
   );
-  // Only escape `;` in the message part (after the first `:`) of arrow lines.
-  const arrowRe = /(--?>>?|-{1,2}x|-\)|<<-)/;
+  // Escape `;` after the first `:` on any line that has one — covers arrows,
+  // Note over, loop/alt/opt/par labels, etc. Lines with no `:` are pure
+  // block-open keywords (sequenceDiagram, end, activate …) and never carry
+  // free text, so they're left alone.
   return pipeFix.split("\n").map((line) => {
     const colon = line.indexOf(":");
-    if (colon < 0 || !arrowRe.test(line.slice(0, colon))) return line;
+    if (colon < 0) return line;
     return line.slice(0, colon + 1) + line.slice(colon + 1).replace(/;/g, "#59;");
   }).join("\n");
 }
