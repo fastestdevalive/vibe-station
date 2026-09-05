@@ -29,6 +29,7 @@ import type {
   Session,
   SessionMeta,
   Settings,
+  SkillsResponse,
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
@@ -747,6 +748,14 @@ export function createClientApi() {
         body: JSON.stringify(body),
       });
       return parseJson<{ ok: true }>(res);
+    },
+
+    // ── Skills ──────────────────────────────────────────────────────────────────
+
+    async getSkills(): Promise<SkillsResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/skills`);
+      return parseJson<SkillsResponse>(res);
     },
 
     // ── Create Project ──────────────────────────────────────────────────────────

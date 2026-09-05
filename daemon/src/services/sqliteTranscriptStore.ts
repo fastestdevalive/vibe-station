@@ -199,12 +199,14 @@ export class SqliteTranscriptStore implements TranscriptStore {
 
   lastMeta(): TranscriptMeta {
     // Bounded reverse scan (R2.6 / J11): walk newest→oldest and stop as soon as
-    // both the last model-bearing and last REAL-usage-bearing event are found —
-    // never reads the whole table. The last model/usage may sit OLDER than the
-    // pagination tail window, so this cannot be derived from `tail()` alone.
+    // the last model-bearing, last REAL-usage-bearing, AND last commands_update
+    // event are all found — never reads the whole table. Any of these may sit
+    // OLDER than the pagination tail window, so this cannot be derived from
+    // `tail()` alone.
     const meta: TranscriptMeta = {};
     let haveModel = false;
     let haveUsage = false;
+    let haveCommands = false;
     const iter = this.db
       .prepare("SELECT seq, payload FROM message WHERE session_id = ? AND superseded = 0 ORDER BY seq DESC")
       .iterate(this.sessionId) as Iterable<{ seq: number; payload: string }>;
@@ -218,7 +220,11 @@ export class SqliteTranscriptStore implements TranscriptStore {
         meta.usage = ev.usage;
         haveUsage = true;
       }
-      if (haveModel && haveUsage) break;
+      if (!haveCommands && ev.kind === "commands_update" && ev.commands) {
+        meta.commands = ev.commands;
+        haveCommands = true;
+      }
+      if (haveModel && haveUsage && haveCommands) break;
     }
     return meta;
   }

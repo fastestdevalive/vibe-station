@@ -140,7 +140,7 @@
 }
 .terminal-attachment-upload__error {
   font-size: var(--font-size-sm);
-  color: var(--destructive);
+  color: var(--destructive-soft);
 }
 
 .chat-pane {
@@ -266,7 +266,22 @@
   max-width: 100%;
 }
 .chat-msg--user {
+  /* 80% of the available row width. Measured here because `.chat-user-turn` is
+     the first ancestor with a real width; no fixed px cap, so wrapping depends
+     only on pane width. */
+  max-width: 80%;
   justify-content: flex-end;
+}
+/* A user message that is NOT wrapped in `.chat-user-turn` — an optimistic
+   in-flight/queued turn, or one being fork-edited — is a direct child of the
+   COLUMN flex `.chat-message-list`. `justify-content` above only right-aligns
+   the bubble INSIDE this box; the box itself is now width-capped at 80%, so
+   without this it stretch-defaults to the start (left) and every user bubble
+   shifts left by the leftover 20% the moment a turn goes in flight. The cap
+   still resolves against the list's content box, so the measured width is
+   unchanged — only the box's own placement is. */
+.chat-message-list > .chat-msg--user {
+  align-self: flex-end;
 }
 .chat-msg--assistant {
   justify-content: flex-start;
@@ -288,6 +303,14 @@
   flex: 0 1 auto;
 }
 .chat-user-turn__edit {
+  /* `order` puts the button before the bubble on the visual line even though it
+     comes after it in the DOM (where it belongs for reading and tab order).
+     Laid out in DOM order it was the rightmost flex item, so its 20px box plus
+     the row `gap` reserved 24px of permanent right margin that no other message
+     has — user bubbles sat 40px from the content edge while assistant messages
+     sat flush at the list padding. On the left it eats slack the bubble is not
+     using, and the bubble lands flush like everything else. */
+  order: -1;
   flex: 0 0 auto;
   align-self: center;
   border: none;
@@ -297,7 +320,7 @@
   opacity: 0;
   padding: var(--space-1);
   border-radius: var(--radius-sm);
-  font-size: 0.9em;
+  font-size: var(--font-size-base);
   transition: opacity 0.12s ease;
 }
 .chat-user-turn:hover .chat-user-turn__edit,
@@ -311,13 +334,13 @@
 .chat-user-turn--cancelled {
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: var(--space-1);
 }
 .chat-user-turn--cancelled .chat-msg {
   opacity: 0.55;
 }
 .chat-user-turn__cancelled {
-  font-size: 0.75em;
+  font-size: var(--font-size-base);
   font-style: italic;
   color: var(--fg-muted);
   padding-right: var(--space-1);
@@ -332,7 +355,10 @@
 .chat-bubble {
   border-radius: var(--radius-lg);
   padding: var(--space-2) var(--space-3);
-  max-width: min(80%, 720px);
+  /* The 80% cap lives on `.chat-msg--user`, NOT here: `.chat-msg` shrink-wraps
+     to its bubble, so a percentage resolved against it capped the bubble at
+     80% of its own content width (~216px) instead of 80% of the row. */
+  max-width: 100%;
   overflow-x: auto;
   line-height: var(--line-height-normal);
 }
@@ -353,7 +379,13 @@
 }
 .chat-bubble__text {
   white-space: pre-wrap;
-  word-break: break-word;
+  /* `overflow-wrap`, NOT `word-break: break-word`. The latter computes to
+     `overflow-wrap: anywhere`, which collapses the element's intrinsic
+     min-content width to a single character — so a max-width box shrink-wraps
+     far narrower than it needs to and short messages break at seemingly random
+     points. `break-word` keeps normal min-content sizing and only breaks a
+     word that genuinely cannot fit (a long URL or path). */
+  overflow-wrap: break-word;
 }
 .chat-bubble__attachments {
   display: flex;
@@ -395,7 +427,7 @@
 /* ── Thinking block ───────────────────────────────────────────────────────── */
 
 .chat-thinking {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   color: var(--fg-muted);
 }
 .chat-thinking__toggle {
@@ -425,11 +457,11 @@
   border: var(--border-width) solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--bg-secondary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   overflow: hidden;
 }
 .chat-tool-card--error {
-  border-color: var(--destructive);
+  border-color: var(--destructive-soft);
 }
 .chat-tool-card__header {
   display: flex;
@@ -450,7 +482,7 @@
 }
 .chat-tool-card__inline {
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -469,7 +501,7 @@
   margin: 0;
   padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   overflow-x: auto;
   border-top: var(--border-width) solid var(--border-subtle);
   white-space: pre-wrap;
@@ -492,7 +524,7 @@
   color: var(--fg-muted);
   cursor: pointer;
   font-family: inherit;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   text-align: left;
 }
 .chat-tool-run__summary:hover {
@@ -501,13 +533,21 @@
 .chat-tool-run__caret {
   flex-shrink: 0;
 }
+/* Deliberately NOT coloured. A non-zero exit is ordinary agent work, not an
+   alarm, and a fully red summary line read as "something died in there". The
+   collapsed state keeps its failure signal as the ⚠ glyph below, so no
+   information is lost by dropping the colour. */
 .chat-tool-run__text--error {
-  color: var(--destructive);
+  color: inherit;
+}
+.chat-tool-run__warn {
+  flex-shrink: 0;
+  color: var(--destructive-soft);
 }
 .chat-tool-run__body {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-1);
   margin-left: var(--space-1);
   padding-top: var(--space-1);
 }
@@ -517,7 +557,7 @@
    small chevron only appears when there's detail beyond the inline summary
    (pretty input JSON and/or the result/diff). */
 .chat-tool-entry {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
 }
 .chat-tool-entry__header {
   display: flex;
@@ -534,7 +574,7 @@
   text-align: left;
 }
 .chat-tool-entry--error .chat-tool-entry__header {
-  color: var(--destructive);
+  color: var(--destructive-soft);
 }
 .chat-tool-entry__caret {
   flex-shrink: 0;
@@ -550,7 +590,7 @@
 }
 .chat-tool-entry__inline {
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -569,7 +609,7 @@
 }
 .chat-tool-entry__child-count {
   flex-shrink: 0;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   color: var(--fg-muted);
 }
 .chat-tool-entry__children {
@@ -590,7 +630,7 @@
   margin: 0;
   padding: var(--space-1) var(--space-2);
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   color: var(--fg-secondary);
   background: var(--bg-secondary);
   border-radius: var(--radius-sm);
@@ -607,7 +647,7 @@
   justify-content: space-between;
   gap: var(--space-3);
   padding: var(--space-2) var(--space-3);
-  border: var(--border-width) solid var(--destructive);
+  border: var(--border-width) solid var(--destructive-soft);
   background: var(--destructive-muted);
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
@@ -651,7 +691,7 @@
 }
 .chat-status-note {
   align-self: center;
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-base);
   color: var(--fg-muted);
   font-style: italic;
   padding: var(--space-1) 0;
@@ -726,7 +766,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-base);
   color: var(--fg-secondary);
 }
 .chat-queued-tray__actions {
@@ -889,17 +929,22 @@
   flex-wrap: wrap;
   gap: var(--space-1);
 }
-.chat-queued-editor__textarea {
-  width: 100%;
-  resize: vertical;
+/* Phase 7B: field wrapper carries the border/background/radius — the chip
+   is now a genuine inline document node inside the contenteditable, not an
+   absolutely positioned overlay. */
+.chat-queued-editor__field {
   background: var(--bg-input, var(--bg-secondary));
-  color: var(--fg-primary);
   border: var(--border-width) solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: var(--space-2);
-  font-family: inherit;
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-normal);
+}
+/* Phase 7B.8: the editor SHELL — see `.chat-composer__textarea` above. */
+.chat-queued-editor__textarea {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.chat-queued-editor__field:focus-within {
+  border-color: var(--chat-accent);
 }
 .chat-queued-editor__actions {
   display: flex;
@@ -1015,11 +1060,11 @@
   color: var(--fg-muted);
 }
 .chat-model-switch__note--error {
-  color: var(--destructive);
+  color: var(--destructive-soft);
 }
 .chat-model-switch__error {
   font-size: var(--font-size-xs);
-  color: var(--destructive);
+  color: var(--destructive-soft);
 }
 .chat-statusbar__turn {
   display: flex;
@@ -1048,7 +1093,7 @@
   gap: var(--space-1);
 }
 .chat-statusbar__state--error {
-  color: var(--destructive);
+  color: var(--destructive-soft);
 }
 .chat-statusbar__stop {
   padding: 2px var(--space-2);
@@ -1058,6 +1103,10 @@
 /* ── Composer ─────────────────────────────────────────────────────────────── */
 
 .chat-composer {
+  /* Anchors the skill popover (`.chat-skill-popover`, `position: absolute`,
+     `bottom: calc(100% + 4px)`) — without this it resolves against
+     `.chat-pane` instead and renders off-screen. */
+  position: relative;
   padding: var(--space-2) var(--space-3) var(--space-3);
   display: flex;
   flex-direction: column;
@@ -1082,7 +1131,7 @@
   gap: var(--space-1);
 }
 .chat-composer__error {
-  color: var(--destructive);
+  color: var(--destructive-soft);
   font-size: var(--font-size-xs);
 }
 .chat-composer__row {
@@ -1090,23 +1139,27 @@
   gap: var(--space-2);
   align-items: flex-end;
 }
-.chat-composer__textarea {
+/* Field wrapper carries the border/background/radius. */
+.chat-composer__field {
   flex: 1;
-  min-height: 40px;
-  /* Height above this is fully JS-driven (autosizeComposerTextarea) up to a
-     ~10-line cap, then internal scroll — no manual resize handle, since a
-     user-dragged height would otherwise be fought/overwritten on every
-     keystroke by the auto-grow effect. */
-  overflow-y: hidden;
-  resize: none;
+  min-width: 0;
   background: var(--bg-input);
-  color: var(--fg-primary);
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
-  padding: var(--space-2);
-  font-family: var(--font-sans);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-normal);
+}
+.chat-composer__field:focus-within {
+  border-color: var(--chat-accent);
+}
+/* Phase 7B.8: the editor SHELL. `max-height`/`overflow-y` are set inline by
+   `<SkillEditor>` (CSS-driven autosize, replacing the old JS
+   `autosizeComposerTextarea` measurement loop) — contenteditable grows with
+   its content natively up to that cap, then scrolls internally. `position:
+   relative` anchors the Lexical placeholder overlay. */
+.chat-composer__textarea {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 40px;
 }
 .chat-composer__actions {
   display: flex;
@@ -1155,6 +1208,145 @@
   font-size: var(--font-size-xs);
   color: var(--fg-faint);
 }
+.chat-composer__hint--skills {
+  font-style: italic;
+}
+
+/* ── Skill editor content (Phase 7B.4/7B.8) — the actual Lexical
+   contenteditable + its placeholder, shared by Composer and
+   QueuedTray/MessageList's QueuedTurnEditor via `<SkillEditor>`. Lexical's
+   own `<ContentEditable>` sets `white-space`/`word-break` inline; this rule
+   supplies the rest (padding, font, color, focus ring removal — the chat
+   font-size setting flows through `--font-sans`/`--font-size-sm` exactly as
+   the old textarea did). ───────────────────────────────────────────────── */
+.chat-skill-editor__content {
+  min-height: 40px;
+  padding: var(--space-2);
+  color: var(--fg-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+.chat-skill-editor__content:focus {
+  outline: none;
+}
+.chat-skill-editor__placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: var(--space-2);
+  color: var(--fg-faint);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Skill invocation chip (shared: Composer, QueuedTray/MessageList's
+   QueuedTurnEditor) — Phase 7B.3: a genuine INLINE document node (a Lexical
+   atomic `DecoratorNode`), not an absolutely-positioned overlay. Wraps
+   naturally with surrounding prose like any other inline element. No ✕
+   button (spec correction) — removal is progressive Backspace/Delete only,
+   collapsing the chip to a literal `/` (see `SkillChipNode.tsx`). ───────── */
+.chat-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  /* Matches the editor's own line box (`--font-size-sm` /
+     `--line-height-normal`) so the chip reads as sitting ON the text line,
+     not as a taller foreign block. */
+  line-height: var(--line-height-normal);
+  vertical-align: baseline;
+}
+.chat-skill-chip__label {
+  flex-shrink: 0;
+  color: var(--chat-accent);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: text;
+}
+.chat-skill-chip__arg-input {
+  /* §9: a minimum ~4ch width even with no argumentHint placeholder, so
+     there is always a visible, clickable target — a subtle inset makes it
+     read as "somewhere to type" without a hint. */
+  flex-shrink: 1;
+  min-width: 4ch;
+  max-width: 240px;
+  overflow-x: auto;
+  background: var(--bg-active);
+  color: var(--fg-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  box-shadow: inset 0 0 0 var(--border-width) transparent;
+}
+.chat-skill-chip__arg-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--chat-accent);
+}
+/* ── Skill popover ("/"-triggered, report §1 State 2) ───────────────────────
+   Extends `.combobox-popup`/`.combobox-option` (workspace.css:2972-3020),
+   anchored above the composer row instead of below the field. */
+.chat-skill-popover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  /* Must clear .chat-pane__footer's opaque background. */
+  z-index: 60;
+  padding: var(--space-1);
+}
+.chat-skill-popover__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  /* Truncated children need a hard box to clip against, not just the flex item's content size. */
+  min-width: 0;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+}
+.chat-skill-popover__option:hover,
+.chat-skill-popover__option--active {
+  background: var(--bg-hover);
+}
+.chat-skill-popover__name,
+.chat-skill-popover__desc {
+  /* One line, ellipsis-truncated (report requirement — a full untruncated
+     description could otherwise run to ~6 wrapped lines). */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-skill-popover__name {
+  color: var(--chat-accent);
+  font-weight: var(--font-weight-medium);
+}
+.chat-skill-popover__desc {
+  font-size: var(--font-size-xs);
+  color: var(--fg-faint);
+}
 
 /* ── Attachment picker (create dialogs — stages files pre-session) ─────────── */
 
@@ -1194,8 +1386,8 @@
   max-width: 220px;
 }
 .chat-attachment-chip--error {
-  border-color: var(--destructive);
-  color: var(--destructive);
+  border-color: var(--destructive-soft);
+  color: var(--destructive-soft);
 }
 .chat-attachment-chip__name {
   overflow: hidden;
@@ -1236,4 +1428,29 @@
   margin-left: var(--space-1);
   font-size: var(--font-size-xs);
   opacity: 0.75;
+}
+
+/* Sent-message skill token (Phase 7B.10). The name and its arguments are
+   deliberately distinct: the name carries the accent (it is the instruction),
+   the args sit muted beside it (they are a parameter). Rendered from the
+   stored `{/name args}` token, so this can never disagree with what the
+   composer showed. Tokens only — no bare hex. */
+.chat-msg-skill {
+  /* `inline`, NOT `inline-flex`: a flex container drops the whitespace-only
+     text node between the name and the args, so the copied text would lose
+     the space. Plain inline keeps a real space in the DOM. */
+  display: inline;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+}
+.chat-msg-skill__name {
+  color: var(--chat-accent);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+.chat-msg-skill__args {
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-base);
 }

@@ -66,6 +66,22 @@ export interface TurnInput {
    * Decision 3). Resumed turns rely on the CLI's own session state.
    */
   isFirstTurn: boolean;
+  /**
+   * Resolved skill invocations (skill-invocation-in-chat REPLAN Phase 7A) —
+   * set by `jsonAgent.ts`'s `runOneTurn` (via `resolveSkillInvocations`), the
+   * only place holding both the session's ACP catalog and
+   * `userSkillCatalog`'s directory-scanned entries. Zero, one, or many
+   * entries — a message may invoke several skills anywhere in its prose,
+   * each already substituted inline into `message` as `/name args`. `path`
+   * is `undefined` for an ACP-only skill name (no directory entry). An
+   * unresolved token (unknown name, or removed from the catalog between
+   * send and run) still substitutes into `message` but contributes NO entry
+   * here — degrade to plain text, no directive, no error. Omitted entirely
+   * (undefined, not `[]`) when no token resolved. A plugin (`claude.ts`)
+   * only FORMATS the directive from this already-resolved list — it never
+   * queries the catalog itself.
+   */
+  skillInvocations?: Array<{ name: string; args: string; path?: string }>;
 }
 
 /**
@@ -236,6 +252,21 @@ export interface AgentPlugin {
    * omits this or returns false.
    */
   supportsAcp?(): boolean;
+  /**
+   * Format (never resolve) an explicit `<skill-invocations>` directive from
+   * an already-resolved `TurnInput.skillInvocations` list and append it to
+   * `message` (skill-invocation-in-chat REPLAN Phase 7A.4 / M6). Presence of
+   * this method is the gate: `jsonAgent.ts` must never offer skills (in
+   * `SessionMeta.commands`, path-bearing entries) for a plugin that doesn't
+   * implement it — without a directive, a chip commits and the turn goes out
+   * as a bare `/name args` with no directive, a silent no-op for a CLI that
+   * doesn't independently resolve skill names itself. Currently implemented
+   * by `claude.ts` only; other plugins intentionally omit it.
+   */
+  formatSkillDirective?(
+    message: string,
+    skillInvocations?: Array<{ name: string; args: string; path?: string }>,
+  ): string;
   /**
    * True when this CLI's mid-turn steering (`_session/steering`) is trusted to
    * actually reach the running turn. This is a SECOND gate on top of the

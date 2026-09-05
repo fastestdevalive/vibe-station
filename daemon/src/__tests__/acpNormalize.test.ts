@@ -103,7 +103,7 @@ describe("normalizeSessionUpdate (1.T3)", () => {
     expect(ev?.modeId).toBe("build");
   });
 
-  it("available_commands_update maps to a commands_update event", () => {
+  it("available_commands_update maps to a commands_update event, stripping ONE leading '/' from the name (M5)", () => {
     const ev = normalizeSessionUpdate(
       {
         sessionUpdate: "available_commands_update",
@@ -113,7 +113,29 @@ describe("normalizeSessionUpdate (1.T3)", () => {
       "claude",
     );
     expect(ev?.kind).toBe("commands_update");
-    expect(ev?.commands).toEqual([{ name: "/plan", description: "Plan mode" }]);
+    // Catalog names are BARE — downstream everything (popover, insertion,
+    // matchLongestName) prepends its own "/"; leaving it in here doubles it
+    // up (`//plan`) and the message never dispatches (M5).
+    expect(ev?.commands).toEqual([{ name: "plan", description: "Plan mode" }]);
+  });
+
+  it("available_commands_update preserves input.hint as argumentHint and strips the leading '/' (2.T1)", () => {
+    const ev = normalizeSessionUpdate(
+      {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "code-review", description: "Review the diff", input: { hint: "[effort] [target]" } },
+          { name: "/plan", description: "Plan mode" },
+        ],
+      },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.kind).toBe("commands_update");
+    expect(ev?.commands).toEqual([
+      { name: "code-review", description: "Review the diff", argumentHint: "[effort] [target]" },
+      { name: "plan", description: "Plan mode" },
+    ]);
   });
 
   it("maps plan to a status event, never a new kind", () => {

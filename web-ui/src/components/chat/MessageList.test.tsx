@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NormalizedEvent } from "@/api/types";
+import { createMockApi } from "@/api/mock";
 import { MessageList, groupEvents, mergeToolRuns } from "./MessageList";
 
 function userEvent(turnId: string, text: string, edited = false): NormalizedEvent {
@@ -927,6 +928,28 @@ describe("groupEvents — native Task sub-thread (Phase 6, Decision 4)", () => {
     expect(tools).toHaveLength(2);
     expect(tools[0]!.children ?? []).toHaveLength(0);
     expect(tools[1]!.children ?? []).toHaveLength(0);
+  });
+});
+
+describe("m10 — MessageList threads `commands` through to the fork editor's QueuedTurnEditor mount", () => {
+  it("the skill row renders once the fork editor for an answered turn is opened", () => {
+    const api = createMockApi();
+    render(
+      <MessageList
+        events={[userEvent("t1", "{/code-review high}and open a PR")]}
+        pending={[]}
+        api={api}
+        sessionId="s1"
+        onForkTurn={vi.fn()}
+        commands={[{ name: "code-review", description: "Review the diff", argumentHint: "[severity]" }]}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Edit message (fork)"));
+    // Only renders if `commands` actually reached the mounted QueuedTurnEditor
+    // — nothing previously verified this crosses the MessageList -> fork
+    // QueuedTurnEditor boundary, only that QueuedTurnEditor works correctly
+    // in isolation (the plan's 5.T7 tested QueuedTurnEditor alone).
+    expect(screen.getByLabelText("Arguments for code-review")).toBeTruthy();
   });
 });
 

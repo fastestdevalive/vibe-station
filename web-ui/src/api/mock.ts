@@ -30,6 +30,7 @@ import type {
   Session,
   SessionMeta,
   Settings,
+  SkillsResponse,
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
@@ -1056,12 +1057,25 @@ export function createMockApi() {
     // ── Settings ────────────────────────────────────────────────────────────────
 
     async getSettings(): Promise<Settings> {
-      return { defaultProjectsDir: "/home/user/projects", homeDir: "/home/user" };
+      return {
+        defaultProjectsDir: "/home/user/projects",
+        homeDir: "/home/user",
+        skillPaths: ["/home/user/.claude/skills"],
+      };
     },
 
     async updateSettings(_body: Partial<Settings>): Promise<{ ok: true }> {
       // Mock does not persist settings
       return { ok: true };
+    },
+
+    // ── Skills ──────────────────────────────────────────────────────────────────
+
+    async getSkills(): Promise<SkillsResponse> {
+      return {
+        skills: [],
+        directories: [{ path: "/home/user/.claude/skills", skillCount: 0 }],
+      };
     },
 
     // ── Create Project ──────────────────────────────────────────────────────────

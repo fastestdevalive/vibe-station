@@ -377,6 +377,42 @@ async function* runLegacySpawnTurn(
 }
 
 /**
+ * Format (never resolve) a single `<skill-invocations>` directive block from
+ * an already-resolved `TurnInput.skillInvocations` list and append it to
+ * `message` (skill-invocation-in-chat REPLAN Phase 7A.4). This function
+ * never touches the catalog — `jsonAgent.ts`'s `runOneTurn`
+ * (`resolveSkillInvocations`) is the only place that resolves a skill name
+ * to a path; this only formats what it was handed.
+ *
+ * ONE block, N entries (D5/D6 — a single directive dialect regardless of how
+ * many skills the message invokes or where their chips sat in the prose,
+ * which inline substitution already preserved). The preamble exists because
+ * the ORIGINAL bug this feature fixes was the model treating a skill mention
+ * as a topic to discuss rather than an instruction to run. Each entry reads
+ * "Invoke the skill defined at <path>" when a directory-scanned path is
+ * known, else "Invoke the skill named `<name>`" (ACP-only catalog entry —
+ * the CLI resolves its own skill names), and its `with arguments: <args>`
+ * line is omitted entirely when args is empty. Zero entries (undefined or `[]`,
+ * e.g. every token in the message was unresolved) → `message` is returned
+ * unchanged — no block, no error (Requirement 10).
+ */
+export function formatSkillDirective(
+  message: string,
+  skillInvocations?: Array<{ name: string; args: string; path?: string }>,
+): string {
+  if (!skillInvocations || skillInvocations.length === 0) return message;
+  const entries = skillInvocations.map(({ name, args, path }, i) => {
+    const invokeLine = path ? `Invoke the skill defined at ${path}` : `Invoke the skill named \`${name}\``;
+    const lines = [`${i + 1}. ${invokeLine}`];
+    if (args.trim().length > 0) lines.push(`   with arguments: ${args}`);
+    return lines.join("\n");
+  });
+  const preamble =
+    "The following are skill invocations to EXECUTE now — treat each as a command to run, not a topic to discuss:";
+  return `${message}\n\n<skill-invocations>\n${preamble}\n\n${entries.join("\n")}\n</skill-invocations>`;
+}
+
+/**
  * ACP-based turn (Decision 2). Drives the persistent `AcpConnection` (spawned
  * once per session via `ctx.getAcpConnection`, Decision 1) instead of a
  * per-turn one-shot spawn — the turn ends when `session/prompt` RESOLVES, not
@@ -411,15 +447,24 @@ async function* runTurnAcp(
       agentChatId: sessionId,
       ...(ctx.model ? { model: ctx.model } : {}),
     });
-    // ACP has no dedicated system-prompt field — prepend it as the first
-    // content block of turn 1's prompt, the closest analog to
+  }
+  // The user message MUST be prompt[0] on every turn, first turn included:
+  // upstream reads prompt[0] for its own slash-command detection (e.g. a
+  // leading "/skill-name args" line), so anything pushed ahead of it there
+  // defeats that parsing. Do NOT "fix" this by moving the system prompt (or
+  // an attachments footer, jsonAgent.ts injectAttachments) back in front of
+  // this block — see plan Decision 8 / skill-invocation-in-chat.
+  promptBlocks.push({ type: "text", text: formatSkillDirective(input.message, input.skillInvocations) });
+  if (input.isFirstTurn) {
+    // ACP has no dedicated system-prompt field — append it as the second
+    // content block of turn 1's prompt (after the user message, per the
+    // ordering constraint above), the closest analog to
     // `--append-system-prompt` that `session/prompt`'s `PromptBlock[]` shape
     // allows. Resumed turns rely on claude's own session state, exactly as
     // the legacy path already did.
     const systemPrompt = await fs.readFile(ctx.systemPromptFile, "utf8").catch(() => "");
     if (systemPrompt) promptBlocks.push({ type: "text", text: systemPrompt });
   }
-  promptBlocks.push({ type: "text", text: input.message });
 
   const { updates, result } = conn.sendPrompt(sessionId, promptBlocks, signal);
   for await (const ev of updates) yield ev;
@@ -687,6 +732,18 @@ export function createClaudePlugin(): AgentPlugin {
     /** ACP migration (Decision 7/1.4): gates jsonAgent's stop/release semantics. */
     supportsAcp(): boolean {
       return true;
+    },
+
+    /**
+     * M6: presence of this method is `jsonAgent.ts`'s gate for offering
+     * skills at all — see the interface doc on `AgentPlugin.formatSkillDirective`.
+     * Claude is currently the only plugin that implements it.
+     */
+    formatSkillDirective(
+      message: string,
+      skillInvocations?: Array<{ name: string; args: string; path?: string }>,
+    ): string {
+      return formatSkillDirective(message, skillInvocations);
     },
 
     /**

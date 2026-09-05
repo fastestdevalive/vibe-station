@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
+import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 
@@ -86,7 +87,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // (via `composerKey`) so its initial text/attachments apply.
   const [salvage, setSalvage] = useState<{ text: string; attachments: Attachment[] } | null>(null);
   const [composerKey, setComposerKey] = useState(0);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<SkillEditorHandle>(null);
 
   const turnActive = useMemo(() => {
     const s = meta?.turnState;
@@ -271,6 +272,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
               onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
               onAtBottomChange={setAtBottom}
               {...(meta?.cwd ? { cwd: meta.cwd } : {})}
+              commands={meta?.commands}
             />
           )}
         </div>
@@ -288,6 +290,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             onDiscard={(turnId) => void discardEdit(turnId)}
             onSalvage={onSalvage}
             focusComposer={() => composerRef.current?.focus()}
+            commands={meta?.commands}
           />
         ) : null}
         <StatusBar
@@ -332,6 +335,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             busy={turnActive}
             canSteer={meta?.canSteer ?? false}
             onStop={() => void stop()}
+            commands={meta?.commands}
             {...(salvage ? { initialText: salvage.text, initialAttachments: salvage.attachments } : {})}
           />
         ) : null}

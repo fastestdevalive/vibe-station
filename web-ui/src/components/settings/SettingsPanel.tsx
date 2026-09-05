@@ -6,6 +6,7 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
 import { ProjectsSetting } from "./ProjectsSetting";
+import { SkillsSetting } from "./SkillsSetting";
 import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
 import { StorageSetting } from "./StorageSetting";
 import { RemoteAccessSetting } from "./RemoteAccessSetting";
@@ -30,6 +31,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     { id: "modes", label: "Modes", content: <ModesSetting api={api} /> },
     { id: "appearance", label: "Appearance", content: <AppearanceSetting /> },
     { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },
+    { id: "skills", label: "Skills", content: <SkillsSetting api={api} /> },
     { id: "hidden-projects", label: "Hidden projects", content: <HiddenProjectsSetting api={api} /> },
     { id: "storage", label: "Storage", content: <StorageSetting api={api} /> },
     { id: "remote-access", label: "Remote Access", content: <RemoteAccessSetting api={api} /> },

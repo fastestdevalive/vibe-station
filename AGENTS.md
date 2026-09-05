@@ -252,3 +252,21 @@ There are two separate docker setups in this repo. They look similar (both boot 
 - **`scripts/dev-sandbox.sh up` with no flags seeds the full demo dataset by default** — worktrees/agents are there out of the box. Pass `--seed=file-search` if you specifically want a fast, empty single-project tree instead.
 - **Switching `--seed` mode on an already-seeded volume does NOT cleanly swap datasets — it merges/corrupts them.** The two seed scripts guard themselves independently and asymmetrically, not via a shared "already seeded in mode X" marker: `demo-seed.sh` checks its own `$VST/.seeded` file; `seed-file-search-demo.sh` checks whether `file-search-demo`'s repo dir exists and whether that project is already registered with the daemon. Neither guard knows about the other, so going `file-search` → `demo` on the same worktree-name runs `demo-seed.sh` in full on a volume the daemon already has state for (it `rm -rf`s its own project dirs and overwrites `modes.json`, but doesn't touch the pre-existing `file-search-demo` data or the daemon's already-booted SQLite state — the result is an inconsistent mix, not a clean demo dataset), and going `demo` → `file-search` just registers a 4th project alongside the demo data rather than being a no-op. Use a fresh worktree-name (or `docker volume rm vst-dev-data-<worktree> vst-dev-projects-<worktree>`) whenever you want to actually change an existing sandbox's seed mode.
 - **Don't add demo-dataset seeding to `docker-compose.screenshots.yml`'s job description** or vice versa — `screenshots` intentionally has no hot reload and real auth so it matches what `take-screenshots.ts` expects; don't "fix" that to make it more dev-friendly.
+
+---
+
+## Three unrelated things named "skill" — don't conflate them
+
+**Files:** `skill/SKILL.md` · `daemon/src/assets/agent-system-prompt.md` · `daemon/src/services/promptBuilder.ts:22-23,35-46` · `daemon/src/services/userSkillCatalog.ts` · `daemon/src/services/config.ts` (`UserSettings.skillPaths`)
+
+There are three different "skill" concepts in this repo, two of which share a file name pattern (`SKILL.md`):
+
+1. **`skill/SKILL.md` at the repo root** is the **`vst` agent skill this repo publishes** — a Claude-Code-style skill (frontmatter `name: vst`) documenting how an *external* agent drives the vst daemon. It is not loaded by the daemon at all; it is shipped for other agents to install.
+2. **`daemon/src/assets/agent-system-prompt.md`** is vibe-station's **own L1 system prompt asset** — loaded once at daemon boot by `promptBuilder.ts` (`loadSkillMd()`, whose stale `skill/skill.md` header comment is what invites confusion #1) and sent to every spawned agent as the base of its system prompt. Not user-configurable, nothing to do with per-user "skills".
+3. **User skill directories** (`UserSettings.skillPaths`, default `~/.claude/skills`) are scanned by `userSkillCatalog.ts` for `<dir>/<name>/SKILL.md` files — these are the skills a user can invoke with `/name` in Rich Chat (skill-invocation-in-chat).
+
+### What to watch for
+
+- **Scan hazard:** if a user ever adds the vibe-station repo root to `skillPaths` in the Skills settings panel, `userSkillCatalog`'s `<dir>/*/SKILL.md` scan would ingest `skill/SKILL.md` as a user skill named `vst` (it has valid frontmatter, so it parses cleanly — the ingestion is silent, not an error). The default (`~/.claude/skills`) avoids this in practice, but the settings UI does not block the repo root — don't "fix" this by special-casing the repo root path; the fix (if ever needed) belongs in the scanner's directory validation, not as a silent path skip.
+- Do not rename `userSkillCatalog` to `skillCatalog` or similar — the deliberately distinct name is what keeps this file from being confused with `promptBuilder.ts`'s L1 asset in searches/greps.
+- **`skill/SKILL.md` is not the L1 prompt.** Editing it changes what *external* agents are told about the vst CLI; editing `daemon/src/assets/agent-system-prompt.md` changes what *our own* spawned agents are told. They are cross-referenced from each other but are never the same file.
