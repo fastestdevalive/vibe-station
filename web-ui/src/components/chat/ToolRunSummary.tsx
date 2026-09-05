@@ -276,6 +276,15 @@ export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
         <span className="chat-tool-run__caret" aria-hidden>
           {open ? "▾" : "▸"}
         </span>
+        {/* The summary is no longer coloured red on failure (it read as alarming
+            for an ordinary non-zero exit). Colour was the ONLY failure signal
+            while the run is COLLAPSED, so carry it as a glyph instead — the
+            information survives without the alarm. */}
+        {hasError ? (
+          <span className="chat-tool-run__warn" aria-hidden>
+            ⚠
+          </span>
+        ) : null}
         <span className={`chat-tool-run__text${hasError ? " chat-tool-run__text--error" : ""}`}>
           {summarizeGroup(tools)}
         </span>
