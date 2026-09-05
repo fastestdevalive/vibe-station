@@ -47,31 +47,6 @@ export function registerDoctor(program: Command): void {
         });
       }
 
-      // Pi Coding Agent — requires the @victor-software-house/pi-acp adapter (npm-global).
-      const piAcpFound = check("pi-acp is on PATH (required for Pi Rich Chat / ACP)", () => {
-        execSync("which pi-acp", { stdio: "pipe" });
-        return true;
-      });
-      if (piAcpFound) {
-        check(`pi-acp version >= 0.17.1`, () => {
-          const out = execSync("pi-acp --version", { encoding: "utf8", stdio: "pipe" }).trim();
-          const m = out.match(/(\d+\.\d+\.\d+)/);
-          const ver = (m && m[1]) ? m[1] : out;
-          const parts = ver.split(".").map(Number);
-          const min = [0, 17, 1];
-          for (let i = 0; i < 3; i++) {
-            if ((parts[i] ?? 0) > (min[i] ?? 0)) return true;
-            if ((parts[i] ?? 0) < (min[i] ?? 0)) return false;
-          }
-          return true;
-        });
-      } else {
-        console.log(
-          chalk.yellow("  →"),
-          `Install: npm install -g @victor-software-house/pi-acp@0.17.1`,
-        );
-      }
-
       // bun/bunx is required by the agy plugin's ACP adapter
       const bunFound = check("bun is on PATH (required for agy Rich Chat / ACP)", () => {
         try {

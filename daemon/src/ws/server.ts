@@ -16,7 +16,8 @@ import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { handleDebugLog } from "./handlers/debugLog.js";
 import { handleChatOpen, handleChatClose } from "./handlers/chatOpen.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
-import { COOKIE_NAME, validateSessionCookie } from "../auth.js";
+import { COOKIE_NAME, validateSessionCookie, parseSessionCookie } from "../auth.js";
+import { isLive } from "../state/auth-session-store.js";
 
 /**
  * Parse a raw Cookie header string and return the value for a given cookie name.
@@ -35,28 +36,29 @@ function parseCookieValue(cookieHeader: string, name: string): string {
 
 /**
  * Authenticate a WebSocket upgrade request.
- * Returns true if allowed, false if rejected (caller should close the socket).
+ * Returns the session nonce if allowed (null for Bearer/noAuth), or false if rejected.
  */
-function authenticateWS(req: FastifyRequest, daemonToken: string | undefined): boolean {
-  if (!daemonToken) return true; // auth disabled (dev/test)
+function authenticateWS(req: FastifyRequest, daemonToken: string | undefined): string | null | false {
+  if (!daemonToken) return null; // auth disabled (dev/test)
+
+  // Bearer fallback — allows CLI tooling to open a WS if needed (no nonce tracking)
+  const auth = req.headers.authorization;
+  if (auth?.startsWith("Bearer ")) {
+    return auth.slice(7) === daemonToken ? null : false;
+  }
 
   // CSRF protection here is the cookie itself: HMAC-signed with the daemon
   // secret + SameSite=Strict means a malicious cross-site page can neither
   // forge nor send the cookie. We deliberately don't gate on Origin — that
   // would block legitimate LAN / Tailscale / reverse-proxy access.
-
-  // Cookie check — validate the vst-session cookie
   const cookieHeader = req.headers.cookie ?? "";
   const sessionCookie = parseCookieValue(cookieHeader, COOKIE_NAME);
-  if (validateSessionCookie(sessionCookie, daemonToken)) return true;
+  if (!validateSessionCookie(sessionCookie, daemonToken)) return false;
 
-  // Bearer fallback — allows CLI tooling to open a WS if needed
-  const auth = req.headers.authorization;
-  if (auth?.startsWith("Bearer ")) {
-    return auth.slice(7) === daemonToken;
-  }
-
-  return false;
+  const parsed = parseSessionCookie(sessionCookie);
+  if (!parsed) return false;
+  if (!isLive(parsed.nonce)) return false;
+  return parsed.nonce;
 }
 
 /**
@@ -68,12 +70,14 @@ export async function registerWSEndpoint(app: FastifyInstance, daemonToken?: str
 
   app.get("/ws", { websocket: true }, (socket: WebSocket, req) => {
     // Auth gate — reject before registering the connection
-    if (!authenticateWS(req, daemonToken)) {
+    const authResult = authenticateWS(req, daemonToken);
+    if (authResult === false) {
       socket.close(4401, "Unauthorized");
       return;
     }
 
     const conn = new WSConnection(socket);
+    conn.nonce = authResult; // null for Bearer/noAuth; nonce string for cookie auth
 
     // Register connection for broadcasts
     registerConnection(conn);

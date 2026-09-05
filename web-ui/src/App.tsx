@@ -54,6 +54,7 @@ function AppShell() {
         <Routes>
           <Route path="/" element={<Workspace />} />
           <Route path="/settings" element={<Workspace />} />
+          <Route path="/settings/:sectionId" element={<Workspace />} />
           <Route path="/worktree" element={<Workspace />} />
           <Route path="/worktree/:wtId" element={<Workspace />} />
           <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />

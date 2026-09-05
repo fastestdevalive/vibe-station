@@ -54,7 +54,9 @@ describe("DashboardPanel", () => {
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
   });
 
-  it("renders daemon status and project names on worktree cards", async () => {
+  // The daemon dot was replaced by the remote-access indicators (tunnel state +
+  // remote device count); connectivity now comes from the WS state elsewhere.
+  it("renders the tunnel indicator and project names on worktree cards", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -64,7 +66,7 @@ describe("DashboardPanel", () => {
       </MemoryRouter>,
     );
     await waitFor(() => {
-      expect(screen.getByText(/daemon/i)).toBeInTheDocument();
+      expect(screen.getByText(/tunnel off/i)).toBeInTheDocument();
     });
     await waitFor(() => {
       expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);

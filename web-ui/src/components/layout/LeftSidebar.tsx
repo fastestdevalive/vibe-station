@@ -1,7 +1,7 @@
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   DndContext,
@@ -332,6 +332,22 @@ export function LeftSidebar({
    * cannot fix this on its own.
    */
   const markDrag = useDragClickGuard();
+
+  // --- Remote (QR) session count for sidebar badge ---
+  const [remoteSessionCount, setRemoteSessionCount] = useState(0);
+  const fetchRemoteCount = useCallback(async () => {
+    try {
+      const data = await api.listAuthSessions();
+      setRemoteSessionCount(data.filter((s) => s.createdVia === "qr").length);
+    } catch {
+      // Silently ignore — the badge is best-effort
+    }
+  }, [api]);
+  useEffect(() => {
+    void fetchRemoteCount();
+    const id = setInterval(() => { void fetchRemoteCount(); }, 30_000);
+    return () => clearInterval(id);
+  }, [fetchRemoteCount]);
 
   // --- Inline double-click rename (Part 03 Phase 3) — mirrors TabsStrip.tsx's
   // startRename/commitRename/renamingId/renameValue/renameInputRef pattern
@@ -1745,7 +1761,16 @@ export function LeftSidebar({
           }}
         >
           <SlidersHorizontal size={16} aria-hidden />
-          {!collapsed ? <span>Settings</span> : null}
+          {!collapsed ? (
+            <span style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+              Settings
+              {remoteSessionCount > 0 && (
+                <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+                  · {remoteSessionCount} remote
+                </span>
+              )}
+            </span>
+          ) : null}
         </Link>
         <div className="left-sidebar__icon-row">
           <button

@@ -11,6 +11,8 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
+import { readConfig } from "./services/config.js";
+import * as cloudflared from "./services/cloudflared.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "./services/lifecycle.js";
@@ -152,9 +154,10 @@ async function main() {
 
   const port = await findFreePort(DEFAULT_PORT);
 
-  // Generate a fresh random token each daemon start.
+  // Read existing token from config.json; generate fresh only on first boot.
   // The token never travels via argv — it lives only in memory + config.json.
-  const token = randomBytes(32).toString("hex");
+  const existingConfig = await readConfig();
+  const token = existingConfig.token ?? randomBytes(32).toString("hex");
   await writeConfig(port, token);
 
   // Dev escape hatch: VST_NO_AUTH=1 disables the auth guard so the web UI loads
@@ -183,6 +186,7 @@ async function main() {
     console.log(`\nReceived ${signal}; shutting down…`);
     stopLifecyclePoller();
     stopPrPoller();
+    cloudflared.disable();
     await app.close();
     await releaseLock();
     process.exit(0);

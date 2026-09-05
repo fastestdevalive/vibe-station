@@ -23,6 +23,7 @@
     "@agentclientprotocol/sdk": "1.4.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
+    "@fastify/static": "^10.1.3",
     "@fastify/type-provider-zod": "^1.0.0",
     "@fastify/websocket": "^11.2.0",
     "better-sqlite3": "^12.11.1",

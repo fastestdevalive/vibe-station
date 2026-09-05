@@ -4,11 +4,8 @@ import rehypeHighlight from "rehype-highlight";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
-import { MermaidView } from "./MermaidView";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
-import { useTheme } from "@/hooks/useTheme";
-import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 
 interface MarkdownImageProps {
   src?: string;
@@ -72,9 +69,6 @@ interface MarkdownViewProps {
 
 export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null }: MarkdownViewProps) {
   const fileDir = filePath ? filePath.split("/").slice(0, -1).join("/") || null : null;
-  const { theme } = useTheme();
-
-  const segments = useMemo(() => segmentMarkdownWithMermaid(source), [source]);
 
   const markdownComponents = useMemo(() => ({
     pre({ children }: { children?: ReactNode }) {
@@ -90,20 +84,13 @@ export function MarkdownView({ source, api = null, worktreeId = null, scope = "w
 
   return (
     <div className="workspace-markdown-preview">
-      {segments.map((seg, i) =>
-        seg.type === "mermaid" ? (
-          <MermaidView key={i} chart={seg.content} theme={theme} />
-        ) : (
-          <ReactMarkdown
-            key={i}
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeHighlight]}
-            components={markdownComponents}
-          >
-            {seg.content}
-          </ReactMarkdown>
-        )
-      )}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={markdownComponents}
+      >
+        {source}
+      </ReactMarkdown>
     </div>
   );
 }

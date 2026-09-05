@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Columns3, LayoutList } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
-import type { ConnectionState } from "@/api/client";
-import type { HealthResponse, PrStatus, Session } from "@/api/types";
+import type { PrStatus, Session } from "@/api/types";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -59,21 +58,34 @@ const DASHBOARD_VIEW_KEY = "dashboard:view";
 const DASHBOARD_SHOW_FINISHED_KEY = "dashboard:showFinished";
 
 export function DashboardPanel({ api }: DashboardPanelProps) {
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [connState, setConnState] = useState<ConnectionState>(() => api.getConnectionState());
+  const navigate = useNavigate();
 
-  useEffect(() => api.subscribeConnection(setConnState), [api]);
+  // ── Header indicators ───────────────────────────────────────────────────────
+  const [remoteCount, setRemoteCount] = useState(0);
+  const [tunnelEnabled, setTunnelEnabled] = useState(false);
 
-  // Fetch the daemon health snapshot once for the port label. The live "is the
-  // daemon reachable?" indicator comes from the WS connection state — the
-  // health endpoint is just for the metadata.
-  useEffect(() => {
-    let cancelled = false;
-    void api.health()
-      .then((h) => { if (!cancelled) setHealth(h); })
-      .catch(() => { if (!cancelled) setHealth(null); });
-    return () => { cancelled = true; };
+  // Both indicators are best-effort and must settle independently: on a remote
+  // (QR) session /auth/sessions answers 403 TUNNEL_ONLY_BLOCKED, and a shared
+  // Promise.all would swallow the tunnel status too, showing "tunnel off" while
+  // the phone is literally connected through the tunnel.
+  const fetchHeaderStats = useCallback(async () => {
+    const [authSessions, tunnelState] = await Promise.allSettled([
+      api.listAuthSessions(),
+      api.getTunnelStatus(),
+    ]);
+    if (authSessions.status === "fulfilled") {
+      setRemoteCount(authSessions.value.filter((s) => s.createdVia === "qr").length);
+    }
+    if (tunnelState.status === "fulfilled") {
+      setTunnelEnabled(tunnelState.value.enabled);
+    }
   }, [api]);
+
+  useEffect(() => {
+    void fetchHeaderStats();
+    const id = setInterval(() => { void fetchHeaderStats(); }, 30_000);
+    return () => clearInterval(id);
+  }, [fetchHeaderStats]);
   // Server data + live state both come from central stores — see useServerSync
   // (mounted in Workspace) for the fetch + WS event reducers.
   const projects = useServerStore((s) => s.projects);
@@ -202,7 +214,6 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     return { working: sWorking, needsYou: sNeedsYou, idle: sIdle, pr: sPr, finished: sFinished };
   }, [sessions, sessionStates, hiddenProjectIds, worktreeById, worktreePrById]);
 
-  const daemonOk = connState === "online";
 
   const renderDashboardItem = useCallback(
     (s: Session) => {
@@ -266,21 +277,28 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       >
         <div className="dashboard-header">
           <div className="dashboard-header__wordmark">vibe-station</div>
-          <div className="dashboard-header__daemon">
+          {remoteCount > 0 && (
             <span
-              className="dashboard-header__daemon-dot"
-              style={{ color: daemonOk ? "var(--success)" : "var(--destructive)" }}
+              style={{
+                fontSize: "var(--font-size-xs)",
+                color: "var(--fg-muted)",
+                cursor: "pointer",
+              }}
+              onClick={() => navigate("/settings")}
             >
-              {daemonOk ? "●" : "○"}
+              · {remoteCount} device{remoteCount !== 1 ? "s" : ""}
             </span>
-            <span className="dashboard-header__daemon-label">
-              {daemonOk
-                ? `daemon · port ${health?.port ?? "—"}`
-                : connState === "connecting"
-                  ? "connecting…"
-                  : "daemon unreachable"}
-            </span>
-          </div>
+          )}
+          <span
+            style={{
+              fontSize: "var(--font-size-xs)",
+              color: "var(--fg-muted)",
+              cursor: "pointer",
+            }}
+            onClick={() => navigate("/settings")}
+          >
+            · {tunnelEnabled ? "◎ tunnel on" : "○ tunnel off"}
+          </span>
           <div className="dashboard-header__actions">
             <label className="dashboard-header__show-finished">
               <input

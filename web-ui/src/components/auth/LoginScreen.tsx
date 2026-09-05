@@ -2,11 +2,36 @@ import { type FormEvent, useState } from "react";
 import { api, ApiError } from "@/api";
 import "./LoginScreen.css";
 
+function isTunnelBrowser(): boolean {
+  return window.location.hostname.endsWith(".trycloudflare.com");
+}
+
 interface LoginScreenProps {
   onSuccess: () => void;
 }
 
-export function LoginScreen({ onSuccess }: LoginScreenProps) {
+function TunnelLoginNotice() {
+  return (
+    <div className="login-screen">
+      <div className="login-card">
+        <div className="login-card__brand">Vibe Station</div>
+        <div className="login-card__divider" />
+        <p style={{ textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)", lineHeight: 1.5 }}>
+          Open <strong>Remote Access</strong> settings on your desktop, then tap <strong>Show QR</strong> and scan it with your phone.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// The tunnel branch lives in its own component so the password form's hooks are
+// never conditionally skipped (Rules of Hooks).
+export function LoginScreen(props: LoginScreenProps) {
+  if (isTunnelBrowser()) return <TunnelLoginNotice />;
+  return <PasswordLoginScreen {...props} />;
+}
+
+function PasswordLoginScreen({ onSuccess }: LoginScreenProps) {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

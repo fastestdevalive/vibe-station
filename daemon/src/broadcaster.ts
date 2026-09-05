@@ -48,6 +48,22 @@ export function notifySession(sessionId: string, msg: ServerMessage): void {
 }
 
 /**
+ * Close all WebSocket connections authenticated with the given session nonce.
+ * Called by the revoke route after stamping revokedAt in auth_sessions.
+ */
+export function closeConnectionsByNonce(nonce: string, code: number, reason: string): void {
+  for (const conn of connections) {
+    if (conn.nonce === nonce) {
+      try {
+        conn.socket.close(code, reason);
+      } catch {
+        // best-effort — socket may already be closing
+      }
+    }
+  }
+}
+
+/**
  * Force-detach every connection's open WS stream on `sessionId` (Decision 9).
  *
  * `releaseSessionRuntime` (services/sessionRuntime.ts) kills the actual

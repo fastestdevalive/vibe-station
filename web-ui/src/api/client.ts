@@ -1,11 +1,14 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  AuthSession,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
   CliId,
   CommitLogEntry,
+  LocalQrResponse,
+  MobileQrResponse,
   PrInfo,
   PrLookupResult,
   CreateDirectSessionBody,
@@ -31,6 +34,7 @@ import type {
   TranscriptResponse,
   TranscriptPage,
   TreeEntry,
+  TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
   WSEvent,
@@ -1126,6 +1130,52 @@ export function createClientApi() {
       } catch {
         return false;
       }
+    },
+
+    // ── Mobile / tunnel ───────────────────────────────────────────────────────
+
+    async getTunnelStatus(): Promise<TunnelState> {
+      const res = await apiFetch(`${baseUrl()}/auth/tunnel/status`);
+      return parseJson<TunnelState>(res);
+    },
+
+    async enableTunnel(): Promise<TunnelState & { tunnelUrl: string }> {
+      const res = await apiFetch(`${baseUrl()}/auth/tunnel/enable`, { method: "POST" });
+      return parseJson<TunnelState & { tunnelUrl: string }>(res);
+    },
+
+    async disableTunnel(): Promise<void> {
+      const res = await apiFetch(`${baseUrl()}/auth/tunnel/disable`, { method: "POST" });
+      await parseJson<{ enabled: false }>(res);
+    },
+
+    async getMobileQr(): Promise<MobileQrResponse> {
+      const res = await apiFetch(`${baseUrl()}/auth/mobile-qr`, { method: "POST" });
+      return parseJson<MobileQrResponse>(res);
+    },
+
+    async getLocalQr(): Promise<LocalQrResponse> {
+      const res = await apiFetch(`${baseUrl()}/auth/local-qr`, { method: "POST" });
+      return parseJson<LocalQrResponse>(res);
+    },
+
+    async listAuthSessions(): Promise<AuthSession[]> {
+      const res = await apiFetch(`${baseUrl()}/auth/sessions`);
+      const data = await parseJson<{ sessions: AuthSession[] }>(res);
+      return data.sessions;
+    },
+
+    async revokeAuthSession(nonce: string): Promise<void> {
+      const res = await apiFetch(`${baseUrl()}/auth/sessions/${encodeURIComponent(nonce)}`, { method: "DELETE" });
+      // parseJson throws on !ok — without it a rejected revoke (403
+      // CANNOT_REVOKE_SELF, 404) would look like a success and the UI would drop
+      // a device row that is still fully authenticated.
+      await parseJson<{ ok: true }>(res);
+    },
+
+    async revokeAllAuthSessions(): Promise<void> {
+      const res = await apiFetch(`${baseUrl()}/auth/sessions`, { method: "DELETE" });
+      await parseJson<{ revokedCount: number }>(res);
     },
 
     getConnectionState(): ConnectionState {

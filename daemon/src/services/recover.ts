@@ -34,12 +34,6 @@ import type { SessionLifecycle, SessionRecord } from "../types.js";
  *     comm `opencode` — no new entry needed.
  *   - agy: unresolved — Phase 4.1's auth spike was not run this pass; add
  *     agy's ACP adapter comm here once that spike determines it.
- *   - pi: `pi-acp` (@victor-software-house/pi-acp) is an npm binary; its
- *     /proc/<pid>/comm is `node`, NOT `pi-acp`. Adding `node` here would
- *     allow killing ANY Node process that reuses a recorded PID — unsafe on a
- *     shared host. Consequence: an orphaned pi-acp process survives an unclean
- *     daemon restart. Follow-up: switch verifyPidIsTurnProcess to cmdline
- *     matching (/proc/<pid>/cmdline) for Node-based adapters.
  *
  * Known precision gap (documented, not silently papered over): `MainThread`
  * is a generic Bun runtime thread name, not a vibe-station-specific
