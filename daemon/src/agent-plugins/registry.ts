@@ -8,14 +8,12 @@ import { createClaudePlugin } from "./claude.js";
 import { createCursorPlugin } from "./cursor.js";
 import { createOpencodePlugin } from "./opencode.js";
 import { createAgyPlugin } from "./agy.js";
-import { createPiPlugin } from "./pi.js";
 
 export const PLUGIN_MAP = {
   claude: createClaudePlugin,
   cursor: createCursorPlugin,
   opencode: createOpencodePlugin,
   agy: createAgyPlugin,
-  pi: createPiPlugin,
 } as const satisfies Record<string, () => AgentPlugin>;
 
 export type CliId = keyof typeof PLUGIN_MAP;

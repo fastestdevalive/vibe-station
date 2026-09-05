@@ -23,6 +23,12 @@ export default defineConfig({
         rewrite: (p) => p.replace(/^\/api/, ""),
         changeOrigin: true, // ensures Cookie / Set-Cookie headers flow correctly
       },
+      // QR mobile login — /mobile-auth is daemon-handled but not under /api,
+      // so it needs its own proxy entry when the tunnel points at Vite.
+      "/mobile-auth": {
+        target: "http://127.0.0.1:7421",
+        changeOrigin: true,
+      },
       "/ws": {
         target: "ws://127.0.0.1:7421",
         ws: true,

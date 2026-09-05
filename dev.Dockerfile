@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+    -o /usr/local/bin/cloudflared \
+  && chmod +x /usr/local/bin/cloudflared
+
 RUN npm install -g pnpm@9.0.0 @google/gemini-cli
 
 # Runtime user: Claude Code hard-refuses to run with

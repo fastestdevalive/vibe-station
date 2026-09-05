@@ -1,12 +1,15 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  AuthSession,
   Attachment,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
   CliId,
   CommitLogEntry,
+  LocalQrResponse,
+  MobileQrResponse,
   NormalizedEvent,
   PrInfo,
   CreateDirectSessionBody,
@@ -32,6 +35,7 @@ import type {
   TranscriptResponse,
   TranscriptPage,
   TreeEntry,
+  TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
   WSEvent,
@@ -1477,6 +1481,16 @@ export function createMockApi() {
     async login(_token: string): Promise<void> {},
     async logout(): Promise<void> {},
     async checkAuth(): Promise<boolean> { return true; },
+
+    // Mobile / tunnel — stubs for mock mode
+    async getTunnelStatus(): Promise<TunnelState> { return { enabled: false, tunnelUrl: null }; },
+    async enableTunnel(): Promise<TunnelState & { tunnelUrl: string }> { return { enabled: true, tunnelUrl: "https://mock.trycloudflare.com" }; },
+    async disableTunnel(): Promise<void> {},
+    async getMobileQr(): Promise<MobileQrResponse> { return { qrUrl: "https://mock.trycloudflare.com/mobile-auth?code=mock", expiresAt: Date.now() + 30_000 }; },
+    async getLocalQr(): Promise<LocalQrResponse> { return { qrUrl: "http://192.168.1.42:7421/mobile-auth?code=mock-local", expiresAt: Date.now() + 30_000, connectionType: "lan" }; },
+    async listAuthSessions(): Promise<AuthSession[]> { return []; },
+    async revokeAuthSession(_nonce: string): Promise<void> {},
+    async revokeAllAuthSessions(): Promise<void> {},
   };
 
   return api;

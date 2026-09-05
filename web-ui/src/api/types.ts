@@ -1,5 +1,33 @@
 /** Mirrors docs/HIGH-LEVEL-DESIGN.md §8 */
 
+export interface TunnelState {
+  enabled: boolean;
+  tunnelUrl: string | null;
+}
+
+export interface MobileQrResponse {
+  qrUrl: string;
+  expiresAt: number;
+}
+
+export interface LocalQrResponse {
+  qrUrl: string;
+  expiresAt: number;
+  connectionType: "tailscale" | "lan";
+}
+
+export interface AuthSession {
+  nonce: string;
+  label: string | null;
+  createdVia: "password" | "qr";
+  createdAt: string;
+  lastSeenAt: string;
+  createdIp: string | null;
+  expiresAt: string;
+  /** True for the session the current viewer is authenticated with. */
+  isCurrent?: boolean;
+}
+
 export interface HealthResponse {
   ok: boolean;
   version: string;

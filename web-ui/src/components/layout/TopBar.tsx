@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ArrowLeft,
   ChevronDown,
   ChevronUp,
   Columns2,
@@ -58,6 +59,10 @@ interface TopBarProps {
   leftSidebarCollapsed: boolean;
   mobileSidebarOpen: boolean;
   onOpenQuickOpen: () => void;
+  /** Mobile settings drill-in: label of the active section (e.g. "Remote Access") */
+  settingsSectionLabel?: string;
+  /** Mobile settings drill-in: back to section list */
+  onSettingsBack?: () => void;
   leftColumnPx?: number;
 }
 
@@ -74,6 +79,8 @@ export function TopBar({
   mobileSidebarOpen,
   onOpenQuickOpen,
   leftColumnPx,
+  settingsSectionLabel,
+  onSettingsBack,
 }: TopBarProps) {
   const {
     activeProjectId,
@@ -128,6 +135,7 @@ export function TopBar({
     crumbParts.push({ label: "Dashboard" });
   } else if (layoutMode === "settings") {
     crumbParts.push({ label: "Settings" });
+    if (settingsSectionLabel) crumbParts.push({ label: settingsSectionLabel, highlight: true });
   } else if (layoutMode === "direct-session") {
     if (directSessionProject) crumbParts.push({ label: directSessionProject.name });
     if (directSession) crumbParts.push({ label: sessionLabel(directSession), highlight: true });
@@ -148,7 +156,7 @@ export function TopBar({
     layoutMode === "dashboard"
       ? "Dashboard"
       : layoutMode === "settings"
-        ? "Settings"
+        ? (settingsSectionLabel ?? "Settings")
         : layoutMode === "direct-session"
           ? [directSessionProject?.name, directSession ? sessionLabel(directSession) : null].filter(Boolean).join(" · ") || "Direct Session"
           : layoutMode === "workspace-view"
@@ -216,16 +224,27 @@ export function TopBar({
   return (
     <header className="top-bar">
       <div className="top-bar__row">
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label={sidebarExpanded ? "Hide projects sidebar" : "Show projects sidebar"}
-        aria-expanded={isMobile ? mobileSidebarOpen : undefined}
-        title="Toggle projects sidebar"
-        onClick={onToggleLeftSidebar}
-      >
-        <PanelLeft size={18} />
-      </button>
+      {isMobile && layoutMode === "settings" && onSettingsBack ? (
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Back to Settings"
+          onClick={onSettingsBack}
+        >
+          <ArrowLeft size={22} strokeWidth={2} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label={sidebarExpanded ? "Hide projects sidebar" : "Show projects sidebar"}
+          aria-expanded={isMobile ? mobileSidebarOpen : undefined}
+          title="Toggle projects sidebar"
+          onClick={onToggleLeftSidebar}
+        >
+          <PanelLeft size={18} />
+        </button>
+      )}
       {!isMobile ? (
         <>
           <Link
@@ -253,7 +272,22 @@ export function TopBar({
           {layoutMode === "dashboard" ? (
             <span className="top-bar__crumb-seg top-bar__mobile-line">Dashboard</span>
           ) : layoutMode === "settings" ? (
-            <span className="top-bar__crumb-seg top-bar__mobile-line">Settings</span>
+            <span
+              className="top-bar__crumb-seg top-bar__mobile-line"
+              style={{ display: "flex", alignItems: "center", gap: 4, flexDirection: "row" }}
+            >
+              {settingsSectionLabel ? (
+                <>
+                  <span style={{ color: "var(--fg-muted)" }}>Settings</span>
+                  <span style={{ color: "var(--fg-faint)" }}>›</span>
+                  <span style={{ color: "var(--fg-primary)", fontWeight: "var(--font-weight-medium)" }}>
+                    {settingsSectionLabel}
+                  </span>
+                </>
+              ) : (
+                "Settings"
+              )}
+            </span>
           ) : layoutMode === "workspace-view" ? (
             <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
               {viewedWorkspaceName ?? "Workspace"}

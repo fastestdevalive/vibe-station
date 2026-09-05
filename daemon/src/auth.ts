@@ -7,18 +7,23 @@
  *   hmac      — HMAC-SHA256(issuedAt + "." + nonce, daemonToken) as hex (64 chars)
  *
  * Self-validating: the daemon re-derives the HMAC on every request using the
- * in-memory daemonToken. No server-side session store is needed.
+ * in-memory daemonToken. auth_sessions table provides revocation on top of this.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const COOKIE_NAME = "vst-session";
-export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days in seconds (for Max-Age)
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days in seconds (for Max-Age)
 
 // In-memory rate limiter for /auth/login — max 10 attempts per minute per IP.
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 10;
+
+// In-memory rate limiter for /mobile-auth — max 20 attempts per minute per phone IP.
+// Keyed by CF-Connecting-IP value (never undefined — callers must check header first).
+const mobileAuthAttempts = new Map<string, { count: number; resetAt: number }>();
+const MOBILE_RATE_LIMIT_MAX = 20;
 
 /** Returns true if this IP is within the rate limit, false if exceeded. */
 export function checkLoginRateLimit(ip: string): boolean {
@@ -38,6 +43,21 @@ export function resetLoginRateLimit(ip: string): void {
 }
 
 /**
+ * Returns true if the CF-Connecting-IP is within the mobile-auth rate limit.
+ * Callers must verify the header is present before calling this — never pass undefined.
+ */
+export function checkMobileAuthRateLimit(cfIp: string): boolean {
+  const now = Date.now();
+  const entry = mobileAuthAttempts.get(cfIp);
+  if (!entry || now > entry.resetAt) {
+    mobileAuthAttempts.set(cfIp, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= MOBILE_RATE_LIMIT_MAX;
+}
+
+/**
  * Mint a new session cookie value for the given daemonToken.
  */
 export function generateSessionCookie(daemonToken: string): string {
@@ -48,11 +68,35 @@ export function generateSessionCookie(daemonToken: string): string {
 }
 
 /**
+ * Mint a session cookie re-using an existing nonce (sliding bump re-issuance).
+ * Produces a new issuedAt so the HMAC TTL clock resets; same nonce as DB PK.
+ */
+export function generateSessionCookieWithNonce(daemonToken: string, nonce: string): string {
+  const issuedAt = Date.now().toString(10);
+  const hmac = computeHmac(issuedAt, nonce, daemonToken);
+  return `${issuedAt}.${nonce}.${hmac}`;
+}
+
+/**
+ * Parse the structural fields from a cookie value without HMAC verification.
+ * Returns null if the format is malformed.
+ */
+export function parseSessionCookie(cookie: string): { issuedAt: string; nonce: string } | null {
+  const dotFirst = cookie.indexOf(".");
+  if (dotFirst === -1) return null;
+  const dotSecond = cookie.indexOf(".", dotFirst + 1);
+  if (dotSecond === -1) return null;
+  const issuedAt = cookie.slice(0, dotFirst);
+  const nonce = cookie.slice(dotFirst + 1, dotSecond);
+  if (!issuedAt || !nonce) return null;
+  return { issuedAt, nonce };
+}
+
+/**
  * Validate a session cookie value against the daemonToken.
  * Returns true only if the HMAC is correct and the cookie is within TTL.
  */
 export function validateSessionCookie(cookie: string, daemonToken: string): boolean {
-  // Split into exactly 3 parts
   const dotFirst = cookie.indexOf(".");
   if (dotFirst === -1) return false;
   const dotSecond = cookie.indexOf(".", dotFirst + 1);
