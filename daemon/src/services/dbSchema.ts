@@ -106,6 +106,21 @@ export function ensureSchema(db: Database): void {
       updatedAt TEXT NOT NULL,
       PRIMARY KEY (userId, scopeKey)
     );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      nonce      TEXT PRIMARY KEY,
+      userId     TEXT NOT NULL DEFAULT 'local',
+      createdAt  TEXT NOT NULL,
+      issuedAt   TEXT NOT NULL,
+      expiresAt  TEXT NOT NULL,
+      lastSeenAt TEXT NOT NULL,
+      createdVia TEXT NOT NULL CHECK (createdVia IN ('password','qr')),
+      label      TEXT,
+      userAgent  TEXT,
+      createdIp  TEXT,
+      revokedAt  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiresAt ON auth_sessions(expiresAt);
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above is a no-op against a `worktrees` table

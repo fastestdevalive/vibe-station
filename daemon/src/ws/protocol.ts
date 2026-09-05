@@ -153,7 +153,7 @@ export const NormalizedEventSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
   ts: z.string(),
-  provider: z.enum(["claude", "cursor", "opencode", "agy", "pi"]),
+  provider: z.enum(["claude", "cursor", "opencode", "agy"]),
   kind: z.enum([
     "session_init",
     "user",

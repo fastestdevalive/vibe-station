@@ -48,9 +48,15 @@ export class WSConnection {
    * daemon actually received vs. what the client thought it sent.
    */
   debugInput = false;
+  /** Set at auth time so revoke can close this connection by nonce. */
+  nonce: string | null = null;
 
   constructor(private ws: WebSocket) {
     this.id = Math.random().toString(36).slice(2);
+  }
+
+  get socket(): WebSocket {
+    return this.ws;
   }
 
   /**

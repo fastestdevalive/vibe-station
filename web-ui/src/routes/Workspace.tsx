@@ -32,7 +32,17 @@ export function Workspace() {
   const navigate = useNavigate();
   const params = useParams<{ directSessionId?: string; workspaceId?: string }>();
   const isDashboard = location.pathname === "/";
-  const isSettings = location.pathname === "/settings";
+  const isSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
+  const settingsSectionId = isSettings ? (location.pathname.split("/")[2] ?? null) : null;
+  const SETTINGS_LABELS: Record<string, string> = {
+    "modes": "Modes",
+    "appearance": "Appearance",
+    "projects": "Projects",
+    "hidden-projects": "Hidden projects",
+    "storage": "Storage",
+    "remote-access": "Remote Access",
+  };
+  const settingsSectionLabel = settingsSectionId ? (SETTINGS_LABELS[settingsSectionId] ?? settingsSectionId) : undefined;
   const isDirectSession = location.pathname.startsWith("/session/");
   // Detached-workspace view (agent-interaction-workspaces/04-workspaces Phase 3,
   // Decision 4) — a saved WorkspaceDoc's own route, independent of any worktree.
@@ -595,6 +605,11 @@ export function Workspace() {
             mobileSidebarOpen={mobileSidebarOpen}
             onOpenQuickOpen={() => setQuickOpen(true)}
             leftColumnPx={leftColumnPx}
+            settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
+            // replace, not push: a plain push would leave the section entry in
+            // history, so the phone's Back gesture right after tapping Back
+            // would drop straight back into the section you just left.
+            onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
           />
         }
         leftSidebar={
