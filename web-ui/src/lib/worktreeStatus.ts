@@ -9,13 +9,14 @@ export type WorktreeRolledUpStatus =
   | "exited"
   | "none";
 
-// PRD R8 precedence: waiting_for_human outranks working — one session
-// actively blocking on a human dominates the whole worktree's displayed
-// status. PR outcome is a separate axis layered on top by
+// Precedence: working outranks waiting_for_human — if any agent in the
+// worktree is actively running, the worktree should show as working, not
+// waiting. A single blocked agent shouldn't mask another that is still
+// making progress. PR outcome is a separate axis layered on top by
 // `statusColor.ts#resolveStatusClass`, not part of this lifecycle rank.
 const rank: Record<WorktreeRolledUpStatus, number> = {
-  waiting_for_human: 8,
-  working: 6,
+  working: 8,
+  waiting_for_human: 6,
   spawning: 5,
   idle: 4,
   done: 3,

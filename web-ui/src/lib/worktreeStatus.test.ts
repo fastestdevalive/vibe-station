@@ -51,11 +51,12 @@ describe("worktreeRolledUpStatus", () => {
     expect(worktreeRolledUpStatus(sessions, { a: "idle" })).toBe("idle");
   });
 
-  // --- 2.T1: waiting_for_human rollup precedence (R8) ---
+  // --- 2.T1: working beats waiting_for_human in rollup ---
+  // If any agent is actively working, the worktree shows as working, not waiting.
 
-  it("rolls up to waiting_for_human over working", () => {
+  it("rolls up to working over waiting_for_human", () => {
     const sessions = [sess("a", "waiting_for_human"), sess("b", "working")];
-    expect(worktreeRolledUpStatus(sessions, {})).toBe("waiting_for_human");
+    expect(worktreeRolledUpStatus(sessions, {})).toBe("working");
   });
 
   // --- 4.T5: `needs_review` removed from LifecycleState/SessionState (Phase 4) ---
