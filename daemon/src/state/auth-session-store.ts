@@ -5,6 +5,8 @@ export interface AuthSessionMeta {
   userAgent?: string;
   createdIp?: string;
   label?: string;
+  /** Tunnel URL live at creation time — set only for a QR session authenticated through the tunnel (tunnel-persistence). */
+  tunnelUrl?: string;
 }
 
 export interface AuthSessionRow {
@@ -15,6 +17,8 @@ export interface AuthSessionRow {
   lastSeenAt: string;
   createdIp: string | null;
   expiresAt: string;
+  /** Tunnel URL live when this session was created, or null (password / local-network QR). */
+  tunnelUrl: string | null;
 }
 
 // In-memory cache: nonce → { expiresAt, revokedAt, lastSeenAt } (epoch ms)
@@ -57,10 +61,21 @@ export function issue(nonce: string, meta: AuthSessionMeta): void {
     getDb()
       .prepare(
         `INSERT OR IGNORE INTO auth_sessions
-          (nonce, createdAt, issuedAt, expiresAt, lastSeenAt, createdVia, label, userAgent, createdIp)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (nonce, createdAt, issuedAt, expiresAt, lastSeenAt, createdVia, label, userAgent, createdIp, tunnelUrl)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(nonce, nowStr, nowStr, expiresAtStr, nowStr, meta.createdVia, label, meta.userAgent ?? null, meta.createdIp ?? null);
+      .run(
+        nonce,
+        nowStr,
+        nowStr,
+        expiresAtStr,
+        nowStr,
+        meta.createdVia,
+        label,
+        meta.userAgent ?? null,
+        meta.createdIp ?? null,
+        meta.tunnelUrl ?? null,
+      );
     cache.set(nonce, { expiresAt, revokedAt: null, lastSeenAt: now });
   } catch {
     // best-effort
@@ -157,7 +172,7 @@ export function list(): AuthSessionRow[] {
   try {
     return getDb()
       .prepare<[string], AuthSessionRow>(
-        `SELECT nonce, label, createdVia, createdAt, lastSeenAt, createdIp, expiresAt
+        `SELECT nonce, label, createdVia, createdAt, lastSeenAt, createdIp, expiresAt, tunnelUrl
            FROM auth_sessions
           WHERE expiresAt > ? AND revokedAt IS NULL
           ORDER BY issuedAt DESC`,
