@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
+import { createChatRepository } from "@/api/repositories/chatRepository";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** An optimistic user turn rendered immediately after send, before the daemon's
@@ -90,6 +91,11 @@ export function useChat(
   // literal is passed (new object reference on every render).
   const cacheEnabled = opts?.cache !== false;
 
+  // Chat-domain data access routes through ChatRepository, not `api` directly
+  // (repository-pattern plan, Decision 2). Stable per `api` identity, same
+  // lifetime as the `[api, ...]` effect deps below.
+  const chatRepo = useMemo(() => createChatRepository(api), [api]);
+
   const [events, setEvents] = useState<NormalizedEvent[]>([]);
   const [meta, setMeta] = useState<SessionMeta | null>(null);
   const [pending, setPending] = useState<PendingTurn[]>([]);
@@ -145,9 +151,9 @@ export function useChat(
 
     // ── Snapshot restore or cold start ──────────────────────────────────────
     // Determine what openChat sinceSeq to use and set initial state.
-    // IMPORTANT: All api.on() listeners are registered BEFORE calling
-    // api.openChat() so that synchronous emits inside the mock (and real WS
-    // onopen replays) are never missed.
+    // IMPORTANT: All chatRepo.on() listeners are registered BEFORE calling
+    // chatRepo.openChat() so that synchronous emits inside the mock (and real
+    // WS onopen replays) are never missed.
     poisonedRef.current = false;
     let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
     let openChatSinceSeq: number | undefined = undefined;
@@ -217,7 +223,7 @@ export function useChat(
 
     // ── Listeners (registered BEFORE openChat so synchronous emits are caught) ──
 
-    const offReplay = api.on("chat:replay", (e) => {
+    const offReplay = chatRepo.on("chat:replay", (e) => {
       if (e.type !== "chat:replay" || e.sessionId !== sessionId) return;
 
       if (e.hasMore === undefined) {
@@ -285,7 +291,7 @@ export function useChat(
       setIsDeltaLoading(false);
     });
 
-    const offMsg = api.on("session:message", (e) => {
+    const offMsg = chatRepo.on("session:message", (e) => {
       if (e.type !== "session:message" || e.sessionId !== sessionId) return;
       const ev = e.event;
       noteUserTurn(ev);
@@ -294,12 +300,12 @@ export function useChat(
       setLoading(false);
     });
 
-    const offMeta = api.on("session:meta", (e) => {
+    const offMeta = chatRepo.on("session:meta", (e) => {
       if (e.type !== "session:meta" || e.sessionId !== sessionId) return;
       setMeta(e.meta);
     });
 
-    const offError = api.on("session:error", (e) => {
+    const offError = chatRepo.on("session:error", (e) => {
       if (e.type !== "session:error" || e.sessionId !== sessionId) return;
       // Evict so a stale snapshot doesn't resurface on the next mount.
       // Do NOT clear events — session:error also fires for transient TTY errors
@@ -317,7 +323,7 @@ export function useChat(
     // new head.  The new fork user event arrives separately via session:message.
     // Evict BEFORE the `dropped.size === 0` early-return so a fork that only
     // clears history (no supersededTurnIds) still invalidates the snapshot.
-    const offFork = api.on("session:fork", (e) => {
+    const offFork = chatRepo.on("session:fork", (e) => {
       if (e.type !== "session:fork" || e.sessionId !== sessionId) return;
       chatSnapshotCache.evict(sessionId);
       const dropped = new Set(e.supersededTurnIds);
@@ -342,7 +348,7 @@ export function useChat(
     );
 
     // ── Open the chat (AFTER listeners are registered) ───────────────────────
-    void api.openChat(sessionId, openChatSinceSeq);
+    void chatRepo.openChat(sessionId, openChatSinceSeq);
 
     // ── Cleanup ──────────────────────────────────────────────────────────────
 
@@ -370,14 +376,16 @@ export function useChat(
         });
       }
 
-      void api.closeChat(sessionId);
+      void chatRepo.closeChat(sessionId);
     };
-  }, [api, sessionId, active, cacheEnabled]);
+    // `api` stays a dep (not just `chatRepo`) — the auth:expired listener above
+    // registers directly on `api.on`, out of ChatRepository's scope (Decision 4).
+  }, [api, chatRepo, sessionId, active, cacheEnabled]);
 
   const send = useCallback(
     async (message: string, attachmentIds?: string[]) => {
       if (!sessionId) return;
-      const res = await api.sendChat(sessionId, message, attachmentIds);
+      const res = await chatRepo.sendChat(sessionId, message, attachmentIds);
       // Dedupe: only add the optimistic bubble if the authoritative `user` event
       // for this turnId hasn't already landed (Decision 12).
       setPending((prev) => {
@@ -395,73 +403,73 @@ export function useChat(
         ];
       });
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const stop = useCallback(async () => {
     if (!sessionId) return;
-    await api.stopChat(sessionId);
-  }, [api, sessionId]);
+    await chatRepo.stopChat(sessionId);
+  }, [chatRepo, sessionId]);
 
   const cancelQueued = useCallback(
     async (turnId: string) => {
       if (!sessionId) return;
-      await api.cancelQueuedTurn(sessionId, turnId);
+      await chatRepo.cancelQueuedTurn(sessionId, turnId);
       setPending((prev) => prev.filter((p) => p.turnId !== turnId));
       setEditingDrafts((prev) => dropKey(prev, turnId));
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const editQueued = useCallback(
     async (turnId: string) => {
       if (!sessionId) return;
-      const res = await api.beginEditQueuedTurn(sessionId, turnId);
+      const res = await chatRepo.beginEditQueuedTurn(sessionId, turnId);
       setEditingDrafts((prev) => ({
         ...prev,
         [turnId]: { message: res.message, attachments: res.attachments },
       }));
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const saveEdit = useCallback(
     async (turnId: string, message: string, attachmentIds: string[]) => {
       if (!sessionId) return;
       try {
-        await api.resubmitQueuedTurn(sessionId, turnId, { edited: true, message, attachmentIds });
+        await chatRepo.resubmitQueuedTurn(sessionId, turnId, { edited: true, message, attachmentIds });
       } finally {
         // Close the editor whether it succeeded or not — on failure the caller
         // salvages the text into the composer (A9).
         setEditingDrafts((prev) => dropKey(prev, turnId));
       }
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const discardEdit = useCallback(
     async (turnId: string) => {
       if (!sessionId) return;
       setEditingDrafts((prev) => dropKey(prev, turnId));
-      await api.resubmitQueuedTurn(sessionId, turnId, { edited: false });
+      await chatRepo.resubmitQueuedTurn(sessionId, turnId, { edited: false });
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const sendNow = useCallback(
     async (turnId: string) => {
       if (!sessionId) return;
-      await api.promoteQueuedTurn(sessionId, turnId);
+      await chatRepo.promoteQueuedTurn(sessionId, turnId);
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   const forkTurn = useCallback(
     async (turnId: string, message: string, attachmentIds?: string[]) => {
       if (!sessionId) return;
-      await api.forkChat(sessionId, turnId, message, attachmentIds);
+      await chatRepo.forkChat(sessionId, turnId, message, attachmentIds);
     },
-    [api, sessionId],
+    [chatRepo, sessionId],
   );
 
   /** Prepend the previous keyset page (R2.2). Guarded against concurrent runs
@@ -471,7 +479,7 @@ export function useChat(
     if (!hasMoreRef.current || oldestSeqRef.current == null) return;
     setLoadingEarlier(true);
     try {
-      const page = await api.getTranscriptPage(sessionId, oldestSeqRef.current);
+      const page = await chatRepo.getTranscriptPage(sessionId, oldestSeqRef.current);
       for (const ev of page.events) {
         if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
       }
@@ -482,14 +490,14 @@ export function useChat(
     } finally {
       setLoadingEarlier(false);
     }
-  }, [api, sessionId]);
+  }, [chatRepo, sessionId]);
 
   /** Load the WHOLE transcript (guarded "load all" escape hatch, R2.5). */
   const loadAll = useCallback(async () => {
     if (!sessionId) return;
     setLoadingEarlier(true);
     try {
-      const { events: all } = await api.getTranscriptAll(sessionId);
+      const { events: all } = await chatRepo.getTranscriptAll(sessionId);
       for (const ev of all) {
         if (ev.kind === "user" && ev.turnId) userTurnIdsRef.current.add(ev.turnId);
       }
@@ -500,7 +508,7 @@ export function useChat(
     } finally {
       setLoadingEarlier(false);
     }
-  }, [api, sessionId]);
+  }, [chatRepo, sessionId]);
 
   return {
     events,
