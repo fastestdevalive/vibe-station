@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { buildServer } from "./server.js";
 import { readConfig } from "./services/config.js";
 import * as cloudflared from "./services/cloudflared.js";
+import { resolveTunnelPort } from "./services/tunnelPort.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
 import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "./services/lifecycle.js";
@@ -189,6 +190,12 @@ async function main() {
     console.error("Failed to initialize skill catalog (non-fatal):", err);
   }
 
+  // Re-spawn the Cloudflare tunnel if it was enabled before the last shutdown
+  // (tunnel-persistence). Blocking, like the recovery steps above — a
+  // still-restoring tunnel would otherwise report a false "enabled" status to
+  // the first UI poll. No-ops in no-auth/no-token mode. Never throws.
+  await cloudflared.restoreOnBoot(resolveTunnelPort(port), { token, noAuth });
+
   // Subagent → parent notifications resolve the parent's agent lazily and need
   // the port to do it (subagent-ux-v2).
   setNotifyDaemonPort(port);
@@ -203,7 +210,10 @@ async function main() {
     console.log(`\nReceived ${signal}; shutting down…`);
     stopLifecyclePoller();
     stopPrPoller();
-    cloudflared.disable();
+    // shutdownKill(), not disable(): a graceful stop/restart must kill the
+    // process but preserve `enabled` in tunnel_state, or restoreOnBoot()
+    // would never re-spawn it on the next boot (tunnel-persistence, Decision 3).
+    cloudflared.shutdownKill();
     await app.close();
     await releaseLock();
     process.exit(0);
