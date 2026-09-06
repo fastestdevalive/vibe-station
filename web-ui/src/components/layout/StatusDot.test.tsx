@@ -13,7 +13,6 @@ describe("StatusDot (5.T5 — one indicator, D17/D18)", () => {
     const dot = container.querySelector(".status-dot");
     expect(dot).toHaveClass("status-dot--pr-open");
     expect(dot).toHaveTextContent("●");
-    // title/aria-label name the resolved state so it isn't colour-only.
     expect(getByLabelText("status: pr-open")).toBeInTheDocument();
     expect(dot).toHaveAttribute("title", "pr-open");
   });
@@ -26,11 +25,10 @@ describe("StatusDot (5.T5 — one indicator, D17/D18)", () => {
     expect(getByLabelText("status: waiting_for_human")).toBeInTheDocument();
   });
 
-  it("working renders ● with the working class", () => {
-    const { container } = render(<StatusDot status="working" pr={null} />);
-    const dot = container.querySelector(".status-dot");
-    expect(dot).toHaveClass("status-dot--working");
-    expect(dot).toHaveTextContent("●");
+  it("working renders a circular spinner element", () => {
+    const { container, getByLabelText } = render(<StatusDot status="working" pr={null} />);
+    expect(container.querySelector(".status-spinner")).toBeInTheDocument();
+    expect(getByLabelText("status: working")).toBeInTheDocument();
   });
 
   it("pr=merged renders ● with the pr-merged class even when lifecycle is idle", () => {
@@ -57,7 +55,7 @@ describe("StatusDot (5.T5 — one indicator, D17/D18)", () => {
     expect(container.querySelector(".status-dot")).toHaveClass("status-dot--idle");
   });
 
-  it("B1 — done + an open/merged PR keeps the ✓ glyph, not the recoloured ● (terminal glyph survives recolour)", () => {
+  it("B1 — done + an open/merged PR keeps the ✓ glyph, not a spinner (terminal glyph survives recolour)", () => {
     const openDot = render(<StatusDot status="done" pr={pr("open")} />).container.querySelector(".status-dot");
     expect(openDot).toHaveClass("status-dot--pr-open");
     expect(openDot).toHaveTextContent("✓");
@@ -67,7 +65,7 @@ describe("StatusDot (5.T5 — one indicator, D17/D18)", () => {
     expect(mergedDot).toHaveTextContent("✓");
   });
 
-  it("B1 — exited + an open/merged PR keeps the × glyph, not the recoloured ●", () => {
+  it("B1 — exited + an open/merged PR keeps the × glyph, not a spinner", () => {
     const openDot = render(<StatusDot status="exited" pr={pr("open")} />).container.querySelector(".status-dot");
     expect(openDot).toHaveClass("status-dot--pr-open");
     expect(openDot).toHaveTextContent("×");

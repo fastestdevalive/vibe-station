@@ -23,24 +23,31 @@ interface StatusDotProps {
 }
 
 /**
- * One indicator, not two (D17/D18/5.8-5.9, superseding the separate
- * `PrBadge`) — the same `●` dot is recolored by `resolveStatusClass` for
- * `working` (yellow), `pr-open` (green), `pr-merged` (purple). Because D18
- * lets an open/merged PR outrank `waiting_for_human`, the resolved state can
- * differ from the raw `status` prop — e.g. `waiting_for_human` + an open PR
- * resolves to `pr-open` and renders the round dot, not the waiting `!`
- * (the PR is the fresher signal; see `resolveStatusClass`'s doc comment).
- * `title`/`aria-label` always name the resolved state so this isn't
- * colour-only (5.9's accepted trade-off note).
+ * One indicator, not two (D17/D18/5.8-5.9) — `resolveStatusClass` folds
+ * lifecycle + PR axes into a single resolved class. The `working` state
+ * renders as a circular spinner; all other states use a glyph dot.
+ * Terminal states (done/exited) always keep their ✓/× glyph regardless of PR.
  */
 export function StatusDot({ status, pr = null }: StatusDotProps) {
   const resolved = resolveStatusClass(status, pr);
-  const isColoredDot = resolved === "working" || resolved === "pr-open" || resolved === "pr-merged";
-  // Terminal lifecycle (done/exited) always keeps its own glyph, regardless
-  // of what colour the PR axis resolves to — D21 only ever meant to recolour
-  // the dot, never to destroy the ✓/× "this is finished" cue (see
-  // docs/STATUS-INDICATORS.md's non-colour-cues note).
+
+  if (resolved === "working") {
+    const prMod =
+      pr?.state === "merged" ? " status-spinner--pr-merged"
+      : pr?.state === "open" ? " status-spinner--pr-open"
+      : "";
+    return (
+      <span
+        className={`status-spinner${prMod}`}
+        aria-label="status: working"
+        title="working"
+      />
+    );
+  }
+
+  const label = resolved ?? status;
   const isTerminal = status === "done" || status === "exited";
+  const isColoredDot = resolved === "pr-open" || resolved === "pr-merged";
   const glyph = isTerminal
     ? GLYPH[status]
     : isColoredDot
@@ -48,7 +55,7 @@ export function StatusDot({ status, pr = null }: StatusDotProps) {
       : resolved === "waiting_for_human"
         ? "!"
         : GLYPH[status];
-  const label = resolved ?? status;
+
   return (
     <span
       className={`status-dot status-dot--${label}`}

@@ -2131,10 +2131,6 @@
    latter can outrank `waiting_for_human`'s red, see resolveStatusClass's
    doc comment for why). `waiting_for_human` stays the one shape-distinct
    glyph (`!`) as well as a color, so it's still legible without color. */
-.status-dot--working {
-  color: var(--status-working);
-}
-
 .status-dot--pr-open {
   color: var(--pr-open);
 }
@@ -2145,6 +2141,33 @@
 
 .status-dot--waiting_for_human {
   color: var(--status-waiting);
+}
+
+/* ── Circular spinner for working state ──────────────────────────────────── */
+
+.status-spinner {
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--status-working) 30%, transparent);
+  border-top-color: var(--status-working);
+  animation: status-spin 0.75s linear infinite;
+}
+
+@keyframes status-spin {
+  to { transform: rotate(360deg); }
+}
+
+.status-spinner--pr-open {
+  border-color: color-mix(in srgb, var(--pr-open) 30%, transparent);
+  border-top-color: var(--pr-open);
+}
+
+.status-spinner--pr-merged {
+  border-color: color-mix(in srgb, var(--pr-merged) 30%, transparent);
+  border-top-color: var(--pr-merged);
 }
 
 .preview-body {
