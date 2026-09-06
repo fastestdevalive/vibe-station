@@ -457,14 +457,11 @@ const notifyDeps: NotifyDeps = {
       ...(rec.lifecycle?.state !== undefined ? { lifecycleState: rec.lifecycle.state } : {}),
     };
   },
-  enqueueTurn: async (parentSessionId, message) => {
-    // `enqueue`, never `submit`: submit() steers on claude, which would inject
-    // this notice into whatever turn the parent is currently running and
-    // derail it. A queued turn lets the parent finish first.
+  emitSystemEvent: async (parentSessionId, payload) => {
     const { resolveJsonAgent } = await import("./jsonAgentChat.js");
     const resolved = await resolveJsonAgent(parentSessionId, daemonPortForNotify);
     if (!resolved.ok) return;
-    resolved.agent.enqueue({ message });
+    resolved.agent.emitSystemEvent(payload);
   },
 };
 

@@ -304,6 +304,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
         {session ? (
           <SubagentRow
             session={session}
+            api={api}
             onOpen={(target) =>
               openSubagentSession(target, session, {
                 layoutByWorktree,

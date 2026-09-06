@@ -763,6 +763,14 @@ export function createMockApi() {
       return structuredClone(s);
     },
 
+    async delinkSession(id: string): Promise<{ ok: true }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("not found", 404);
+      s.parentSessionId = undefined;
+      emit({ type: "session:updated", sessionId: id, parentSessionId: null });
+      return { ok: true };
+    },
+
 
     async send(message: {
       type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";

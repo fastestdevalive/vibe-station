@@ -26,6 +26,10 @@ export function registerSessionCreate(session: Command): void {
       "--parent <sessionId>",
       "SessionId this session was spawned from (defaults to $VST_SESSION when this CLI is invoked from inside a running agent's own shell)",
     )
+    .option(
+      "--no-parent",
+      "Create an independent session with no parent link (overrides --parent and suppresses the $VST_SESSION default)",
+    )
     .action(
       async (
         worktreeId: string,
@@ -37,7 +41,8 @@ export function registerSessionCreate(session: Command): void {
           prompt?: string;
           promptFile?: string;
           json?: boolean;
-          parent?: string;
+          // Commander sets parent=false when --no-parent is passed (boolean negation).
+          parent?: string | false;
         }
       ) => {
         // The daemon only consumes `prompt` for agent sessions (routes/sessions.ts:420) — a
@@ -53,21 +58,25 @@ export function registerSessionCreate(session: Command): void {
 
         const spinner = ora("Creating session...").start();
 
-        // Same defaulting rule as `vst worktree create` (agent-interaction-
+        // --no-parent wins over --parent and $VST_SESSION: create an independent
+        // session with no parent link at all. Commander sets opts.parent=false for --no-parent.
+        //
+        // Otherwise: same defaulting rule as `vst worktree create` (agent-interaction-
         // workspaces/04-workspaces Phase 4b, S3) — see that command for the
-        // full rationale. `--parent` is the flag
-        // (Decision 15); `--parent` wins if somehow both are passed.
+        // full rationale. `--parent` is the flag (Decision 15); `--parent` wins
+        // if somehow both are passed.
         //
         // Test truthiness, not nullishness (Decision 3): an agent never
         // passes either flag and instead relies on $VST_SESSION — warning
         // here is reserved for a caller who passed the flag explicitly and
         // it resolved blank (e.g. `--parent ""`), not for an unset
         // $VST_SESSION in a plain human terminal.
-        const explicitParent = opts.parent;
-        const explicitlyPassed = opts.parent !== undefined;
         let sourceAgentId: string | undefined;
-        if (explicitlyPassed) {
-          sourceAgentId = explicitParent || undefined;
+        if (opts.parent === false) {
+          // --no-parent: explicitly omit the parent link.
+          sourceAgentId = undefined;
+        } else if (typeof opts.parent === "string") {
+          sourceAgentId = opts.parent || undefined;
           if (!sourceAgentId) {
             console.warn(
               "Warning: --parent was passed but resolved to an empty value — creating the session unlinked.",

@@ -35,14 +35,11 @@ const COALESCE_MS = 4000;
  */
 const MAX_NOTICES_PER_PARENT = 25;
 
-/** States worth waking a parent for. `working` is deliberately excluded — a
- *  child going busy tells the parent nothing it can act on, and it is the most
- *  frequent transition of all. */
+/** Only `waiting_for_human` is actionable — it's the one state where the
+ *  parent can actually do something (reply). `idle`/`done`/`exited` are
+ *  surfaced via dashboard/WS state events and cost an LLM turn; suppressed. */
 const NOTABLE: ReadonlySet<LifecycleState> = new Set<LifecycleState>([
-  "idle",
   "waiting_for_human",
-  "done",
-  "exited",
 ]);
 
 interface Pending {
@@ -103,8 +100,19 @@ export interface NotifyDeps {
     useTmux?: boolean;
     lifecycleState?: LifecycleState;
   } | null;
-  /** Enqueue (NEVER steer) a turn on the parent. */
-  enqueueTurn: (parentSessionId: string, message: string) => Promise<void>;
+  /**
+   * Emit a system annotation event on the parent's JSON-chat stream.
+   * Must persist + broadcast without touching the LLM queue.
+   */
+  emitSystemEvent: (
+    parentSessionId: string,
+    payload: {
+      subagentId: string;
+      subagentName: string;
+      subagentState: LifecycleState;
+      text: string;
+    },
+  ) => Promise<void>;
 }
 
 /**
@@ -158,13 +166,6 @@ export function noteSubagentStateChange(
   pending.set(parentId, { children: new Map([[childSessionId, childInfo]]), timer });
 }
 
-const PHRASE: Record<string, string> = {
-  idle: "finished its turn and is idle",
-  waiting_for_human: "is waiting for a reply",
-  done: "is done",
-  exited: "exited",
-};
-
 async function flush(parentId: string, deps: NotifyDeps): Promise<void> {
   const entry = pending.get(parentId);
   pending.delete(parentId);
@@ -175,20 +176,16 @@ async function flush(parentId: string, deps: NotifyDeps): Promise<void> {
   const parent = deps.lookup(parentId);
   if (!parent || parent.archivedAt || parent.lifecycleState === "done") return;
 
-  const lines = [...entry.children.entries()].map(
-    ([id, c]) => `- ${c.name} (${id}) ${PHRASE[c.state] ?? c.state}`,
-  );
-  const message =
-    `[vst] Subagent update — you spawned these, and they have changed state:\n` +
-    `${lines.join("\n")}\n\n` +
-    `Read a subagent's work with \`vst session output <id>\`. If it has finished ` +
-    `and you have consumed its result, terminate it with \`vst session terminate <id>\`. ` +
-    // `vst session send`, not `vst chat`: send is the verb the shared system
-    // prompt teaches and the only one that works on every channel. Telling the
-    // parent otherwise made the daemon's own guidance contradict the prompt.
-    `If it is waiting for a reply, answer it with \`vst session send <id> "..."\`. ` +
-    `If nothing here needs action from you, say so briefly and stop.`;
-
   noticeCount.set(parentId, (noticeCount.get(parentId) ?? 0) + 1);
-  await deps.enqueueTurn(parentId, message);
+
+  // Emit one system annotation per child (coalesced window may contain multiple).
+  for (const [childId, c] of entry.children) {
+    const text = `waiting for reply`;
+    await deps.emitSystemEvent(parentId, {
+      subagentId: childId,
+      subagentName: c.name,
+      subagentState: c.state,
+      text,
+    });
+  }
 }

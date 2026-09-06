@@ -218,7 +218,8 @@ export type NormalizedEventKind =
   | "error"
   | "status"
   | "mode_update"
-  | "commands_update";
+  | "commands_update"
+  | "message_generated";
 
 /** Normalized non-text (or text-in-a-mixed-array) content block (mirror of daemon `NormalizedContentBlock`). */
 export interface NormalizedContentBlock {
@@ -292,6 +293,12 @@ export interface NormalizedEvent {
   modeId?: string;
   /** `commands_update` only — the available slash commands. */
   commands?: Command[];
+  /** `message_generated` only — the child session that changed state. */
+  subagentId?: string;
+  /** `message_generated` only — display name of the child session. */
+  subagentName?: string;
+  /** `message_generated` only — lifecycle state the child transitioned to. */
+  subagentState?: string;
 }
 
 /** A slash command/skill catalog entry (`commands_update`, session meta). */
@@ -469,6 +476,8 @@ export type WSEvent =
       /** Set true when a main-session promotion (DELETE /sessions/:id on the
        *  old main) flips this session to the worktree's new main. */
       isMain?: boolean;
+      /** Cleared to null by PATCH /sessions/:id/delink; absent means unchanged. */
+      parentSessionId?: string | null;
     }
   | {
       type: "session:error";

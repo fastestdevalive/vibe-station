@@ -1116,6 +1116,35 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.send({ ok: true, sortOrder: value });
   });
 
+  // PATCH /sessions/:id/delink
+  // Sever this session's parent link: sets parentSessionId to null, cancels any
+  // buffered subagent notices, and broadcasts the cleared field so clients can
+  // update their session store in place.
+  app.patch("/sessions/:id/delink", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: "session_not_found" });
+    if (ctx.session.archivedAt) return reply.status(400).send({ error: "session_archived" });
+
+    await mutateProject(ctx.project.id, (p) => {
+      const patchSession = (s: SessionRecord): SessionRecord =>
+        s.id !== id ? s : { ...s, parentSessionId: undefined };
+      if (ctx.kind === "worktree") {
+        return {
+          ...p,
+          worktrees: p.worktrees.map((w) =>
+            w.id === ctx.worktree.id ? { ...w, sessions: w.sessions.map(patchSession) } : w,
+          ),
+        };
+      }
+      return { ...p, directSessions: p.directSessions.map(patchSession) };
+    });
+
+    forgetSubagentNotify(id);
+    broadcastAll({ type: "session:updated", sessionId: id, parentSessionId: null });
+    return reply.send({});
+  });
+
   // POST /sessions/:id/done — retire an agent session: RELEASE its runtime
   // resources (tmux pane / direct-pty child / JsonAgentSession + SQLite handle)
   // and mark it `done`. Everything needed for a later `POST /:id/resume`
