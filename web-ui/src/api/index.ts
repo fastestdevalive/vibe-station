@@ -11,3 +11,4 @@ export { ApiError } from "./errors";
 export * from "./types";
 export { createMockApi } from "./mock";
 export { createClientApi } from "./client";
+export type { ConnectionState, AuthEvent } from "./client";

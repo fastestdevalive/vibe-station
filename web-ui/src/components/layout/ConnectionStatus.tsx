@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/api";
-import type { ConnectionState } from "@/api/client";
+import type { ConnectionState } from "@/api";
 
 export function ConnectionStatus() {
   const [state, setState] = useState<ConnectionState>(() => api.getConnectionState());
