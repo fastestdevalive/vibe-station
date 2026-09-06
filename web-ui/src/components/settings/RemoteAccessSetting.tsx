@@ -689,7 +689,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-              {sessions.map((session) => (
+              {[...sessions].sort((a, b) => new Date(b.lastSeenAt).getTime() - new Date(a.lastSeenAt).getTime()).map((session) => (
                 <div
                   key={session.nonce}
                   style={{
