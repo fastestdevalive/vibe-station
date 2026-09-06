@@ -34,6 +34,12 @@ const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 const SPAWN_TIMEOUT_MS = 10_000;
 const POLL_INTERVAL_MS = 250;
 
+// Deliberately distinct from the 500ms advanceTimersByTimeAsync idiom already
+// used throughout cloudflared.test.ts — sharing that value would make the
+// escalation timer fire mid-advance in any test whose mocked pgrep returns
+// real pids, entangling unrelated test assertions with sweep internals.
+const SWEEP_GRACE_MS = 2000;
+
 /** Spawn cloudflared and return the public tunnel URL. */
 export function enable(port: number): Promise<{ tunnelUrl: string }> {
   if (state.enabled && state.tunnelUrl) {
@@ -51,6 +57,10 @@ export function enable(port: number): Promise<{ tunnelUrl: string }> {
 }
 
 function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
+  // Sweep first, before anything else — only reached when enable() has
+  // decided to actually spawn (never on its "already enabled" early return,
+  // which must not kill the live tunnel it's about to report as healthy).
+  sweepOrphans(port);
   return new Promise((resolve, reject) => {
     const logPath = cloudflaredLogPath();
     mkdirSync(dirname(logPath), { recursive: true });
@@ -158,6 +168,94 @@ function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
 }
 
 /**
+ * Enumerate every real OS process matching the exact cloudflared invocation
+ * this daemon uses for `port`, including the port itself — orphan-reconciliation
+ * sweep (see cloudflared-orphan-sweep plan, Decision 3). Matches the full argv,
+ * not just the binary name, so an unrelated user-run cloudflared tunnel on a
+ * different port/purpose is never touched. Dots are regex-escaped and the
+ * pattern is `$`-anchored on the port so e.g. `:655` can't substring-match a
+ * real tunnel on `:65535`. Fail-open on any `pgrep` error (missing binary,
+ * sandboxed, etc.) — a sweep that finds nothing is safe, never crashing the
+ * caller is the priority, same convention as `isLikelyCloudflaredProcess` below.
+ */
+function findMatchingPids(port: number): number[] {
+  const pattern = `cloudflared tunnel --url http://127\\.0\\.0\\.1:${port}$`;
+  try {
+    const out = execFileSync("pgrep", ["-f", pattern], { encoding: "utf8", timeout: 2000 }).trim();
+    if (!out) return [];
+    return out
+      .split("\n")
+      .map((line) => Number.parseInt(line.trim(), 10))
+      .filter((n) => Number.isFinite(n));
+  } catch (err) {
+    // pgrep's documented contract: exit 1 == "no processes matched" — not an error.
+    if ((err as NodeJS.ErrnoException & { status?: number }).status === 1) return [];
+    console.warn("[cloudflared] sweep: pgrep enumeration failed:", err);
+    return [];
+  }
+}
+
+/** ESRCH-based liveness probe — `process.kill(pid, 0)` signals nothing, just checks existence. */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * OS-truth reconciliation sweep — treats the OS as the source of truth for
+ * "what's running," not the DB (cloudflared-orphan-sweep plan, report
+ * "Proposed" diagram). Runs at every entry point that changes tunnel state,
+ * BEFORE anything else: enumerates every real cloudflared process bound to
+ * `port`, SIGTERMs all of them unconditionally (no "is this mine" branch —
+ * a fresh boot/enable() always mints a brand-new URL, so nothing found here
+ * is ever worth keeping), then escalates any still-alive pid to SIGKILL after
+ * a grace period. Additive to (does not replace) the existing single-pid
+ * `tunnel_state`-derived cleanup below.
+ *
+ * The SIGKILL escalation is deliberately fire-and-forget: cloudflared dials
+ * out to the local port rather than binding it, so a lingering old process
+ * can't conflict with a freshly-spawned one, and blocking the new spawn on
+ * old-process death buys nothing but latency. The escalation timer is
+ * `.unref()`'d so it can never keep the daemon process alive on its own.
+ */
+function sweepOrphans(port: number): void {
+  const pids = findMatchingPids(port);
+  if (pids.length === 0) return;
+  for (const pid of pids) {
+    console.log(`[cloudflared] sweep: SIGTERM pid ${pid} (port ${port})`);
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+        console.warn(`[cloudflared] sweep: failed to SIGTERM pid ${pid}:`, err);
+      }
+    }
+  }
+  setTimeout(() => {
+    for (const pid of pids) {
+      if (!isProcessAlive(pid)) continue;
+      // Re-check identity before SIGKILL too — same pid-reuse hazard
+      // isLikelyCloudflaredProcess() already guards against for persisted
+      // pids below; the grace period is long enough for a pid to have been
+      // recycled by an unrelated process.
+      if (!isLikelyCloudflaredProcess(pid)) continue;
+      console.warn(`[cloudflared] sweep: pid ${pid} still alive after grace period — SIGKILL`);
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ESRCH") {
+          console.warn(`[cloudflared] sweep: failed to SIGKILL pid ${pid}:`, err);
+        }
+      }
+    }
+  }, SWEEP_GRACE_MS).unref();
+}
+
+/**
  * Best-effort identity check before signaling a pid we only know from a
  * persisted record (not our own live `ChildProcess` handle) — after a reboot
  * or a long gap, that pid can easily have been reused by an unrelated
@@ -221,10 +319,12 @@ function killTrackedProcess(): void {
 }
 
 /**
- * Explicit user-facing disable (POST /auth/tunnel/disable). Kills the process
- * AND clears `enabled` in the DB — the next boot must NOT re-spawn.
+ * Explicit user-facing disable (POST /auth/tunnel/disable). Runs the OS-truth
+ * reconciliation sweep first (`port`-scoped — see `sweepOrphans`), then kills
+ * the process AND clears `enabled` in the DB — the next boot must NOT re-spawn.
  */
-export function disable(): void {
+export function disable(port: number): void {
+  sweepOrphans(port);
   killTrackedProcess();
   state.enabled = false;
   state.tunnelUrl = null;
@@ -245,7 +345,12 @@ export function shutdownKill(): void {
 
 /**
  * Called once at daemon boot (main.ts, after port/token/noAuth are resolved).
- * No-ops in no-auth / no-token mode — exposing an auth-disabled daemon over a
+ * Runs the OS-truth reconciliation sweep FIRST, before even the no-auth/token
+ * guard — orphans from a prior run in a *different* auth mode (e.g. this
+ * machine had auth enabled last boot but is booting with --no-auth now) must
+ * still be reaped; "sweep first, before anything else" applies to the guard
+ * too, not just to the existing single-pid logic below. No-ops the REST of
+ * restore in no-auth / no-token mode — exposing an auth-disabled daemon over a
  * public tunnel URL is exactly what /auth/tunnel/enable's own guard prevents,
  * and a boot-time call bypasses that route entirely. Otherwise: best-effort
  * kill (identity-checked) whatever pid was last recorded (covers both an
@@ -254,6 +359,7 @@ export function shutdownKill(): void {
  * Never throws.
  */
 export async function restoreOnBoot(port: number, opts: { token?: string; noAuth: boolean }): Promise<void> {
+  sweepOrphans(port);
   if (opts.noAuth || !opts.token) {
     console.warn("[cloudflared] skipping tunnel restore — daemon is in no-auth mode or has no token");
     return;

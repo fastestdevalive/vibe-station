@@ -24,10 +24,12 @@ const spawnMock = vi.fn(() => {
   spawnedChildren.push(child);
   return child;
 });
-// Default: every persisted pid "looks like" cloudflared, so existing tests that
-// don't care about the identity check keep passing. Individual tests override
-// this to exercise the "pid was reused by something else" path (B2).
-const execFileSyncMock = vi.fn(() => "cloudflared\n");
+// Default: `ps` reports every persisted pid "looks like" cloudflared, and
+// `pgrep` finds no orphans — so existing tests that don't care about the
+// identity check or the sweep keep passing unmodified. Individual tests
+// override this to exercise the "pid reused by something else" (B2) or
+// "sweep found orphans" paths.
+const execFileSyncMock = vi.fn((cmd: string) => (cmd === "pgrep" ? "" : "cloudflared\n"));
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -55,7 +57,7 @@ describe("cloudflared", () => {
     spawnedChildren = [];
     spawnMock.mockClear();
     execFileSyncMock.mockClear();
-    execFileSyncMock.mockReturnValue("cloudflared\n");
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "" : "cloudflared\n"));
     vi.resetModules();
     vi.useFakeTimers();
   });
@@ -107,7 +109,7 @@ describe("cloudflared", () => {
     expect(store.getState().enabled).toBe(true);
     expect(store.getState().currentUrl).toBe("https://persisted.trycloudflare.com");
 
-    cf.disable();
+    cf.disable(7421);
     expect(store.getState().enabled).toBe(false);
     expect(store.getState().currentUrl).toBeNull();
 
@@ -130,7 +132,7 @@ describe("cloudflared", () => {
     await vi.advanceTimersByTimeAsync(500).then(() => promiseA);
     const childA = spawnedChildren[0]!;
 
-    cf.disable(); // kills A in-memory tracking (state.process cleared)
+    cf.disable(7421); // kills A in-memory tracking (state.process cleared)
 
     const promiseB = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
@@ -226,7 +228,7 @@ describe("cloudflared", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
     // Disable while cloudflared is still "starting" (no URL scraped yet).
-    cf.disable();
+    cf.disable(7421);
     await expect(firstEnable).rejects.toThrow(/tunnel disabled/);
 
     // A second enable() must actually spawn again immediately — not reuse the
@@ -243,5 +245,167 @@ describe("cloudflared", () => {
     // the (already-killed) first child.
     await vi.advanceTimersByTimeAsync(10_000);
     expect(store.getState().currentPid).toBe(spawnedChildren[1]!.pid);
+  });
+
+  // --- Orphan reconciliation sweep (cloudflared-orphan-sweep) ---
+
+  it("S1 — enable() sweeps orphans found via pgrep (SIGTERM, port-scoped, $-anchored pattern) before spawning", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "111\n222\n" : "cloudflared\n"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const cf = await import("../services/cloudflared.js");
+
+    cf.enable(7421);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "pgrep",
+      ["-f", "cloudflared tunnel --url http://127\\.0\\.0\\.1:7421$"],
+      expect.anything(),
+    );
+    expect(killSpy).toHaveBeenCalledWith(111, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(222, "SIGTERM");
+    // Sweep (enumerate + SIGTERM) happens synchronously before spawn — no window
+    // where old and new tunnels are briefly both alive (report § Proposed).
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    killSpy.mockRestore();
+  });
+
+  it("S2 — enable()'s already-enabled early return does NOT sweep (must not kill the live tunnel it reports as healthy)", async () => {
+    const cf = await import("../services/cloudflared.js");
+    const promise = cf.enable(7421);
+    await vi.advanceTimersByTimeAsync(0);
+    await writeUrlToLog("https://already-live.trycloudflare.com");
+    await vi.advanceTimersByTimeAsync(500).then(() => promise);
+
+    execFileSyncMock.mockClear();
+    const killSpy = vi.spyOn(process, "kill");
+
+    const result = await cf.enable(7421);
+    expect(result.tunnelUrl).toBe("https://already-live.trycloudflare.com");
+    expect(execFileSyncMock).not.toHaveBeenCalledWith("pgrep", expect.anything(), expect.anything());
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+  });
+
+  it("S3 — disable(port) sweeps orphans found via pgrep before the existing tracked-process cleanup", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "333\n" : "cloudflared\n"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const cf = await import("../services/cloudflared.js");
+    const store = await import("../state/tunnel-store.js");
+
+    cf.disable(7421);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "pgrep",
+      ["-f", "cloudflared tunnel --url http://127\\.0\\.0\\.1:7421$"],
+      expect.anything(),
+    );
+    expect(killSpy).toHaveBeenCalledWith(333, "SIGTERM");
+    // Existing clear-on-disable behavior is unchanged (additive, not a replacement).
+    expect(store.getState().enabled).toBe(false);
+    killSpy.mockRestore();
+  });
+
+  it("S4 — restoreOnBoot() sweeps via pgrep before the existing persisted-pid kill, even before the noAuth/token guard", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "444\n" : "cloudflared\n"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const cf = await import("../services/cloudflared.js");
+
+    await cf.restoreOnBoot(7421, { noAuth: true, token: "x" });
+
+    // Sweep ran even though noAuth short-circuits the rest of restore.
+    expect(killSpy).toHaveBeenCalledWith(444, "SIGTERM");
+    expect(spawnMock).not.toHaveBeenCalled();
+
+    // Call order: the sweep's pgrep call precedes any ps-based identity check.
+    const cmds = execFileSyncMock.mock.calls.map((call) => call[0]);
+    expect(cmds.indexOf("pgrep")).toBeLessThan(cmds.includes("ps") ? cmds.indexOf("ps") : Infinity);
+    killSpy.mockRestore();
+  });
+
+  it("S5 — pgrep exiting with status 1 (no matches) is treated as zero orphans, not an error", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") {
+        throw Object.assign(new Error("no processes matched"), { status: 1 });
+      }
+      return "cloudflared\n";
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const killSpy = vi.spyOn(process, "kill");
+    const cf = await import("../services/cloudflared.js");
+
+    cf.enable(7421);
+
+    expect(killSpy).not.toHaveBeenCalledWith(expect.any(Number), "SIGTERM");
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringMatching(/pgrep enumeration failed/));
+    killSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it("S6 — a non-1-status pgrep failure is logged and treated as zero orphans, never throws", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === "pgrep") {
+        throw Object.assign(new Error("pgrep: command not found"), { status: 127 });
+      }
+      return "cloudflared\n";
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const cf = await import("../services/cloudflared.js");
+
+    expect(() => cf.disable(7421)).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("pgrep enumeration failed"),
+      expect.anything(),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("S7 — a pid still alive after the grace period is escalated to SIGKILL (identity-checked)", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "555\n" : "cloudflared\n"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      // SIGTERM "succeeds" but the process stays alive (kill(pid, 0) keeps not throwing).
+      if (signal === "SIGKILL") return true;
+      return true;
+    });
+    const cf = await import("../services/cloudflared.js");
+
+    cf.disable(7421);
+    expect(killSpy).toHaveBeenCalledWith(555, "SIGTERM");
+    killSpy.mockClear();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(killSpy).toHaveBeenCalledWith(555, "SIGKILL");
+    killSpy.mockRestore();
+  });
+
+  it("S8 — a pid that's already dead by the grace-period check is NOT escalated to SIGKILL", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "666\n" : "cloudflared\n"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      // The liveness probe (signal === 0) reports the process is already gone.
+      if (signal === 0) {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+    const cf = await import("../services/cloudflared.js");
+
+    cf.disable(7421);
+    killSpy.mockClear();
+
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(killSpy).not.toHaveBeenCalledWith(666, "SIGKILL");
+    killSpy.mockRestore();
+  });
+
+  it("S9 — the escalation timer is unref'd so it can never keep the daemon process alive", async () => {
+    execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "777\n" : "cloudflared\n"));
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+    const cf = await import("../services/cloudflared.js");
+
+    // sweepOrphans calls `.unref()` on the setTimeout return value synchronously —
+    // if the escalation timer weren't unref'd (or didn't expose `.unref()` at
+    // all under vitest's fake timers), this call would throw a TypeError.
+    expect(() => cf.disable(7421)).not.toThrow();
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2000);
   });
 });
