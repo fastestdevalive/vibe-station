@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
+import { createSessionRepository } from "@/api/repositories/sessionRepository";
+import { createWorktreeRepository } from "@/api/repositories/worktreeRepository";
 import { useServerStore } from "./useServerStore";
 import {
   useWorkspaceStore,
@@ -61,6 +63,14 @@ export function clearOrderedListWrite(p: Promise<unknown>): void {
  * was beating fresh REST truth in the worktree rollup.
  */
 export function useServerSync(api: ApiInstance): void {
+  // Session/worktree-domain data access routes through their repositories,
+  // not `api` directly (repository-pattern plan, Decision 2). `api.listProjects`
+  // and `api.on("project:*"/"ws:open", ...)` stay direct — Project isn't one of
+  // the 3 requested repositories (Decision 4). Stable per `api` identity, same
+  // lifetime as the `[api, ...]` effect deps below.
+  const sessionRepo = useMemo(() => createSessionRepository(api), [api]);
+  const worktreeRepo = useMemo(() => createWorktreeRepository(api), [api]);
+
   const replaceAll = useServerStore((s) => s.replaceAll);
   const applyProjectCreated = useServerStore((s) => s.applyProjectCreated);
   const applyProjectDeleted = useServerStore((s) => s.applyProjectDeleted);
@@ -85,8 +95,8 @@ export function useServerSync(api: ApiInstance): void {
         try {
           const [projects, worktrees, sessions] = await Promise.all([
             api.listProjects(),
-            api.listWorktrees(),
-            api.listSessions(),
+            worktreeRepo.listWorktrees(),
+            sessionRepo.listSessions(),
           ]);
           replaceAll({ projects, worktrees, sessions });
           // Overlay fresh REST state onto the persisted live map. Without
@@ -118,11 +128,11 @@ export function useServerSync(api: ApiInstance): void {
       if (inFlightPinnedOrderSync) return inFlightPinnedOrderSync;
       inFlightPinnedOrderSync = (async () => {
         try {
-          const pinnedOrder = await api.getOrderedList("pinned-all");
+          const pinnedOrder = await worktreeRepo.getOrderedList("pinned-all");
           if (pinnedOrder.updatedAt === null) {
             const local = useWorkspaceStore.getState().sortOrders["pinned-all"];
             if (local && local.length > 0) {
-              await api.setOrderedList("pinned-all", local);
+              await worktreeRepo.setOrderedList("pinned-all", local);
             }
           } else if (!orderedListWriteInFlight) {
             useWorkspaceStore.getState().setSortOrder("pinned-all", pinnedOrder.itemIds);
@@ -141,7 +151,9 @@ export function useServerSync(api: ApiInstance): void {
       void syncPinnedOrder();
     });
     return off;
-  }, [api, replaceAll, syncSessionsFromApi]);
+    // `api` stays a dep — `listProjects()` above and `ws:open` here are both
+    // direct `api` calls, out of Session/WorktreeRepository's scope (Decision 4).
+  }, [api, sessionRepo, worktreeRepo, replaceAll, syncSessionsFromApi]);
 
   // Incremental WS event reducers — keep the store current between full
   // refreshes so we don't have to refetch for every transition.
@@ -155,10 +167,10 @@ export function useServerSync(api: ApiInstance): void {
     const offProjUpdated = api.on("project:updated", (ev) => {
       if (ev.type === "project:updated") applyProjectUpdated(ev.project);
     });
-    const offWtCreated = api.on("worktree:created", (ev) => {
+    const offWtCreated = worktreeRepo.on("worktree:created", (ev) => {
       if (ev.type === "worktree:created") applyWorktreeCreated(ev.worktree);
     });
-    const offWtDeleted = api.on("worktree:deleted", (ev) => {
+    const offWtDeleted = worktreeRepo.on("worktree:deleted", (ev) => {
       if (ev.type !== "worktree:deleted") return;
       applyWorktreeDeleted(ev.worktreeId);
       // The worktree's SESSION tiles are cleaned up by the per-session
@@ -167,10 +179,10 @@ export function useServerSync(api: ApiInstance): void {
       // own sweep or they linger as empty ghost windows.
       useWorkspaceStore.getState().removeToolsTilesForWorktree(ev.worktreeId);
     });
-    const offWtUpdated = api.on("worktree:updated", (ev) => {
+    const offWtUpdated = worktreeRepo.on("worktree:updated", (ev) => {
       if (ev.type === "worktree:updated") applyWorktreeUpdated(ev.worktree);
     });
-    const offSessCreated = api.on("session:created", (ev) => {
+    const offSessCreated = sessionRepo.on("session:created", (ev) => {
       if (ev.type !== "session:created") return;
       if (ev.snapshot) {
         applySessionCreated(ev.snapshot);
@@ -210,25 +222,25 @@ export function useServerSync(api: ApiInstance): void {
         }
       }
     });
-    const offSessState = api.on("session:state", (ev) => {
+    const offSessState = sessionRepo.on("session:state", (ev) => {
       if (ev.type === "session:state") {
         applySessionUpdated(ev.sessionId, { state: ev.state });
         patchSessionState(ev.sessionId, ev.state);
       }
     });
-    const offSessExited = api.on("session:exited", (ev) => {
+    const offSessExited = sessionRepo.on("session:exited", (ev) => {
       if (ev.type === "session:exited") {
         applySessionUpdated(ev.sessionId, { state: "exited" });
         patchSessionState(ev.sessionId, "exited");
       }
     });
-    const offSessResumed = api.on("session:resumed", (ev) => {
+    const offSessResumed = sessionRepo.on("session:resumed", (ev) => {
       if (ev.type === "session:resumed") {
         applySessionUpdated(ev.sessionId, { state: "working" });
         patchSessionState(ev.sessionId, "working");
       }
     });
-    const offSessDeleted = api.on("session:deleted", (ev) => {
+    const offSessDeleted = sessionRepo.on("session:deleted", (ev) => {
       if (ev.type === "session:deleted") {
         // Captured before `applySessionDeleted` removes it from the list —
         // needed below to scope the fallback-session lookup to the deleted
@@ -250,7 +262,7 @@ export function useServerSync(api: ApiInstance): void {
         useWorkspaceStore.getState().removeTilesForSession(ev.sessionId, remainingSessions);
       }
     });
-    const offSessUpdated = api.on("session:updated", (ev) => {
+    const offSessUpdated = sessionRepo.on("session:updated", (ev) => {
       if (ev.type === "session:updated") {
         // A live channel toggle (P3, R1.7) patches `channel` (+ the `useTmux`
         // invariant) so the ChatPane/TerminalPane flip; a pin toggle patches
@@ -279,7 +291,7 @@ export function useServerSync(api: ApiInstance): void {
         }
       }
     });
-    const offOrderedListUpdated = api.on("orderedList:updated", (ev) => {
+    const offOrderedListUpdated = worktreeRepo.on("orderedList:updated", (ev) => {
       if (ev.type === "orderedList:updated" && ev.scopeKey === "pinned-all") {
         useWorkspaceStore.getState().setSortOrder("pinned-all", ev.itemIds);
       }
@@ -299,8 +311,12 @@ export function useServerSync(api: ApiInstance): void {
       offSessUpdated();
       offOrderedListUpdated();
     };
+    // `api` stays a dep — `project:*` listeners above are direct `api` calls,
+    // out of Session/WorktreeRepository's scope (Decision 4).
   }, [
     api,
+    sessionRepo,
+    worktreeRepo,
     applyProjectCreated,
     applyProjectDeleted,
     applyProjectUpdated,
