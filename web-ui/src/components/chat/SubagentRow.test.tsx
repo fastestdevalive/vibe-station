@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { SubagentRow, openSubagentSession } from "./SubagentRow";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { createMockApi } from "@/api/mock";
 import type { Session } from "@/api/types";
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
@@ -172,6 +173,57 @@ describe("row wording (Subagents caption, waiting-for-agent phrasing)", () => {
     const btn = screen.getByTitle(/kid/);
     expect(btn.getAttribute("title")).toContain("waiting for agent");
     expect(btn.getAttribute("title")).not.toContain("human");
+  });
+});
+
+describe("SubagentRow delink UX (5.T1, 5.T2, 5.T3)", () => {
+  it("5.T1 — ✕ button is present in child chip DOM when api is provided; clicking it enters confirm state", async () => {
+    const user = userEvent.setup();
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    const api = createMockApi();
+    render(<SubagentRow session={parent} onOpen={vi.fn()} api={api} />);
+
+    const delinkBtn = screen.getByLabelText("Detach subagent");
+    expect(delinkBtn).toBeTruthy();
+
+    await user.click(delinkBtn);
+    expect(screen.getByText("Detach worker?")).toBeInTheDocument();
+    expect(screen.getByText("Detach")).toBeInTheDocument();
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
+  });
+
+  it("5.T2 — confirming Detach calls the delink API; cancelling restores the chip", async () => {
+    const user = userEvent.setup();
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    const api = createMockApi();
+    const delinkSpy = vi.fn().mockResolvedValue({ ok: true });
+    api.delinkSession = delinkSpy;
+
+    render(<SubagentRow session={parent} onOpen={vi.fn()} api={api} />);
+
+    await user.click(screen.getByLabelText("Detach subagent"));
+    expect(screen.getByText("Detach worker?")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Cancel"));
+    expect(screen.queryByText("Detach worker?")).toBeNull();
+    expect(delinkSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByLabelText("Detach subagent"));
+    await user.click(screen.getByText("Detach"));
+    expect(delinkSpy).toHaveBeenCalledWith("c1");
+  });
+
+  it("5.T3 — ✕ button not rendered when api is not provided (regression: existing tests pass)", () => {
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    expect(screen.queryByLabelText("Detach subagent")).toBeNull();
+    expect(screen.getByText("worker")).toBeInTheDocument();
   });
 });
 

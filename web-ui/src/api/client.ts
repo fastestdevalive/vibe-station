@@ -566,6 +566,14 @@ export function createClientApi() {
       return parseJson<Session>(res);
     },
 
+    async delinkSession(id: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/delink`, {
+        method: "PATCH",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
 
     async getFileBlob(worktreeId: string, filePath: string, scope: FileScope = "worktree"): Promise<Blob> {
       const path = filePath.replace(/^\/+/, "");

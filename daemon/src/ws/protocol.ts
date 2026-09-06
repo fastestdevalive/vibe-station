@@ -174,6 +174,7 @@ export const NormalizedEventSchema = z.object({
     "status",
     "mode_update",
     "commands_update",
+    "message_generated",
   ]),
   role: z.enum(["user", "assistant"]).optional(),
   text: z.string().optional(),
@@ -219,6 +220,9 @@ export const NormalizedEventSchema = z.object({
   toolStatus: z.enum(["pending", "in_progress", "completed", "failed"]).optional(),
   modeId: z.string().optional(),
   commands: z.array(CommandSchema).optional(),
+  subagentId: z.string().optional(),
+  subagentName: z.string().optional(),
+  subagentState: z.string().optional(),
 });
 
 export const SessionMetaSchema = z.object({
@@ -378,6 +382,8 @@ const SessionUpdatedEvent = z.object({
   /** Set true when a main-session promotion (DELETE /sessions/:id on the old
    *  main, Fix 1) flips this session to the worktree's new main. */
   isMain: z.boolean().optional(),
+  /** Cleared to null by PATCH /sessions/:id/delink; absent means unchanged. */
+  parentSessionId: z.string().nullable().optional(),
 });
 
 /**

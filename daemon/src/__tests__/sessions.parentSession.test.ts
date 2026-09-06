@@ -271,4 +271,74 @@ describe("Session routes — parentSessionId (subagent-ux-v2 Phase 1)", () => {
     // parent.VST_SESSION === parent.id (buildVstEnv sets VST_SESSION: session.id)
     expect(child.parentSessionId).toBe(parent.id);
   });
+
+  it("2.T1 — PATCH /sessions/:id/delink sets parentSessionId to null in DB and broadcasts session:updated", async () => {
+    // Create a parent + child pair.
+    const parentRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const parent = parentRes.json<{ id: string }>();
+
+    const childRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", sourceAgentId: parent.id },
+    });
+    const child = childRes.json<{ id: string; parentSessionId: string | null }>();
+    expect(child.parentSessionId).toBe(parent.id);
+
+    const res = await app.inject({ method: "PATCH", url: `/sessions/${child.id}/delink` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({});
+
+    // parentSessionId cleared in the DB — re-read the session.
+    const sessRes = await app.inject({ method: "GET", url: `/sessions/${child.id}` });
+    const childAfter = sessRes.json<{ id: string; parentSessionId: string | null }>();
+    expect(childAfter?.parentSessionId).toBeNull();
+  });
+
+  it("2.T2 — PATCH /sessions/:id/delink on archived session returns 400", async () => {
+    const parentRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    const parent = parentRes.json<{ id: string }>();
+
+    const childRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", sourceAgentId: parent.id },
+    });
+    const child = childRes.json<{ id: string }>();
+
+    // Archive the child directly via the project store.
+    const { mutateProject } = await import("../state/project-store.js");
+    await mutateProject(projectId, (p) => ({
+      ...p,
+      worktrees: p.worktrees.map((w) =>
+        w.id !== worktreeId
+          ? w
+          : {
+              ...w,
+              sessions: w.sessions.map((s) =>
+                s.id !== child.id ? s : { ...s, archivedAt: new Date().toISOString() },
+              ),
+            },
+      ),
+    }));
+
+    // Delink must refuse — archived sessions must not be mutated.
+    const res = await app.inject({ method: "PATCH", url: `/sessions/${child.id}/delink` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toBe("session_archived");
+  });
+
+  it("2.T3 — PATCH /sessions/:nonexistent/delink returns 404", async () => {
+    const res = await app.inject({ method: "PATCH", url: "/sessions/does-not-exist/delink" });
+    expect(res.statusCode).toBe(404);
+    expect(res.json<{ error: string }>().error).toBe("session_not_found");
+  });
 });

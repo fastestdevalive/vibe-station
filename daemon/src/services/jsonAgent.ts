@@ -600,6 +600,27 @@ export class JsonAgentSession {
     this.stream.emitMessage(userEvent);
   }
 
+  /**
+   * Persist + broadcast a system annotation event (kind:"message_generated").
+   * Never touches the queue or calls kickDrain — this is not a turn input and
+   * must never trigger an LLM round-trip.
+   */
+  emitSystemEvent(payload: {
+    subagentId: string;
+    subagentName: string;
+    subagentState: import("../types.js").LifecycleState;
+    text: string;
+  }): void {
+    const ev = this.newEvent("message_generated", {
+      text: payload.text,
+      subagentId: payload.subagentId,
+      subagentName: payload.subagentName,
+      subagentState: payload.subagentState,
+    });
+    this.persist(ev);
+    this.stream.emitMessage(ev);
+  }
+
   enqueue(input: {
     /** RAW user text (pre-injection); attachments are injected at run time (A1). */
     message: string;

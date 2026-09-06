@@ -36,7 +36,8 @@ type RenderItem =
   | ({ type: "tool" } & ToolCallEntry)
   | { type: "toolRun"; id: string; tools: ToolCallEntry[] }
   | { type: "error"; id: string; text: string }
-  | { type: "status"; id: string; text: string };
+  | { type: "status"; id: string; text: string }
+  | { type: "system_event"; id: string; text: string; agentName?: string };
 
 /**
  * Consecutive `tool` items (no text/user message, and no turn boundary,
@@ -357,6 +358,9 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         });
         break;
       }
+      case "message_generated":
+        items.push({ type: "system_event", id: ev.id, text: ev.text ?? "", agentName: ev.subagentName });
+        break;
       default:
         // session_init / usage / result — not rendered as bubbles, but a
         // `result` event marks the turn as over, so close any open group.
@@ -876,6 +880,14 @@ export function MessageList({
           case "status":
             node = (
               <div key={key} className="chat-status-note" role="note">
+                {item.text}
+              </div>
+            );
+            break;
+          case "system_event":
+            node = (
+              <div key={key} className="chat-system-event" role="note">
+                {item.agentName ? <span className="chat-system-event__chip">{item.agentName}</span> : null}
                 {item.text}
               </div>
             );
