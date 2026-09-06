@@ -83,7 +83,8 @@ export type NormalizedEventKind =
   | "error"
   | "status"
   | "mode_update"
-  | "commands_update";
+  | "commands_update"
+  | "message_generated";
 
 /** Token / cost usage numbers, normalized across harnesses. */
 export interface UsageInfo {
@@ -226,6 +227,12 @@ export interface NormalizedEvent {
   modeId?: string;
   /** `commands_update` only — the available slash commands (Gap 7). */
   commands?: { name: string; description: string; argumentHint?: string }[];
+  /** `message_generated` only — the child session that changed state. */
+  subagentId?: string;
+  /** `message_generated` only — display name of the child session. */
+  subagentName?: string;
+  /** `message_generated` only — the lifecycle state the child transitioned to. */
+  subagentState?: LifecycleState;
 }
 
 /** Derived turn state driving the composer status indicator. */

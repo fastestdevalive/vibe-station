@@ -1377,4 +1377,57 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     const metaFromStoreMeta = buildMetaFromStoreMeta({ sessionId: session.id, cli: "claude", meta: storeMeta });
     expect(metaFromStoreMeta.commands).toEqual(COMMANDS);
   });
+
+  it("1.T3 — emitSystemEvent persists + broadcasts message_generated; queue length unchanged; kickDrain not called", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const { openSqliteTranscriptStore } = await import("../services/sqliteTranscriptStore.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const broadcast: unknown[] = [];
+    agent.stream.on("message", (ev) => broadcast.push(ev));
+
+    // Capture queue length before call (should be 0 and stay 0).
+    const queueBefore = agent.getMeta().queueDepth;
+    expect(queueBefore).toBe(0);
+
+    agent.emitSystemEvent({
+      subagentId: "child-42",
+      subagentName: "worker",
+      subagentState: "waiting_for_human",
+      text: "worker is waiting for your reply",
+    });
+
+    // Queue depth must not grow — emitSystemEvent never calls enqueue/kickDrain.
+    expect(agent.getMeta().queueDepth).toBe(0);
+
+    // Event broadcast immediately.
+    expect(broadcast).toHaveLength(1);
+    const emitted = broadcast[0] as Record<string, unknown>;
+    expect(emitted.kind).toBe("message_generated");
+    expect(emitted.subagentId).toBe("child-42");
+    expect(emitted.subagentName).toBe("worker");
+    expect(emitted.subagentState).toBe("waiting_for_human");
+    expect(emitted.text).toBe("worker is waiting for your reply");
+
+    // Event persisted to SQLite transcript.
+    await agent.release();
+    const dataDir = join(tempDir, "projects", PROJECT_ID, "sessions", session.id);
+    const store = openSqliteTranscriptStore(dataDir, session.id);
+    const rows = store.readAll();
+    store.close();
+    const sysEvt = rows.find((e) => e.kind === "message_generated");
+    expect(sysEvt).toBeDefined();
+    expect(sysEvt?.subagentId).toBe("child-42");
+    expect(sysEvt?.text).toBe("worker is waiting for your reply");
+  });
 });

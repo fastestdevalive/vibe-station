@@ -144,4 +144,24 @@ describe("vst session create --parent", () => {
     const [, body] = daemonPostMock.mock.calls[0]!;
     expect(body).not.toHaveProperty("sourceAgentId");
   });
+
+  // 3.T1 — --no-parent omits sourceAgentId from POST body
+  it("3.T1 — --no-parent POST body contains no sourceAgentId", async () => {
+    process.env.VST_SESSION = "sess-from-env";
+    const program = buildSessionProgram();
+    await program.parseAsync(["session", "create", "wt-1", "--no-parent"], { from: "user" });
+    const [, body] = daemonPostMock.mock.calls[0]!;
+    expect(body).not.toHaveProperty("sourceAgentId");
+  });
+
+  // 3.T2 — without --no-parent, $VST_SESSION is still sent
+  it("3.T2 — vst session create without --no-parent still sends sourceAgentId: $VST_SESSION", async () => {
+    process.env.VST_SESSION = "sess-from-env";
+    const program = buildSessionProgram();
+    await program.parseAsync(["session", "create", "wt-1"], { from: "user" });
+    expect(daemonPostMock).toHaveBeenCalledWith(
+      "/sessions",
+      expect.objectContaining({ sourceAgentId: "sess-from-env" }),
+    );
+  });
 });

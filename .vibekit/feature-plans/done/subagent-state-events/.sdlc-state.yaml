@@ -1,0 +1,13 @@
+feature: subagent-state-events
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-82
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null

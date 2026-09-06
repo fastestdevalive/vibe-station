@@ -988,4 +988,44 @@ describe("JSON chat REST + WS", () => {
     expect(replay.oldestSeq).toBeUndefined();
     expect(replay.hasMore).toBeUndefined();
   });
+
+  it("1.T5 — message_generated event persisted while no chat:open stream open appears in chat:replay", async () => {
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+
+    // Ensure the agent is registered (lazy-create via POST /chat or by accessing registry).
+    const turnRes = await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "hi" } });
+    expect(turnRes.statusCode).toBe(202);
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    // Emit a system event AFTER the turn (no chat:open stream is open during this call).
+    const agent = jsonAgentRegistry.get(SESSION_ID);
+    expect(agent).toBeDefined();
+    agent!.emitSystemEvent({
+      subagentId: "child-replay",
+      subagentName: "replayer",
+      subagentState: "waiting_for_human",
+      text: "replayer is waiting for your reply",
+    });
+
+    // Now open chat:open — the event must appear in the replay.
+    const replay = await new Promise<{ events: NormalizedEvent[] }>((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const t = setTimeout(() => reject(new Error("no replay")), 5000);
+      ws.on("open", () => ws.send(JSON.stringify({ type: "chat:open", sessionId: SESSION_ID })));
+      ws.on("message", (data: Buffer) => {
+        const m = JSON.parse(data.toString("utf8"));
+        if (m.type === "chat:replay") {
+          clearTimeout(t);
+          ws.close();
+          resolve(m);
+        }
+      });
+      ws.on("error", reject);
+    });
+
+    const sysEvt = replay.events.find((e) => e.kind === "message_generated");
+    expect(sysEvt).toBeDefined();
+    expect(sysEvt?.subagentId).toBe("child-replay");
+    expect(sysEvt?.text).toBe("replayer is waiting for your reply");
+  });
 });

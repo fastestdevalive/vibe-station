@@ -953,3 +953,46 @@ describe("m10 — MessageList threads `commands` through to the fork editor's Qu
   });
 });
 
+describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
+  it("4.T1 — message_generated event produces a system_event RenderItem with the event's text", () => {
+    const items = groupEvents([
+      userEvent("t1", "do something"),
+      {
+        id: "sg1",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "message_generated",
+        text: "subagent-abc is waiting for your input",
+        subagentId: "abc",
+        subagentName: "subagent-abc",
+        subagentState: "waiting_for_human",
+      },
+    ]);
+    const sysEvents = items.filter((i) => i.type === "system_event");
+    expect(sysEvents).toHaveLength(1);
+    expect((sysEvents[0] as { text: string }).text).toBe("subagent-abc is waiting for your input");
+  });
+
+  it("4.T2 — message_generated renders a .chat-system-event element in the MessageList", () => {
+    const events: NormalizedEvent[] = [
+      userEvent("t1", "do something"),
+      {
+        id: "sg1",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "message_generated",
+        text: "subagent-abc is waiting for your input",
+        subagentId: "abc",
+        subagentName: "subagent-abc",
+        subagentState: "waiting_for_human",
+      },
+    ];
+    const { container } = render(<MessageList events={events} pending={[]} />);
+    const el = container.querySelector(".chat-system-event");
+    expect(el).toBeTruthy();
+    expect(el!.textContent).toBe("subagent-abc is waiting for your input");
+  });
+});
+
