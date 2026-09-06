@@ -139,10 +139,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }, [api]);
 
-  useEffect(() => {
-    void fetchStatus();
-  }, [fetchStatus]);
-
   // ── QR countdown timer ──────────────────────────────────────────────────────
   useEffect(() => {
     if (countdownRef.current) {
@@ -178,6 +174,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   }, [activeQr]);
 
   // ── Fetch sessions ──────────────────────────────────────────────────────────
+  const isRemoteSessionRef = useRef(false);
   const fetchSessions = useCallback(async () => {
     try {
       const data = await api.listAuthSessions();
@@ -186,6 +183,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setIsRemoteSession(true);
+        isRemoteSessionRef.current = true;
       } else {
         setSessionsError("Failed to load sessions.");
       }
@@ -194,9 +192,28 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }, [api]);
 
+  // ── Poll tunnel + session status ────────────────────────────────────────────
+  // GET /auth/sessions 403s for a tunnel-connected (remote) viewer — once that's
+  // been seen, stop re-requesting it on every tick; tunnel status is always safe
+  // to poll. Also refetches immediately when the tab regains focus, so a status
+  // change made from another device/tab doesn't sit stale for up to POLL_MS.
+  const POLL_MS = 12_000;
   useEffect(() => {
-    void fetchSessions();
-  }, [fetchSessions]);
+    function pollTick() {
+      void fetchStatus();
+      if (!isRemoteSessionRef.current) void fetchSessions();
+    }
+    pollTick(); // initial fetch, replaces the old one-shot effects
+    const interval = setInterval(pollTick, POLL_MS);
+    function onVisibilityChange() {
+      if (document.visibilityState === "visible") pollTick();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [fetchStatus, fetchSessions]);
 
   // ── Open QR overlay ─────────────────────────────────────────────────────────
   async function openQr(type: "local" | "tunnel") {
@@ -214,19 +231,43 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   }
 
   // ── Tunnel toggle ───────────────────────────────────────────────────────────
-  async function handleToggleTunnel() {
+  // Sessions the confirm-before-disable dialog is about to disconnect (Decision 4).
+  // `tunnelLive` — not `!tunnelInvalidated` — is what actually gets revoked server-side:
+  // a password/local-QR session has both flags false and must never be counted here.
+  const [confirmDisableSessions, setConfirmDisableSessions] = useState<AuthSession[] | null>(null);
+
+  async function performDisable() {
+    setConfirmDisableSessions(null);
     setToggling(true);
     setError(null);
     try {
-      if (tunnel.enabled) {
-        await api.disableTunnel();
-        setTunnel({ enabled: false, tunnelUrl: null });
-        // Close QR overlay if it was a tunnel QR
-        setActiveQr((prev) => (prev?.type === "tunnel" ? null : prev));
-      } else {
-        const result = await api.enableTunnel();
-        setTunnel({ enabled: result.enabled, tunnelUrl: result.tunnelUrl });
+      await api.disableTunnel();
+      setTunnel({ enabled: false, tunnelUrl: null });
+      // Close QR overlay if it was a tunnel QR
+      setActiveQr((prev) => (prev?.type === "tunnel" ? null : prev));
+      await fetchSessions(); // revoked sessions drop off the list
+    } catch (err) {
+      setError(errMessage(err, "Failed to toggle tunnel."));
+    } finally {
+      setToggling(false);
+    }
+  }
+
+  async function handleToggleTunnel() {
+    if (tunnel.enabled) {
+      const liveSessions = sessions.filter((s) => s.tunnelLive);
+      if (liveSessions.length > 0) {
+        setConfirmDisableSessions(liveSessions);
+        return;
       }
+      await performDisable();
+      return;
+    }
+    setToggling(true);
+    setError(null);
+    try {
+      const result = await api.enableTunnel();
+      setTunnel({ enabled: result.enabled, tunnelUrl: result.tunnelUrl });
     } catch (err) {
       setError(errMessage(err, "Failed to toggle tunnel."));
     } finally {
@@ -408,6 +449,64 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     );
   }
 
+  // ── Confirm-before-disable overlay (Decision 4/CUJ 2) ───────────────────────
+  function renderConfirmDisableDialog() {
+    if (!confirmDisableSessions) return null;
+    return createPortal(
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 1000,
+          background: "rgba(0,0,0,0.65)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+        onClick={() => setConfirmDisableSessions(null)}
+      >
+        <div
+          style={{
+            background: "var(--bg-card)",
+            border: "var(--border-width) solid var(--border-default)",
+            borderRadius: "var(--radius-md)",
+            padding: "var(--space-5)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-3)",
+            maxWidth: 320,
+            width: "100%",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+            Disable remote access?
+          </div>
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+            This will disconnect {confirmDisableSessions.length} remote session
+            {confirmDisableSessions.length !== 1 ? "s" : ""}:{" "}
+            {confirmDisableSessions
+              .map((s) => s.label ?? (s.createdVia === "qr" ? "Mobile" : "Desktop"))
+              .join(", ")}
+          </div>
+          <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              onClick={() => setConfirmDisableSessions(null)}
+            >
+              Cancel
+            </button>
+            <button type="button" className="btn btn--danger" onClick={() => void performDisable()}>
+              Disable
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   // ── Remote session guard ────────────────────────────────────────────────────
   if (isRemoteSession) {
     return (
@@ -438,6 +537,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {renderQrOverlay()}
+      {renderConfirmDisableDialog()}
 
       {/* Two cards side by side */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
@@ -601,6 +701,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                     border: "var(--border-width) solid var(--border-default)",
                     borderRadius: "var(--radius-md)",
                     background: "var(--bg-card)",
+                    opacity: session.tunnelInvalidated ? 0.55 : 1,
                   }}
                 >
                   <div style={{ minWidth: 0 }}>
@@ -623,13 +724,17 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                       <span
                         style={{
                           fontSize: "var(--font-size-xs)",
-                          color: "var(--fg-muted)",
+                          color: session.tunnelInvalidated ? "var(--fg-danger, #ef4444)" : "var(--fg-muted)",
                           background: "var(--bg-input)",
                           borderRadius: "var(--radius-sm)",
                           padding: "1px 6px",
                         }}
                       >
-                        {session.createdVia === "qr" ? "QR" : "Password"}
+                        {session.tunnelInvalidated
+                          ? "tunnel invalidated"
+                          : session.createdVia === "qr"
+                            ? "QR"
+                            : "Password"}
                       </span>
                       {session.isCurrent && (
                         <span

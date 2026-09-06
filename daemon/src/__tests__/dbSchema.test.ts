@@ -162,3 +162,79 @@ describe("ensureSchema — hiddenAt column (hide-worktrees)", () => {
     db.close();
   });
 });
+
+describe("ensureSchema — tunnel_state table + auth_sessions.tunnelUrl column (tunnel-persistence)", () => {
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-dbschema-test-"));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("fresh database: tunnel_state table exists and auth_sessions has tunnelUrl", () => {
+    const db = new Database(join(tempDir, "fresh.db"));
+    ensureSchema(db);
+
+    const tunnelStateTable = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tunnel_state'")
+      .get();
+    expect(tunnelStateTable).toBeDefined();
+
+    const authSessionsColumns = db.pragma("table_info(auth_sessions)") as { name: string }[];
+    expect(authSessionsColumns.some((c) => c.name === "tunnelUrl")).toBe(true);
+    db.close();
+  });
+
+  it("already-migrated database (pre-existing auth_sessions table without tunnelUrl) gets it backfilled via ALTER TABLE, preserving existing rows", () => {
+    const dbPath = join(tempDir, "legacy.db");
+    const db = new Database(dbPath);
+
+    // Simulate an `auth_sessions` table shape from before this feature existed.
+    db.exec(`
+      CREATE TABLE auth_sessions (
+        nonce      TEXT PRIMARY KEY,
+        userId     TEXT NOT NULL DEFAULT 'local',
+        createdAt  TEXT NOT NULL,
+        issuedAt   TEXT NOT NULL,
+        expiresAt  TEXT NOT NULL,
+        lastSeenAt TEXT NOT NULL,
+        createdVia TEXT NOT NULL CHECK (createdVia IN ('password','qr')),
+        label      TEXT,
+        userAgent  TEXT,
+        createdIp  TEXT,
+        revokedAt  TEXT
+      );
+    `);
+    db.prepare(
+      `INSERT INTO auth_sessions (nonce, createdAt, issuedAt, expiresAt, lastSeenAt, createdVia)
+       VALUES ('n-old', '1', '1', '999999999999', '1', 'password')`,
+    ).run();
+
+    let columns = db.pragma("table_info(auth_sessions)") as { name: string }[];
+    expect(columns.some((c) => c.name === "tunnelUrl")).toBe(false);
+
+    ensureSchema(db);
+
+    columns = db.pragma("table_info(auth_sessions)") as { name: string }[];
+    expect(columns.some((c) => c.name === "tunnelUrl")).toBe(true);
+
+    const row = db.prepare("SELECT * FROM auth_sessions WHERE nonce = ?").get("n-old") as {
+      nonce: string;
+      tunnelUrl: string | null;
+    };
+    expect(row.nonce).toBe("n-old");
+    expect(row.tunnelUrl).toBeNull();
+
+    // Calling ensureSchema again (next boot, both the table and the column already present) must not error.
+    expect(() => ensureSchema(db)).not.toThrow();
+    db.close();
+  });
+
+  it("calling ensureSchema twice against a fresh DB does not error (idempotent CREATE TABLE IF NOT EXISTS)", () => {
+    const db = new Database(join(tempDir, "double-fresh.db"));
+    ensureSchema(db);
+    expect(() => ensureSchema(db)).not.toThrow();
+    db.close();
+  });
+});

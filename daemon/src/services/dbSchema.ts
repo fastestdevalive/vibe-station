@@ -121,6 +121,18 @@ export function ensureSchema(db: Database): void {
       revokedAt  TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiresAt ON auth_sessions(expiresAt);
+
+    -- tunnel-persistence: single-row table tracking the cloudflared quick-tunnel's
+    -- persisted intent + last-known process across daemon restarts. id is always 1.
+    -- See daemon/src/state/tunnel-store.ts.
+    CREATE TABLE IF NOT EXISTS tunnel_state (
+      id         INTEGER PRIMARY KEY,
+      enabled    INTEGER NOT NULL DEFAULT 0,
+      currentUrl TEXT,
+      currentPid INTEGER,
+      startedAt  TEXT,
+      port       INTEGER
+    );
   `);
 
   // `CREATE TABLE IF NOT EXISTS` above is a no-op against a `worktrees` table
@@ -168,6 +180,12 @@ export function ensureSchema(db: Database): void {
   // resume id (agentChatId keeps meaning "native id" unconditionally). NULL
   // for every plugin on Option A and for every session created before ACP.
   addColumnIfMissing(db, "sessions", "acpSessionId", "TEXT");
+  // tunnelUrl (tunnel-persistence) — the Cloudflare quick-tunnel URL that was
+  // live when a QR-authenticated session was created, or NULL for a
+  // password/local-network-QR session. Lets GET /auth/sessions compute
+  // tunnelInvalidated/tunnelLive by comparing against the current live tunnel
+  // URL — see daemon/src/routes/mobileAuth.ts.
+  addColumnIfMissing(db, "auth_sessions", "tunnelUrl", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */
