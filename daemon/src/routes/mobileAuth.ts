@@ -89,7 +89,7 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
         closeConnectionsByNonce(row.nonce, 4403, "Tunnel disabled");
       }
     }
-    cloudflared.disable();
+    cloudflared.disable(tunnelPort);
     return reply.send({ enabled: false });
   });
 
