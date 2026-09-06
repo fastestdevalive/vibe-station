@@ -296,13 +296,13 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
     const currentNonce = parseSessionCookie(cookies[COOKIE_NAME] ?? "")?.nonce ?? null;
     const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
     const isLoopback = loopbackAddresses.has(req.ip ?? "");
-    const sessions = sessionStore.list().map((row) => ({
-      ...row,
-      isCurrent:
+    const sessions = sessionStore.list().map((row) => {
+      const isCurrent =
         currentNonce !== null
           ? row.nonce === currentNonce
-          : isLoopback && loopbackAddresses.has(row.createdIp ?? ""),
-    }));
+          : isLoopback && loopbackAddresses.has(row.createdIp ?? "");
+      return { ...row, isCurrent };
+    });
     return reply.send({ sessions });
   });
 

@@ -77,6 +77,26 @@ export function needsBump(nonce: string): boolean {
   return Date.now() - cached.lastSeenAt > 60 * 60 * 1000;
 }
 
+const TOUCH_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Update lastSeenAt only — does not touch expiry. Throttled to one DB write
+ * per TOUCH_THROTTLE_MS so every authenticated request can call this cheaply.
+ */
+export function touchLastSeen(nonce: string): void {
+  const now = Date.now();
+  const cached = cache.get(nonce);
+  if (cached && now - cached.lastSeenAt < TOUCH_THROTTLE_MS) return;
+  try {
+    getDb()
+      .prepare("UPDATE auth_sessions SET lastSeenAt=? WHERE nonce=?")
+      .run(String(now), nonce);
+    if (cached) cache.set(nonce, { ...cached, lastSeenAt: now });
+  } catch {
+    // best-effort
+  }
+}
+
 /** Slide the session expiry window forward and re-issue the HMAC clock. */
 export function bump(nonce: string): void {
   const now = Date.now();

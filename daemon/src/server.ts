@@ -26,7 +26,7 @@ import {
   parseSessionCookie,
   generateSessionCookieWithNonce,
 } from "./auth.js";
-import { isLive, needsBump, bump } from "./state/auth-session-store.js";
+import { isLive, needsBump, bump, touchLastSeen } from "./state/auth-session-store.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -167,6 +167,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
       if (!isLive(parsed.nonce)) return reply.status(401).send({ error: "Session expired or revoked." });
 
       // Sliding bump: re-issue cookie when lastSeenAt is >1 h ago to reset HMAC TTL clock.
+      // Must run before touchLastSeen — bump checks cache.lastSeenAt and touchLastSeen resets it.
       if (needsBump(parsed.nonce)) {
         bump(parsed.nonce);
         const newCookie = generateSessionCookieWithNonce(token, parsed.nonce);
@@ -176,6 +177,10 @@ export async function buildServer(opts: BuildServerOptions = {}) {
           : `HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
         void reply.header("Set-Cookie", `${COOKIE_NAME}=${newCookie}; ${attrs}`);
       }
+
+      // Update lastSeenAt on every request (throttled to once per 5 min in the store).
+      // Runs after bump so needsBump's cache read is not clobbered by the touch.
+      touchLastSeen(parsed.nonce);
     });
   }
 

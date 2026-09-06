@@ -631,6 +631,19 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                       >
                         {session.createdVia === "qr" ? "QR" : "Password"}
                       </span>
+                      {session.isCurrent && (
+                        <span
+                          style={{
+                            fontSize: "var(--font-size-xs)",
+                            color: "var(--fg-muted)",
+                            background: "var(--bg-input)",
+                            borderRadius: "var(--radius-sm)",
+                            padding: "1px 6px",
+                          }}
+                        >
+                          this session
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
                       Last seen {formatRelative(session.lastSeenAt)}
