@@ -1,0 +1,33 @@
+[package]
+name = "vibe-station-desktop"
+version = "0.1.0"
+description = "vibe-station desktop shell"
+authors = ["Gaurav Bhola"]
+license = "MIT"
+repository = ""
+default-run = "vibe-station-desktop"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "vibe-station-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+regex = "1"
+dirs-next = "2"
+
+[features]
+# This feature is used for production builds or when a dev server is not specified,
+# DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]

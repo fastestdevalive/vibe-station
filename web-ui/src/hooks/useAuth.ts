@@ -24,10 +24,32 @@ export function useAuth(): AuthState {
     if (checkedRef.current) return;
     checkedRef.current = true;
 
-    void api.checkAuth().then((ok: boolean) => {
+    void (async () => {
+      // In the Tauri desktop shell the token is injected before page JS runs.
+      // Auto-login so the user never sees the login screen.
+      const injectedToken = (window as unknown as Record<string, unknown>).__VST_TOKEN__;
+      if (typeof injectedToken === "string" && injectedToken.length > 0) {
+        const ok = await api.checkAuth();
+        if (ok) {
+          setAuthed(true);
+          setLoading(false);
+          return;
+        }
+        // Session cookie missing or expired — use the injected token to log in.
+        try {
+          await api.login(injectedToken);
+          setAuthed(true);
+          setLoading(false);
+          return;
+        } catch {
+          // Fall through to normal check — token may be stale.
+        }
+      }
+
+      const ok = await api.checkAuth();
       setAuthed(ok);
       setLoading(false);
-    });
+    })();
   }, []);
 
   // Listen for WS 4401 close — session expired mid-use

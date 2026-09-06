@@ -64,6 +64,21 @@ export function registerDoctor(program: Command): void {
         console.log(chalk.yellow("  →"), `Install: ${installCmd}`);
       }
 
+      const cloudflaredFound = check("cloudflared", () => {
+        try {
+          execSync("which cloudflared", { stdio: "pipe" });
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      if (!cloudflaredFound) {
+        console.log(
+          chalk.yellow("  →"),
+          "brew install cloudflared  OR  https://developers.cloudflare.com/cloudflared/",
+        );
+      }
+
       allOk = check("Daemon is running", () => {
         const url = getDaemonUrl();
         if (!url) {

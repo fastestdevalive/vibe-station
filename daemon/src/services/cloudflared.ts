@@ -70,7 +70,7 @@ function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
     // bookkeeping needed), plus the log never grows unbounded across restarts.
     const logFd = openSync(logPath, "w");
 
-    const child = spawn("cloudflared", ["tunnel", "--url", `http://127.0.0.1:${port}`], {
+    const child = spawn(process.env.VST_CLOUDFLARED_BIN ?? "cloudflared", ["tunnel", "--url", `http://127.0.0.1:${port}`], {
       // Piped stdio's read end is owned by the parent — once the daemon exits,
       // the child's next write raises EPIPE. Redirecting to a log file lets
       // the child (detached + unref'd) outlive the daemon without depending
