@@ -1,0 +1,55 @@
+mode: verifying
+awaiting_phase: verify
+
+summary: |
+  All 6 phases of the tauri-desktop-shell feature are implemented.
+
+  What was built:
+  - scripts/build-daemon-binary.sh — esbuild + @yao-pkg/pkg pipeline that
+    bundles cli/dist/daemon/main.js into a standalone binary for macOS/Linux.
+    Accepts --target <rust-triple>, maps to pkg's platform format, copies
+    *.node native addons alongside.
+  - scripts/download-cloudflared.sh — downloads the cloudflared binary for
+    a given target triple from GitHub releases into
+    apps/desktop/src-tauri/binaries/.
+  - daemon/src/services/cloudflared.ts line 43 — spawn() now uses
+    process.env.VST_CLOUDFLARED_BIN ?? "cloudflared" so the desktop app
+    can inject the bundled binary path.
+  - cli/src/commands/doctor.ts — cloudflared check added after the bun check,
+    with install hint on failure.
+  - apps/desktop/ — full Tauri v2 app scaffold:
+      src-tauri/Cargo.toml, build.rs, tauri.conf.json, entitlements.mac.plist
+      src/main.rs — detects/spawns daemon, injects __VST_PORT__ and
+                    data-tauri-os, hides on close, registers tray
+      src/daemon.rs — detect_running_daemon() + spawn_daemon() using Tauri
+                      sidecar API and config.json polling
+      src/tray.rs — "Open" + "Quit completely" menu items, SIGTERM on quit
+  - pnpm-workspace.yaml — apps/desktop added to workspace packages list
+  - web-ui/src/components/layout/WindowControls.tsx — Linux-only window
+    controls (minimize/maximize/hide) using __TAURI_INTERNALS__.invoke;
+    no @tauri-apps/api static import so web-ui builds cleanly in browser
+  - web-ui/src/components/layout/TopBar.tsx — data-tauri-drag-region on
+    header + row, <WindowControls /> in end section of all layout modes
+  - web-ui/src/styles/workspace.css — macOS traffic-light padding and
+    window-controls button styles
+  - .github/workflows/desktop-build.yml — 3-job matrix build (aarch64-mac,
+    x86_64-mac, x86_64-linux) with daemon binary build, cloudflared download,
+    tauri-action build, and artifact upload
+
+  Phase 1.3 (smoke-test) was not executed — Rust, Node 24, and @yao-pkg/pkg
+  are not available in this worktree sandbox. All scripts are authored; a
+  local run on a machine with full tooling is required for final validation.
+
+what_reviewer_should_check:
+  - Rust source compiles: cargo build in apps/desktop/src-tauri with Tauri v2
+  - Tauri v2 API shapes: verify tauri.conf.json schema matches Tauri v2 (not v1)
+    in particular: app.windows[], app.macOS, bundle.externalBin
+  - daemon.rs sidecar invocation: the ShellExt sidecar API and event loop pattern
+    is correct for tauri-plugin-shell v2
+  - tray.rs: TrayIconBuilder and menu API match Tauri v2 (changed from v1's
+    SystemTray/SystemTrayMenu)
+  - WindowControls.tsx: verify __TAURI_INTERNALS__.invoke("plugin:window|minimize")
+    etc. are the correct v2 command names (or adjust to use @tauri-apps/api if
+    the command strings differ)
+  - CI workflow: tauri-apps/tauri-action@v0 version and artifact paths
+  - Smoke-test the build scripts on a machine with Rust + Node 24 installed

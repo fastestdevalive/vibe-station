@@ -179,8 +179,8 @@ export function TopBar({
   // Login mode — minimal header, no sidebar or workspace controls
   if (layoutMode === "login") {
     return (
-      <header className="top-bar">
-        <div className="top-bar__row">
+      <header className="top-bar" data-tauri-drag-region>
+        <div className="top-bar__row" data-tauri-drag-region>
           <span
             className="top-bar__brand"
             style={{
@@ -222,8 +222,8 @@ export function TopBar({
   const inCanvasMode = paneLayoutMode === "workspace";
 
   return (
-    <header className="top-bar">
-      <div className="top-bar__row">
+    <header className="top-bar" data-tauri-drag-region>
+      <div className="top-bar__row" data-tauri-drag-region>
       {isMobile && layoutMode === "settings" && onSettingsBack ? (
         <button
           type="button"

@@ -4825,3 +4825,16 @@ a.dashboard-card.dashboard-card--session {
 .settings-tabs-scroll::-webkit-scrollbar {
   display: none;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Tauri desktop shell — drag region & macOS traffic-light clearance.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/* macOS overlay title bar: shift the top-bar content right to clear the
+ * traffic lights (position x:10 y:10, ~75px wide). We set this via
+ * window.__TAURI_OS__ injected by main.rs; falls back to the UA-based
+ * check done by WindowControls.tsx. */
+body[data-tauri-os="macos"] .top-bar {
+  padding-left: 80px;
+}
+
