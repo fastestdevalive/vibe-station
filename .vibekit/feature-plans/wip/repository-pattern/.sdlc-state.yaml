@@ -8,7 +8,7 @@ subfeatures:
   - id: root
     origin: planned
     spawned_from: null
-    mode: implementing
+    mode: done
     last_completed: "4.4"
     awaiting_phase: implement
     awaiting_artifact: .vibekit/feature-plans/wip/repository-pattern/plan-repository-pattern.md
@@ -16,4 +16,4 @@ subfeatures:
     superseded_reason: null
     parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: pending
+    commit: 9f7a136
