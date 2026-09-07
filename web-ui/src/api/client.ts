@@ -1186,6 +1186,10 @@ export function createClientApi() {
       return data.sessions;
     },
 
+    async revokeAuthSession(tokenId: string): Promise<void> {
+      await apiFetch(`${baseUrl()}/auth/sessions/${encodeURIComponent(tokenId)}/revoke`, { method: "POST" });
+    },
+
     async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> {
       const res = await apiFetch(`${baseUrl()}/auth/revoke-browser`, { method: "POST" });
       if (!res.ok) throw new Error("Failed to revoke browser sessions");

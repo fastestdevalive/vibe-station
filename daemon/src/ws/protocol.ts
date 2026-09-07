@@ -533,12 +533,13 @@ const SessionForkEvent = z.object({
 
 const RemoteConnectedEvent = z.object({
   type: z.literal("remote:connected"),
-  session: z.object({ id: z.string(), scope: z.string(), connectedAt: z.number() }),
+  session: z.object({ tokenId: z.string(), scope: z.string(), connections: z.number(), issuedAt: z.number(), lastSeenAt: z.number(), expiresAt: z.number().optional() }),
 });
 
 const RemoteDisconnectedEvent = z.object({
   type: z.literal("remote:disconnected"),
-  sessionId: z.string(),
+  tokenId: z.string(),
+  connections: z.number(),
 });
 
 export const ServerMessage = z.discriminatedUnion("type", [

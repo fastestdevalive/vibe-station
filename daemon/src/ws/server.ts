@@ -35,12 +35,19 @@ function parseCookieValue(cookieHeader: string, name: string): string {
   return "";
 }
 
+type WSAuthResult = {
+  scope: TokenScope | null;
+  tokenId: string | null;
+  issuedAt: number | null;
+  expiresAt: number | null;
+};
+
 /**
  * Authenticate a WebSocket upgrade request.
- * Returns the token scope on success, null for noAuth, or false if rejected.
+ * Returns auth metadata on success, or false if rejected.
  */
-function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): TokenScope | null | false {
-  if (!authState) return null; // auth disabled (dev/test)
+function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): WSAuthResult | false {
+  if (!authState) return { scope: null, tokenId: null, issuedAt: null, expiresAt: null };
 
   // Same loopback bypass as the HTTP guard in server.ts.
   // The local desktop UI connects from loopback and never has a cookie or Bearer token,
@@ -48,7 +55,7 @@ function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): 
   const viaTunnel = !!req.headers["cf-connecting-ip"];
   const ip = req.socket.remoteAddress ?? "";
   if (!viaTunnel && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1")) {
-    return null; // trusted loopback — null means "no scope restriction"
+    return { scope: null, tokenId: null, issuedAt: null, expiresAt: null };
   }
 
   const auth = req.headers.authorization;
@@ -62,7 +69,14 @@ function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): 
 
   const result = verifyToken(token, authState);
   if (!result.ok) return false;
-  return result.payload.scope;
+
+  const tokenId = token.slice(0, token.lastIndexOf("."));
+  return {
+    scope: result.payload.scope,
+    tokenId,
+    issuedAt: result.payload.iat,
+    expiresAt: result.payload.exp ?? null,
+  };
 }
 
 /**
@@ -81,7 +95,10 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
     }
 
     const conn = new WSConnection(socket);
-    conn.scope = authResult; // null for noAuth; TokenScope string for authenticated connections
+    conn.scope = authResult.scope;
+    conn.tokenId = authResult.tokenId;
+    conn.tokenIssuedAt = authResult.issuedAt;
+    conn.tokenExpiresAt = authResult.expiresAt;
 
     // Register connection for broadcasts
     registerConnection(conn);
@@ -108,6 +125,7 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
     const backpressureTimer = setInterval(checkBackpressure, 5000);
 
     socket.on("message", async (data: Buffer) => {
+      conn.lastSeenAt = Date.now();
       try {
         const text = data.toString("utf8");
         const json = JSON.parse(text);

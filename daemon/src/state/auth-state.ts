@@ -10,13 +10,21 @@
 export interface AuthState {
   daemonToken: string;
   browserEpoch: number;
+  /** In-memory token revocation set. Resets on daemon restart. */
+  revokedTokenIds: Set<string>;
 }
 
 let _state: AuthState | null = null;
 
 /** Load the auth singleton at daemon startup. Must be called before getAuthState(). */
 export function loadAuthState(daemonToken: string, browserEpoch: number): void {
-  _state = { daemonToken, browserEpoch };
+  _state = { daemonToken, browserEpoch, revokedTokenIds: new Set() };
+}
+
+/** Revoke a specific token by its payloadB64 id. Future verifyToken calls will reject it. */
+export function revokeTokenId(tokenId: string): void {
+  if (!_state) throw new Error("Auth state not initialised");
+  _state.revokedTokenIds.add(tokenId);
 }
 
 /** Get the current auth state. Throws if loadAuthState() has not been called. */
