@@ -596,7 +596,21 @@ export type WSEvent =
   | {
       type: "system:error";
       message: string;
+    }
+  | {
+      type: "remote:connected";
+      session: { id: string; scope: string; connectedAt: number };
+    }
+  | {
+      type: "remote:disconnected";
+      sessionId: string;
     };
+
+export interface AuthSession {
+  id: string;
+  scope: string;
+  connectedAt: number;
+}
 
 export type DiffScope = "local" | "branch" | "none";
 

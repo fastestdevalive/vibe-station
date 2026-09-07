@@ -106,8 +106,8 @@ fn main() {
 /// token might contain). The IIFE sets data-tauri-os after DOMContentLoaded
 /// because the init script runs before document.body exists.
 ///
-/// NOTE: __VST_PORT__ is injected for future use but the web-ui api client
-/// does not yet read it (it uses VITE_DAEMON_URL or relative /api).
+/// NOTE: __VST_PORT__ is read by baseUrl() in web-ui/src/api/client.ts to
+/// build an absolute daemon URL when running inside the Tauri shell.
 fn build_init_script(port: u16, token: &str, os_name: &str) -> String {
     let token_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
     format!(

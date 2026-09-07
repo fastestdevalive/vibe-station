@@ -33,7 +33,7 @@ function tryPort(port: number): Promise<number | null> {
   return new Promise((resolve) => {
     const srv = createServer();
     srv.once("error", () => resolve(null));
-    srv.listen(port, "127.0.0.1", () => {
+    srv.listen(port, "0.0.0.0", () => {
       srv.close(() => resolve(port));
     });
   });
@@ -247,8 +247,8 @@ async function main() {
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
 
   try {
-    await app.listen({ port, host: "127.0.0.1" });
-    console.log(`vst daemon listening on http://127.0.0.1:${port}`);
+    await app.listen({ port, host: "0.0.0.0" });
+    console.log(`vst daemon listening on http://0.0.0.0:${port}`);
   } catch (err) {
     console.error("Failed to start daemon:", err);
     await releaseLock();

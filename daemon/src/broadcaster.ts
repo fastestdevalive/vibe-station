@@ -10,12 +10,17 @@ import type { TokenScope } from "./types.js";
 
 const connections = new Set<WSConnection>();
 
+const REMOTE_SCOPES: ReadonlySet<TokenScope> = new Set(["browser", "mobile"]);
+
 /**
  * Register a connection for broadcasts.
  * Called when a WS connection opens.
  */
 export function registerConnection(conn: WSConnection): void {
   connections.add(conn);
+  if (conn.scope && REMOTE_SCOPES.has(conn.scope)) {
+    broadcastAll({ type: "remote:connected", session: { id: conn.id, scope: conn.scope, connectedAt: conn.connectedAt } });
+  }
 }
 
 /**
@@ -24,6 +29,20 @@ export function registerConnection(conn: WSConnection): void {
  */
 export function unregisterConnection(conn: WSConnection): void {
   connections.delete(conn);
+  if (conn.scope && REMOTE_SCOPES.has(conn.scope)) {
+    broadcastAll({ type: "remote:disconnected", sessionId: conn.id });
+  }
+}
+
+/** Return a snapshot of currently connected remote (browser/mobile) sessions. */
+export function getRemoteSessions(): Array<{ id: string; scope: string; connectedAt: number }> {
+  const result: Array<{ id: string; scope: string; connectedAt: number }> = [];
+  for (const conn of connections) {
+    if (conn.scope && REMOTE_SCOPES.has(conn.scope)) {
+      result.push({ id: conn.id, scope: conn.scope, connectedAt: conn.connectedAt });
+    }
+  }
+  return result;
 }
 
 /**

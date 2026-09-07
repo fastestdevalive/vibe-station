@@ -39,6 +39,7 @@ export class WSConnection {
   fileWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   treeWatches: Map<string, unknown> = new Map(); // key -> FSWatcher (public for handlers)
   readonly id: string; // Unique identifier for this connection
+  readonly connectedAt: number; // Unix ms — when this connection was established
   private sessionLocks: Map<string, Promise<void>> = new Map(); // sessionId -> tail of promise chain
   /**
    * Diagnostic flag (mobile double-text investigation). Set once a client sends
@@ -53,6 +54,7 @@ export class WSConnection {
 
   constructor(private ws: WebSocket) {
     this.id = Math.random().toString(36).slice(2);
+    this.connectedAt = Date.now();
   }
 
   get socket(): WebSocket {

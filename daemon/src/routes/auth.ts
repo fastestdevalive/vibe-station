@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { COOKIE_NAME } from "../auth.js";
 import { bumpBrowserEpoch } from "../state/auth-state.js";
-import { closeConnectionsByScope } from "../broadcaster.js";
+import { closeConnectionsByScope, getRemoteSessions } from "../broadcaster.js";
 import type { TokenPayload } from "../types.js";
 
 export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Promise<void>): void {
@@ -22,6 +22,16 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
     // Loopback callers (no authPayload set) always pass — they are on the machine.
     if (!authPayload) return reply.send({ ok: true });
     return reply.send({ ok: true });
+  });
+
+  // GET /auth/sessions — list currently connected remote (browser/mobile) sessions.
+  // Returns 403 for requests arriving via the Cloudflare tunnel so that browser
+  // clients see a clear "desktop only" signal rather than a generic error.
+  app.get("/auth/sessions", async (req, reply) => {
+    if (req.headers["cf-connecting-ip"]) {
+      return reply.status(403).send({ error: "DESKTOP_ONLY" });
+    }
+    return reply.send({ sessions: getRemoteSessions() });
   });
 
   // POST /auth/revoke-browser — bump browserEpoch to invalidate all browser tokens.

@@ -140,16 +140,14 @@ export async function buildServer(opts: BuildServerOptions = {}) {
         // Origin: http://localhost:5173 which this check rejects — see Open Question 2.
         const origin = req.headers.origin;
         if (origin) {
-          const allowed = [
-            `http://localhost:${opts.port}`,
-            `http://127.0.0.1:${opts.port}`,
-            // Vite dev server proxies POST requests with its own origin header.
-            // Only allowed in non-production environments.
-            ...(process.env.NODE_ENV !== "production"
-              ? ["http://localhost:5173", "http://127.0.0.1:5173"]
-              : []),
-          ];
-          if (!allowed.includes(origin)) {
+          // Accept any localhost origin (any port) — the loopback check above
+          // already constrains us to code running on this machine, so port
+          // specificity adds nothing. Also accept Tauri WebView origins
+          // (tauri://localhost, http://tauri.localhost) used by the desktop shell.
+          const isLocalhostOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+          const isTauriOrigin = origin === "tauri://localhost" ||
+            /^https?:\/\/tauri\.localhost$/.test(origin);
+          if (!isLocalhostOrigin && !isTauriOrigin) {
             return reply.status(403).send({ error: "Forbidden." });
           }
         }

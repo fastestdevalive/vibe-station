@@ -531,6 +531,16 @@ const SessionForkEvent = z.object({
   supersededTurnIds: z.array(z.string()),
 });
 
+const RemoteConnectedEvent = z.object({
+  type: z.literal("remote:connected"),
+  session: z.object({ id: z.string(), scope: z.string(), connectedAt: z.number() }),
+});
+
+const RemoteDisconnectedEvent = z.object({
+  type: z.literal("remote:disconnected"),
+  sessionId: z.string(),
+});
+
 export const ServerMessage = z.discriminatedUnion("type", [
   // Per-session events
   SessionCreatedEvent,
@@ -562,6 +572,9 @@ export const ServerMessage = z.discriminatedUnion("type", [
   SessionMessageEvent,
   SessionMetaEvent,
   SessionForkEvent,
+  // Remote session presence (desktop only)
+  RemoteConnectedEvent,
+  RemoteDisconnectedEvent,
   // System
   PongMessage,
   SystemErrorEvent,

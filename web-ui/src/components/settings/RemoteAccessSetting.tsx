@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import type { ApiInstance } from "@/api";
-import type { TunnelState, MobileQrResponse, LocalQrResponse } from "@/api/types";
+import type { AuthSession, TunnelState, MobileQrResponse, LocalQrResponse } from "@/api/types";
 import { ApiError } from "@/api/errors";
 
 interface RemoteAccessSettingProps {
@@ -101,6 +101,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Remote sessions ─────────────────────────────────────────────────────────
+  const [sessions, setSessions] = useState<AuthSession[]>([]);
+  const [isRemoteSession, setIsRemoteSession] = useState(false);
+
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
   const [qrLoading, setQrLoading] = useState<"local" | "tunnel" | null>(null);
@@ -126,9 +130,39 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }, [api]);
 
+  // ── Fetch remote sessions ───────────────────────────────────────────────────
+  const fetchSessions = useCallback(async () => {
+    try {
+      const list = await api.listAuthSessions();
+      setSessions(list);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setIsRemoteSession(true);
+      }
+      // non-403 errors: silently ignore (session list is non-critical)
+    }
+  }, [api]);
+
   useEffect(() => {
     void fetchStatus();
-  }, [fetchStatus]);
+    void fetchSessions();
+  }, [fetchStatus, fetchSessions]);
+
+  // ── Live session presence via WS ────────────────────────────────────────────
+  useEffect(() => {
+    const offConnected = api.on("remote:connected", (e) => {
+      if (e.type !== "remote:connected") return;
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === e.session.id)) return prev;
+        return [...prev, e.session];
+      });
+    });
+    const offDisconnected = api.on("remote:disconnected", (e) => {
+      if (e.type !== "remote:disconnected") return;
+      setSessions((prev) => prev.filter((s) => s.id !== e.sessionId));
+    });
+    return () => { offConnected(); offDisconnected(); };
+  }, [api]);
 
   // ── QR countdown timer ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -366,6 +400,14 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     );
   }
 
+  if (isRemoteSession) {
+    return (
+      <div style={{ padding: "var(--space-5)", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
+        Remote session management can only be done from the primary desktop session.
+      </div>
+    );
+  }
+
   // Truncate tunnel URL for display
   const truncatedUrl = tunnel.tunnelUrl
     ? tunnel.tunnelUrl.replace(/^https?:\/\//, "").slice(0, 40) +
@@ -473,6 +515,36 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           {error ?? qrError}
         </div>
       )}
+
+      {/* Active remote sessions */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+        <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+          Active sessions
+        </div>
+        {sessions.length === 0 ? (
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+            No remote sessions connected.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+            {sessions.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  fontSize: "var(--font-size-xs)",
+                  color: "var(--fg-muted)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "var(--space-2)",
+                }}
+              >
+                <span style={{ color: "var(--accent-color, var(--fg-primary))", fontWeight: 600 }}>●</span>
+                {s.scope} · connected {new Date(s.connectedAt).toLocaleTimeString()}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Revoke all browser sessions */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
