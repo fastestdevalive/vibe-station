@@ -17,7 +17,12 @@ import { configPath, vstHome } from "./paths.js";
 interface MainConfig {
   pid?: number;
   port?: number;
-  token?: string;
+  /** Pre-minted scope:cli token written to config so the CLI can read it. daemonToken is never written. */
+  cliToken?: string;
+  /** Pre-minted scope:tauri token written to config so the desktop webview can auto-authenticate. */
+  tauriToken?: string;
+  /** Browser-session revocation counter. Persisted so revoke-all survives restart. */
+  browserEpoch?: number;
   startedAt?: string;
 }
 

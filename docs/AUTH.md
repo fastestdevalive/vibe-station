@@ -120,6 +120,28 @@ Requests arriving via the Cloudflare tunnel (`CF-Connecting-IP` header present) 
 
 ---
 
+## Token lifecycle (how POST /auth/login works)
+
+`daemonToken` is the master secret — a 32-byte hex string generated once at daemon startup and persisted in `~/.vibe-station/config.json` (mode 0600). It never leaves the server.
+
+`POST /auth/login` does **not** issue a new bearer token. It uses `daemonToken` as the HMAC signing key:
+
+```
+cookie value = issuedAt + "." + randomNonce + "." + HMAC-SHA256(issuedAt + "." + nonce, daemonToken)
+```
+
+The cookie is self-validating: on every request the daemon recomputes the HMAC from the cookie's own `issuedAt` and `nonce` fields. No database read is needed to authenticate — SQLite is consulted only to check revocation (is this nonce still live?).
+
+If `daemonToken` rotates (daemon restart with a new config), all existing cookies immediately become invalid because the HMAC key changed.
+
+**Tauri desktop shell flow:**
+1. Daemon reads `daemonToken` from `config.json` on startup.
+2. Rust `setup()` injects `window.__VST_TOKEN__ = '<daemonToken>'` via `win.eval()` before page JS runs.
+3. `useAuth.ts` reads `__VST_TOKEN__`, calls `api.checkAuth()` first; if no valid session, calls `api.login(token)` to exchange the injected token for a session cookie.
+4. From that point on the browser holds the HMAC-signed cookie — `__VST_TOKEN__` is no longer needed.
+
+---
+
 ## Future directions
 
 - **Electron/Tauri:** store token in OS keychain (`safeStorage` / `tauri-plugin-stronghold`); open webview to `http://localhost:<port>/?launch_token=<short-lived-token>` and exchange on first load

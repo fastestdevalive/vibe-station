@@ -62,7 +62,7 @@ pub fn detect_running_daemon() -> Option<DaemonInfo> {
         Some(DaemonInfo {
             port: config.port,
             pid: config.pid,
-            token: config.token,
+            token,
         })
     } else {
         None
@@ -153,9 +153,14 @@ pub fn spawn_daemon(
         std::thread::sleep(Duration::from_millis(100));
     };
 
+    // Prefer the tauri-scoped token; fall back to cli token, then legacy token.
+    let token = config.tauri_token
+        .or(config.cli_token)
+        .or(config.token)
+        .unwrap_or_default();
     Ok(DaemonInfo {
         port: config.port,
         pid: config.pid,
-        token: config.token,
+        token,
     })
 }

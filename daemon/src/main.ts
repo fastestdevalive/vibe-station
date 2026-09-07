@@ -12,6 +12,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "./server.js";
 import { readConfig } from "./services/config.js";
+import { loadAuthState, getAuthState } from "./state/auth-state.js";
+import { mintToken } from "./auth.js";
 import * as cloudflared from "./services/cloudflared.js";
 import { resolveTunnelPort } from "./services/tunnelPort.js";
 import { loadAll } from "./state/project-store.js";
@@ -77,9 +79,12 @@ async function acquireLock(): Promise<void> {
   await fh.close();
 }
 
-async function writeConfig(port: number, token: string): Promise<void> {
+async function writeConfig(port: number, cliToken: string, browserEpoch: number, tauriToken: string): Promise<void> {
   await mkdir(VST_HOME, { recursive: true });
-  const config = { port, pid: process.pid, startedAt: new Date().toISOString(), token };
+  // H3: Read existing config so user settings (e.g. defaultProjectsDir) are preserved.
+  const existing = await readConfig();
+  // daemonToken is NEVER written to disk — only cliToken/tauriToken (pre-minted) and browserEpoch.
+  const config = { ...existing, port, pid: process.pid, startedAt: new Date().toISOString(), cliToken, tauriToken, browserEpoch };
   // mode 0o600 — owner read/write only; no other user on the machine can read the token
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { encoding: "utf8", mode: 0o600 });
   // Ensure correct permissions even if the file already existed with wrong mode
@@ -157,23 +162,43 @@ async function main() {
 
   const port = await findFreePort(DEFAULT_PORT);
 
-  // Read existing token from config.json; generate fresh only on first boot.
-  // The token never travels via argv — it lives only in memory + config.json.
+  // Read persisted browserEpoch from config (daemonToken is never read/written).
   const existingConfig = await readConfig();
-  const token = existingConfig.token ?? randomBytes(32).toString("hex");
-  await writeConfig(port, token);
+
+  // Generate a fresh daemonToken in memory on every startup — never persisted.
+  // All existing sessions (browser, CLI, Tauri) become invalid on restart.
+  const daemonToken = randomBytes(32).toString("hex");
+  loadAuthState(daemonToken, existingConfig.browserEpoch ?? 0);
+
+  // M4: Print the browser login password so the user knows what to type in the
+  // web login form — this is the only way to authenticate via the web UI.
+  console.log(`[vst] Browser login password: ${daemonToken}`);
+
+  // Pre-mint the CLI token and write it to config.json so `vst` can read it.
+  const cliToken = mintToken("cli", getAuthState());
+
+  // H1: Pre-mint a tauri-scoped token so the desktop webview auto-authenticates
+  // without showing the login screen. Written to config.json; Rust reads it.
+  const tauriToken = mintToken("tauri", getAuthState());
+
+  // persistEpoch is the only way routes mutate config.json after startup.
+  const persistEpoch = async () => {
+    await writeConfig(port, cliToken, getAuthState().browserEpoch, tauriToken);
+  };
+
+  await writeConfig(port, cliToken, existingConfig.browserEpoch ?? 0, tauriToken);
 
   // Dev escape hatch: VST_NO_AUTH=1 disables the auth guard so the web UI loads
-  // with no login (e.g. behind Tailscale on a trusted tailnet). The token is
+  // with no login (e.g. behind Tailscale on a trusted tailnet). The CLI token is
   // still written to config.json so the CLI keeps working either way.
   const noAuth = process.env.VST_NO_AUTH === "1" || process.env.VST_NO_AUTH === "true";
   if (noAuth) {
     console.warn("⚠  VST_NO_AUTH set — authentication is DISABLED. Do not expose this daemon to untrusted networks.");
   } else {
-    console.log(`Browser token: ${token.slice(0, 8)}...  (full token in ${CONFIG_PATH})`);
+    console.log(`CLI token written to ${CONFIG_PATH}`);
   }
 
-  const app = await buildServer({ port, logger: true, token, noAuth });
+  const app = await buildServer({ port, logger: true, authState: getAuthState(), noAuth, persistEpoch });
 
   // Initialize the user skill catalog from persisted settings (skillPaths
   // defaults to ~/.claude/skills, Decision 11) so the popover/GET /skills
@@ -194,7 +219,7 @@ async function main() {
   // (tunnel-persistence). Blocking, like the recovery steps above — a
   // still-restoring tunnel would otherwise report a false "enabled" status to
   // the first UI poll. No-ops in no-auth/no-token mode. Never throws.
-  await cloudflared.restoreOnBoot(resolveTunnelPort(port), { token, noAuth });
+  await cloudflared.restoreOnBoot(resolveTunnelPort(port), { token: daemonToken, noAuth });
 
   // Subagent → parent notifications resolve the parent's agent lazily and need
   // the port to do it (subagent-ux-v2).
