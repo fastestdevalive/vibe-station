@@ -226,4 +226,18 @@ describe("StatusBar busy dots when scrolled away", () => {
     expect(container.querySelector(".chat-statusbar__busy")).toBeNull();
     expect(screen.getByText("Ready")).toBeTruthy();
   });
+
+  // V3e/V3f — notice slot (subagent-ux-v2 Phase 3)
+  it("V3e — Stop button shows 'Stop checking on <name>' when noticeSlot.running is true", () => {
+    const noticeSlot = { children: { "c1": "Worker" }, running: true };
+    render(<StatusBar meta={busyMeta} onStop={() => {}} noticeSlot={noticeSlot} />);
+    const stopBtn = screen.getByRole("button", { name: /stop/i });
+    expect(stopBtn.textContent).toBe("Stop checking on Worker");
+  });
+
+  it("V3f — Stop button shows generic 'Stop' when noticeSlot is undefined", () => {
+    render(<StatusBar meta={busyMeta} onStop={() => {}} />);
+    const stopBtn = screen.getByRole("button", { name: /stop/i });
+    expect(stopBtn.textContent).toBe("Stop");
+  });
 });

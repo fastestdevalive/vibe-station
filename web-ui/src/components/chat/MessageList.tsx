@@ -167,6 +167,9 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
     }
     switch (ev.kind) {
       case "user": {
+        // Silent user events (subagent-ux-v2 notice turns) must not render as
+        // human bubbles — they are daemon-internal turn inputs, not real messages.
+        if (ev.silent) break;
         if (ev.turnId) {
           const existingIdx = userIndexByTurnId.get(ev.turnId);
           if (existingIdx != null) {
@@ -358,9 +361,36 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         });
         break;
       }
-      case "message_generated":
-        items.push({ type: "system_event", id: ev.id, text: ev.text ?? "", agentName: ev.subagentName });
+      case "message_generated": {
+        // FIX-B: discriminate annotation pills (ev.text set) from notification
+        // pills (ev.text empty — backend sends "" for notification pills so the
+        // frontend can compose the human-readable copy). Annotation pills
+        // (dismiss "wake-up for X dismissed", abort "wake-up dropped; X still
+        // waiting", cap warning "auto-wake paused…") carry their text directly;
+        // notification pills show the agent name as a chip + a short predicate
+        // that does NOT repeat the name (the chip already carries it).
+        const pillText =
+          ev.text && ev.text.trim().length > 0
+            ? ev.text
+            : ev.subagentName
+              ? `paused — waiting for you`
+              : "";
+        // Guard: if neither text nor chip name is set, the pill is empty — skip
+        // rather than pushing a blank div into the feed.
+        const pillAgentName = ev.text && ev.text.trim().length > 0 ? undefined : ev.subagentName;
+        if (!pillText && !pillAgentName) break;
+        // Annotation pills carry their own text (ev.text set) — suppress the
+        // chip so the name does not appear twice (text already names the agent).
+        // Notification pills have empty ev.text — show the chip so the name
+        // appears once, as the chip, beside "paused — waiting for you".
+        items.push({
+          type: "system_event",
+          id: ev.id,
+          text: pillText,
+          agentName: pillAgentName,
+        });
         break;
+      }
       default:
         // session_init / usage / result — not rendered as bubbles, but a
         // `result` event marks the turn as over, so close any open group.

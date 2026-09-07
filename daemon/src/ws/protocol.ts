@@ -223,6 +223,8 @@ export const NormalizedEventSchema = z.object({
   subagentId: z.string().optional(),
   subagentName: z.string().optional(),
   subagentState: z.string().optional(),
+  /** True when this user event was synthesized for a silent notice turn — UI skips rendering it as a human bubble. */
+  silent: z.boolean().optional(),
 });
 
 export const SessionMetaSchema = z.object({
@@ -239,6 +241,13 @@ export const SessionMetaSchema = z.object({
   usage: UsageInfoSchema.optional(),
   cwd: z.string().optional(),
   commands: z.array(CommandSchema).optional(),
+  /** Active notice slot (pending or running). Absent when no slot is live. */
+  noticeSlot: z
+    .object({
+      children: z.record(z.string(), z.string()),
+      running: z.boolean(),
+    })
+    .optional(),
 });
 
 /**

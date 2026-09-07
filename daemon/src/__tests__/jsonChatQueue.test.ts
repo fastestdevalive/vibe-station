@@ -1028,3 +1028,74 @@ describe("Phase 5 — submit() steer-vs-enqueue gate", () => {
     await agent.settled();
   });
 });
+
+// V2a/V2b/V2c — dismiss-notice route behavior (subagent-ux-v2 Phase 2)
+// These tests verify the dismiss logic at the agent level (equivalent to route tests).
+// HTTP surface tested separately in integration tests.
+describe("dismiss-notice — agent-level (V2a/V2b)", () => {
+  let project: ProjectRecord;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-dismiss-"));
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    project = {
+      id: PROJECT_ID,
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pq",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [makeSession()],
+      worktrees: [],
+    };
+    await addProject(project);
+  });
+
+  afterEach(async () => {
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    jsonAgentRegistry.clear();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("V2a — dismiss with slot: clears slot + emits annotation pill per child", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const { plugin } = makeGatePlugin();
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    agent.populateNoticeSlot("child-v2a", "WorkerV2a");
+    expect(agent.getMeta().noticeSlot).toBeDefined();
+    expect(agent.getMeta().noticeSlot?.children["child-v2a"]).toBe("WorkerV2a");
+
+    agent.dismissNoticeSlot();
+
+    // Slot must be cleared.
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+
+    // Annotation pill emitted (transcript append-only, KD-9).
+    const transcript = agent.readTranscript();
+    const dismissPill = transcript.find(
+      (e) => e.kind === "message_generated" && typeof e.text === "string" && e.text.includes("dismissed"),
+    );
+    expect(dismissPill).toBeDefined();
+    expect(dismissPill?.subagentName).toBe("WorkerV2a");
+
+    await agent.release();
+  });
+
+  it("V2b — dismiss with no slot: idempotent, no error, slot stays undefined", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const { plugin } = makeGatePlugin();
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    // No slot populated — dismiss must be a no-op.
+    expect(() => agent.dismissNoticeSlot()).not.toThrow();
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+
+    await agent.release();
+  });
+});

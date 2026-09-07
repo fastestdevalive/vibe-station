@@ -1,0 +1,13 @@
+feature: silent-subagent-notify
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-86
+master:
+  prd: complete
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: "3.T4"
+    awaiting_phase: null
+    awaiting_artifact: null
