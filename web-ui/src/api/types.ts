@@ -305,6 +305,8 @@ export interface NormalizedEvent {
   subagentName?: string;
   /** `message_generated` only — lifecycle state the child transitioned to. */
   subagentState?: string;
+  /** True when this is a daemon-synthesized notice turn (subagent-ux-v2) — UI must not render as a human bubble. */
+  silent?: boolean;
 }
 
 /** A slash command/skill catalog entry (`commands_update`, session meta). */
@@ -376,6 +378,9 @@ export interface SessionMeta {
   canSteer?: boolean;
   /** Latest `commands_update` catalog for this session, if any (full-replace). */
   commands?: Command[];
+  /** Populated while a notice slot is pending or running (subagent-ux-v2).
+   *  `running: true` while the notice LLM turn is active. */
+  noticeSlot?: { children: Record<string, string>; running: boolean };
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */

@@ -21,6 +21,8 @@ interface StatusBarProps {
    *  indicator already covers it). Defaults to `true` — no busy dots — so
    *  callers that don't track scrolling are unaffected. */
   atBottom?: boolean;
+  /** Notice slot (subagent-ux-v2) — when running, overrides the status label. */
+  noticeSlot?: { children: Record<string, string>; running: boolean };
 }
 
 function fmt(n: number): string {
@@ -59,11 +61,21 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * branching). Fields absent from `meta` (e.g. costUsd, contextWindow) hide
  * gracefully.
  */
-export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true, noticeSlot }: StatusBarProps) {
   const usage = meta?.usage;
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
   const busy = state ? BUSY_STATES.includes(state) : false;
+
+  // Notice slot contextual labels (subagent-ux-v2 R12, R13).
+  const noticeRunning = noticeSlot?.running === true;
+  const noticeChildNames = noticeSlot ? Object.values(noticeSlot.children) : [];
+  const noticeName = noticeChildNames.length === 1
+    ? noticeChildNames[0]!
+    : noticeChildNames.length > 1
+    ? `${noticeChildNames[0]} +${noticeChildNames.length - 1}`
+    : "subagent";
+  const noticeStopLabel = `Stop checking on ${noticeName}`;
 
   const total = usage?.totalTokens ?? 0;
   const ctx = usage?.contextWindow;
@@ -160,7 +172,7 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
         ) : null}
         {busy && onStop ? (
           <button type="button" className="chat-statusbar__stop btn btn--secondary" onClick={onStop}>
-            Stop
+            {noticeRunning ? noticeStopLabel : "Stop"}
           </button>
         ) : null}
       </div>

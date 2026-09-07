@@ -290,3 +290,79 @@ describe("ChatPane atBottom threading (MessageList → ChatPane → StatusBar)",
   });
 });
 
+describe("V3g — silent events excluded from lastUserText and edit-prefill (ChatPane)", () => {
+  it("V3g-a: lastUserText skips silent user events; non-silent text is used for retry prefill", async () => {
+    const api = createMockApi();
+    // Regular user event first, then a silent notice-turn user event.
+    api.__test.pushChatEvent("js-v3g-a", ev("u1", { kind: "user", role: "user", text: "real user message", turnId: "t1" }));
+    api.__test.pushChatEvent("js-v3g-a", ev("sn1", { kind: "user", role: "user", text: "notice text", silent: true, turnId: "t-silent" }));
+    api.__test.pushChatEvent("js-v3g-a", ev("e1", { kind: "error", text: "Something went wrong" }));
+
+    render(<ChatPane api={api} session={jsonSession("js-v3g-a")} visible />);
+
+    // Wait for error to render.
+    await screen.findByText("Something went wrong");
+
+    // The retry button should pre-fill from "real user message", not "notice text".
+    // We can verify this by checking that lastUserText (used in handleRetry) skips silent events.
+    // The simplest observable effect: click Retry and check the queued turn text via the mocked API.
+    // Verify events were passed to MessageList BEFORE any retry click.
+    const mockedMessageList = MessageList as unknown as Mock;
+    const propsBeforeRetry = mockedMessageList.mock.calls.at(-1)?.[0];
+    if (propsBeforeRetry) {
+      const userEvents = (propsBeforeRetry.events as NormalizedEvent[]).filter(
+        (e: NormalizedEvent) => e.kind === "user",
+      );
+      // Two user events: one real, one silent.
+      expect(userEvents.length).toBe(2);
+      const silentEvt = userEvents.find((e: NormalizedEvent) => (e as { silent?: boolean }).silent);
+      expect(silentEvt).toBeDefined();
+      // The silent event is passed through (filtering happens inside ChatPane's useMemo).
+    }
+    const retryBtn = screen.queryByRole("button", { name: /retry/i });
+    if (retryBtn) {
+      const calls: string[] = [];
+      const origSendChat = api.sendChat.bind(api);
+      api.sendChat = async (sessionId: string, message: string, attachmentIds?: string[]) => {
+        calls.push(message);
+        return origSendChat(sessionId, message, attachmentIds);
+      };
+      await userEvent.setup().click(retryBtn);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toBe("real user message");
+    }
+  });
+
+  it("V3g-b: userEvents index skips silent events — silent turnId not in tray prefill map", async () => {
+    const api = createMockApi();
+    // A silent user event with a turnId that's also in queuedTurnIds.
+    const silentTurnId = "t-silent-queue";
+    api.__test.pushChatEvent("js-v3g-b", ev("sn1", {
+      kind: "user",
+      role: "user",
+      text: "this is the notice text",
+      silent: true,
+      turnId: silentTurnId,
+    }));
+    // Simulate meta with silentTurnId in queuedTurnIds.
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-v3g-b",
+        meta: meta("js-v3g-b", { queuedTurnIds: [silentTurnId] }),
+      });
+    });
+
+    render(<ChatPane api={api} session={jsonSession("js-v3g-b")} visible />);
+
+    await screen.findByRole("log");
+
+    // The tray row for silentTurnId should NOT show "this is the notice text"
+    // because silent events are excluded from the userEvents map. The tray would
+    // show empty text or a fallback for the queued turn.
+    // Since the tray renders queued turns, check that "this is the notice text" is NOT in the tray.
+    const trayText = screen.queryByText("this is the notice text");
+    expect(trayText).toBeNull();
+  });
+});
+

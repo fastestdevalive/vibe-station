@@ -909,6 +909,14 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+    /** Dismiss the pending notice slot (subagent-ux-v2). Idempotent — 204 if no slot. */
+    async dismissNotice(sessionId: string): Promise<void> {
+      const root = baseUrl();
+      await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/dismiss-notice`, {
+        method: "POST",
+      });
+    },
+
     /** Cancel a single not-yet-started queued turn. */
     async cancelQueuedTurn(sessionId: string, turnId: string): Promise<{ ok: true }> {
       const root = baseUrl();

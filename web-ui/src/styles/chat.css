@@ -697,27 +697,28 @@
   padding: var(--space-1) 0;
 }
 
-/* ── Centred system-event pill (message_generated / subagent state notices) ──── */
+/* ── System-event pill (message_generated / subagent state notices) ──────────── */
 
 .chat-system-event {
-  align-self: center;
+  align-self: flex-start;
   display: flex;
   align-items: center;
   gap: var(--space-2);
   font-size: var(--font-size-sm);
-  color: var(--fg-subtle);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-full);
-  background: var(--surface-subtle);
-  max-width: 60%;
+  /* --fg-muted: dimmer than body text, signals a system note not a human message */
+  color: var(--fg-muted);
+  /* no left padding — chip sits flush at the left edge of the message area */
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
+  max-width: 80%;
 }
 .chat-system-event__chip {
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: 500;
-  color: var(--fg-muted);
-  background: var(--surface-raised);
+  color: var(--fg-secondary);
+  background: var(--bg-elevated, var(--bg-card));
+  border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-full);
-  padding: 0 var(--space-2);
+  padding: 1px var(--space-2);
   white-space: nowrap;
 }
 
@@ -783,6 +784,13 @@
 .chat-queued-tray__row--pending {
   opacity: 0.7;
   border-style: dashed;
+}
+.chat-queued-tray__row--notice {
+  opacity: 0.85;
+  border-style: dashed;
+  border-color: var(--border-muted);
+  background: var(--surface-subtle);
+  color: var(--fg-muted);
 }
 .chat-queued-tray__text {
   flex: 1 1 auto;

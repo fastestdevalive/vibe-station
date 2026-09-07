@@ -24,6 +24,7 @@ import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { sessionChannel } from "./channel.js";
 import type { LifecycleState, SessionRecord } from "../types.js";
 import { noteSubagentStateChange, type NotifyDeps } from "./subagentNotify.js";
+import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
 
 export const POLL_INTERVAL_MS = 1000;
 
@@ -442,7 +443,7 @@ function findSessionRecord(sessionId: string): SessionRecord | null {
  * stays a leaf with no dependency on the agent runtime — which would otherwise
  * be a cycle (jsonAgent → lifecycle → subagentNotify → jsonAgent).
  */
-const notifyDeps: NotifyDeps = {
+export const notifyDeps: NotifyDeps = {
   lookup: (id) => {
     const rec = findSessionRecord(id);
     if (!rec) return null;
@@ -457,11 +458,38 @@ const notifyDeps: NotifyDeps = {
       ...(rec.lifecycle?.state !== undefined ? { lifecycleState: rec.lifecycle.state } : {}),
     };
   },
-  emitSystemEvent: async (parentSessionId, payload) => {
+  // Sync: merge/create notice slot in the parent's JsonAgentSession.
+  // FIX-D: when no live agent exists yet for this parent, return true so the
+  // pill is still emitted (pill ≠ slot population — the old code via
+  // resolveJsonAgent created agents on demand; the pill does not require a
+  // live agent). The notice slot itself is a no-op without a live agent,
+  // but the user still sees the notification. The agent will be created on
+  // demand by emitPill's resolveJsonAgent call.
+  populateNoticeSlot: (parentSessionId, childId, childName) => {
+    const agent = jsonAgentRegistry.get(parentSessionId);
+    if (!agent) return true; // allow pill to emit; no slot to populate without a live agent
+    return agent.populateNoticeSlot(childId, childName);
+  },
+  // Async: emit the message_generated pill on the parent's chat stream.
+  emitPill: async (parentSessionId, payload) => {
     const { resolveJsonAgent } = await import("./jsonAgentChat.js");
     const resolved = await resolveJsonAgent(parentSessionId, daemonPortForNotify);
     if (!resolved.ok) return;
+    // FIX-D2: if the parent had no live agent when populateNoticeSlot ran (the
+    // registry was empty), it returned `true` without actually populating the
+    // slot (comment at line ~462: "notice slot itself is a no-op without a live
+    // agent"). Populate the slot NOW on the freshly resolved agent, before
+    // emitting the pill, so the wake-up turn still fires. This only applies to
+    // notification pills (subagentId non-empty); cap-warning/annotation pills
+    // (subagentId="") do not drive a slot-based wake-up turn.
+    if (payload.subagentId) {
+      resolved.agent.populateNoticeSlot(payload.subagentId, payload.subagentName);
+    }
     resolved.agent.emitSystemEvent(payload);
+  },
+  // Sync: prune a child from the parent's pending notice slot (R16).
+  pruneNoticeSlotChild: (parentSessionId, childSessionId) => {
+    jsonAgentRegistry.get(parentSessionId)?.pruneNoticeSlotChild(childSessionId);
   },
 };
 

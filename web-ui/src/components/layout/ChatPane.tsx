@@ -140,15 +140,29 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // further label oscillation is still smoothed as intended.
   const displayStateIsBusy =
     displayTurnState === "thinking" || displayTurnState === "responding" || displayTurnState === "tool";
-  const workingLabel = turnLabel(displayStateIsBusy ? displayTurnState : meta?.turnState, meta?.queueDepth ?? 0);
+  // Notice slot contextual label (subagent-ux-v2 R12): when a notice turn is
+  // running, override the generic "Thinking" label with "Checking on <name>".
+  const noticeSlot = meta?.noticeSlot;
+  const noticeRunning = noticeSlot?.running === true;
+  const noticeChildNames = noticeSlot ? Object.values(noticeSlot.children) : [];
+  const noticeName = noticeChildNames.length === 1
+    ? noticeChildNames[0]!
+    : noticeChildNames.length > 1
+    ? `${noticeChildNames[0]} +${noticeChildNames.length - 1}`
+    : "subagent";
+  const workingLabel = noticeRunning
+    ? `Checking on ${noticeName}`
+    : turnLabel(displayStateIsBusy ? displayTurnState : meta?.turnState, meta?.queueDepth ?? 0);
 
   // Latest user text + attachments per turnId (last wins, mirroring the A7
   // edited-turn rule) + the set of turnIds that have a real `user` event.
+  // Silent events (subagent-ux-v2 notice turns) are excluded from both —
+  // they are daemon-internal and must not appear in edit-prefill (FIX-19).
   const userEvents = useMemo(() => {
     const map = new Map<string, { text: string; attachments?: Attachment[] }>();
     const ids = new Set<string>();
     for (const ev of events) {
-      if (ev.kind === "user" && ev.turnId) {
+      if (ev.kind === "user" && ev.turnId && !ev.silent) {
         ids.add(ev.turnId);
         map.set(ev.turnId, { text: ev.text ?? "", attachments: ev.attachments });
       }
@@ -215,9 +229,11 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
     setComposerKey((k) => k + 1);
   }, []);
 
+  // lastUserText drives the retry prefill — skip silent events (subagent-ux-v2,
+  // FIX-19) so the retry composer doesn't pre-fill with the notice-turn prompt.
   const lastUserText = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) {
-      if (events[i]!.kind === "user") return events[i]!.text ?? "";
+      if (events[i]!.kind === "user" && !events[i]!.silent) return events[i]!.text ?? "";
     }
     return pending.length > 0 ? pending[pending.length - 1]!.message : "";
   }, [events, pending]);
@@ -291,6 +307,10 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             onSalvage={onSalvage}
             focusComposer={() => composerRef.current?.focus()}
             commands={meta?.commands}
+            noticeSlot={noticeSlot}
+            onDismissNotice={() => {
+              if (sessionId) void api.dismissNotice(sessionId);
+            }}
           />
         ) : null}
         <StatusBar
@@ -300,6 +320,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
           onStop={() => void stop()}
           api={api}
           {...(sessionId ? { sessionId } : {})}
+          noticeSlot={noticeSlot}
         />
         {session ? (
           <SubagentRow

@@ -954,7 +954,7 @@ describe("m10 — MessageList threads `commands` through to the fork editor's Qu
 });
 
 describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
-  it("4.T1 — message_generated event produces a system_event RenderItem with the event's text", () => {
+  it("4.T1 — notification pill (empty text) composes 'subagent <name> is now waiting for your reply'", () => {
     const items = groupEvents([
       userEvent("t1", "do something"),
       {
@@ -963,7 +963,8 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
         ts: "",
         provider: "claude",
         kind: "message_generated",
-        text: "subagent-abc is waiting for your input",
+        // FIX-B: notification pills use empty text; frontend composes readable copy
+        text: "",
         subagentId: "abc",
         subagentName: "subagent-abc",
         subagentState: "waiting_for_human",
@@ -971,7 +972,47 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
     ]);
     const sysEvents = items.filter((i) => i.type === "system_event");
     expect(sysEvents).toHaveLength(1);
-    expect((sysEvents[0] as { text: string }).text).toBe("subagent-abc is waiting for your input");
+    // Notification pills compose "subagent <name> is now waiting for your reply"
+    expect((sysEvents[0] as { text: string }).text).toBe("subagent subagent-abc is now waiting for your reply");
+  });
+
+  it("4.T1b — FIX-B: annotation pill (non-empty text) renders ev.text directly, not composed copy", () => {
+    // Annotation pills (dismiss, abort, cap warning) carry their own text
+    const dismissItems = groupEvents([
+      {
+        id: "sg2",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "message_generated",
+        text: "wake-up for subagent-abc dismissed",
+        subagentId: "abc",
+        subagentName: "subagent-abc",
+        subagentState: "waiting_for_human",
+      },
+    ]);
+    const sysEvents = dismissItems.filter((i) => i.type === "system_event");
+    expect(sysEvents).toHaveLength(1);
+    // Annotation pill renders ev.text directly, NOT the composed "is now waiting" copy
+    expect((sysEvents[0] as { text: string }).text).toBe("wake-up for subagent-abc dismissed");
+
+    // Abort annotation
+    const abortItems = groupEvents([
+      {
+        id: "sg3",
+        sessionId: "s1",
+        ts: "",
+        provider: "claude",
+        kind: "message_generated",
+        text: "wake-up dropped; subagent-abc is still waiting",
+        subagentId: "",
+        subagentName: "subagent-abc",
+        subagentState: "waiting_for_human",
+      },
+    ]);
+    const abortSysEvents = abortItems.filter((i) => i.type === "system_event");
+    expect(abortSysEvents).toHaveLength(1);
+    expect((abortSysEvents[0] as { text: string }).text).toBe("wake-up dropped; subagent-abc is still waiting");
   });
 
   it("4.T2 — message_generated renders a .chat-system-event element in the MessageList", () => {
@@ -983,7 +1024,8 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
         ts: "",
         provider: "claude",
         kind: "message_generated",
-        text: "subagent-abc is waiting for your input",
+        // FIX-B: notification pills use empty text; frontend composes readable copy
+        text: "",
         subagentId: "abc",
         subagentName: "subagent-abc",
         subagentState: "waiting_for_human",
@@ -992,7 +1034,21 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
     const { container } = render(<MessageList events={events} pending={[]} />);
     const el = container.querySelector(".chat-system-event");
     expect(el).toBeTruthy();
-    expect(el!.textContent).toBe("subagent-abc is waiting for your input");
+    // chip (subagentName) + text: "subagent-abc" + "subagent subagent-abc is now waiting for your reply"
+    expect(el!.textContent).toContain("subagent subagent-abc is now waiting for your reply");
+    expect(el!.textContent).toContain("subagent-abc");
+  });
+
+  it("V3a — silent user event: no human bubble rendered", () => {
+    const events: NormalizedEvent[] = [
+      { id: "u1", sessionId: "s1", ts: "", provider: "claude", kind: "user", text: "hi" },
+      { id: "sn1", sessionId: "s1", ts: "", provider: "claude", kind: "user", text: "notice text", silent: true, turnId: "t-notice" },
+    ];
+    const items = groupEvents(events);
+    // Only 1 user item — the silent one is excluded
+    const userItems = items.filter((i) => i.type === "user");
+    expect(userItems).toHaveLength(1);
+    expect((userItems[0] as { text: string }).text).toBe("hi");
   });
 });
 

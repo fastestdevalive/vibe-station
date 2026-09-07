@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { QueuedTray, type QueuedTrayProps, type QueuedTrayRow } from "./QueuedTray";
+import { QueuedTray, type QueuedTrayProps, type QueuedTrayRow, type NoticeSlotInfo } from "./QueuedTray";
 
 function renderTray(rows: QueuedTrayRow[], over: Partial<QueuedTrayProps> = {}) {
   const props: QueuedTrayProps = {
@@ -20,7 +20,7 @@ function renderTray(rows: QueuedTrayRow[], over: Partial<QueuedTrayProps> = {}) 
 }
 
 describe("QueuedTray", () => {
-  it("renders nothing when there are no rows", () => {
+  it("renders nothing when there are no rows and no noticeSlot", () => {
     const { container } = renderTray([]);
     expect(container.firstChild).toBeNull();
   });
@@ -130,5 +130,31 @@ describe("QueuedTray", () => {
     renderTray([{ turnId: "t1", text: "first", status: "queued" }], { focusComposer });
     fireEvent.keyDown(screen.getByRole("list"), { key: "Escape" });
     expect(focusComposer).toHaveBeenCalled();
+  });
+
+  // V3b/V3c/V3d — notice slot row (subagent-ux-v2 Phase 3)
+  it("V3b — renders a notice row when noticeSlot is provided, even with no human queue rows", () => {
+    const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
+    renderTray([], { noticeSlot });
+    const listItems = screen.getAllByRole("listitem");
+    expect(listItems.length).toBeGreaterThanOrEqual(1);
+    // Notice row label contains child names
+    expect(listItems[0]!.textContent).toContain("Worker");
+  });
+
+  it("V3c — notice row has no Edit / Send-now; only Dismiss is present", () => {
+    const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
+    renderTray([], { noticeSlot });
+    expect(screen.queryByLabelText("Edit queued message")).toBeNull();
+    expect(screen.queryByLabelText("Send now")).toBeNull();
+    expect(screen.getByLabelText("Dismiss wake-up")).toBeTruthy();
+  });
+
+  it("V3d — clicking Dismiss on the notice row calls onDismissNotice", () => {
+    const onDismissNotice = vi.fn();
+    const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
+    renderTray([], { noticeSlot, onDismissNotice });
+    fireEvent.click(screen.getByLabelText("Dismiss wake-up"));
+    expect(onDismissNotice).toHaveBeenCalledOnce();
   });
 });
