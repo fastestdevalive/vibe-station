@@ -84,11 +84,6 @@ export function daemonLogPath(): string {
   return join(vstHome(), "logs", "daemon.log");
 }
 
-/** ~/.vibe-station/logs/cloudflared.log — stdout/stderr of the spawned cloudflared process (tunnel-persistence). */
-export function cloudflaredLogPath(): string {
-  return join(vstHome(), "logs", "cloudflared.log");
-}
-
 /** ~/.vibe-station/projects/<p>/session-data/<w>/<s> — per-session data dir (sibling of worktrees/, not inside the checkout) */
 export function sessionDataDir(projectId: string, worktreeId: string, sessionId: string): string {
   return join(projectDir(projectId), "session-data", worktreeId, sessionId);
