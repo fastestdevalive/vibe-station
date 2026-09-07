@@ -289,7 +289,7 @@ async function revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: 
 
 | # | Question | Notes |
 |---|----------|-------|
-| 1 | Where exactly does Tauri inject `window.__VST_TOKEN__`? | Check `apps/desktop/src-tauri/` before Phase 6 |
+| 1 | Where exactly does Tauri inject `window.__VST_TOKEN__`? | Check `desktop/src-tauri/` before Phase 6 |
 | 2 | Does Vite dev proxy to daemon port? If not, Origin check blocks dev SPA | Check `web-ui/vite.config.ts` proxy config |
 
 ## Implementation Phases
