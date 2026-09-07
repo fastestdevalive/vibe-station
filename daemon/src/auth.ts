@@ -1,19 +1,32 @@
 /**
- * HMAC-based session cookie utilities.
+ * Token primitives for the vibe-station daemon.
  *
- * Cookie format:  vst-session=<issuedAt>.<nonce>.<hmac>
- *   issuedAt  — Date.now() in ms (base-10 string)
- *   nonce     — 16 random bytes as hex (32 chars) — ensures each cookie is unique
- *   hmac      — HMAC-SHA256(issuedAt + "." + nonce, daemonToken) as hex (64 chars)
+ * Token format:  <base64url(JSON(payload))>.<HMAC-SHA256-hex>
  *
- * Self-validating: the daemon re-derives the HMAC on every request using the
- * in-memory daemonToken. auth_sessions table provides revocation on top of this.
+ * All three client types (CLI, Tauri, browser) use the same mintToken /
+ * verifyToken pair. Scope is server-determined at mint time — callers cannot
+ * claim a scope.
+ *
+ * Browser tokens additionally carry exp (7-day TTL) and epoch (revocation
+ * counter). CLI and Tauri tokens have no expiry and no epoch.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { AuthState } from "./state/auth-state.js";
+import type { TokenPayload, TokenScope, VerifyResult } from "./types.js";
 
-export const COOKIE_NAME = "vst-session";
-export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days in seconds (for Max-Age)
+export { BROWSER_TTL_MS, BROWSER_MAX_AGE_SECONDS, COOKIE_NAME };
+export {
+  checkLoginRateLimit,
+  resetLoginRateLimit,
+  checkMobileAuthRateLimit,
+};
+export { mintToken, verifyToken };
+
+const COOKIE_NAME = "vst-session";
+const BROWSER_TTL_MS = 7 * 24 * 60 * 60 * 1000;        // 7 days in ms
+const BROWSER_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;       // 7 days in seconds (for Max-Age)
+
+// ── Rate limiters ─────────────────────────────────────────────────────────────
 
 // In-memory rate limiter for /auth/login — max 10 attempts per minute per IP.
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -26,7 +39,7 @@ const mobileAuthAttempts = new Map<string, { count: number; resetAt: number }>()
 const MOBILE_RATE_LIMIT_MAX = 20;
 
 /** Returns true if this IP is within the rate limit, false if exceeded. */
-export function checkLoginRateLimit(ip: string): boolean {
+function checkLoginRateLimit(ip: string): boolean {
   const now = Date.now();
   const entry = loginAttempts.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -38,7 +51,7 @@ export function checkLoginRateLimit(ip: string): boolean {
 }
 
 /** Reset the rate limit counter for an IP (called on successful login). */
-export function resetLoginRateLimit(ip: string): void {
+function resetLoginRateLimit(ip: string): void {
   loginAttempts.delete(ip);
 }
 
@@ -46,7 +59,7 @@ export function resetLoginRateLimit(ip: string): void {
  * Returns true if the CF-Connecting-IP is within the mobile-auth rate limit.
  * Callers must verify the header is present before calling this — never pass undefined.
  */
-export function checkMobileAuthRateLimit(cfIp: string): boolean {
+function checkMobileAuthRateLimit(cfIp: string): boolean {
   const now = Date.now();
   const entry = mobileAuthAttempts.get(cfIp);
   if (!entry || now > entry.resetAt) {
@@ -57,78 +70,106 @@ export function checkMobileAuthRateLimit(cfIp: string): boolean {
   return entry.count <= MOBILE_RATE_LIMIT_MAX;
 }
 
-/**
- * Mint a new session cookie value for the given daemonToken.
- */
-export function generateSessionCookie(daemonToken: string): string {
-  const issuedAt = Date.now().toString(10);
-  const nonce = randomBytes(16).toString("hex");
-  const hmac = computeHmac(issuedAt, nonce, daemonToken);
-  return `${issuedAt}.${nonce}.${hmac}`;
+// ── Token primitives ──────────────────────────────────────────────────────────
+
+function base64urlEncode(s: string): string {
+  return Buffer.from(s).toString("base64url");
+}
+
+function hmacPayload(payloadB64: string, key: string): string {
+  return createHmac("sha256", key).update(payloadB64).digest("hex");
 }
 
 /**
- * Mint a session cookie re-using an existing nonce (sliding bump re-issuance).
- * Produces a new issuedAt so the HMAC TTL clock resets; same nonce as DB PK.
+ * Mint a new signed token for the given scope.
+ *
+ * - cli / tauri: payload = { iat, scope }  — no exp, no epoch
+ * - browser:     payload = { iat, scope, exp, epoch }
  */
-export function generateSessionCookieWithNonce(daemonToken: string, nonce: string): string {
-  const issuedAt = Date.now().toString(10);
-  const hmac = computeHmac(issuedAt, nonce, daemonToken);
-  return `${issuedAt}.${nonce}.${hmac}`;
+function mintToken(
+  scope: TokenScope,
+  authState: AuthState,
+  opts?: { exp?: number },
+): string {
+  const payload: TokenPayload = {
+    iat: Date.now(),
+    scope,
+    ...(scope === "browser"
+      ? {
+          // L4: clamp caller-supplied exp so it can never exceed the max TTL.
+          exp: opts?.exp !== undefined
+            ? Math.min(opts.exp, Date.now() + BROWSER_TTL_MS)
+            : Date.now() + BROWSER_TTL_MS,
+          epoch: authState.browserEpoch,
+        }
+      : {}),
+  };
+  const payloadB64 = base64urlEncode(JSON.stringify(payload));
+  const sig = hmacPayload(payloadB64, authState.daemonToken);
+  return `${payloadB64}.${sig}`;
 }
 
 /**
- * Parse the structural fields from a cookie value without HMAC verification.
- * Returns null if the format is malformed.
+ * Verify a token minted by mintToken.
+ *
+ * Checks (in order):
+ *  1. Structure — must be <base64url>.<64-hex-chars>
+ *  2. HMAC — constant-time compare
+ *  3. Payload parseable as TokenPayload
+ *  4. Scope-shape — browser must have exp+epoch; cli/tauri must not have exp
+ *  5. Expiry — browser tokens only
+ *  6. Epoch — browser tokens only
  */
-export function parseSessionCookie(cookie: string): { issuedAt: string; nonce: string } | null {
-  const dotFirst = cookie.indexOf(".");
-  if (dotFirst === -1) return null;
-  const dotSecond = cookie.indexOf(".", dotFirst + 1);
-  if (dotSecond === -1) return null;
-  const issuedAt = cookie.slice(0, dotFirst);
-  const nonce = cookie.slice(dotFirst + 1, dotSecond);
-  if (!issuedAt || !nonce) return null;
-  return { issuedAt, nonce };
-}
+function verifyToken(token: string, authState: AuthState): VerifyResult {
+  const dot = token.lastIndexOf(".");
+  if (dot === -1) return { ok: false, reason: "malformed" };
 
-/**
- * Validate a session cookie value against the daemonToken.
- * Returns true only if the HMAC is correct and the cookie is within TTL.
- */
-export function validateSessionCookie(cookie: string, daemonToken: string): boolean {
-  const dotFirst = cookie.indexOf(".");
-  if (dotFirst === -1) return false;
-  const dotSecond = cookie.indexOf(".", dotFirst + 1);
-  if (dotSecond === -1) return false;
+  const payloadB64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
 
-  const issuedAt = cookie.slice(0, dotFirst);
-  const nonce = cookie.slice(dotFirst + 1, dotSecond);
-  const receivedHmac = cookie.slice(dotSecond + 1);
-
-  // Guard: receivedHmac must be exactly 64 hex chars (SHA-256 output)
-  // timingSafeEqual throws if buffers differ in length — check first.
-  if (receivedHmac.length !== 64) return false;
-
-  // Recompute and constant-time compare
-  const expectedHmac = computeHmac(issuedAt, nonce, daemonToken);
+  // Constant-time HMAC compare
+  const expected = hmacPayload(payloadB64, authState.daemonToken);
   try {
-    const received = Buffer.from(receivedHmac, "hex");
-    const expected = Buffer.from(expectedHmac, "hex");
-    if (!timingSafeEqual(received, expected)) return false;
+    const recvBuf = Buffer.from(sig, "hex");
+    const expBuf = Buffer.from(expected, "hex");
+    if (recvBuf.length !== expBuf.length || !timingSafeEqual(recvBuf, expBuf)) {
+      return { ok: false, reason: "invalid_signature" };
+    }
   } catch {
-    return false;
+    return { ok: false, reason: "invalid_signature" };
   }
 
-  // Age check: 0 <= age < TTL (rejects future-dated AND expired cookies)
-  const ts = parseInt(issuedAt, 10);
-  if (!Number.isFinite(ts)) return false;
-  const age = Date.now() - ts;
-  return age >= 0 && age < SESSION_TTL_MS;
-}
+  let payload: TokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString()) as TokenPayload;
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
 
-function computeHmac(issuedAt: string, nonce: string, key: string): string {
-  return createHmac("sha256", key)
-    .update(`${issuedAt}.${nonce}`)
-    .digest("hex");
+  // Validate scope is a known value before any scope-based branching.
+  if (!["cli", "tauri", "browser"].includes(payload.scope)) {
+    return { ok: false, reason: "malformed" };
+  }
+
+  // Scope-shape validation
+  if (payload.scope === "browser") {
+    if (payload.epoch === undefined || payload.exp === undefined) {
+      return { ok: false, reason: "malformed" };
+    }
+  } else {
+    // cli / tauri must not carry exp (guards against token downgrade)
+    if (payload.exp !== undefined) return { ok: false, reason: "malformed" };
+  }
+
+  // Expiry (browser only)
+  if (payload.scope === "browser" && Date.now() > payload.exp!) {
+    return { ok: false, reason: "expired" };
+  }
+
+  // Epoch mismatch (browser only) — set when epoch was bumped via revoke-all
+  if (payload.scope === "browser" && payload.epoch !== authState.browserEpoch) {
+    return { ok: false, reason: "epoch_mismatch" };
+  }
+
+  return { ok: true, payload };
 }

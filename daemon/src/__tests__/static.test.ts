@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildServer } from "../server.js";
+import { loadAuthState, getAuthState } from "../state/auth-state.js";
 import type { FastifyInstance } from "fastify";
 
 vi.mock("../services/paths.js", async () => {
@@ -36,6 +37,17 @@ vi.mock("../services/paths.js", async () => {
   };
 });
 
+/**
+ * The stateless HMAC auth redesign replaced `buildServer({ token })` with an
+ * `authState` (daemonToken + browserEpoch). Passing the old `token` key left
+ * `authState` undefined, which makes buildServer allow EVERY request — so the
+ * 401 assertions below silently passed a 200. Always build real auth state.
+ */
+function makeAuthState() {
+  loadAuthState("test-daemon-token", 0);
+  return getAuthState();
+}
+
 describe("static file serving", () => {
   let app: FastifyInstance;
   let tempDist: string;
@@ -58,7 +70,7 @@ describe("static file serving", () => {
 
   it("(a) GET / returns 200 HTML without a session cookie (auth-exempt)", async () => {
     tempDist = await makeDistDir();
-    app = await buildServer({ token: "test-token", distPath: tempDist });
+    app = await buildServer({ authState: makeAuthState(), distPath: tempDist });
 
     const res = await app.inject({ method: "GET", url: "/" });
     expect(res.statusCode).toBe(200);
@@ -68,7 +80,7 @@ describe("static file serving", () => {
 
   it("(b) GET /deep/path SPA fallback returns 200 HTML", async () => {
     tempDist = await makeDistDir();
-    app = await buildServer({ token: "test-token", distPath: tempDist });
+    app = await buildServer({ authState: makeAuthState(), distPath: tempDist });
 
     const res = await app.inject({ method: "GET", url: "/deep/path" });
     expect(res.statusCode).toBe(200);
@@ -76,7 +88,7 @@ describe("static file serving", () => {
   });
 
   it("(c) GET /api/health returns 200 JSON (rewriteUrl strips /api prefix)", async () => {
-    app = await buildServer({ token: "test-token" });
+    app = await buildServer({ authState: makeAuthState() });
 
     const res = await app.inject({ method: "GET", url: "/api/health" });
     expect(res.statusCode).toBe(200);
@@ -84,7 +96,7 @@ describe("static file serving", () => {
   });
 
   it("(d) GET /api/projects returns 401 (auth enforced on non-exempt API routes)", async () => {
-    app = await buildServer({ token: "test-token" });
+    app = await buildServer({ authState: makeAuthState() });
 
     // Non-loopback source: loopback is implicitly trusted (see docs/AUTH.md).
     const res = await app.inject({
@@ -96,7 +108,7 @@ describe("static file serving", () => {
   });
 
   it("(f) loopback trust does NOT apply to Cloudflare tunnel requests", async () => {
-    app = await buildServer({ token: "test-token" });
+    app = await buildServer({ authState: makeAuthState() });
 
     // cloudflared dials the daemon on 127.0.0.1, so a tunnel request looks like
     // loopback at the socket level. CF-Connecting-IP must defeat the bypass.
@@ -111,7 +123,7 @@ describe("static file serving", () => {
 
   it("(e) daemon starts cleanly with no dist/ dir (no startup error)", async () => {
     // no distPath option — auto-detection finds nothing in test env
-    app = await buildServer({ token: "test-token" });
+    app = await buildServer({ authState: makeAuthState() });
     const res = await app.inject({ method: "GET", url: "/health" });
     expect(res.statusCode).toBe(200);
   });

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import type { ApiInstance } from "@/api";
-import type { TunnelState, MobileQrResponse, AuthSession, LocalQrResponse } from "@/api/types";
+import type { TunnelState, MobileQrResponse, LocalQrResponse } from "@/api/types";
 import { ApiError } from "@/api/errors";
 
 interface RemoteAccessSettingProps {
@@ -23,16 +23,6 @@ function errMessage(err: unknown, fallback: string): string {
     // not JSON — fall through to the raw message
   }
   return err.message || fallback;
-}
-
-function formatRelative(iso: string): string {
-  const diff = Date.now() - new Date(Number(iso)).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 type ActiveQrType = {
@@ -118,13 +108,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [countdown, setCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Sessions state ──────────────────────────────────────────────────────────
-  const [sessions, setSessions] = useState<AuthSession[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [sessionsError, setSessionsError] = useState<string | null>(null);
-  const [isRemoteSession, setIsRemoteSession] = useState(false);
-  const [revoking, setRevoking] = useState<Set<string>>(new Set());
+  // ── Revoke-all state ────────────────────────────────────────────────────────
   const [revokingAll, setRevokingAll] = useState(false);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
+  const [revokeSuccess, setRevokeSuccess] = useState(false);
 
   // ── Fetch tunnel status ─────────────────────────────────────────────────────
   const fetchStatus = useCallback(async () => {
@@ -138,6 +125,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       setLoading(false);
     }
   }, [api]);
+
+  useEffect(() => {
+    void fetchStatus();
+  }, [fetchStatus]);
 
   // ── QR countdown timer ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -173,48 +164,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     };
   }, [activeQr]);
 
-  // ── Fetch sessions ──────────────────────────────────────────────────────────
-  const isRemoteSessionRef = useRef(false);
-  const fetchSessions = useCallback(async () => {
-    try {
-      const data = await api.listAuthSessions();
-      setSessions(data);
-      setSessionsError(null);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        setIsRemoteSession(true);
-        isRemoteSessionRef.current = true;
-      } else {
-        setSessionsError("Failed to load sessions.");
-      }
-    } finally {
-      setSessionsLoading(false);
-    }
-  }, [api]);
-
-  // ── Poll tunnel + session status ────────────────────────────────────────────
-  // GET /auth/sessions 403s for a tunnel-connected (remote) viewer — once that's
-  // been seen, stop re-requesting it on every tick; tunnel status is always safe
-  // to poll. Also refetches immediately when the tab regains focus, so a status
-  // change made from another device/tab doesn't sit stale for up to POLL_MS.
-  const POLL_MS = 12_000;
-  useEffect(() => {
-    function pollTick() {
-      void fetchStatus();
-      if (!isRemoteSessionRef.current) void fetchSessions();
-    }
-    pollTick(); // initial fetch, replaces the old one-shot effects
-    const interval = setInterval(pollTick, POLL_MS);
-    function onVisibilityChange() {
-      if (document.visibilityState === "visible") pollTick();
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [fetchStatus, fetchSessions]);
-
   // ── Open QR overlay ─────────────────────────────────────────────────────────
   async function openQr(type: "local" | "tunnel") {
     setQrLoading(type);
@@ -231,43 +180,19 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   }
 
   // ── Tunnel toggle ───────────────────────────────────────────────────────────
-  // Sessions the confirm-before-disable dialog is about to disconnect (Decision 4).
-  // `tunnelLive` — not `!tunnelInvalidated` — is what actually gets revoked server-side:
-  // a password/local-QR session has both flags false and must never be counted here.
-  const [confirmDisableSessions, setConfirmDisableSessions] = useState<AuthSession[] | null>(null);
-
-  async function performDisable() {
-    setConfirmDisableSessions(null);
-    setToggling(true);
-    setError(null);
-    try {
-      await api.disableTunnel();
-      setTunnel({ enabled: false, tunnelUrl: null });
-      // Close QR overlay if it was a tunnel QR
-      setActiveQr((prev) => (prev?.type === "tunnel" ? null : prev));
-      await fetchSessions(); // revoked sessions drop off the list
-    } catch (err) {
-      setError(errMessage(err, "Failed to toggle tunnel."));
-    } finally {
-      setToggling(false);
-    }
-  }
-
   async function handleToggleTunnel() {
-    if (tunnel.enabled) {
-      const liveSessions = sessions.filter((s) => s.tunnelLive);
-      if (liveSessions.length > 0) {
-        setConfirmDisableSessions(liveSessions);
-        return;
-      }
-      await performDisable();
-      return;
-    }
     setToggling(true);
     setError(null);
     try {
-      const result = await api.enableTunnel();
-      setTunnel({ enabled: result.enabled, tunnelUrl: result.tunnelUrl });
+      if (tunnel.enabled) {
+        await api.disableTunnel();
+        setTunnel({ enabled: false, tunnelUrl: null });
+        // Close QR overlay if it was a tunnel QR
+        setActiveQr((prev) => (prev?.type === "tunnel" ? null : prev));
+      } else {
+        const result = await api.enableTunnel();
+        setTunnel({ enabled: result.enabled, tunnelUrl: result.tunnelUrl });
+      }
     } catch (err) {
       setError(errMessage(err, "Failed to toggle tunnel."));
     } finally {
@@ -275,31 +200,17 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }
 
-  // ── Session handlers ────────────────────────────────────────────────────────
-  async function handleRevoke(nonce: string) {
-    setRevoking((prev) => new Set(prev).add(nonce));
-    try {
-      await api.revokeAuthSession(nonce);
-      setSessions((prev) => prev.filter((s) => s.nonce !== nonce));
-    } catch (err) {
-      setSessionsError(errMessage(err, "Failed to revoke session."));
-    } finally {
-      setRevoking((prev) => {
-        const n = new Set(prev);
-        n.delete(nonce);
-        return n;
-      });
-    }
-  }
-
+  // ── Revoke all browser sessions ─────────────────────────────────────────────
   async function handleRevokeAll() {
     setRevokingAll(true);
-    setSessionsError(null);
+    setRevokeError(null);
+    setRevokeSuccess(false);
     try {
-      await api.revokeAllAuthSessions();
-      await fetchSessions();
+      await api.revokeAllBrowserSessions();
+      setRevokeSuccess(true);
+      setTimeout(() => setRevokeSuccess(false), 3000);
     } catch (err) {
-      setSessionsError(errMessage(err, "Failed to revoke sessions."));
+      setRevokeError(errMessage(err, "Failed to revoke browser sessions."));
     } finally {
       setRevokingAll(false);
     }
@@ -449,79 +360,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     );
   }
 
-  // ── Confirm-before-disable overlay (Decision 4/CUJ 2) ───────────────────────
-  function renderConfirmDisableDialog() {
-    if (!confirmDisableSessions) return null;
-    return createPortal(
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 1000,
-          background: "rgba(0,0,0,0.65)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-        onClick={() => setConfirmDisableSessions(null)}
-      >
-        <div
-          style={{
-            background: "var(--bg-card)",
-            border: "var(--border-width) solid var(--border-default)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-5)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--space-3)",
-            maxWidth: 320,
-            width: "100%",
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-            Disable remote access?
-          </div>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            This will disconnect {confirmDisableSessions.length} remote session
-            {confirmDisableSessions.length !== 1 ? "s" : ""}:{" "}
-            {confirmDisableSessions
-              .map((s) => s.label ?? (s.createdVia === "qr" ? "Mobile" : "Desktop"))
-              .join(", ")}
-          </div>
-          <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end" }}>
-            <button
-              type="button"
-              className="btn btn--secondary"
-              onClick={() => setConfirmDisableSessions(null)}
-            >
-              Cancel
-            </button>
-            <button type="button" className="btn btn--danger" onClick={() => void performDisable()}>
-              Disable
-            </button>
-          </div>
-        </div>
-      </div>,
-      document.body,
-    );
-  }
-
-  // ── Remote session guard ────────────────────────────────────────────────────
-  if (isRemoteSession) {
-    return (
-      <div
-        style={{
-          padding: "var(--space-5)",
-          color: "var(--fg-muted)",
-          fontSize: "var(--font-size-sm)",
-        }}
-      >
-        Remote access settings are only available from the desktop.
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div style={{ padding: "var(--space-5)", color: "var(--fg-muted)" }}>Loading…</div>
@@ -537,7 +375,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {renderQrOverlay()}
-      {renderConfirmDisableDialog()}
 
       {/* Two cards side by side */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
@@ -637,138 +474,36 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
         </div>
       )}
 
-      {/* Connected devices section */}
+      {/* Revoke all browser sessions */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
         <div
           style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}
         >
-          Connected devices
+          Browser sessions
         </div>
-
-        {sessionsLoading ? (
-          <div style={{ color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
-            Loading…
+        <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+          Invalidates all active browser and mobile sessions immediately, including any live connections.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          <button
+            type="button"
+            className="btn btn--danger"
+            disabled={revokingAll}
+            onClick={() => void handleRevokeAll()}
+            style={{ alignSelf: "flex-start" }}
+          >
+            {revokingAll ? "Revoking…" : "Revoke all browser sessions"}
+          </button>
+          {revokeSuccess && (
+            <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-success, #16a34a)" }}>
+              All browser sessions revoked.
+            </span>
+          )}
+        </div>
+        {revokeError && (
+          <div style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-danger)" }}>
+            {revokeError}
           </div>
-        ) : (
-          <>
-            <div
-              style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}
-            >
-              <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-                {sessions.length} active session{sessions.length !== 1 ? "s" : ""}
-              </div>
-              {sessions.length > 1 && (
-                <button
-                  type="button"
-                  className="btn btn--danger"
-                  disabled={revokingAll}
-                  onClick={() => void handleRevokeAll()}
-                >
-                  {revokingAll ? "Revoking…" : "Revoke others"}
-                </button>
-              )}
-            </div>
-
-            {sessionsError && (
-              <div style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-danger)" }}>
-                {sessionsError}
-              </div>
-            )}
-
-            {sessions.length === 0 && !sessionsError && (
-              <div
-                style={{
-                  padding: "var(--space-5)",
-                  textAlign: "center",
-                  color: "var(--fg-muted)",
-                  fontSize: "var(--font-size-sm)",
-                }}
-              >
-                No active sessions.
-              </div>
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-              {[...sessions].sort((a, b) => Number(b.lastSeenAt) - Number(a.lastSeenAt)).map((session) => (
-                <div
-                  key={session.nonce}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "var(--space-3)",
-                    padding: "var(--space-3)",
-                    border: "var(--border-width) solid var(--border-default)",
-                    borderRadius: "var(--radius-md)",
-                    background: "var(--bg-card)",
-                    opacity: session.tunnelInvalidated ? 0.55 : 1,
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "var(--space-2)",
-                        marginBottom: 2,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontWeight: "var(--font-weight-medium)",
-                          fontSize: "var(--font-size-sm)",
-                        }}
-                      >
-                        {session.label ?? (session.createdVia === "qr" ? "Mobile" : "Desktop")}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: "var(--font-size-xs)",
-                          color: session.tunnelInvalidated ? "var(--fg-danger, #ef4444)" : "var(--fg-muted)",
-                          background: "var(--bg-input)",
-                          borderRadius: "var(--radius-sm)",
-                          padding: "1px 6px",
-                        }}
-                      >
-                        {session.tunnelInvalidated
-                          ? "tunnel invalidated"
-                          : session.createdVia === "qr"
-                            ? "QR"
-                            : "Password"}
-                      </span>
-                      {session.isCurrent && (
-                        <span
-                          style={{
-                            fontSize: "var(--font-size-xs)",
-                            color: "var(--fg-muted)",
-                            background: "var(--bg-input)",
-                            borderRadius: "var(--radius-sm)",
-                            padding: "1px 6px",
-                          }}
-                        >
-                          this session
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-                      Last seen {formatRelative(session.lastSeenAt)}
-                      {session.createdIp ? ` · ${session.createdIp}` : ""}
-                    </div>
-                  </div>
-                  {!session.isCurrent && (
-                    <button
-                      type="button"
-                      className="btn btn--secondary"
-                      disabled={revoking.has(session.nonce)}
-                      onClick={() => void handleRevoke(session.nonce)}
-                    >
-                      {revoking.has(session.nonce) ? "…" : "Revoke"}
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
         )}
       </div>
     </div>
