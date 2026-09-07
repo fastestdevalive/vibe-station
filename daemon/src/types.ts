@@ -456,6 +456,31 @@ export interface WorktreeRecord {
   sessions: SessionRecord[];
 }
 
+// ── Auth token types ─────────────────────────────────────────────────────────
+
+/** Identifies which client minted a token (server-determined at mint time). */
+export type TokenScope = "cli" | "tauri" | "browser";
+
+/**
+ * Payload embedded in every vst token.
+ * cli/tauri: only iat + scope.
+ * browser:  iat + scope + exp (7d TTL) + epoch (revocation check).
+ */
+export interface TokenPayload {
+  iat: number;
+  scope: TokenScope;
+  /** browser only — unix ms at which the token expires */
+  exp?: number;
+  /** browser only — authState.browserEpoch at mint time */
+  epoch?: number;
+}
+
+export type VerifyResult =
+  | { ok: true; payload: TokenPayload }
+  | { ok: false; reason: "invalid_signature" | "expired" | "epoch_mismatch" | "malformed" };
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface ProjectRecord {
   id: string;
   absolutePath: string;

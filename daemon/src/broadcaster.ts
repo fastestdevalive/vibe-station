@@ -1,5 +1,6 @@
 import type { ServerMessage } from "./ws/protocol.js";
 import type { WSConnection } from "./ws/connection.js";
+import type { TokenScope } from "./types.js";
 
 /**
  * WS broadcaster: manages broadcast events to connected clients.
@@ -48,12 +49,12 @@ export function notifySession(sessionId: string, msg: ServerMessage): void {
 }
 
 /**
- * Close all WebSocket connections authenticated with the given session nonce.
- * Called by the revoke route after stamping revokedAt in auth_sessions.
+ * Close all WebSocket connections authenticated with the given token scope.
+ * Called by POST /auth/revoke-browser after bumping browserEpoch.
  */
-export function closeConnectionsByNonce(nonce: string, code: number, reason: string): void {
+export function closeConnectionsByScope(scope: TokenScope, code: number, reason: string): void {
   for (const conn of connections) {
-    if (conn.nonce === nonce) {
+    if (conn.scope === scope) {
       try {
         conn.socket.close(code, reason);
       } catch {

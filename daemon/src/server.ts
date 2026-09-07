@@ -5,7 +5,6 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual } from "node:crypto";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
@@ -19,14 +18,9 @@ import { registerFsRoutes } from "./routes/fs.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerMobileAuthRoutes } from "./routes/mobileAuth.js";
 import { registerWSEndpoint } from "./ws/server.js";
-import {
-  COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
-  validateSessionCookie,
-  parseSessionCookie,
-  generateSessionCookieWithNonce,
-} from "./auth.js";
-import { isLive, needsBump, bump, touchLastSeen } from "./state/auth-session-store.js";
+import { COOKIE_NAME, verifyToken } from "./auth.js";
+import type { AuthState } from "./state/auth-state.js";
+import type { TokenPayload } from "./types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -40,7 +34,6 @@ const AUTH_EXEMPT = new Set([
   "GET /ws",
   "POST /auth/login",
   "POST /auth/logout",
-  "GET /auth/check",
   "GET /mobile-auth",
 ]);
 
@@ -65,8 +58,8 @@ function readVersion(): string {
 export interface BuildServerOptions {
   port?: number;
   logger?: boolean;
-  /** Daemon token for auth. When omitted all requests are allowed (dev/test). */
-  token?: string;
+  /** In-memory auth state (daemonToken + browserEpoch). When omitted all requests are allowed (dev/test). */
+  authState?: AuthState;
   /**
    * Dev escape hatch (VST_NO_AUTH): disable the auth guard entirely so the web
    * UI loads with no login. The auth routes are still served as no-op stubs so
@@ -76,12 +69,17 @@ export interface BuildServerOptions {
   noAuth?: boolean;
   /** Override the auto-detected web-ui/dist path (used in tests). */
   distPath?: string;
+  /**
+   * Callback to persist the current browserEpoch to config.json.
+   * Passed to auth routes so they can flush epoch bumps without importing main.ts.
+   */
+  persistEpoch?: () => Promise<void>;
 }
 
 export async function buildServer(opts: BuildServerOptions = {}) {
   const startedAt = Date.now();
   const version = readVersion();
-  const { token, noAuth } = opts;
+  const { authState, noAuth, persistEpoch } = opts;
   // distPath: explicit override (tests) or auto-detected from two-try candidates
   const distPath =
     opts.distPath ??
@@ -108,20 +106,15 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await app.register(fastifyCookie);
 
   // CORS — reflect the request origin (any origin) and allow credentials.
-  // CSRF defense lives at the cookie layer: HMAC-signed session token +
-  // SameSite=Strict. An origin allowlist here would block legitimate LAN /
-  // Tailscale / reverse-proxy access without adding meaningful protection,
-  // since unauthenticated origins still can't forge a valid cookie.
   await app.register(fastifyCors, {
     origin: true,
     credentials: true,
   });
 
   // ── Auth guard ───────────────────────────────────────────────────────────────
-  if (token && !noAuth) {
+  if (authState && !noAuth) {
     app.addHook("onRequest", async (req, reply) => {
       const key = `${req.method} ${req.routeOptions?.url ?? new URL(req.url, "http://x").pathname}`;
-      if (AUTH_EXEMPT.has(key)) return;
 
       // Loopback requests are implicitly trusted — if you can reach 127.0.0.1
       // you are already on the machine. This removes the password prompt for
@@ -133,54 +126,60 @@ export async function buildServer(opts: BuildServerOptions = {}) {
       // unauthenticated access to every route. CF-Connecting-IP is set by the
       // Cloudflare edge and cannot be stripped by the remote client; a local
       // process that forges it only loses privileges, never gains them.
+      //
+      // M2: The CSRF/Origin check is applied BEFORE the AUTH_EXEMPT early-return
+      // so that /auth/login and /auth/logout cannot be CSRF'd from another loopback origin.
       const viaTunnel = !!req.headers["cf-connecting-ip"];
       const ip = req.ip;
-      if (!viaTunnel && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1")) return;
+      if (!viaTunnel && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1")) {
+        // CSRF guard: if Origin header present it must match the daemon's own origin.
+        // CLI tools and curl don't send Origin — they pass through unchanged.
+        // A browser tab on a DIFFERENT origin (cross-site request) sends Origin and
+        // is rejected here. Vite dev proxy forwards same-origin requests without
+        // an Origin header for GET, so this does not break the dev workflow for
+        // GET-heavy routes. POST requests from Vite dev (port 5173) carry
+        // Origin: http://localhost:5173 which this check rejects — see Open Question 2.
+        const origin = req.headers.origin;
+        if (origin) {
+          const allowed = [
+            `http://localhost:${opts.port}`,
+            `http://127.0.0.1:${opts.port}`,
+            // Vite dev server proxies POST requests with its own origin header.
+            // Only allowed in non-production environments.
+            ...(process.env.NODE_ENV !== "production"
+              ? ["http://localhost:5173", "http://127.0.0.1:5173"]
+              : []),
+          ];
+          if (!allowed.includes(origin)) {
+            return reply.status(403).send({ error: "Forbidden." });
+          }
+        }
+        // Trusted loopback (CSRF check passed) — no credentials needed for any route.
+        return;
+      }
 
       // Static plugin catch-all (/*) and SPA fallback (no routeOptions) serve the
       // app bundle — exempt so the browser can bootstrap before showing login.
       const routeUrl = req.routeOptions?.url;
       if (!routeUrl || routeUrl === "/*") return;
 
-      // Path 1 — CLI: Authorization: Bearer <daemonToken>
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith("Bearer ")) {
-        const provided = Buffer.from(authHeader.slice(7));
-        const expected = Buffer.from(token);
-        if (provided.length === expected.length) {
-          try {
-            if (timingSafeEqual(provided, expected)) return;
-          } catch { /* fall through */ }
-        }
-        return reply.status(401).send({ error: "Invalid token." });
-      }
+      // Routes exempt from credential check (but still subject to CSRF check above
+      // when accessed from loopback).
+      if (AUTH_EXEMPT.has(key)) return;
 
-      // Path 2 — Browser: vst-session cookie
+      // Extract credential: Bearer token or cookie
+      const authHeader = req.headers.authorization;
       const cookies = (req as typeof req & { cookies?: Record<string, string> }).cookies ?? {};
-      const sessionCookie = cookies[COOKIE_NAME] ?? "";
-      if (!validateSessionCookie(sessionCookie, token)) {
+      const rawToken = authHeader?.startsWith("Bearer ")
+        ? authHeader.slice(7)
+        : (cookies[COOKIE_NAME] ?? "");
+
+      const result = verifyToken(rawToken, authState);
+      if (!result.ok) {
         return reply.status(401).send({ error: "Not authenticated." });
       }
-
-      const parsed = parseSessionCookie(sessionCookie);
-      if (!parsed) return reply.status(401).send({ error: "Not authenticated." });
-      if (!isLive(parsed.nonce)) return reply.status(401).send({ error: "Session expired or revoked." });
-
-      // Sliding bump: re-issue cookie when lastSeenAt is >1 h ago to reset HMAC TTL clock.
-      // Must run before touchLastSeen — bump checks cache.lastSeenAt and touchLastSeen resets it.
-      if (needsBump(parsed.nonce)) {
-        bump(parsed.nonce);
-        const newCookie = generateSessionCookieWithNonce(token, parsed.nonce);
-        const isTunnel = !!req.headers["cf-connecting-ip"];
-        const attrs = isTunnel
-          ? `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`
-          : `HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
-        void reply.header("Set-Cookie", `${COOKIE_NAME}=${newCookie}; ${attrs}`);
-      }
-
-      // Update lastSeenAt on every request (throttled to once per 5 min in the store).
-      // Runs after bump so needsBump's cache read is not clobbered by the touch.
-      touchLastSeen(parsed.nonce);
+      // Attach payload to request for downstream use (e.g. /auth/check)
+      (req as typeof req & { authPayload?: TokenPayload }).authPayload = result.payload;
     });
   }
 
@@ -193,10 +192,11 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     app.get("/auth/check", async (_req, reply) => reply.send({ ok: true }));
     app.post("/auth/login", async (_req, reply) => reply.send({ ok: true }));
     app.post("/auth/logout", async (_req, reply) => reply.send({ ok: true }));
-  } else if (token) {
-    registerAuthRoutes(app, token);
+    app.post("/auth/revoke-browser", async (_req, reply) => reply.send({ ok: true, browserEpoch: 0 }));
+  } else if (authState) {
+    registerAuthRoutes(app, persistEpoch ?? (() => Promise.resolve()));
   }
-  registerMobileAuthRoutes(app, { token, noAuth, port: opts.port });
+  registerMobileAuthRoutes(app, { authState, noAuth, port: opts.port });
   registerProjectRoutes(app);
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);
@@ -214,7 +214,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     });
   }
 
-  await registerWSEndpoint(app, noAuth ? undefined : token);
+  await registerWSEndpoint(app, noAuth ? undefined : authState);
 
   return app;
 }

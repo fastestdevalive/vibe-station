@@ -3,15 +3,13 @@ import type { FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
 import {
   COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
-  generateSessionCookieWithNonce,
-  parseSessionCookie,
+  BROWSER_MAX_AGE_SECONDS,
+  mintToken,
   checkMobileAuthRateLimit,
 } from "../auth.js";
 import * as cloudflared from "../services/cloudflared.js";
-import { resolveTunnelPort } from "../services/tunnelPort.js";
-import * as sessionStore from "../state/auth-session-store.js";
-import { closeConnectionsByNonce } from "../broadcaster.js";
+import { getAuthState } from "../state/auth-state.js";
+import type { AuthState } from "../state/auth-state.js";
 
 interface OneTimeCode {
   createdAt: number;
@@ -35,21 +33,24 @@ function isTunnelRequest(req: { headers: Record<string, string | string[] | unde
 }
 
 export interface MobileAuthOpts {
-  token?: string;
+  authState?: AuthState;
   port?: number;
   noAuth?: boolean;
 }
 
 export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthOpts): void {
-  const { token, port = 7421, noAuth = false } = opts;
-  const tunnelPort = resolveTunnelPort(port);
+  const { authState, port = 7421, noAuth = false } = opts;
+  // VST_TUNNEL_PORT lets dev environments (docker, local Vite) point cloudflared
+  // at the web UI server instead of the daemon. In production the daemon serves
+  // the SPA directly so this env var is not set and `port` is used as-is.
+  const tunnelPort = process.env.VST_TUNNEL_PORT ? Number(process.env.VST_TUNNEL_PORT) : port;
 
   // POST /auth/tunnel/enable
   app.post("/auth/tunnel/enable", async (req, reply) => {
     if (isTunnelRequest(req)) {
       return reply.status(403).send({ error: "TUNNEL_ONLY_BLOCKED" });
     }
-    if (noAuth || !token) {
+    if (noAuth || !authState) {
       return reply.status(409).send({ error: "Tunnel unavailable in no-auth mode" });
     }
     const current = cloudflared.getState();
@@ -69,25 +70,10 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
     if (isTunnelRequest(req)) {
       return reply.status(403).send({ error: "TUNNEL_ONLY_BLOCKED" });
     }
-    const { tunnelUrl: liveUrl } = cloudflared.getState();
     // Only tunnel-minted codes become unusable when the tunnel goes away.
-    // A local-network QR shown at the same time must keep working. Purged
-    // BEFORE disable()/the session revoke below so a /mobile-auth redemption
-    // already in flight can't slip a fresh session in under the old URL
-    // after the sessions snapshot is taken.
+    // A local-network QR shown at the same time must keep working.
     for (const [code, entry] of oneTimeCodes) {
       if (entry.origin === "tunnel") oneTimeCodes.delete(code);
-    }
-    // "Disable" really disconnects — revoke every session that authenticated
-    // through the tunnel that was live, and close its socket. Snapshot BEFORE
-    // disable() clears the live URL / BEFORE revoking, since list() filters
-    // out revoked rows and cloudflared.disable() below zeroes state.tunnelUrl.
-    if (liveUrl) {
-      const doomed = sessionStore.list().filter((row) => row.tunnelUrl === liveUrl);
-      for (const row of doomed) {
-        sessionStore.revoke(row.nonce);
-        closeConnectionsByNonce(row.nonce, 4403, "Tunnel disabled");
-      }
     }
     cloudflared.disable(tunnelPort);
     return reply.send({ enabled: false });
@@ -235,39 +221,31 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
 </html>`);
     }
 
-    // Check config before burning the code — a 503 here must not leave the user
+    // Check auth state before burning the code — a 503 here must not leave the user
     // with a dead QR they can never retry.
-    if (!token) {
+    if (!authState) {
       return reply.status(503).send({ error: "Auth not configured" });
     }
 
     // Mark consumed before issuing cookie — prevents any race on double-scan
     entry.consumed = true;
 
-    // Mint the nonce first so the session row can never diverge from the cookie.
-    // (Deriving it by re-parsing the cookie could in principle yield null, which
-    // would set a cookie with no backing row — every later request would then
-    // fail isLive() and the device would be locked out with no way to recover.)
-    const nonce = randomBytes(16).toString("hex");
-    const cookieValue = generateSessionCookieWithNonce(token, nonce);
-    sessionStore.issue(nonce, {
-      createdVia: "qr",
-      userAgent: req.headers["user-agent"] ?? undefined,
-      createdIp: ipStr,
-      // Stamp the tunnel URL live right now, for a tunnel-origin login only —
-      // lets GET /auth/sessions later tell a still-reachable session from one
-      // whose tunnel has since gone stale (tunnel-persistence, Decision 1/2).
-      tunnelUrl: viaTunnel ? (cloudflared.getState().tunnelUrl ?? undefined) : undefined,
-    });
+    // Mint a browser-scope token. getAuthState() is safe here — authState is
+    // checked above and the module singleton is the same reference.
+    const cookieValue = mintToken("browser", getAuthState());
 
     // `Secure` is only valid over HTTPS. The tunnel is HTTPS, but the local /
     // Tailscale QR is plain http://<ip>:<port> — browsers silently DROP a
     // Secure cookie on an insecure origin, which would make local QR login
     // appear to succeed and then bounce the phone back to the login screen.
     const cookieAttrs = viaTunnel
-      ? `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`
-      : `HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}`;
+      ? `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${BROWSER_MAX_AGE_SECONDS}`
+      : `HttpOnly; SameSite=Lax; Path=/; Max-Age=${BROWSER_MAX_AGE_SECONDS}`;
     void reply.header("Set-Cookie", `${COOKIE_NAME}=${cookieValue}; ${cookieAttrs}`);
+
+    // Suppress unused variable warning — ipStr used for rate limiting above.
+    void ipStr;
+
     // Serve a self-contained HTML page rather than redirecting to "/".
     // A redirect to "/" returns 404 when the daemon has no built web-ui/dist
     // (e.g. docker dev sandbox where Vite serves the UI on a different port).
@@ -302,89 +280,5 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
 </div>
 </body>
 </html>`);
-  });
-
-  // GET /auth/sessions — desktop only
-  app.get("/auth/sessions", async (req, reply) => {
-    if (isTunnelRequest(req)) {
-      return reply.status(403).send({ error: "TUNNEL_ONLY_BLOCKED" });
-    }
-    const cookies = (req as typeof req & { cookies?: Record<string, string> }).cookies ?? {};
-    const currentNonce = parseSessionCookie(cookies[COOKIE_NAME] ?? "")?.nonce ?? null;
-    const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-    const isLoopback = loopbackAddresses.has(req.ip ?? "");
-    const { tunnelUrl: liveTunnelUrl } = cloudflared.getState();
-    const sessions = sessionStore.list().map((row) => {
-      const isCurrent =
-        currentNonce !== null
-          ? row.nonce === currentNonce
-          : isLoopback && loopbackAddresses.has(row.createdIp ?? "");
-      // Computed on every read, never stored (tunnel-persistence, Decision 2).
-      // Mutually exclusive; both false for a password/local-QR row (tunnelUrl: null).
-      const tunnelInvalidated = row.tunnelUrl !== null && row.tunnelUrl !== liveTunnelUrl;
-      const tunnelLive = row.tunnelUrl !== null && row.tunnelUrl === liveTunnelUrl;
-      // List fields explicitly rather than spreading `row` — raw tunnelUrl must
-      // never reach the client, only the two computed booleans above.
-      return {
-        nonce: row.nonce,
-        label: row.label,
-        createdVia: row.createdVia,
-        createdAt: row.createdAt,
-        lastSeenAt: row.lastSeenAt,
-        createdIp: row.createdIp,
-        expiresAt: row.expiresAt,
-        isCurrent,
-        tunnelInvalidated,
-        tunnelLive,
-      };
-    });
-    return reply.send({ sessions });
-  });
-
-  // DELETE /auth/sessions/:nonce — desktop only; revoke one session
-  app.delete<{ Params: { nonce: string } }>("/auth/sessions/:nonce", async (req, reply) => {
-    if (isTunnelRequest(req)) {
-      return reply.status(403).send({ error: "TUNNEL_ONLY_BLOCKED" });
-    }
-    const { nonce } = req.params;
-
-    // Prevent self-revoke
-    const cookies = (req as typeof req & { cookies?: Record<string, string> }).cookies ?? {};
-    const sessionCookie = cookies[COOKIE_NAME] ?? "";
-    const currentParsed = parseSessionCookie(sessionCookie);
-    if (currentParsed?.nonce === nonce) {
-      return reply.status(403).send({ error: "CANNOT_REVOKE_SELF" });
-    }
-
-    const row = sessionStore.get(nonce);
-    if (!row) return reply.status(404).send({ error: "Session not found" });
-
-    sessionStore.revoke(nonce);
-    closeConnectionsByNonce(nonce, 4403, "Session revoked");
-    return reply.send({ ok: true });
-  });
-
-  // DELETE /auth/sessions — desktop only; revoke all except current
-  app.delete("/auth/sessions", async (req, reply) => {
-    if (isTunnelRequest(req)) {
-      return reply.status(403).send({ error: "TUNNEL_ONLY_BLOCKED" });
-    }
-    const cookies = (req as typeof req & { cookies?: Record<string, string> }).cookies ?? {};
-    const sessionCookie = cookies[COOKIE_NAME] ?? "";
-    const currentParsed = parseSessionCookie(sessionCookie);
-    const currentNonce = currentParsed?.nonce ?? "__none__";
-
-    // Snapshot BEFORE revoking: list() filters out revoked rows, so reading it
-    // afterwards yields only the surviving session and no socket is ever closed
-    // — a revoked phone would keep its live WS (and full control) indefinitely.
-    const doomed = sessionStore.list().filter((row) => row.nonce !== currentNonce);
-    const revokedCount = sessionStore.revokeAllExcept(currentNonce);
-
-    // Close WS connections for all revoked sessions
-    for (const row of doomed) {
-      closeConnectionsByNonce(row.nonce, 4403, "Session revoked");
-    }
-
-    return reply.send({ revokedCount });
   });
 }

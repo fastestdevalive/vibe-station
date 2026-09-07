@@ -163,7 +163,7 @@ describe("ensureSchema — hiddenAt column (hide-worktrees)", () => {
   });
 });
 
-describe("ensureSchema — tunnel_state table + auth_sessions.tunnelUrl column (tunnel-persistence)", () => {
+describe("ensureSchema — tunnel_state table (tunnel-persistence)", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "vst-dbschema-test-"));
   });
@@ -172,7 +172,7 @@ describe("ensureSchema — tunnel_state table + auth_sessions.tunnelUrl column (
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("fresh database: tunnel_state table exists and auth_sessions has tunnelUrl", () => {
+  it("fresh database: tunnel_state table exists", () => {
     const db = new Database(join(tempDir, "fresh.db"));
     ensureSchema(db);
 
@@ -180,54 +180,48 @@ describe("ensureSchema — tunnel_state table + auth_sessions.tunnelUrl column (
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='tunnel_state'")
       .get();
     expect(tunnelStateTable).toBeDefined();
-
-    const authSessionsColumns = db.pragma("table_info(auth_sessions)") as { name: string }[];
-    expect(authSessionsColumns.some((c) => c.name === "tunnelUrl")).toBe(true);
     db.close();
   });
 
-  it("already-migrated database (pre-existing auth_sessions table without tunnelUrl) gets it backfilled via ALTER TABLE, preserving existing rows", () => {
-    const dbPath = join(tempDir, "legacy.db");
-    const db = new Database(dbPath);
-
-    // Simulate an `auth_sessions` table shape from before this feature existed.
+  // The stateless HMAC auth redesign removed the `auth_sessions` table
+  // entirely (browser sessions are now epoch-revoked bearer tokens, not rows),
+  // so ensureSchema must no longer touch it — not even to ALTER a column onto
+  // it. A database created by an older build still HAS the table; ensureSchema
+  // simply leaves it alone rather than migrating it.
+  it("leaves a legacy auth_sessions table untouched and never recreates one", () => {
+    const db = new Database(join(tempDir, "legacy.db"));
     db.exec(`
       CREATE TABLE auth_sessions (
         nonce      TEXT PRIMARY KEY,
-        userId     TEXT NOT NULL DEFAULT 'local',
         createdAt  TEXT NOT NULL,
-        issuedAt   TEXT NOT NULL,
-        expiresAt  TEXT NOT NULL,
-        lastSeenAt TEXT NOT NULL,
-        createdVia TEXT NOT NULL CHECK (createdVia IN ('password','qr')),
-        label      TEXT,
-        userAgent  TEXT,
-        createdIp  TEXT,
-        revokedAt  TEXT
+        createdVia TEXT NOT NULL
       );
     `);
     db.prepare(
-      `INSERT INTO auth_sessions (nonce, createdAt, issuedAt, expiresAt, lastSeenAt, createdVia)
-       VALUES ('n-old', '1', '1', '999999999999', '1', 'password')`,
+      `INSERT INTO auth_sessions (nonce, createdAt, createdVia) VALUES ('n-old', '1', 'password')`,
     ).run();
 
-    let columns = db.pragma("table_info(auth_sessions)") as { name: string }[];
-    expect(columns.some((c) => c.name === "tunnelUrl")).toBe(false);
-
-    ensureSchema(db);
-
-    columns = db.pragma("table_info(auth_sessions)") as { name: string }[];
-    expect(columns.some((c) => c.name === "tunnelUrl")).toBe(true);
-
-    const row = db.prepare("SELECT * FROM auth_sessions WHERE nonce = ?").get("n-old") as {
-      nonce: string;
-      tunnelUrl: string | null;
-    };
-    expect(row.nonce).toBe("n-old");
-    expect(row.tunnelUrl).toBeNull();
-
-    // Calling ensureSchema again (next boot, both the table and the column already present) must not error.
     expect(() => ensureSchema(db)).not.toThrow();
+
+    // No tunnelUrl column was bolted on, and the pre-existing row survives.
+    const columns = db.pragma("table_info(auth_sessions)") as { name: string }[];
+    expect(columns.some((c) => c.name === "tunnelUrl")).toBe(false);
+    const row = db.prepare("SELECT nonce FROM auth_sessions WHERE nonce = ?").get("n-old");
+    expect(row).toBeDefined();
+    db.close();
+  });
+
+  // Regression for the rebase fallout: ensureSchema used to ALTER
+  // `auth_sessions` unconditionally, which threw "no such table" on any
+  // database created after the table was dropped from the schema — i.e. every
+  // fresh install, at daemon boot.
+  it("fresh database: does not create or require an auth_sessions table", () => {
+    const db = new Database(join(tempDir, "no-auth-sessions.db"));
+    expect(() => ensureSchema(db)).not.toThrow();
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='auth_sessions'")
+      .get();
+    expect(table).toBeUndefined();
     db.close();
   });
 

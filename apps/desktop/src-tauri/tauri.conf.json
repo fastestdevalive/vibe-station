@@ -12,6 +12,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "vibe-station",
         "width": 1400,
         "height": 900,

@@ -1,7 +1,6 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
-  AuthSession,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
@@ -1184,23 +1183,10 @@ export function createClientApi() {
       return parseJson<LocalQrResponse>(res);
     },
 
-    async listAuthSessions(): Promise<AuthSession[]> {
-      const res = await apiFetch(`${baseUrl()}/auth/sessions`);
-      const data = await parseJson<{ sessions: AuthSession[] }>(res);
-      return data.sessions;
-    },
-
-    async revokeAuthSession(nonce: string): Promise<void> {
-      const res = await apiFetch(`${baseUrl()}/auth/sessions/${encodeURIComponent(nonce)}`, { method: "DELETE" });
-      // parseJson throws on !ok — without it a rejected revoke (403
-      // CANNOT_REVOKE_SELF, 404) would look like a success and the UI would drop
-      // a device row that is still fully authenticated.
-      await parseJson<{ ok: true }>(res);
-    },
-
-    async revokeAllAuthSessions(): Promise<void> {
-      const res = await apiFetch(`${baseUrl()}/auth/sessions`, { method: "DELETE" });
-      await parseJson<{ revokedCount: number }>(res);
+    async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> {
+      const res = await apiFetch(`${baseUrl()}/auth/revoke-browser`, { method: "POST" });
+      if (!res.ok) throw new Error("Failed to revoke browser sessions");
+      return res.json() as Promise<{ ok: boolean; browserEpoch: number }>;
     },
 
     getConnectionState(): ConnectionState {

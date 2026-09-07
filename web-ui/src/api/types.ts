@@ -18,22 +18,6 @@ export interface LocalQrResponse {
   connectionType: "tailscale" | "lan";
 }
 
-export interface AuthSession {
-  nonce: string;
-  label: string | null;
-  createdVia: "password" | "qr";
-  createdAt: string;
-  lastSeenAt: string;
-  createdIp: string | null;
-  expiresAt: string;
-  /** True for the session the current viewer is authenticated with. */
-  isCurrent?: boolean;
-  /** Server-computed: this session's tunnelUrl no longer matches the live tunnel (tunnel-persistence). Never true together with tunnelLive. */
-  tunnelInvalidated: boolean;
-  /** Server-computed: this session is currently reachable via the live tunnel — the set Disable will actually revoke (tunnel-persistence). */
-  tunnelLive: boolean;
-}
-
 export interface HealthResponse {
   ok: boolean;
   version: string;

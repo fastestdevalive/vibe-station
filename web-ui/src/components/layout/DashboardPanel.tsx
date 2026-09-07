@@ -61,23 +61,12 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
   const navigate = useNavigate();
 
   // ── Header indicators ───────────────────────────────────────────────────────
-  const [remoteCount, setRemoteCount] = useState(0);
   const [tunnelEnabled, setTunnelEnabled] = useState(false);
 
-  // Both indicators are best-effort and must settle independently: on a remote
-  // (QR) session /auth/sessions answers 403 TUNNEL_ONLY_BLOCKED, and a shared
-  // Promise.all would swallow the tunnel status too, showing "tunnel off" while
-  // the phone is literally connected through the tunnel.
   const fetchHeaderStats = useCallback(async () => {
-    const [authSessions, tunnelState] = await Promise.allSettled([
-      api.listAuthSessions(),
-      api.getTunnelStatus(),
-    ]);
-    if (authSessions.status === "fulfilled") {
-      setRemoteCount(authSessions.value.filter((s) => s.createdVia === "qr").length);
-    }
-    if (tunnelState.status === "fulfilled") {
-      setTunnelEnabled(tunnelState.value.enabled);
+    const tunnelState = await api.getTunnelStatus().catch(() => null);
+    if (tunnelState) {
+      setTunnelEnabled(tunnelState.enabled);
     }
   }, [api]);
 
@@ -277,18 +266,6 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       >
         <div className="dashboard-header">
           <div className="dashboard-header__wordmark">vibe-station</div>
-          {remoteCount > 0 && (
-            <span
-              style={{
-                fontSize: "var(--font-size-xs)",
-                color: "var(--fg-muted)",
-                cursor: "pointer",
-              }}
-              onClick={() => navigate("/settings")}
-            >
-              · {remoteCount} device{remoteCount !== 1 ? "s" : ""}
-            </span>
-          )}
           <span
             style={{
               fontSize: "var(--font-size-xs)",

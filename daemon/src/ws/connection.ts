@@ -2,7 +2,7 @@ import type { WebSocket } from "@fastify/websocket";
 import type { ServerMessage } from "./protocol.js";
 import type { SessionStream } from "./streams/sessionStream.js";
 import type { JsonAgentStream } from "./streams/jsonAgentStream.js";
-import type { NormalizedEvent, SessionMeta } from "../types.js";
+import type { NormalizedEvent, SessionMeta, TokenScope } from "../types.js";
 
 /**
  * A live JSON chat subscription: listeners attached to a session's
@@ -48,8 +48,8 @@ export class WSConnection {
    * daemon actually received vs. what the client thought it sent.
    */
   debugInput = false;
-  /** Set at auth time so revoke can close this connection by nonce. */
-  nonce: string | null = null;
+  /** Set at auth time so revoke can close connections by scope. null = noAuth or CLI Bearer. */
+  scope: TokenScope | null = null;
 
   constructor(private ws: WebSocket) {
     this.id = Math.random().toString(36).slice(2);

@@ -13,7 +13,6 @@ vi.mock("../services/paths.js", async () => {
     vstHome: () => tempDir,
     dbPath: () => pathJoin(tempDir, "vibe-station.db"),
     daemonLogPath: () => pathJoin(tempDir, "logs", "daemon.log"),
-    cloudflaredLogPath: () => pathJoin(tempDir, "logs", "cloudflared.log"),
   };
 });
 
@@ -29,15 +28,22 @@ vi.mock("../services/cloudflared.js", () => ({
   }),
 }));
 
-const BEARER = { authorization: "Bearer test-token" };
 const TUNNEL_IP = { "cf-connecting-ip": "1.2.3.4" };
 
-async function importBuildServer() {
-  const mod = await import("../server.js");
-  return mod.buildServer;
+/**
+ * Build a server wired to a real in-memory auth state. The stateless auth
+ * redesign replaced `buildServer({ token })` with an `authState` holding the
+ * daemonToken + browserEpoch; `/mobile-auth` mints a browser-scope token off
+ * it, and returns 503 when it's absent.
+ */
+async function importDeps() {
+  const server = await import("../server.js");
+  const authStateMod = await import("../state/auth-state.js");
+  authStateMod.loadAuthState("test-daemon-token", 0);
+  return { buildServer: server.buildServer, authState: authStateMod.getAuthState() };
 }
 
-describe("mobileAuth routes — tunnel-persistence", () => {
+describe("mobileAuth routes — QR code redemption", () => {
   let app: FastifyInstance;
 
   beforeEach(async () => {
@@ -51,16 +57,15 @@ describe("mobileAuth routes — tunnel-persistence", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("3.T1 — a tunnel-origin /mobile-auth redemption stamps the session's tunnelUrl to the live URL", async () => {
+  it("a tunnel-origin /mobile-auth redemption issues a browser session cookie", async () => {
     tunnelState = { enabled: true, tunnelUrl: "https://live.trycloudflare.com", startedAt: 1 };
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
-    // Mint a tunnel-origin QR code the same way /auth/mobile-qr would, but
-    // directly via the route to keep this test focused on the redemption path.
-    const qrRes = await app.inject({ method: "POST", url: "/auth/mobile-qr", headers: BEARER });
+    const qrRes = await app.inject({ method: "POST", url: "/auth/mobile-qr" });
     expect(qrRes.statusCode).toBe(200);
     const { qrUrl } = qrRes.json() as { qrUrl: string };
+    expect(qrUrl.startsWith("https://live.trycloudflare.com/mobile-auth?code=")).toBe(true);
     const code = new URL(qrUrl).searchParams.get("code")!;
 
     const redeemRes = await app.inject({
@@ -69,84 +74,65 @@ describe("mobileAuth routes — tunnel-persistence", () => {
       headers: TUNNEL_IP,
     });
     expect(redeemRes.statusCode).toBe(200);
-
-    const sessionStore = await import("../state/auth-session-store.js");
-    const rows = sessionStore.list();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.tunnelUrl).toBe("https://live.trycloudflare.com");
+    // Tunnel origin is HTTPS, so the cookie must carry `Secure`.
+    expect(redeemRes.headers["set-cookie"]).toMatch(/Secure/);
   });
 
-  it("3.T2 — a local-network /mobile-auth redemption (no cf-connecting-ip) stamps tunnelUrl: null", async () => {
-    tunnelState = { enabled: true, tunnelUrl: "https://live.trycloudflare.com", startedAt: 1 };
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+  it("a local-network redemption issues a cookie WITHOUT Secure (plain http origin)", async () => {
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
-    const qrRes = await app.inject({ method: "POST", url: "/auth/local-qr", headers: BEARER });
+    const qrRes = await app.inject({ method: "POST", url: "/auth/local-qr" });
     expect(qrRes.statusCode).toBe(200);
     const { qrUrl } = qrRes.json() as { qrUrl: string };
     const code = new URL(qrUrl).searchParams.get("code")!;
 
     const redeemRes = await app.inject({ method: "GET", url: `/mobile-auth?code=${code}` });
     expect(redeemRes.statusCode).toBe(200);
-
-    const sessionStore = await import("../state/auth-session-store.js");
-    const rows = sessionStore.list();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.tunnelUrl).toBeNull();
+    // Browsers silently drop a Secure cookie on an insecure origin, which would
+    // make local-QR login appear to succeed then bounce back to the login screen.
+    expect(redeemRes.headers["set-cookie"]).not.toMatch(/Secure/);
   });
 
-  it("3.T3 — GET /auth/sessions computes tunnelInvalidated/tunnelLive server-side and omits raw tunnelUrl", async () => {
-    tunnelState = { enabled: true, tunnelUrl: "https://current.trycloudflare.com", startedAt: 1 };
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+  it("POST /auth/mobile-qr is 409 when the tunnel is not enabled", async () => {
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
-    const sessionStore = await import("../state/auth-session-store.js");
-    sessionStore.issue("nonce-live", { createdVia: "qr", tunnelUrl: "https://current.trycloudflare.com" });
-    sessionStore.issue("nonce-stale", { createdVia: "qr", tunnelUrl: "https://old.trycloudflare.com" });
-    sessionStore.issue("nonce-password", { createdVia: "password" });
-
-    const res = await app.inject({ method: "GET", url: "/auth/sessions", headers: BEARER });
-    expect(res.statusCode).toBe(200);
-    const { sessions } = res.json() as {
-      sessions: Array<{ nonce: string; tunnelInvalidated: boolean; tunnelLive: boolean; tunnelUrl?: string }>;
-    };
-
-    const byNonce = Object.fromEntries(sessions.map((s) => [s.nonce, s]));
-    expect(byNonce["nonce-live"]).toMatchObject({ tunnelInvalidated: false, tunnelLive: true });
-    expect(byNonce["nonce-stale"]).toMatchObject({ tunnelInvalidated: true, tunnelLive: false });
-    expect(byNonce["nonce-password"]).toMatchObject({ tunnelInvalidated: false, tunnelLive: false });
-    for (const s of sessions) expect(s.tunnelUrl).toBeUndefined();
+    const res = await app.inject({ method: "POST", url: "/auth/mobile-qr" });
+    expect(res.statusCode).toBe(409);
   });
 
-  it("3.T4 — POST /auth/tunnel/disable revokes only live-tunnel sessions and closes their connections", async () => {
+  it("POST /auth/tunnel/disable invalidates tunnel-minted codes but not local ones", async () => {
     tunnelState = { enabled: true, tunnelUrl: "https://current.trycloudflare.com", startedAt: 1 };
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
-    const sessionStore = await import("../state/auth-session-store.js");
-    const broadcaster = await import("../broadcaster.js");
-    const closeSpy = vi.spyOn(broadcaster, "closeConnectionsByNonce");
+    const tunnelCode = new URL(
+      (await app.inject({ method: "POST", url: "/auth/mobile-qr" })).json<{ qrUrl: string }>().qrUrl,
+    ).searchParams.get("code")!;
+    const localCode = new URL(
+      (await app.inject({ method: "POST", url: "/auth/local-qr" })).json<{ qrUrl: string }>().qrUrl,
+    ).searchParams.get("code")!;
 
-    sessionStore.issue("nonce-live-1", { createdVia: "qr", tunnelUrl: "https://current.trycloudflare.com" });
-    sessionStore.issue("nonce-live-2", { createdVia: "qr", tunnelUrl: "https://current.trycloudflare.com" });
-    sessionStore.issue("nonce-password", { createdVia: "password" });
-
-    const res = await app.inject({ method: "POST", url: "/auth/tunnel/disable", headers: BEARER });
+    const res = await app.inject({ method: "POST", url: "/auth/tunnel/disable" });
     expect(res.statusCode).toBe(200);
 
-    const remaining = sessionStore.list().map((r) => r.nonce);
-    expect(remaining).not.toContain("nonce-live-1");
-    expect(remaining).not.toContain("nonce-live-2");
-    expect(remaining).toContain("nonce-password");
+    // The tunnel-minted code is gone…
+    const tunnelRedeem = await app.inject({
+      method: "GET",
+      url: `/mobile-auth?code=${tunnelCode}`,
+      headers: TUNNEL_IP,
+    });
+    expect(tunnelRedeem.statusCode).toBe(410);
 
-    expect(closeSpy).toHaveBeenCalledWith("nonce-live-1", 4403, "Tunnel disabled");
-    expect(closeSpy).toHaveBeenCalledWith("nonce-live-2", 4403, "Tunnel disabled");
-    expect(closeSpy).not.toHaveBeenCalledWith("nonce-password", expect.anything(), expect.anything());
+    // …while a local-network QR shown at the same time keeps working.
+    const localRedeem = await app.inject({ method: "GET", url: `/mobile-auth?code=${localCode}` });
+    expect(localRedeem.statusCode).toBe(200);
   });
 
-  it("3.T5 — code-redemption regressions: expired/consumed code returns 410, missing code returns 400", async () => {
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+  it("code-redemption regressions: expired/consumed code returns 410, missing code returns 400", async () => {
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
     const missing = await app.inject({ method: "GET", url: "/mobile-auth" });
     expect(missing.statusCode).toBe(400);
@@ -155,17 +141,28 @@ describe("mobileAuth routes — tunnel-persistence", () => {
     expect(bogus.statusCode).toBe(410);
   });
 
-  it("3.T5 — a tunnel-minted code cannot be redeemed via the local-network path (origin mismatch → 410)", async () => {
+  it("a tunnel-minted code cannot be redeemed via the local-network path (origin mismatch → 410)", async () => {
     tunnelState = { enabled: true, tunnelUrl: "https://live.trycloudflare.com", startedAt: 1 };
-    const buildServer = await importBuildServer();
-    app = await buildServer({ token: "test-token" });
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
 
-    const qrRes = await app.inject({ method: "POST", url: "/auth/mobile-qr", headers: BEARER });
+    const qrRes = await app.inject({ method: "POST", url: "/auth/mobile-qr" });
     const { qrUrl } = qrRes.json() as { qrUrl: string };
     const code = new URL(qrUrl).searchParams.get("code")!;
 
     // Redeem WITHOUT the cf-connecting-ip header — origin mismatch.
     const res = await app.inject({ method: "GET", url: `/mobile-auth?code=${code}` });
     expect(res.statusCode).toBe(410);
+  });
+
+  it("a single-use code cannot be redeemed twice", async () => {
+    const { buildServer, authState } = await importDeps();
+    app = await buildServer({ authState });
+
+    const { qrUrl } = (await app.inject({ method: "POST", url: "/auth/local-qr" })).json<{ qrUrl: string }>();
+    const code = new URL(qrUrl).searchParams.get("code")!;
+
+    expect((await app.inject({ method: "GET", url: `/mobile-auth?code=${code}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/mobile-auth?code=${code}` })).statusCode).toBe(410);
   });
 });

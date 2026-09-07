@@ -6,7 +6,7 @@ mod tray;
 
 use std::path::PathBuf;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{Manager, WebviewWindowBuilder, WindowEvent};
 
 fn main() {
     tauri::Builder::default()
@@ -14,16 +14,11 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
-            // Resolve the bundled cloudflared binary path.
-            // Tauri strips the target-triple suffix from externalBin entries at bundle
-            // time, so the binary lands in the resource directory as plain "cloudflared".
             let cloudflared_bin: PathBuf = app_handle
                 .path()
                 .resource_dir()
                 .ok()
                 .map(|dir| {
-                    // On Windows the binary has an .exe extension; the resource_dir()
-                    // lookup covers both cases.
                     let name = if cfg!(target_os = "windows") {
                         "cloudflared.exe"
                     } else {
@@ -34,7 +29,6 @@ fn main() {
                 })
                 .unwrap_or_else(|| PathBuf::from("cloudflared"));
 
-            // Detect an already-running daemon, or spawn one.
             let daemon_info = match daemon::detect_running_daemon() {
                 Some(info) => {
                     println!("[vst] found running daemon on port {}", info.port);
@@ -49,7 +43,6 @@ fn main() {
                         }
                         Err(e) => {
                             eprintln!("[vst] failed to start daemon: {e}");
-                            // Still attempt to open the UI — user may resolve manually.
                             daemon::DaemonInfo {
                                 port: 7422,
                                 pid: 0,
@@ -60,11 +53,9 @@ fn main() {
                 }
             };
 
-            let port = daemon_info.port;
-            let token = daemon_info.token.clone();
+            // Store daemon info in app state for future invoke commands.
+            app.manage(daemon_info.clone());
 
-            // OS label injected into the document so CSS can target macOS traffic-light
-            // clearance (body[data-tauri-os="macos"]) and WindowControls.tsx can detect Linux.
             let os_name = if cfg!(target_os = "macos") {
                 "macos"
             } else if cfg!(target_os = "linux") {
@@ -73,42 +64,57 @@ fn main() {
                 "windows"
             };
 
-            // Inject port, token, and OS tag before any page JS runs.
-            // __VST_TOKEN__ lets useAuth auto-login without showing the login screen.
-            // The IIFE handles the race: eval() may fire before or after DOMContentLoaded.
-            let init_script = format!(
-                "window.__VST_PORT__ = {port};\
-                 window.__VST_TOKEN__ = '{token}';\
-                 (function() {{\
-                   function tag() {{ document.body && document.body.setAttribute('data-tauri-os', '{os_name}'); }}\
-                   if (document.readyState === 'loading') {{\
-                     document.addEventListener('DOMContentLoaded', tag);\
-                   }} else {{\
-                     tag();\
-                   }}\
-                 }})();"
-            );
+            // Build the "main" window from its config entry and attach the
+            // initialization script. The script runs after the JS global object
+            // is created but before any page script — the only race-free way to
+            // guarantee __VST_TOKEN__ is present when useAuth reads it.
+            // "create": false in tauri.conf.json prevents the auto-creation that
+            // would otherwise happen before setup() runs.
+            let script = build_init_script(daemon_info.port, &daemon_info.token, os_name);
+            let conf = app.config().app.windows.first().cloned()
+                .ok_or("no window config found")?;
+            WebviewWindowBuilder::from_config(app.handle(), &conf)?
+                .initialization_script(&script)
+                .build()?;
 
-            // Get the window Tauri auto-created from tauri.conf.json and inject port/OS.
-            // The SPA is a React app that never hard-navigates, so eval() is stable.
-            let win = app
-                .get_webview_window("main")
-                .ok_or("main window not found")?;
-
-            win.eval(&init_script)?;
-
-            // Set up the system tray.
             tray::build_tray(&app_handle)?;
 
             Ok(())
         })
         .on_window_event(|win, event| {
-            // Hide instead of close when the user clicks the ✕ button.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = win.hide();
+            // Hide instead of close when the user clicks the ✕ button —
+            // but only for the main window; secondary windows should close normally.
+            if win.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = win.hide();
+                }
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running vibe-station desktop");
+}
+
+/// Returns the JS initialization script injected into every new window.
+///
+/// Uses serde_json::to_string for safe token quoting (handles any chars the
+/// token might contain). The IIFE sets data-tauri-os after DOMContentLoaded
+/// because the init script runs before document.body exists.
+///
+/// NOTE: __VST_PORT__ is injected for future use but the web-ui api client
+/// does not yet read it (it uses VITE_DAEMON_URL or relative /api).
+fn build_init_script(port: u16, token: &str, os_name: &str) -> String {
+    let token_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
+    format!(
+        "window.__VST_PORT__ = {port};\
+         window.__VST_TOKEN__ = {token_json};\
+         (function() {{\
+           function tag() {{ document.body && document.body.setAttribute('data-tauri-os', '{os_name}'); }}\
+           if (document.readyState === 'loading') {{\
+             document.addEventListener('DOMContentLoaded', tag);\
+           }} else {{\
+             tag();\
+           }}\
+         }})();"
+    )
 }
