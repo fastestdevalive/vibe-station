@@ -198,7 +198,7 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
       </button>
       {open && hasBody ? (
         <div className="chat-tool-entry__body">
-          {hasInputBody ? (
+          {hasInputBody && !hasDiffs ? (
             <pre className="chat-tool-entry__pre">
               <code>{pretty}</code>
             </pre>
