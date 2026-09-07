@@ -1,8 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { cloudflaredLogPath } from "./paths.js";
 import * as tunnelStore from "../state/tunnel-store.js";
 
 interface TunnelState {
@@ -23,16 +20,15 @@ let pending: Promise<{ tunnelUrl: string }> | null = null;
 
 /**
  * The in-flight spawn attempt, if any. `disable()`/`shutdownKill()` must cancel
- * this (not just kill the process) — otherwise the poll interval keeps scraping
- * the log for the rest of the 10s window, `pending` never clears (wedging the
- * next `enable()` until the timeout fires), and a URL that happens to appear in
- * that window resolves with a pid that's already dead.
+ * this (not just kill the process) — otherwise the stdio listeners keep
+ * scanning output for the rest of the 10s window, `pending` never clears
+ * (wedging the next `enable()` until the timeout fires), and a URL that happens
+ * to appear in that window resolves with a pid that's already dead.
  */
 let activeSpawn: { child: ChildProcess; cancel: (reason: string) => void } | null = null;
 
 const TUNNEL_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 const SPAWN_TIMEOUT_MS = 10_000;
-const POLL_INTERVAL_MS = 250;
 
 // Deliberately distinct from the 500ms advanceTimersByTimeAsync idiom already
 // used throughout cloudflared.test.ts — sharing that value would make the
@@ -62,24 +58,9 @@ function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
   // which must not kill the live tunnel it's about to report as healthy).
   sweepOrphans(port);
   return new Promise((resolve, reject) => {
-    const logPath = cloudflaredLogPath();
-    mkdirSync(dirname(logPath), { recursive: true });
-    // Truncate on every spawn ("w", not "a") — the previous run's output is
-    // irrelevant to this attempt, and a fresh file means the URL regex can
-    // never match stale text left over from an earlier spawn (no offset
-    // bookkeeping needed), plus the log never grows unbounded across restarts.
-    const logFd = openSync(logPath, "w");
-
     const child = spawn(process.env.VST_CLOUDFLARED_BIN ?? "cloudflared", ["tunnel", "--url", `http://127.0.0.1:${port}`], {
-      // Piped stdio's read end is owned by the parent — once the daemon exits,
-      // the child's next write raises EPIPE. Redirecting to a log file lets
-      // the child (detached + unref'd) outlive the daemon without depending
-      // on anyone draining its stdio.
-      stdio: ["ignore", logFd, logFd],
-      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    closeSync(logFd); // parent doesn't need its own handle once the child has inherited it
-    child.unref();
     state.process = child;
 
     let resolved = false;
@@ -87,7 +68,6 @@ function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
     function finishResolve(url: string) {
       if (resolved) return;
       resolved = true;
-      clearInterval(poll);
       clearTimeout(timer);
       if (activeSpawn?.child === child) activeSpawn = null;
       state.enabled = true;
@@ -105,22 +85,31 @@ function spawnTunnel(port: number): Promise<{ tunnelUrl: string }> {
     function finishReject(err: Error) {
       if (resolved) return;
       resolved = true;
-      clearInterval(poll);
       clearTimeout(timer);
       if (activeSpawn?.child === child) activeSpawn = null;
       reject(err);
     }
 
-    const poll = setInterval(() => {
-      let text: string;
-      try {
-        text = readFileSync(logPath).toString("utf8");
-      } catch {
-        return; // best-effort — file may not exist yet on the very first tick
-      }
-      const match = TUNNEL_URL_RE.exec(text);
+    // Accumulate across chunks rather than testing each one in isolation:
+    // stdout/stderr are byte streams with no message framing, so the URL can
+    // (and on a slow pipe does) arrive split across two `data` events —
+    // "https://abc-" then "def.trycloudflare.com" — which no per-chunk regex
+    // would ever match, wedging the spawn until the 10s timeout. Capped so a
+    // chatty cloudflared can't grow this unboundedly during the spawn window;
+    // the tail is retained (not cleared) so a URL straddling the cap boundary
+    // still matches.
+    const MAX_BUFFER = 64 * 1024;
+    let buffer = "";
+
+    function onData(chunk: Buffer) {
+      buffer += chunk.toString("utf8");
+      if (buffer.length > MAX_BUFFER) buffer = buffer.slice(-MAX_BUFFER);
+      const match = TUNNEL_URL_RE.exec(buffer);
       if (match) finishResolve(match[0]);
-    }, POLL_INTERVAL_MS);
+    }
+
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
 
     const timer = setTimeout(() => {
       child.kill();

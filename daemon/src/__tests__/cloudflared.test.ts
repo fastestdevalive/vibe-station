@@ -1,17 +1,22 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile, appendFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 let tempDir: string;
-let logPath: string;
 let nextPid = 1000;
 
+/**
+ * cloudflared is spawned with piped stdio and the tunnel URL is scraped from
+ * the `data` events on its stdout/stderr — so the fake child exposes both as
+ * real EventEmitters for tests to emit through.
+ */
 class FakeChild extends EventEmitter {
   pid: number;
   kill = vi.fn();
-  unref = vi.fn();
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
   constructor() {
     super();
     this.pid = nextPid++;
@@ -41,19 +46,18 @@ vi.mock("../services/paths.js", async () => {
   return {
     vstHome: () => tempDir,
     dbPath: () => pathJoin(tempDir, "vibe-station.db"),
-    cloudflaredLogPath: () => logPath,
   };
 });
 
-async function writeUrlToLog(url: string) {
-  await appendFile(logPath, `some cloudflared banner text\n${url}\nmore text\n`);
+/** Emit cloudflared's banner + URL on the latest child's stderr (where the real binary writes it). */
+function emitUrl(url: string, stream: "stdout" | "stderr" = "stderr") {
+  const child = spawnedChildren[spawnedChildren.length - 1]!;
+  child[stream].emit("data", Buffer.from(`some cloudflared banner text\n${url}\nmore text\n`));
 }
 
 describe("cloudflared", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "vst-cloudflared-test-"));
-    logPath = join(tempDir, "cloudflared.log");
-    await writeFile(logPath, "");
     spawnedChildren = [];
     spawnMock.mockClear();
     execFileSyncMock.mockClear();
@@ -67,35 +71,85 @@ describe("cloudflared", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("2.T1 — enable() resolves with the scraped URL and stops polling afterward", async () => {
+  it("2.T0 — cloudflared is spawned with piped stdio, from VST_CLOUDFLARED_BIN when set", async () => {
+    const cf = await import("../services/cloudflared.js");
+    void cf.enable(7421);
+    expect(spawnMock).toHaveBeenCalledWith(
+      "cloudflared",
+      ["tunnel", "--url", "http://127.0.0.1:7421"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+
+    vi.resetModules();
+    spawnMock.mockClear();
+    process.env.VST_CLOUDFLARED_BIN = "/opt/bundled/cloudflared";
+    try {
+      const cf2 = await import("../services/cloudflared.js");
+      void cf2.enable(7421);
+      expect(spawnMock).toHaveBeenCalledWith(
+        "/opt/bundled/cloudflared",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      delete process.env.VST_CLOUDFLARED_BIN;
+    }
+  });
+
+  it("2.T1 — enable() resolves with the scraped URL and ignores output afterward", async () => {
     const cf = await import("../services/cloudflared.js");
     const promise = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://abc-def.trycloudflare.com");
-    const result = await vi.advanceTimersByTimeAsync(500).then(() => promise);
+    emitUrl("https://abc-def.trycloudflare.com");
+    const result = await promise;
     expect(result.tunnelUrl).toBe("https://abc-def.trycloudflare.com");
 
-    // No further scraping after resolve — write a NEW url, advance time, state must not change.
-    await writeUrlToLog("https://should-not-match.trycloudflare.com");
+    // Already resolved — a NEW url arriving later must not change state.
+    emitUrl("https://should-not-match.trycloudflare.com");
     await vi.advanceTimersByTimeAsync(1000);
     expect(cf.getState().tunnelUrl).toBe("https://abc-def.trycloudflare.com");
   });
 
-  it("2.T2 — a stale URL already in the log from a prior spawn is truncated away, not matched", async () => {
-    await writeUrlToLog("https://stale-old.trycloudflare.com");
+  it("2.T1b — the URL is matched on stdout too, not only stderr", async () => {
     const cf = await import("../services/cloudflared.js");
     const promise = cf.enable(7421);
-    await vi.advanceTimersByTimeAsync(500);
-    // spawnTunnel truncates the log file at spawn time — the stale URL is gone,
-    // so nothing has matched yet even though time has passed.
+    await vi.advanceTimersByTimeAsync(0);
+    emitUrl("https://via-stdout.trycloudflare.com", "stdout");
+    expect((await promise).tunnelUrl).toBe("https://via-stdout.trycloudflare.com");
+  });
+
+  it("2.T2 — a URL split across two data chunks is still matched (stdio has no message framing)", async () => {
+    const cf = await import("../services/cloudflared.js");
+    const promise = cf.enable(7421);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = spawnedChildren[0]!;
+
     let settled = false;
     void promise.then(() => { settled = true; });
+
+    // Neither half contains a complete URL — a per-chunk regex would never match.
+    child.stderr.emit("data", Buffer.from("banner\nyour url is https://split-"));
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
 
-    await writeUrlToLog("https://fresh-new.trycloudflare.com");
-    const result = await vi.advanceTimersByTimeAsync(500).then(() => promise);
-    expect(result.tunnelUrl).toBe("https://fresh-new.trycloudflare.com");
+    child.stderr.emit("data", Buffer.from("across.trycloudflare.com\n"));
+    expect((await promise).tunnelUrl).toBe("https://split-across.trycloudflare.com");
+  });
+
+  it("2.T2b — a chunk with no URL does not resolve, and does not break a later match", async () => {
+    const cf = await import("../services/cloudflared.js");
+    const promise = cf.enable(7421);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = spawnedChildren[0]!;
+
+    let settled = false;
+    void promise.then(() => { settled = true; });
+    child.stderr.emit("data", Buffer.from("INF Requesting new quick Tunnel on trycloudflare.com...\n"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+
+    emitUrl("https://later.trycloudflare.com");
+    expect((await promise).tunnelUrl).toBe("https://later.trycloudflare.com");
   });
 
   it("2.T3 — enable() persists to tunnel-store on success; disable() clears fully; shutdownKill() keeps enabled", async () => {
@@ -103,8 +157,8 @@ describe("cloudflared", () => {
     const store = await import("../state/tunnel-store.js");
     const promise = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://persisted.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500).then(() => promise);
+    emitUrl("https://persisted.trycloudflare.com");
+    await promise;
 
     expect(store.getState().enabled).toBe(true);
     expect(store.getState().currentUrl).toBe("https://persisted.trycloudflare.com");
@@ -116,8 +170,8 @@ describe("cloudflared", () => {
     // Re-enable then shutdownKill — enabled must stay true.
     const promise2 = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://second.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500).then(() => promise2);
+    emitUrl("https://second.trycloudflare.com");
+    await promise2;
     cf.shutdownKill();
     expect(store.getState().enabled).toBe(true);
     expect(store.getState().currentUrl).toBeNull();
@@ -128,16 +182,16 @@ describe("cloudflared", () => {
 
     const promiseA = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://process-a.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500).then(() => promiseA);
+    emitUrl("https://process-a.trycloudflare.com");
+    await promiseA;
     const childA = spawnedChildren[0]!;
 
     cf.disable(7421); // kills A in-memory tracking (state.process cleared)
 
     const promiseB = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://process-b.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500).then(() => promiseB);
+    emitUrl("https://process-b.trycloudflare.com");
+    await promiseB;
 
     expect(cf.getState().tunnelUrl).toBe("https://process-b.trycloudflare.com");
 
@@ -157,13 +211,24 @@ describe("cloudflared", () => {
     await expect(promise).rejects.toThrow(/run: vst doctor/);
   });
 
-  it("2.T4c — exit before any URL match rejects with a specific message and stops polling", async () => {
+  it("2.T4c — exit before any URL match rejects with a specific message", async () => {
     const cf = await import("../services/cloudflared.js");
     const promise = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
     const child = spawnedChildren[0]!;
     child.emit("exit", 1);
     await expect(promise).rejects.toThrow(/before emitting URL/);
+  });
+
+  it("2.T4d — no URL within the 10s window kills the child and rejects", async () => {
+    const cf = await import("../services/cloudflared.js");
+    const promise = cf.enable(7421);
+    await vi.advanceTimersByTimeAsync(0);
+    const child = spawnedChildren[0]!;
+    const assertion = expect(promise).rejects.toThrow(/did not emit a URL within 10s/);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    expect(child.kill).toHaveBeenCalled();
   });
 
   it("2.T5 — restoreOnBoot no-ops (never spawns) when noAuth is true or token is missing", async () => {
@@ -196,8 +261,7 @@ describe("cloudflared", () => {
     expect(killSpy).toHaveBeenCalledWith(99999, "SIGTERM");
 
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://restored.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500);
+    emitUrl("https://restored.trycloudflare.com");
     await promise;
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -236,15 +300,17 @@ describe("cloudflared", () => {
     const secondEnable = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    await writeUrlToLog("https://second-attempt.trycloudflare.com");
-    const result = await vi.advanceTimersByTimeAsync(500).then(() => secondEnable);
+    emitUrl("https://second-attempt.trycloudflare.com");
+    const result = await secondEnable;
     expect(result.tunnelUrl).toBe("https://second-attempt.trycloudflare.com");
 
-    // The cancelled first attempt's poll must be dead — advancing well past
-    // its original 10s timeout must not write a phantom "enabled" state for
-    // the (already-killed) first child.
+    // The cancelled first attempt must be fully dead — late output from the
+    // (already-killed) first child, and its original 10s timeout firing, must
+    // not write a phantom "enabled" state over the live second one.
+    spawnedChildren[0]!.stderr.emit("data", Buffer.from("https://phantom.trycloudflare.com\n"));
     await vi.advanceTimersByTimeAsync(10_000);
     expect(store.getState().currentPid).toBe(spawnedChildren[1]!.pid);
+    expect(cf.getState().tunnelUrl).toBe("https://second-attempt.trycloudflare.com");
   });
 
   // --- Orphan reconciliation sweep (cloudflared-orphan-sweep) ---
@@ -254,7 +320,7 @@ describe("cloudflared", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     const cf = await import("../services/cloudflared.js");
 
-    cf.enable(7421);
+    void cf.enable(7421);
 
     expect(execFileSyncMock).toHaveBeenCalledWith(
       "pgrep",
@@ -273,8 +339,8 @@ describe("cloudflared", () => {
     const cf = await import("../services/cloudflared.js");
     const promise = cf.enable(7421);
     await vi.advanceTimersByTimeAsync(0);
-    await writeUrlToLog("https://already-live.trycloudflare.com");
-    await vi.advanceTimersByTimeAsync(500).then(() => promise);
+    emitUrl("https://already-live.trycloudflare.com");
+    await promise;
 
     execFileSyncMock.mockClear();
     const killSpy = vi.spyOn(process, "kill");
@@ -333,7 +399,7 @@ describe("cloudflared", () => {
     const killSpy = vi.spyOn(process, "kill");
     const cf = await import("../services/cloudflared.js");
 
-    cf.enable(7421);
+    void cf.enable(7421);
 
     expect(killSpy).not.toHaveBeenCalledWith(expect.any(Number), "SIGTERM");
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringMatching(/pgrep enumeration failed/));
