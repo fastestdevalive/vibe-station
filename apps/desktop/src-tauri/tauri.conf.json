@@ -1,6 +1,6 @@
 {
   "productName": "vibe-station",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "identifier": "com.fastestdevalive.vibestation",
   "build": {
     "beforeDevCommand": "pnpm --filter web-ui dev -- --port 5180",
