@@ -883,6 +883,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         ...p,
         directSessions: p.directSessions.filter((s) => s.id !== id),
       }));
+      // Prune from parent's live notice slot (the child may be sitting in a
+      // slot that was already consumed from pending — forgetSubagentNotify only
+      // clears pending, not the live JsonAgentSession slot).
+      if (session.parentSessionId) {
+        jsonAgentRegistry.get(session.parentSessionId)?.pruneNoticeSlotChild(id);
+      }
       forgetSubagentNotify(id);
       broadcastAll({ type: "session:deleted", sessionId: id });
       return reply.send({ ok: true });
@@ -988,6 +994,10 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     if (promotedAtCommit) {
       broadcastAll({ type: "session:updated", sessionId: promotedId!, isMain: true, pr: promotedPr ?? null });
+    }
+    // Prune from parent's live notice slot before forgetting the child entirely.
+    if (session.parentSessionId) {
+      jsonAgentRegistry.get(session.parentSessionId)?.pruneNoticeSlotChild(id);
     }
     forgetSubagentNotify(id);
     broadcastAll({ type: "session:deleted", sessionId: id });
@@ -1140,6 +1150,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       return { ...p, directSessions: p.directSessions.map(patchSession) };
     });
 
+    // Prune from parent's live notice slot — the child may be in a slot the
+    // parent's JsonAgentSession has already consumed from pending. forgetSubagentNotify
+    // clears pending; this catches the live slot.
+    if (ctx.session.parentSessionId) {
+      jsonAgentRegistry.get(ctx.session.parentSessionId)?.pruneNoticeSlotChild(id);
+    }
     forgetSubagentNotify(id);
     broadcastAll({ type: "session:updated", sessionId: id, parentSessionId: null });
     return reply.send({});
@@ -1176,6 +1192,10 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       id,
       "done",
     );
+
+    // Clean up notify state: noticeCount/suppressionWarned/pending entries for
+    // a done session would otherwise leak for the daemon's lifetime.
+    forgetSubagentNotify(id);
 
     // Drop the replay-only initial prompt now the session is explicitly
     // done — a future resume must never re-issue it (see the resume
@@ -1609,6 +1629,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     });
 
     const wtIdForSerialize = ctx.kind === "worktree" ? ctx.worktree.id : null;
+    // Clean up notify state for the archived (old) session. Any pending flush
+    // timer targeting the old id would fail the archivedAt guard in flush() anyway,
+    // but clearing it here avoids the wasted timer fire and plugs the noticeCount
+    // leak. Children of the old session will naturally resolve to the new session
+    // via resolveParent's supersededBy chain.
+    forgetSubagentNotify(session.id);
     broadcastAll({ type: "session:updated", sessionId: session.id, archivedAt, supersededBy: newId });
     broadcastAll({
       type: "session:created",
@@ -1830,6 +1856,21 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     noteHumanTurn(id);
 
     return reply.status(202).send(res.result);
+  });
+
+  // POST /sessions/:id/chat/dismiss-notice — dismiss the pending notice slot
+  // (subagent-ux-v2). Idempotent: 204 whether or not a slot exists. 404 if the
+  // session is not found or is not a JSON session.
+  app.post("/sessions/:id/chat/dismiss-notice", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    // FIX-F: idempotent — no agent means no active slot; 204 per plan spec
+    // (404 only for "session not found / not a JSON session", not "no instance").
+    if (!agent) return reply.status(204).send();
+    agent.dismissNoticeSlot();
+    return reply.status(204).send();
   });
 
   // POST /sessions/:id/chat/stop — abort the ACTIVE turn, keep queued turns

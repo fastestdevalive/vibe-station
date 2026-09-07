@@ -233,6 +233,12 @@ export interface NormalizedEvent {
   subagentName?: string;
   /** `message_generated` only — the lifecycle state the child transitioned to. */
   subagentState?: LifecycleState;
+  /**
+   * True when this `user` event was synthesized for a silent notice turn (not a
+   * human message). The UI must not render it as a human bubble — it is a
+   * daemon-internal transcript marker only.
+   */
+  silent?: boolean;
 }
 
 /** Derived turn state driving the composer status indicator. */
@@ -270,6 +276,14 @@ export interface SessionMeta {
    * published one (out-of-band before turn 1, or in-turn on republish).
    */
   commands?: { name: string; description: string; argumentHint?: string }[];
+  /**
+   * Populated while a notice slot is pending or running (drives the tray row
+   * and status bar contextual labels). `running` is true while the notice LLM
+   * turn is active. Absent when no slot is pending. Never contains
+   * `noticeLabel`/`noticeStopLabel` — the UI composes copy from the children
+   * map and the `running` flag itself.
+   */
+  noticeSlot?: { children: Record<string, string>; running: boolean };
 }
 
 export interface SessionRecord {

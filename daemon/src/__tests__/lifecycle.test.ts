@@ -425,3 +425,86 @@ describe("lifecycle polling behavior", () => {
     expect(await getCurrentState()).toBe("exited");
   });
 });
+
+describe("lifecycle notifyDeps bridge — pruneNoticeSlotChild routes to registry", () => {
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "vst-lifecycle-test-"));
+    await mkdir(join(tempDir, "projects"), { recursive: true });
+    vi.useFakeTimers();
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("pruneNoticeSlotChild is wired: calling noteSubagentStateChange with exit from waiting_for_human triggers prune on registry agent", async () => {
+    // We use a simple mocked registry to verify the bridge.
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    const pruned: string[] = [];
+    const fakeAgent = {
+      pruneNoticeSlotChild: (childId: string) => {
+        pruned.push(childId);
+      },
+    };
+    // Register a fake parent.
+    jsonAgentRegistry.set("p-bridge", fakeAgent as never);
+
+    const { _resetSubagentNotifyForTest } = await import("../services/subagentNotify.js");
+    const { _clearStoreForTest, addProject } = await import("../state/project-store.js");
+    _clearStoreForTest();
+    _resetSubagentNotifyForTest();
+
+    const projectRec = {
+      id: "p-bridge-proj",
+      absolutePath: join(tempDir, "repo"),
+      prefix: "pfx",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: new Date().toISOString(),
+      directSessions: [
+        {
+          id: "child-bridge",
+          parentSessionId: "p-bridge",
+          type: "agent" as const,
+          tmuxName: "__direct__-b",
+          useTmux: false,
+          channel: "json" as const,
+          lifecycle: { state: "waiting_for_human" as const, lastTransitionAt: new Date().toISOString() },
+          isMain: false,
+          sortOrder: 1,
+          projectId: "p-bridge-proj",
+        },
+        {
+          id: "p-bridge",
+          parentSessionId: null,
+          type: "agent" as const,
+          tmuxName: "__direct__-p",
+          useTmux: false,
+          channel: "json" as const,
+          lifecycle: { state: "working" as const, lastTransitionAt: new Date().toISOString() },
+          isMain: false,
+          sortOrder: 0,
+          projectId: "p-bridge-proj",
+        },
+      ],
+      worktrees: [],
+    };
+    await addProject(projectRec as never);
+
+    // FIX-H5: use the real notifyDeps exported from lifecycle.ts rather than
+    // constructing an inline replica of the bridge logic.
+    const { noteSubagentStateChange: noteChange } = await import("../services/subagentNotify.js");
+    const { notifyDeps } = await import("../services/lifecycle.js");
+
+    // Trigger the prune path: child exits waiting_for_human.
+    noteChange("child-bridge", "waiting_for_human", "working", notifyDeps);
+
+    // The bridge should have routed to fakeAgent.pruneNoticeSlotChild.
+    expect(pruned).toContain("child-bridge");
+
+    // Cleanup.
+    jsonAgentRegistry.delete("p-bridge");
+    _resetSubagentNotifyForTest();
+  });
+});
+

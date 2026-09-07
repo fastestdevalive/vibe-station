@@ -1378,6 +1378,224 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     expect(metaFromStoreMeta.commands).toEqual(COMMANDS);
   });
 
+  // V1 — Notice slot tests (subagent-ux-v2)
+  it("V1: populateNoticeSlot sets slot, emitMeta includes noticeSlot, kickDrain fires", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const metas: unknown[] = [];
+    agent.stream.on("meta", (m) => metas.push(m));
+
+    const ok = agent.populateNoticeSlot("child-1", "Worker");
+    expect(ok).toBe(true);
+    const meta = agent.getMeta();
+    expect(meta.noticeSlot).toMatchObject({ children: { "child-1": "Worker" }, running: false });
+    // emitMeta should have broadcast.
+    expect(metas.length).toBeGreaterThan(0);
+
+    await agent.release();
+  });
+
+  it("V1: pruneNoticeSlotChild removes child; empty slot cleared", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.populateNoticeSlot("child-1", "Worker");
+    agent.pruneNoticeSlotChild("child-1");
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+
+    await agent.release();
+  });
+
+  it("V1g: abortAndDrain does NOT clear noticeSlot (R14)", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin([INIT, TEXT, RESULT].join("\n")),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.populateNoticeSlot("child-abort", "WorkerA");
+    agent.enqueue({ message: "hi" });
+    agent.abortAndDrain();
+
+    // Slot must survive abortAndDrain.
+    expect(agent.getMeta().noticeSlot).toBeDefined();
+    expect(agent.getMeta().noticeSlot?.children["child-abort"]).toBe("WorkerA");
+
+    await agent.release();
+  });
+
+  it("V1h: release() clears noticeSlot (slot does not survive retire)", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.populateNoticeSlot("child-release", "WorkerB");
+    await agent.release();
+    // After release slot is gone (instance torn down — just confirm no throw).
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+  });
+
+  it("V1i: session:meta contains noticeSlot with children + running", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    agent.populateNoticeSlot("c-meta", "Meta-Worker");
+    const meta = agent.getMeta();
+    expect(meta.noticeSlot).toBeDefined();
+    expect(meta.noticeSlot?.children).toEqual({ "c-meta": "Meta-Worker" });
+    expect(meta.noticeSlot?.running).toBe(false);
+
+    await agent.release();
+  });
+
+  it("V1: dismissNoticeSlot emits annotation pill and clears slot", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: mockPlugin(""),
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const broadcast: unknown[] = [];
+    agent.stream.on("message", (ev) => broadcast.push(ev));
+
+    agent.populateNoticeSlot("child-dismiss", "Worker-D");
+    agent.dismissNoticeSlot();
+
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+    // Annotation pill should have been emitted.
+    const pills = (broadcast as Array<Record<string, unknown>>).filter(
+      (e) => e.kind === "message_generated",
+    );
+    expect(pills.length).toBeGreaterThan(0);
+    const pill = pills[0]!;
+    expect(pill.text as string).toContain("dismissed");
+
+    await agent.release();
+  });
+
+  it("FIX-A: aborting the notice slot turn emits 'wake-up dropped' annotation pill", async () => {
+    // FIX-A verifies that snapshot of AbortController before runOneTurn correctly
+    // detects the abort in runNoticeSlotTurn's finally block.
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    // Create a plugin that blocks until aborted (simulates a running notice turn).
+    let resolveAbort!: () => void;
+    const blockingPlugin: AgentPlugin = {
+      name: "claude",
+      defaultModel: "sonnet",
+      promptDelivery: "inline",
+      async listModels() { return { models: [] }; },
+      getLaunchCommand() { return ["claude"]; },
+      getEnvironment() { return {}; },
+      getReadySignal() { return { fallbackMs: 0 }; },
+      composeLaunchPrompt() { return {}; },
+      supportsJson() { return true; },
+      async *runTurn(_input, _ctx, signal) {
+        // Block until aborted.
+        await new Promise<void>((resolve) => {
+          resolveAbort = resolve;
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        // Yield nothing — turn completes without a result (abort path).
+      },
+    } as unknown as AgentPlugin;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: blockingPlugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const broadcast: unknown[] = [];
+    agent.stream.on("message", (ev) => broadcast.push(ev));
+
+    // Populate the notice slot and wait for the notice turn to start.
+    agent.populateNoticeSlot("child-abort-test", "TestWorker");
+    // Allow the microtask (kickDrain → drain → runNoticeSlotTurn) to start.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Notice turn should now be running (activeNotice set).
+    expect(agent.getMeta().noticeSlot?.running).toBe(true);
+
+    // Stop the active notice turn (user presses Stop).
+    agent.stopActiveTurn();
+    // Wait for the turn to unwind.
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // FIX-A: the abort annotation pill ("wake-up dropped") must have been emitted.
+    const pills = (broadcast as Array<Record<string, unknown>>).filter(
+      (e) => e.kind === "message_generated",
+    );
+    const droppedPill = pills.find((p) => (p.text as string)?.includes("wake-up dropped"));
+    expect(droppedPill).toBeDefined();
+    expect(droppedPill?.subagentName).toBe("TestWorker");
+
+    // Slot must be cleared after the turn unwinds.
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+
+    resolveAbort?.(); // unblock in case it's still running
+    await agent.release();
+  });
+
   it("1.T3 — emitSystemEvent persists + broadcasts message_generated; queue length unchanged; kickDrain not called", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { getProject } = await import("../state/project-store.js");

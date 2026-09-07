@@ -16,6 +16,12 @@ export interface QueuedTrayRow {
   draft?: EditingDraft;
 }
 
+/** Notice slot info (subagent-ux-v2) — displayed as a muted row above human queue rows. */
+export interface NoticeSlotInfo {
+  children: Record<string, string>;
+  running: boolean;
+}
+
 export interface QueuedTrayProps {
   api: ApiInstance;
   sessionId: string;
@@ -32,6 +38,10 @@ export interface QueuedTrayProps {
   focusComposer?: () => void;
   /** Session's slash-command/skill catalog, threaded into `QueuedTurnEditor`. */
   commands?: Command[];
+  /** Pending notice slot (subagent-ux-v2) — muted row rendered above human queue rows. */
+  noticeSlot?: NoticeSlotInfo;
+  /** Called when the user clicks Dismiss on the notice slot row. */
+  onDismissNotice?: () => void;
 }
 
 /**
@@ -54,6 +64,8 @@ export function QueuedTray({
   onSalvage,
   focusComposer,
   commands,
+  noticeSlot,
+  onDismissNotice,
 }: QueuedTrayProps) {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -64,7 +76,7 @@ export function QueuedTray({
     if (focusedIndex > rows.length - 1) setFocusedIndex(Math.max(0, rows.length - 1));
   }, [rows.length, focusedIndex]);
 
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && !noticeSlot) return null;
 
   function moveFocus(delta: number) {
     const next = Math.min(Math.max(focusedIndex + delta, 0), rows.length - 1);
@@ -92,6 +104,35 @@ export function QueuedTray({
         }
       }}
     >
+      {noticeSlot ? (() => {
+        const names = Object.values(noticeSlot.children);
+        const label = names.length === 0
+          ? "Checking on subagent…"
+          : names.length === 1
+          ? `Waking parent — ${names[0]} waiting for agent`
+          : `Waking parent — ${names.join(", ")} waiting for agent`;
+        return (
+          <div
+            key="__notice__"
+            className="chat-queued-tray__row chat-queued-tray__row--notice"
+            role="listitem"
+            aria-label={label}
+          >
+            <div className="chat-queued-tray__text">{label}</div>
+            <div className="chat-queued-tray__actions">
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Dismiss wake-up"
+                title="Dismiss"
+                onClick={() => onDismissNotice?.()}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        );
+      })() : null}
       {rows.map((row, i) => {
         const editing = row.status === "editing";
         const localEdit = editing && row.draft;

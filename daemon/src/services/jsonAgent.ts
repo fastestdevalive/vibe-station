@@ -28,7 +28,7 @@ import {
   systemPromptPath,
   directSystemPromptPath,
 } from "./paths.js";
-import { mutateProject } from "../state/project-store.js";
+import { mutateProject, getAllProjects } from "../state/project-store.js";
 import { buildVstEnv } from "./context.js";
 import { JsonAgentStream } from "../ws/streams/jsonAgentStream.js";
 import { jsonAgentRegistry } from "../state/jsonAgentRegistry.js";
@@ -302,6 +302,16 @@ export interface JsonAgentSessionOptions {
   modeName?: string;
 }
 
+/**
+ * In-memory notice slot for silent LLM turns triggered by subagent state
+ * changes. Lives on `JsonAgentSession`; NOT persisted to disk.
+ * Cleared only by `release()` or `dismissNoticeSlot()` — NOT by `abortAndDrain()`.
+ */
+interface NoticeSlot {
+  /** childId → display name. Map preserves insertion order; later flush merges. */
+  children: Map<string, string>;
+}
+
 interface QueuedTurn {
   turnId: string;
   /** Monotonic enqueue order — stable identity for ordering across reorders. */
@@ -478,6 +488,18 @@ export class JsonAgentSession {
   private activeAbort: AbortController | null = null;
   private drainPromise: Promise<void> = Promise.resolve();
   /**
+   * FIX-G: set to true by abortAndDrain() and stopActiveTurn() so the drain
+   * loop knows not to immediately fire the notice slot after a user-initiated
+   * abort. The slot survives (R14) and fires on the NEXT kickDrain instead.
+   */
+  private _abortedSinceLastDrain = false;
+  /**
+   * FIX-A: set to true by stopActiveTurn() when a notice turn is running
+   * (activeNotice !== null). runNoticeSlotTurn reads and clears this in its
+   * finally block to detect abort when activeAbort has already been nulled.
+   */
+  private _noticeWasAborted = false;
+  /**
    * Chat id the ACTIVE turn is forking from (R3.2), or undefined for a normal
    * turn. Set for the duration of a fork turn so `handleEvent` adopts the NEW
    * forked session id from its `session_init` — otherwise later turns would
@@ -506,6 +528,19 @@ export class JsonAgentSession {
   private outOfBandTurnId: string | null = null;
   /** `Date.now()` of the last out-of-band event — a long quiet gap opens a new burst. */
   private outOfBandLastAt = 0;
+
+  /**
+   * Pending notice slot (subagent-ux-v2). Set by `populateNoticeSlot`; consumed
+   * by `runNoticeSlotTurn`; cleared only by `release()` or `dismissNoticeSlot()`
+   * (R14 — `abortAndDrain()` must NOT clear it).
+   */
+  private noticeSlot: NoticeSlot | null = null;
+  /**
+   * Set for the duration of a notice LLM turn (slot being actively consumed).
+   * Drives `getMeta().noticeSlot.running = true` and lets `dismissNoticeSlot`
+   * stop the active notice turn.
+   */
+  private activeNotice: NoticeSlot | null = null;
 
   /**
    * Set by `release()` — this instance is being torn down and must never write
@@ -589,12 +624,18 @@ export class JsonAgentSession {
    * kicks the sequential runner. Always accepted — never busy-rejects.
    */
   /** Persist + broadcast the synthesized `user` event for a turn (Decision 12). */
-  private emitUserEvent(turnId: string, message: string, attachments: Attachment[]): void {
+  private emitUserEvent(
+    turnId: string,
+    message: string,
+    attachments: Attachment[],
+    opts?: { silent?: boolean },
+  ): void {
     const userEvent = this.newEvent("user", {
       role: "user",
       text: message,
       turnId,
       ...(attachments.length ? { attachments } : {}),
+      ...(opts?.silent ? { silent: true } : {}),
     });
     this.persist(userEvent);
     this.stream.emitMessage(userEvent);
@@ -709,7 +750,7 @@ export class JsonAgentSession {
   }
 
   private kickDrain(): void {
-    if (!this.running) {
+    if (!this.running && (this.queue.length > 0 || this.noticeSlot)) {
       this.drainPromise = this.drain();
     }
   }
@@ -722,6 +763,7 @@ export class JsonAgentSession {
     // (a killed parent reparents its children to init, losing the tree), then
     // abort to unwind the iterator / plugin cleanup.
     this.killLivePids();
+    this._abortedSinceLastDrain = true; // FIX-G: prevent notice slot from firing immediately
     this.activeAbort?.abort();
     this.setTurnState("idle");
     this.emitMeta();
@@ -761,6 +803,9 @@ export class JsonAgentSession {
   async release(): Promise<void> {
     if (this.released) return;
     this.released = true;
+    // R14 — only retire/delete clears the slot; abortAndDrain() must NOT.
+    this.noticeSlot = null;
+    this.activeNotice = null;
     this.abortAndDrain();
     await Promise.race([
       this.settled().catch(() => {}),
@@ -792,6 +837,10 @@ export class JsonAgentSession {
       // Legacy per-turn spawn: kill the whole descendant tree (tool
       // subprocesses in their own groups would otherwise survive the stop).
       this.killLivePids();
+    }
+    this._abortedSinceLastDrain = true; // FIX-G: prevent notice slot from firing immediately
+    if (this.activeNotice !== null) {
+      this._noticeWasAborted = true; // FIX-A: allow runNoticeSlotTurn to detect abort
     }
     this.activeAbort.abort();
     return true;
@@ -1013,6 +1062,17 @@ export class JsonAgentSession {
       this.commands,
       typeof this.plugin.formatSkillDirective === "function",
     );
+    // Derive noticeSlot: use activeNotice when a notice turn is running,
+    // else use the pending noticeSlot. Absent when neither is set.
+    const slotSource = this.activeNotice ?? this.noticeSlot;
+    const noticeSlotMeta = slotSource
+      ? {
+          noticeSlot: {
+            children: Object.fromEntries(slotSource.children),
+            running: this.activeNotice !== null,
+          },
+        }
+      : {};
     return {
       sessionId: this.session.id,
       channel: "json",
@@ -1032,7 +1092,213 @@ export class JsonAgentSession {
         !!this.connection?.isAlive() &&
         !!this.connection?.supportsSteering &&
         this.plugin.supportsMidTurnSteering?.() === true,
+      ...noticeSlotMeta,
     };
+  }
+
+  // --- Notice slot (subagent-ux-v2) ---
+
+  /**
+   * Populate (or merge into) the notice slot for this session with a child that
+   * has entered `waiting_for_human`. Sync; called from `subagentNotify.flush()`
+   * via the `populateNoticeSlot` dep.
+   *
+   * Returns true when the slot was populated/merged (and the caller should
+   * emit a pill + charge budget). Returns false when the parent has reached the
+   * notice cap — the slot is NOT populated and the caller must NOT emit a pill
+   * or charge budget (only a warning pill may be emitted by the caller).
+   */
+  populateNoticeSlot(childId: string, childName: string): boolean {
+    if (this.noticeSlot) {
+      // Merge into existing slot (R3 coalescing).
+      this.noticeSlot.children.set(childId, childName);
+      this.emitMeta();
+      // Defer kickDrain by one microtask so synchronous callers (tests, getMeta)
+      // observe the slot in pending (not active) state before drain starts.
+      void Promise.resolve().then(() => this.kickDrain());
+      return true;
+    }
+    // Create a new slot.
+    this.noticeSlot = { children: new Map([[childId, childName]]) };
+    this.emitMeta();
+    void Promise.resolve().then(() => this.kickDrain());
+    return true;
+  }
+
+  /**
+   * Proactively remove a child from the pending notice slot (R16). Called when
+   * the child leaves `waiting_for_human` before the slot is consumed. If the
+   * slot becomes empty after removal, it is discarded and `emitMeta()` clears
+   * the tray row.
+   */
+  pruneNoticeSlotChild(childId: string): void {
+    if (!this.noticeSlot) return;
+    // FIX-H3: only emit meta if the child was actually present — Map.delete()
+    // returns true when the key existed and was removed.
+    const removed = this.noticeSlot.children.delete(childId);
+    if (!removed) return;
+    if (this.noticeSlot.children.size === 0) {
+      this.noticeSlot = null;
+    }
+    this.emitMeta();
+  }
+
+  /**
+   * Dismiss the pending notice slot: captures + clears the slot, emits an
+   * annotation pill per child ("wake-up for <child> dismissed"), and stops the
+   * active notice turn if one is running. Idempotent — no slot is also OK.
+   * Called from `POST /sessions/:id/chat/dismiss-notice` (204, always).
+   */
+  dismissNoticeSlot(): void {
+    // FIX-H4: handle pending slot and active slot separately.
+    // Pending slot — emit "dismissed" annotation and clear immediately.
+    // Active slot — stop the turn; FIX-A's abort path emits "wake-up dropped"
+    // for active-slot children when the abort lands in runNoticeSlotTurn's finally.
+    const pendingSlot = this.noticeSlot;
+    this.noticeSlot = null;
+    const wasActive = this.activeNotice !== null;
+    if (wasActive) {
+      // Set _noticeWasAborted BEFORE clearing activeNotice. stopActiveTurn's own
+      // guard (line ~842) checks `this.activeNotice !== null`; since we are about
+      // to null it here, that check would fail and the flag would never be set,
+      // causing runNoticeSlotTurn's finally to emit no "wake-up dropped" pill.
+      // Setting the flag here guarantees the finally always emits on dismiss-
+      // while-running, regardless of the order in which activeNotice is cleared.
+      this._noticeWasAborted = true;
+    }
+    // Clear activeNotice so getMeta() reports no running notice slot after dismiss.
+    // runNoticeSlotTurn's finally block is a no-op if it also clears (already null).
+    this.activeNotice = null;
+    if (!pendingSlot && !wasActive) return;
+    // Emit an annotation pill per child in the PENDING slot (KD-9).
+    // The active slot's children get their annotation from the abort path (FIX-A).
+    if (pendingSlot) {
+      for (const [, childName] of pendingSlot.children) {
+        this.emitSystemEvent({
+          subagentId: "",
+          subagentName: childName,
+          subagentState: "waiting_for_human",
+          text: `wake-up for ${childName} dismissed`,
+        });
+      }
+    }
+    // Stop the active notice turn if one was running.
+    if (wasActive) {
+      this.stopActiveTurn();
+    }
+    this.emitMeta();
+  }
+
+  /**
+   * Run one silent LLM turn for the pending notice slot (KD-2). Called from
+   * `drain()` when the human queue is empty and `this.noticeSlot` is non-null.
+   *
+   * Steps:
+   *  1. Capture + clear `noticeSlot` (atomically move to local).
+   *  2. Prune children that are no longer `waiting_for_human` (R9).
+   *  3. If empty after prune → discard (no LLM turn).
+   *  4. Build notice text; synthesize turnId; emit silent user event.
+   *  5. Set `activeNotice`; run one turn; clear `activeNotice` in finally.
+   *  6. On abort: emit annotation pill ("wake-up dropped; <child> is still waiting").
+   */
+  private async runNoticeSlotTurn(): Promise<void> {
+    const slot = this.noticeSlot;
+    if (!slot) return;
+    // Atomically move slot to local variable.
+    this.noticeSlot = null;
+
+    // R9 — prune children no longer waiting_for_human at run time.
+    const projects = getAllProjects();
+    const pruned = new Map<string, string>();
+    for (const [childId, childName] of slot.children) {
+      // Find the child's current lifecycle state in the project store.
+      let found = false;
+      outer: for (const project of projects) {
+        for (const wt of project.worktrees ?? []) {
+          const s = wt.sessions?.find((sess) => sess.id === childId);
+          if (s) {
+            if (s.lifecycle.state === "waiting_for_human") {
+              pruned.set(childId, childName);
+            }
+            found = true;
+            break outer;
+          }
+        }
+        const direct = project.directSessions?.find((s) => s.id === childId);
+        if (direct) {
+          if (direct.lifecycle.state === "waiting_for_human") {
+            pruned.set(childId, childName);
+          }
+          found = true;
+          break;
+        }
+      }
+      // If not found in store, keep in the turn (defensive — may be a very
+      // fresh session not yet reflected; the LLM will see stale context but
+      // won't corrupt anything).
+      if (!found) pruned.set(childId, childName);
+    }
+
+    if (pruned.size === 0) {
+      // All children have unblocked — discard the slot, no LLM turn needed.
+      this.emitMeta();
+      return;
+    }
+
+    // Build the notice text from remaining children.
+    const childNames = [...pruned.values()];
+    const childList = childNames.join(", ");
+    const noticeText =
+      childNames.length === 1
+        ? `${childList} is waiting for your reply`
+        : `${childList} are waiting for your reply`;
+
+    const turnId = randomUUID();
+    // Emit the silent user event (KD-4) — must appear before runOneTurn so
+    // transcript replay correctly places it.
+    this.emitUserEvent(turnId, noticeText, [], { silent: true });
+
+    // Move to active state.
+    const activeSlot: NoticeSlot = { children: pruned };
+    this.activeNotice = activeSlot;
+    this.emitMeta();
+
+    // Build a synthetic QueuedTurn and run it. The silent flag is on the
+    // emitted user event (above), not on QueuedTurn — the field was removed
+    // from QueuedTurn since runOneTurn never reads it (FIX-H2).
+    const syntheticTurn: QueuedTurn = {
+      turnId,
+      enqueueOrder: this.enqueueCounter++,
+      rawMessage: noticeText,
+      attachments: [],
+    };
+
+    // FIX-A: _noticeWasAborted is set by stopActiveTurn() when activeNotice is
+    // non-null (i.e. while we're running). We clear it first so stale state
+    // from a prior aborted turn cannot bleed through. After runOneTurn resolves,
+    // activeAbort is already null (runOneTurn clears it in its own finally), so
+    // we cannot check the signal directly — the flag is the only reliable path.
+    this._noticeWasAborted = false;
+    try {
+      await this.runOneTurn(syntheticTurn);
+    } finally {
+      const wasAborted = this._noticeWasAborted;
+      this._noticeWasAborted = false;
+      this.activeNotice = null;
+      this.emitMeta();
+      if (wasAborted) {
+        // KD-8 — emit annotation pill unconditionally on abort (not just when
+        // !sawResult — a notice turn stopped after result still warrants a note).
+        for (const [, name] of activeSlot.children) {
+          this.emitSystemEvent({
+            subagentId: "",
+            subagentName: name,
+            subagentState: "waiting_for_human",
+            text: `wake-up dropped; ${name} is still waiting`,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -1084,10 +1350,36 @@ export class JsonAgentSession {
   private async drain(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    this._abortedSinceLastDrain = false; // FIX-G: reset abort flag for this drain cycle
+    // FIX-G2: track whether the loop exited via an abort-break. If so we must
+    // NOT re-kick in the finally — that would immediately re-enter drain, reset
+    // _abortedSinceLastDrain to false, and consume the notice slot right after
+    // the user pressed Stop (defeating FIX-G entirely).
+    let brokeForAbort = false;
     try {
-      while (this.queue.length > 0) {
-        const turn = this.queue.shift()!;
-        await this.runOneTurn(turn);
+      // Outer loop: human queue first, then notice slot. Each iteration of the
+      // outer loop re-checks both, so a notice slot that arrives while the
+      // human queue is draining will still be consumed before we exit.
+      while (this.queue.length > 0 || this.noticeSlot) {
+        // Drain the human queue entirely before consuming the notice slot
+        // (human turns always take priority — R5b).
+        while (this.queue.length > 0) {
+          const turn = this.queue.shift()!;
+          await this.runOneTurn(turn);
+        }
+        // FIX-G: if a user-initiated abort happened during the human queue,
+        // skip the notice slot for now — it survives (R14) and fires on the
+        // next kickDrain, not immediately after a Stop.
+        if (this._abortedSinceLastDrain) {
+          this._abortedSinceLastDrain = false;
+          brokeForAbort = true;
+          break;
+        }
+        // Consume the notice slot if still present (and no human turn arrived
+        // during runOneTurn — the outer while re-checks).
+        if (this.noticeSlot) {
+          await this.runNoticeSlotTurn();
+        }
       }
     } finally {
       this.running = false;
@@ -1112,7 +1404,17 @@ export class JsonAgentSession {
       // `waiting_for_human`, including the very first one. Even on a turn
       // error the session is ready for the next message (the error lives in
       // the transcript), so the same choice applies.
+      //
+      // KD-2 race fix: if a notice slot arrived while the finally block was
+      // executing (yield in persistLifecycle), kick drain once more so it is
+      // not permanently stranded. `running` is now false, so kickDrain() fires
+      // if the slot is non-null.
       await this.persistLifecycle("waiting_for_human");
+      // FIX-G2: only re-kick for a slot that arrived while the finally itself
+      // yielded (persistLifecycle await above). If the loop broke because of an
+      // abort, we must not fire immediately — the slot survives and the user's
+      // next interaction will kickDrain naturally.
+      if (this.noticeSlot && !brokeForAbort) this.kickDrain();
     }
   }
 

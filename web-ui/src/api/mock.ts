@@ -1294,6 +1294,10 @@ export function createMockApi() {
       return { ok: true };
     },
 
+    async dismissNotice(_sessionId: string): Promise<void> {
+      // no-op in mock
+    },
+
     async cancelQueuedTurn(_sessionId: string, _turnId: string): Promise<{ ok: true }> {
       return { ok: true };
     },
