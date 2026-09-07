@@ -142,5 +142,60 @@ describe("ToolRunSummary structured diffs (Decision 3/4, 4.T2)", () => {
     // once structured diffs are present.
     expect(screen.queryByText("not a unified diff at all")).toBeTruthy();
   });
+
+  it("suppresses raw toolInput JSON when structured diffs are present (ACP Edit path)", () => {
+    // ACP sends both rawInput ({file_path, old_string, new_string}) AND content diffs.
+    // Only the diff view should show — the JSON is redundant and was leaking through.
+    const editInput = { file_path: "/app/foo.ts", old_string: "const x = 1", new_string: "const x = 2" };
+    const tools = [
+      tool({
+        toolName: "Edit",
+        toolInput: editInput,
+        status: "completed",
+        diffs: [{ path: "/app/foo.ts", oldText: "const x = 1", newText: "const x = 2" }],
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    // Edit tool rows start expanded (isBash=false, isReadOnly=false), so no click needed.
+    expect(document.querySelector(".diff-line")).toBeTruthy();
+    // Raw JSON of the tool input must NOT appear alongside the diff.
+    expect(screen.queryByText(/old_string/)).toBeNull();
+    expect(screen.queryByText(/new_string/)).toBeNull();
+  });
+
+  it("shows raw toolInput JSON when there are no diffs (non-edit tools)", () => {
+    // For tools that have input but produce no diff, the pretty-printed JSON is the only body.
+    const tools = [
+      tool({
+        toolName: "Bash",
+        toolInput: { command: "echo hello" },
+        status: "completed",
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    const entryHeader = document.querySelector(".chat-tool-entry__header") as HTMLElement;
+    fireEvent.click(entryHeader);
+    // The input JSON body block must be visible.
+    expect(document.querySelector(".chat-tool-entry__pre")).toBeTruthy();
+  });
+
+  it("shows raw toolInput JSON for Bash even when result looks like a unified diff", () => {
+    // `git diff` output passes looksLikeUnifiedDiff — the input JSON must still show,
+    // because the command itself is not redundant with the diff text in the result.
+    const diffOutput = "diff --git a/foo.ts b/foo.ts\n--- a/foo.ts\n+++ b/foo.ts\n@@ -1 +1 @@\n-old\n+new";
+    const tools = [
+      tool({
+        toolName: "Bash",
+        toolInput: { command: "git diff HEAD" },
+        status: "completed",
+        result: { content: diffOutput },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    const entryHeader = document.querySelector(".chat-tool-entry__header") as HTMLElement;
+    fireEvent.click(entryHeader);
+    // The input JSON body block must still be present (not suppressed by the diff result).
+    expect(document.querySelector(".chat-tool-entry__pre code")).toBeTruthy();
+  });
 });
 
