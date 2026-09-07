@@ -64,7 +64,7 @@ services:
       # Dev sandbox: disable daemon auth (no login screen) and let Vite accept
       # any Host header so Tailscale / LAN access works. Sandbox-only — do not
       # mirror these onto a network-exposed production daemon.
-      VST_NO_AUTH: "0"
+      VST_NO_AUTH: "1"
       VITE_DEV_ALLOW_ALL_HOSTS: "1"
       # Point cloudflared at Vite (port 5173) so mobile gets the full SPA
       # through the tunnel. Vite proxies /mobile-auth and /api/* back to the

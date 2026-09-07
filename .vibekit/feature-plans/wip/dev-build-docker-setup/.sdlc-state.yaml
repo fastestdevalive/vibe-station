@@ -1,0 +1,13 @@
+feature: dev-build-docker-setup
+worktree: /home/gb/code/fastestdevalive/vibe-station
+master:
+  prd: N/A
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null

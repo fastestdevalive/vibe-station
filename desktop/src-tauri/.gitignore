@@ -1,6 +1,1 @@
-# Rust build output
-target/
-
-# Downloaded / generated external binaries (populated by CI and local build scripts).
-# The icons/ directory IS committed (placeholder art); binaries/ is not.
 binaries/

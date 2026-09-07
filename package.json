@@ -5,8 +5,9 @@
   "description": "Web-based orchestrator for parallel AI coding agents.",
   "packageManager": "pnpm@9.0.0",
   "scripts": {
-    "dev": "pnpm --filter @vibestation/web dev",
-    "build": "pnpm -r build",
+    "dev": "pnpm --filter @vibe-station/desktop dev",
+    "build": "pnpm --filter @vibe-station/desktop build",
+    "docker": "bash scripts/dev-sandbox.sh up",
     "lint": "eslint web-ui/src web-ui/e2e",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
@@ -18,8 +19,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "concurrently": "^9.1.0",
     "eslint": "^9.15.0",
     "eslint-plugin-react-hooks": "^5.0.0",
+    "tsx": "^4.19.2",
     "typescript-eslint": "^8.15.0"
   }
 }
