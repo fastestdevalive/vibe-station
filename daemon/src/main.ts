@@ -215,11 +215,9 @@ async function main() {
     console.error("Failed to initialize skill catalog (non-fatal):", err);
   }
 
-  // Re-spawn the Cloudflare tunnel if it was enabled before the last shutdown
-  // (tunnel-persistence). Blocking, like the recovery steps above — a
-  // still-restoring tunnel would otherwise report a false "enabled" status to
-  // the first UI poll. No-ops in no-auth/no-token mode. Never throws.
-  await cloudflared.restoreOnBoot(resolveTunnelPort(port), { token: daemonToken, noAuth });
+  // Reap any orphaned cloudflared processes and clear persisted tunnel state.
+  // The tunnel requires explicit user action to enable after each restart.
+  await cloudflared.restoreOnBoot(resolveTunnelPort(port));
 
   // Subagent → parent notifications resolve the parent's agent lazily and need
   // the port to do it (subagent-ux-v2).

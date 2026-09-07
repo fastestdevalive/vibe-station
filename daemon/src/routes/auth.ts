@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { COOKIE_NAME } from "../auth.js";
-import { bumpBrowserEpoch } from "../state/auth-state.js";
-import { closeConnectionsByScope, getRemoteSessions } from "../broadcaster.js";
+import { bumpBrowserEpoch, revokeTokenId } from "../state/auth-state.js";
+import { closeConnectionsByTokenId, closeConnectionsByScope, getRemoteSessions } from "../broadcaster.js";
 import type { TokenPayload } from "../types.js";
 
 export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Promise<void>): void {
@@ -32,6 +32,19 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
       return reply.status(403).send({ error: "DESKTOP_ONLY" });
     }
     return reply.send({ sessions: getRemoteSessions() });
+  });
+
+  // POST /auth/sessions/:id/revoke — revoke a remote session by tokenId.
+  // Marks the token as revoked (in-memory) and closes all its WS connections.
+  app.post("/auth/sessions/:id/revoke", async (req, reply) => {
+    if (req.headers["cf-connecting-ip"]) {
+      return reply.status(403).send({ error: "DESKTOP_ONLY" });
+    }
+    const { id } = req.params as { id: string };
+    revokeTokenId(id);
+    const found = closeConnectionsByTokenId(id, 4403, "Session revoked");
+    if (!found) return reply.status(404).send({ error: "Session not found." });
+    return reply.send({ ok: true });
   });
 
   // POST /auth/revoke-browser — bump browserEpoch to invalidate all browser tokens.

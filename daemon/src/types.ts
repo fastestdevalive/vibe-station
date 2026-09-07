@@ -459,7 +459,7 @@ export interface WorktreeRecord {
 // ── Auth token types ─────────────────────────────────────────────────────────
 
 /** Identifies which client minted a token (server-determined at mint time). */
-export type TokenScope = "cli" | "tauri" | "browser";
+export type TokenScope = "cli" | "tauri" | "browser" | "mobile";
 
 /**
  * Payload embedded in every vst token.
@@ -477,7 +477,7 @@ export interface TokenPayload {
 
 export type VerifyResult =
   | { ok: true; payload: TokenPayload }
-  | { ok: false; reason: "invalid_signature" | "expired" | "epoch_mismatch" | "malformed" };
+  | { ok: false; reason: "invalid_signature" | "expired" | "epoch_mismatch" | "malformed" | "revoked" };
 
 // ─────────────────────────────────────────────────────────────────────────────
 

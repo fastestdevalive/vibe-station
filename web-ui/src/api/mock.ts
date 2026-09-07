@@ -2,6 +2,7 @@ import type {
   AddProjectBody,
   AddProjectResponse,
   Attachment,
+  AuthSession,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
@@ -1514,6 +1515,8 @@ export function createMockApi() {
     async getMobileQr(): Promise<MobileQrResponse> { return { qrUrl: "https://mock.trycloudflare.com/mobile-auth?code=mock", expiresAt: Date.now() + 30_000 }; },
     async getLocalQr(): Promise<LocalQrResponse> { return { qrUrl: "http://192.168.1.42:7421/mobile-auth?code=mock-local", expiresAt: Date.now() + 30_000, connectionType: "lan" }; },
     async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> { return { ok: true, browserEpoch: 0 }; },
+    async listAuthSessions(): Promise<AuthSession[]> { return []; },
+    async revokeAuthSession(_tokenId: string): Promise<void> {},
   };
 
   return api;

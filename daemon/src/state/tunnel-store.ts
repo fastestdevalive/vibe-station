@@ -85,9 +85,9 @@ export function clear(): void {
 }
 
 /**
- * Process-only clear — used by a graceful daemon shutdown (`shutdownKill()` in
- * cloudflared.ts). `enabled` is left untouched so the next boot's
- * restoreOnBoot() still re-spawns if it was on — see plan Decision 3.
+ * Process-only clear — clears pid/url/startedAt but leaves `enabled` untouched.
+ * Note: `shutdownKill()` now calls `clear()` instead, so this is only used
+ * by code paths that need to clear process state without touching `enabled`.
  */
 export function clearProcess(): void {
   try {

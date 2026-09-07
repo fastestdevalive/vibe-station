@@ -9,6 +9,16 @@ interface RemoteAccessSettingProps {
   api: ApiInstance;
 }
 
+function formatRelative(ms: number): string {
+  const diff = Date.now() - ms;
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
 /**
  * ApiError.message is the raw response body, which for these routes is
  * `{"error":"…"}`. Surface the human-readable string instead of the JSON blob
@@ -112,8 +122,9 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [countdown, setCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Revoke-all state ────────────────────────────────────────────────────────
+  // ── Revoke state ────────────────────────────────────────────────────────────
   const [revokingAll, setRevokingAll] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [revokeSuccess, setRevokeSuccess] = useState(false);
 
@@ -148,18 +159,31 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     void fetchSessions();
   }, [fetchStatus, fetchSessions]);
 
+  // ── Refresh lastSeenAt periodically ────────────────────────────────────────
+  useEffect(() => {
+    const id = setInterval(() => void fetchSessions(), 30_000);
+    return () => clearInterval(id);
+  }, [fetchSessions]);
+
   // ── Live session presence via WS ────────────────────────────────────────────
   useEffect(() => {
     const offConnected = api.on("remote:connected", (e) => {
       if (e.type !== "remote:connected") return;
       setSessions((prev) => {
-        if (prev.some((s) => s.id === e.session.id)) return prev;
+        const idx = prev.findIndex((s) => s.tokenId === e.session.tokenId);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = e.session;
+          return next;
+        }
         return [...prev, e.session];
       });
     });
     const offDisconnected = api.on("remote:disconnected", (e) => {
       if (e.type !== "remote:disconnected") return;
-      setSessions((prev) => prev.filter((s) => s.id !== e.sessionId));
+      setSessions((prev) => prev.map((s) =>
+        s.tokenId === e.tokenId ? { ...s, connections: e.connections } : s
+      ));
     });
     return () => { offConnected(); offDisconnected(); };
   }, [api]);
@@ -241,12 +265,27 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     setRevokeSuccess(false);
     try {
       await api.revokeAllBrowserSessions();
+      setSessions([]);
       setRevokeSuccess(true);
       setTimeout(() => setRevokeSuccess(false), 3000);
     } catch (err) {
       setRevokeError(errMessage(err, "Failed to revoke browser sessions."));
     } finally {
       setRevokingAll(false);
+    }
+  }
+
+  // ── Revoke a single session ─────────────────────────────────────────────────
+  async function handleRevokeOne(tokenId: string) {
+    setRevokingId(tokenId);
+    setRevokeError(null);
+    try {
+      await api.revokeAuthSession(tokenId);
+      setSessions((prev) => prev.filter((s) => s.tokenId !== tokenId));
+    } catch (err) {
+      setRevokeError(errMessage(err, "Failed to revoke session."));
+    } finally {
+      setRevokingId(null);
     }
   }
 
@@ -516,67 +555,110 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
         </div>
       )}
 
-      {/* Active remote sessions */}
+      {/* Active sessions */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-        <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-          Active sessions
-        </div>
-        {sessions.length === 0 ? (
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            No remote sessions connected.
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+            Active sessions
           </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                style={{
-                  fontSize: "var(--font-size-xs)",
-                  color: "var(--fg-muted)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                }}
-              >
-                <span style={{ color: "var(--accent-color, var(--fg-primary))", fontWeight: 600 }}>●</span>
-                {s.scope} · connected {new Date(s.connectedAt).toLocaleTimeString()}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Revoke all browser sessions */}
-      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-        <div
-          style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}
-        >
-          Browser sessions
-        </div>
-        <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-          Invalidates all active browser and mobile sessions immediately, including any live connections.
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-          <button
-            type="button"
-            className="btn btn--danger"
-            disabled={revokingAll}
-            onClick={() => void handleRevokeAll()}
-            style={{ alignSelf: "flex-start" }}
-          >
-            {revokingAll ? "Revoking…" : "Revoke all browser sessions"}
-          </button>
-          {revokeSuccess && (
-            <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-success, #16a34a)" }}>
-              All browser sessions revoked.
-            </span>
+          {sessions.length > 0 && (
+            <button
+              type="button"
+              className="btn btn--danger"
+              disabled={revokingAll}
+              onClick={() => void handleRevokeAll()}
+              style={{ fontSize: "var(--font-size-xs)" }}
+            >
+              {revokingAll ? "Revoking…" : "Revoke all"}
+            </button>
           )}
         </div>
+
         {revokeError && (
-          <div style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-danger)" }}>
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-danger)" }}>
             {revokeError}
           </div>
         )}
+        {revokeSuccess && (
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-success, #16a34a)" }}>
+            All sessions revoked.
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+          {/* Fixed desktop entry */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "var(--space-3)",
+            padding: "var(--space-3)",
+            border: "var(--border-width) solid var(--border-default)",
+            borderRadius: "var(--radius-md)",
+            background: "var(--bg-card)",
+          }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
+                <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>Desktop</span>
+                <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
+                  this session
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Remote sessions sorted by lastSeenAt desc */}
+          {[...sessions].sort((a, b) => b.lastSeenAt - a.lastSeenAt).map((s) => (
+            <div
+              key={s.tokenId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "var(--space-3)",
+                padding: "var(--space-3)",
+                border: "var(--border-width) solid var(--border-default)",
+                borderRadius: "var(--radius-md)",
+                background: "var(--bg-card)",
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
+                  <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+                    {s.scope === "mobile" ? "Mobile" : "Browser"}
+                  </span>
+                  <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
+                    {s.scope}
+                  </span>
+                  {s.connections === 0 ? (
+                    <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>0 tabs open</span>
+                  ) : (
+                    <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-success, #16a34a)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
+                      {s.connections} {s.connections === 1 ? "tab" : "tabs"}
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+                  Last seen {formatRelative(s.lastSeenAt)} · issued {s.issuedAt ? formatRelative(s.issuedAt) : "unknown"}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={revokingId === s.tokenId || revokingAll}
+                onClick={() => void handleRevokeOne(s.tokenId)}
+              >
+                {revokingId === s.tokenId ? "…" : "Revoke"}
+              </button>
+            </div>
+          ))}
+
+          {sessions.length === 0 && (
+            <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", padding: "var(--space-2) 0" }}>
+              No remote sessions connected.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

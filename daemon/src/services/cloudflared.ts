@@ -321,52 +321,36 @@ export function disable(port: number): void {
 }
 
 /**
- * Graceful daemon shutdown (main.ts). Kills the process but preserves
- * `enabled` in the DB — the next boot's restoreOnBoot() still re-spawns if
- * the tunnel was on. See tunnel-persistence plan, Decision 3.
+ * Graceful daemon shutdown (main.ts). Kills the process and clears all
+ * persisted tunnel state — the tunnel requires explicit user action to
+ * re-enable after each restart.
  */
 export function shutdownKill(): void {
   killTrackedProcess();
   state.enabled = false;
   state.tunnelUrl = null;
-  tunnelStore.clearProcess();
+  tunnelStore.clear();
 }
 
 /**
- * Called once at daemon boot (main.ts, after port/token/noAuth are resolved).
- * Runs the OS-truth reconciliation sweep FIRST, before even the no-auth/token
- * guard — orphans from a prior run in a *different* auth mode (e.g. this
- * machine had auth enabled last boot but is booting with --no-auth now) must
- * still be reaped; "sweep first, before anything else" applies to the guard
- * too, not just to the existing single-pid logic below. No-ops the REST of
- * restore in no-auth / no-token mode — exposing an auth-disabled daemon over a
- * public tunnel URL is exactly what /auth/tunnel/enable's own guard prevents,
- * and a boot-time call bypasses that route entirely. Otherwise: best-effort
- * kill (identity-checked) whatever pid was last recorded (covers both an
- * already-dead graceful shutdown and a live orphan from a crash), then
- * re-spawn fresh if the persisted state says the tunnel should be enabled.
- * Never throws.
+ * Called once at daemon boot (main.ts). Sweeps any orphaned cloudflared
+ * processes from a prior run, kills the persisted pid if any, then clears
+ * all tunnel state. The tunnel requires explicit user action to enable and
+ * must not auto-start across daemon restarts. Never throws.
  */
-export async function restoreOnBoot(port: number, opts: { token?: string; noAuth: boolean }): Promise<void> {
+export async function restoreOnBoot(port: number): Promise<void> {
+  // Sweep any orphaned cloudflared processes from a prior run.
   sweepOrphans(port);
-  if (opts.noAuth || !opts.token) {
-    console.warn("[cloudflared] skipping tunnel restore — daemon is in no-auth mode or has no token");
-    return;
-  }
+  // Kill the persisted pid if any (it's always stale at this point — the
+  // sweepOrphans call above already SIGTERMed pgrep matches, this covers the
+  // recorded-but-missed case).
   const persisted = tunnelStore.getState();
   if (persisted.currentPid !== null) {
     killPersistedPid(persisted.currentPid, "orphaned");
   }
-  if (!persisted.enabled) return;
-  try {
-    await enable(port);
-  } catch (err) {
-    console.warn("[cloudflared] failed to restore tunnel on boot:", err);
-    // Don't leave a dead pid/url behind for the NEXT boot to re-discover and
-    // re-attempt killing (it'll be stale, possibly reused by an unrelated
-    // process by then) — `enabled` stays true so the retry itself still happens.
-    tunnelStore.clearProcess();
-  }
+  // Always clear the tunnel state on boot — the tunnel requires explicit user
+  // action to enable and must not auto-start across daemon restarts.
+  tunnelStore.clear();
 }
 
 /** Return the current tunnel state (no side effects). */

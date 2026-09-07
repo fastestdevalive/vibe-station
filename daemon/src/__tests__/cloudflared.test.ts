@@ -152,7 +152,7 @@ describe("cloudflared", () => {
     expect((await promise).tunnelUrl).toBe("https://later.trycloudflare.com");
   });
 
-  it("2.T3 — enable() persists to tunnel-store on success; disable() clears fully; shutdownKill() keeps enabled", async () => {
+  it("2.T3 — enable() persists to tunnel-store on success; disable() clears fully; shutdownKill() clears all state", async () => {
     const cf = await import("../services/cloudflared.js");
     const store = await import("../state/tunnel-store.js");
     const promise = cf.enable(7421);
@@ -173,7 +173,7 @@ describe("cloudflared", () => {
     emitUrl("https://second.trycloudflare.com");
     await promise2;
     cf.shutdownKill();
-    expect(store.getState().enabled).toBe(true);
+    expect(store.getState().enabled).toBe(false);
     expect(store.getState().currentUrl).toBeNull();
   });
 
@@ -231,21 +231,23 @@ describe("cloudflared", () => {
     expect(child.kill).toHaveBeenCalled();
   });
 
-  it("2.T5 — restoreOnBoot no-ops (never spawns) when noAuth is true or token is missing", async () => {
+  it("2.T5 — restoreOnBoot never spawns (tunnel requires explicit user action)", async () => {
     const cf = await import("../services/cloudflared.js");
-    await cf.restoreOnBoot(7421, { noAuth: true, token: "x" });
-    expect(spawnMock).not.toHaveBeenCalled();
-    await cf.restoreOnBoot(7421, { noAuth: false, token: undefined });
+    await cf.restoreOnBoot(7421);
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("2.T6 — restoreOnBoot does not spawn when persisted state is enabled:false", async () => {
+  it("2.T6 — restoreOnBoot clears all tunnel state on boot", async () => {
     const cf = await import("../services/cloudflared.js");
-    await cf.restoreOnBoot(7421, { noAuth: false, token: "x" });
+    const store = await import("../state/tunnel-store.js");
+    store.setState({ enabled: true, currentUrl: "https://old.trycloudflare.com", currentPid: null, startedAt: 1, port: 7421 });
+    await cf.restoreOnBoot(7421);
+    expect(store.getState().enabled).toBe(false);
+    expect(store.getState().currentUrl).toBeNull();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("2.T7 — restoreOnBoot kills the recorded pid before spawning, and swallows an ESRCH-style error", async () => {
+  it("2.T7 — restoreOnBoot kills the recorded pid and clears state, swallows ESRCH-style error", async () => {
     const cf = await import("../services/cloudflared.js");
     const store = await import("../state/tunnel-store.js");
     store.setState({ enabled: true, currentUrl: "https://old.trycloudflare.com", currentPid: 99999, startedAt: 1, port: 7421 });
@@ -255,17 +257,13 @@ describe("cloudflared", () => {
       throw err;
     });
 
-    const promise = cf.restoreOnBoot(7421, { noAuth: false, token: "x" });
+    await cf.restoreOnBoot(7421);
     // Identity is checked (via `ps`, mocked to report "cloudflared") before the kill.
     expect(execFileSyncMock).toHaveBeenCalledWith("ps", ["-o", "comm=", "-p", "99999"], expect.anything());
     expect(killSpy).toHaveBeenCalledWith(99999, "SIGTERM");
-
-    await vi.advanceTimersByTimeAsync(0);
-    emitUrl("https://restored.trycloudflare.com");
-    await promise;
-
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(cf.getState().tunnelUrl).toBe("https://restored.trycloudflare.com");
+    // State is cleared; no spawn.
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(cf.getState().tunnelUrl).toBeNull();
     killSpy.mockRestore();
   });
 
@@ -276,7 +274,7 @@ describe("cloudflared", () => {
     store.setState({ enabled: false, currentUrl: null, currentPid: 55555, startedAt: 1, port: 7421 });
 
     const killSpy = vi.spyOn(process, "kill");
-    await cf.restoreOnBoot(7421, { noAuth: false, token: "x" });
+    await cf.restoreOnBoot(7421);
 
     expect(execFileSyncMock).toHaveBeenCalledWith("ps", ["-o", "comm=", "-p", "55555"], expect.anything());
     expect(killSpy).not.toHaveBeenCalled();
@@ -371,14 +369,13 @@ describe("cloudflared", () => {
     killSpy.mockRestore();
   });
 
-  it("S4 — restoreOnBoot() sweeps via pgrep before the existing persisted-pid kill, even before the noAuth/token guard", async () => {
+  it("S4 — restoreOnBoot() sweeps via pgrep before the persisted-pid kill", async () => {
     execFileSyncMock.mockImplementation((cmd: string) => (cmd === "pgrep" ? "444\n" : "cloudflared\n"));
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
     const cf = await import("../services/cloudflared.js");
 
-    await cf.restoreOnBoot(7421, { noAuth: true, token: "x" });
+    await cf.restoreOnBoot(7421);
 
-    // Sweep ran even though noAuth short-circuits the rest of restore.
     expect(killSpy).toHaveBeenCalledWith(444, "SIGTERM");
     expect(spawnMock).not.toHaveBeenCalled();
 

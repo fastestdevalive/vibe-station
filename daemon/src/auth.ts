@@ -147,5 +147,10 @@ function verifyToken(token: string, authState: AuthState): VerifyResult {
     return { ok: false, reason: "epoch_mismatch" };
   }
 
+  // Per-token revocation — set when a specific session is individually revoked
+  if (authState.revokedTokenIds.has(payloadB64)) {
+    return { ok: false, reason: "revoked" };
+  }
+
   return { ok: true, payload };
 }
