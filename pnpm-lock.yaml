@@ -21,7 +21,7 @@ importers:
         specifier: ^8.15.0
         version: 8.59.1(eslint@9.39.4)(typescript@5.9.3)
 
-  apps/desktop:
+  desktop:
     dependencies:
       '@tauri-apps/api':
         specifier: ^2.0.0
