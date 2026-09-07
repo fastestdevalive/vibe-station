@@ -11,20 +11,20 @@ summary: |
     *.node native addons alongside.
   - scripts/download-cloudflared.sh — downloads the cloudflared binary for
     a given target triple from GitHub releases into
-    apps/desktop/src-tauri/binaries/.
+    desktop/src-tauri/binaries/.
   - daemon/src/services/cloudflared.ts line 43 — spawn() now uses
     process.env.VST_CLOUDFLARED_BIN ?? "cloudflared" so the desktop app
     can inject the bundled binary path.
   - cli/src/commands/doctor.ts — cloudflared check added after the bun check,
     with install hint on failure.
-  - apps/desktop/ — full Tauri v2 app scaffold:
+  - desktop/ — full Tauri v2 app scaffold:
       src-tauri/Cargo.toml, build.rs, tauri.conf.json, entitlements.mac.plist
       src/main.rs — detects/spawns daemon, injects __VST_PORT__ and
                     data-tauri-os, hides on close, registers tray
       src/daemon.rs — detect_running_daemon() + spawn_daemon() using Tauri
                       sidecar API and config.json polling
       src/tray.rs — "Open" + "Quit completely" menu items, SIGTERM on quit
-  - pnpm-workspace.yaml — apps/desktop added to workspace packages list
+  - pnpm-workspace.yaml — desktop added to workspace packages list
   - web-ui/src/components/layout/WindowControls.tsx — Linux-only window
     controls (minimize/maximize/hide) using __TAURI_INTERNALS__.invoke;
     no @tauri-apps/api static import so web-ui builds cleanly in browser
@@ -41,7 +41,7 @@ summary: |
   local run on a machine with full tooling is required for final validation.
 
 what_reviewer_should_check:
-  - Rust source compiles: cargo build in apps/desktop/src-tauri with Tauri v2
+  - Rust source compiles: cargo build in desktop/src-tauri with Tauri v2
   - Tauri v2 API shapes: verify tauri.conf.json schema matches Tauri v2 (not v1)
     in particular: app.windows[], app.macOS, bundle.externalBin
   - daemon.rs sidecar invocation: the ShellExt sidecar API and event loop pattern

@@ -27,10 +27,10 @@ ROOT="$(git rev-parse --show-toplevel)"
 # To include cli/ or web-ui/ when they graduate from 0.0.0 placeholders, append here.
 # ---------------------------------------------------------------------------
 JSON_FILES=(
-  "apps/desktop/src-tauri/tauri.conf.json"
-  "apps/desktop/package.json"
+  "desktop/src-tauri/tauri.conf.json"
+  "desktop/package.json"
 )
-CARGO_TOML="apps/desktop/src-tauri/Cargo.toml"
+CARGO_TOML="desktop/src-tauri/Cargo.toml"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -190,7 +190,7 @@ done
 STAGE_FILES+=("$CARGO_TOML")
 
 # Include Cargo.lock if it changed
-CARGO_LOCK="apps/desktop/src-tauri/Cargo.lock"
+CARGO_LOCK="desktop/src-tauri/Cargo.lock"
 if ! git -C "$ROOT" diff --quiet -- "$CARGO_LOCK" 2>/dev/null; then
   STAGE_FILES+=("$CARGO_LOCK")
 fi

@@ -55,7 +55,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "apps/desktop/src-tauri -> target"
+          workspaces: "desktop/src-tauri -> target"
 
       # ── Linux system libraries for WebKitGTK ─────────────────────────────
       - name: Install Linux system dependencies
@@ -80,10 +80,10 @@ jobs:
 
       - name: Copy daemon binary into Tauri externals dir
         run: |
-          mkdir -p apps/desktop/src-tauri/binaries
+          mkdir -p desktop/src-tauri/binaries
           cp dist/vst-daemon-${{ matrix.target }} \
-             apps/desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
-          chmod +x apps/desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
+             desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
+          chmod +x desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
 
       # ── Download cloudflared ──────────────────────────────────────────────
       - name: Download cloudflared binary
@@ -95,7 +95,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: apps/desktop
+          projectPath: desktop
           args: --target ${{ matrix.target }}
 
       # ── Upload artifacts ──────────────────────────────────────────────────
@@ -104,7 +104,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vibe-station-${{ matrix.target }}.dmg
-          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Upload Linux .AppImage
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vibe-station-${{ matrix.target }}.AppImage
-          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
       - name: Upload Linux .deb
@@ -120,5 +120,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vibe-station-${{ matrix.target }}.deb
-          path: apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
           if-no-files-found: error

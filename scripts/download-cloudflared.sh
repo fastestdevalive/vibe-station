@@ -10,7 +10,7 @@
 #   scripts/download-cloudflared.sh --target x86_64-apple-darwin
 #
 # Output:
-#   apps/desktop/src-tauri/binaries/cloudflared-<triple>
+#   desktop/src-tauri/binaries/cloudflared-<triple>
 #
 # The cloudflared binary is downloaded from the GitHub releases latest page.
 
@@ -63,7 +63,7 @@ case "$TARGET" in
     ;;
 esac
 
-OUT_DIR="$REPO_ROOT/apps/desktop/src-tauri/binaries"
+OUT_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 OUT_FILE="$OUT_DIR/cloudflared-$TARGET"
 
 mkdir -p "$OUT_DIR"

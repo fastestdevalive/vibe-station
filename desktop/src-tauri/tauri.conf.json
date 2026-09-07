@@ -6,7 +6,7 @@
     "beforeDevCommand": "pnpm --filter web-ui dev -- --port 5180",
     "devUrl": "http://localhost:5180",
     "beforeBuildCommand": "pnpm --filter web-ui build",
-    "frontendDist": "../../../web-ui/dist"
+    "frontendDist": "../../web-ui/dist"
   },
   "app": {
     "windows": [
