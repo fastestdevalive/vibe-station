@@ -42,11 +42,16 @@ fn main() {
                             info
                         }
                         Err(e) => {
-                            eprintln!("[vst] failed to start daemon: {e}");
-                            daemon::DaemonInfo {
-                                port: 7422,
-                                pid: 0,
-                                token: String::new(),
+                            #[cfg(debug_assertions)]
+                            panic!("[vst] daemon not found — is beforeDevCommand running? error: {e}");
+                            #[cfg(not(debug_assertions))]
+                            {
+                                eprintln!("[vst] failed to start daemon: {e}");
+                                daemon::DaemonInfo {
+                                    port: 7422,
+                                    pid: 0,
+                                    token: String::new(),
+                                }
                             }
                         }
                     }

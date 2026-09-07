@@ -15,11 +15,7 @@ import type { AuthState } from "./state/auth-state.js";
 import type { TokenPayload, TokenScope, VerifyResult } from "./types.js";
 
 export { BROWSER_TTL_MS, BROWSER_MAX_AGE_SECONDS, COOKIE_NAME };
-export {
-  checkLoginRateLimit,
-  resetLoginRateLimit,
-  checkMobileAuthRateLimit,
-};
+export { checkMobileAuthRateLimit };
 export { mintToken, verifyToken };
 
 const COOKIE_NAME = "vst-session";
@@ -28,32 +24,12 @@ const BROWSER_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;       // 7 days in seconds (fo
 
 // ── Rate limiters ─────────────────────────────────────────────────────────────
 
-// In-memory rate limiter for /auth/login — max 10 attempts per minute per IP.
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 10;
 
 // In-memory rate limiter for /mobile-auth — max 20 attempts per minute per phone IP.
 // Keyed by CF-Connecting-IP value (never undefined — callers must check header first).
 const mobileAuthAttempts = new Map<string, { count: number; resetAt: number }>();
 const MOBILE_RATE_LIMIT_MAX = 20;
-
-/** Returns true if this IP is within the rate limit, false if exceeded. */
-function checkLoginRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const entry = loginAttempts.get(ip);
-  if (!entry || now > entry.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  entry.count += 1;
-  return entry.count <= RATE_LIMIT_MAX;
-}
-
-/** Reset the rate limit counter for an IP (called on successful login). */
-function resetLoginRateLimit(ip: string): void {
-  loginAttempts.delete(ip);
-}
 
 /**
  * Returns true if the CF-Connecting-IP is within the mobile-auth rate limit.

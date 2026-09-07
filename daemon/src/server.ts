@@ -32,7 +32,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const AUTH_EXEMPT = new Set([
   "GET /health",
   "GET /ws",
-  "POST /auth/login",
   "POST /auth/logout",
   "GET /mobile-auth",
 ]);
@@ -190,7 +189,6 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     // passes (returning 404 would strand it on the LoginScreen with no working
     // login). The guard above is skipped, so these are purely cosmetic.
     app.get("/auth/check", async (_req, reply) => reply.send({ ok: true }));
-    app.post("/auth/login", async (_req, reply) => reply.send({ ok: true }));
     app.post("/auth/logout", async (_req, reply) => reply.send({ ok: true }));
     app.post("/auth/revoke-browser", async (_req, reply) => reply.send({ ok: true, browserEpoch: 0 }));
   } else if (authState) {

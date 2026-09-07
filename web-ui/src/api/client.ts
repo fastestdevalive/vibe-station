@@ -1128,17 +1128,6 @@ export function createClientApi() {
 
     // ── Auth ──────────────────────────────────────────────────────────────────
 
-    /** Exchange the daemon token for a session cookie. Throws ApiError on failure. */
-    async login(token: string): Promise<void> {
-      const root = baseUrl();
-      const res = await apiFetch(`${root}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      await parseJson<{ ok: true }>(res);
-    },
-
     /** Clear the session cookie (server side). */
     async logout(): Promise<void> {
       const root = baseUrl();
