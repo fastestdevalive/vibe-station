@@ -3,9 +3,9 @@
   "version": "0.0.0",
   "identifier": "com.fastestdevalive.vibestation",
   "build": {
-    "beforeDevCommand": "concurrently --kill-others-on-fail \"pnpm --filter @vibestation/web dev -- --port 5180\" \"tsx watch --tsconfig ../../daemon/tsconfig.json ../../daemon/src/main.ts\"",
+    "beforeDevCommand": "bash ../scripts/dev-start.sh",
     "devUrl": "http://localhost:5180",
-    "beforeBuildCommand": "bash ../../scripts/prep-sidecar.sh && pnpm --filter @vibestation/web build",
+    "beforeBuildCommand": "bash ../scripts/prep-sidecar.sh && pnpm --filter @vibestation/web build",
     "frontendDist": "../../web-ui/dist"
   },
   "app": {

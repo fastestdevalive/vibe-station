@@ -1,6 +1,7 @@
 import type {
   AddProjectBody,
   AddProjectResponse,
+  AuthSession,
   BeginEditResponse,
   ChangedPathEntry,
   Channel,
@@ -44,7 +45,14 @@ import { ApiError } from "./errors";
 
 function baseUrl() {
   const raw = import.meta.env.VITE_DAEMON_URL ?? "";
-  return raw.trim() || "/api";
+  if (raw.trim()) return raw.trim();
+  // Tauri shell: __VST_PORT__ is injected by main.rs before page JS runs.
+  // Use an absolute URL so requests reach the daemon whether or not a Vite
+  // proxy is in the path (in prod the app is served from tauri://, so relative
+  // /api would hit the asset protocol rather than the daemon).
+  const port = (window as unknown as Record<string, unknown>).__VST_PORT__;
+  if (typeof port === "number" && port > 0) return `http://127.0.0.1:${port}/api`;
+  return "/api";
 }
 
 function wsUrl() {
@@ -1170,6 +1178,12 @@ export function createClientApi() {
     async getLocalQr(): Promise<LocalQrResponse> {
       const res = await apiFetch(`${baseUrl()}/auth/local-qr`, { method: "POST" });
       return parseJson<LocalQrResponse>(res);
+    },
+
+    async listAuthSessions(): Promise<AuthSession[]> {
+      const res = await apiFetch(`${baseUrl()}/auth/sessions`);
+      const data = await parseJson<{ sessions: AuthSession[] }>(res);
+      return data.sessions;
     },
 
     async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> {
