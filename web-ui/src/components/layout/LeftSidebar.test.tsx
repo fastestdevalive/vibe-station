@@ -324,6 +324,42 @@ describe("LeftSidebar", () => {
     });
   });
 
+  // ─── LOC indicator (item 10, 11.T2) ────────────────────────────────────
+  describe("diffstat LOC indicator", () => {
+    it("shows +N −N matching a mocked getDiffStat response", async () => {
+      vi.spyOn(api, "getDiffStat").mockImplementation(async (worktreeId: string) =>
+        worktreeId === "wt-1" ? { insertions: 12, deletions: 4 } : { insertions: 0, deletions: 0 },
+      );
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const row = link.closest(".tree-row--worktree")!;
+      await waitFor(() => {
+        expect(within(row as HTMLElement).getByText("+12")).toBeInTheDocument();
+      });
+      expect(within(row as HTMLElement).getByText("−4")).toBeInTheDocument();
+    });
+
+    it("11.T4 regression — collapsed sidebar rail hides the indicator alongside wt-row__id", async () => {
+      vi.spyOn(api, "getDiffStat").mockResolvedValue({ insertions: 7, deletions: 2 });
+      render(
+        <MemoryRouter>
+          <Harness api={api}>
+            <LeftSidebar api={api} collapsed />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      await waitFor(() => expect(api.getDiffStat).toHaveBeenCalled());
+      expect(screen.queryByText("+7")).not.toBeInTheDocument();
+    });
+  });
+
   // ─── Pinning ───────────────────────────────────────────────────────────
   describe("worktree pinning", () => {
     it("does not render the pinned section when no worktrees are pinned", async () => {

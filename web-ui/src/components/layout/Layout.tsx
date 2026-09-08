@@ -245,11 +245,11 @@ export function Layout({
     >
       {[
         vertical ? (
-          <Panel defaultSize={42} minSize={18} key="tools">
+          <Panel defaultSize={42} minSize={18} key="tools" order={1}>
             {wrap(toolPanel)}
           </Panel>
         ) : (
-          <Panel defaultSize={58} minSize={25} key="agent">
+          <Panel defaultSize={58} minSize={25} key="agent" order={1}>
             {agentWrapper()}
           </Panel>
         ),
@@ -258,11 +258,11 @@ export function Layout({
           key="handle"
         />,
         vertical ? (
-          <Panel defaultSize={58} minSize={25} key="agent">
+          <Panel defaultSize={58} minSize={25} key="agent" order={2}>
             {agentWrapper()}
           </Panel>
         ) : (
-          <Panel defaultSize={42} minSize={18} key="tools">
+          <Panel defaultSize={42} minSize={18} key="tools" order={2}>
             {wrap(toolPanel)}
           </Panel>
         ),

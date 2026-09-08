@@ -9,6 +9,7 @@ import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { NewModeDialog } from "./NewModeDialog";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
+import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
 
 interface NewSessionDialogProps {
   open: boolean;
@@ -42,7 +43,13 @@ export function NewSessionDialog({
   const [branchesError, setBranchesError] = useState<string | null>(null);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
-  const [initialPrompt, setInitialPrompt] = useState("");
+  const draftKey = `vst-newsession-draft-${projectId}`;
+  const draft = useDraftPersistence(draftKey);
+  const [initialPrompt, setInitialPromptState] = useState(() => loadDraft(draftKey));
+  function setInitialPrompt(value: string) {
+    setInitialPromptState(value);
+    draft.save(value);
+  }
   const [useTmux, setUseTmux] = useState(true);
   const [channel, setChannel] = useState<"terminal" | "json">("terminal");
   const [files, setFiles] = useState<File[]>([]);
@@ -53,7 +60,9 @@ export function NewSessionDialog({
 
   useEffect(() => {
     if (!open) return;
-    if (initialPromptProp) setInitialPrompt(initialPromptProp);
+    // Prefer an explicit carried-over prompt (e.g. from another dialog); else
+    // restore whatever draft is saved for this project's key.
+    setInitialPromptState(initialPromptProp || loadDraft(draftKey));
     setChannel("terminal");
     setFiles([]);
     void (async () => {
@@ -205,6 +214,7 @@ export function NewSessionDialog({
         }
       }
       onCreated?.();
+      draft.clear();
       onClose();
     } catch (err) {
       // Surface server errors (and offline daemon) in-dialog so the user gets

@@ -28,6 +28,7 @@ describe("createWorktreeRepository", () => {
       "listCommits",
       "getPr",
       "listSubmodules",
+      "getDiffStat",
       "on",
     ] as const;
     for (const method of methods) {

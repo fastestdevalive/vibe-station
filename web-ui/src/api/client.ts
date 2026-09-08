@@ -17,6 +17,7 @@ import type {
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DiffStat,
   DiskUsageResponse,
   FileScope,
   FsCheckResponse,
@@ -608,10 +609,12 @@ export function createClientApi() {
     async getDiff(
       worktreeId: string,
       filePath: string,
-      scope: "local" | "branch",
+      scope: "local" | "branch" | "commit",
+      sha?: string,
     ): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const q = new URLSearchParams({ scope });
+      if (scope === "commit" && sha) q.set("sha", sha);
       const root = baseUrl();
       const res = await apiFetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/diff/${path}?${q}`,
@@ -658,14 +661,27 @@ export function createClientApi() {
 
     async listChangedPaths(
       worktreeId: string,
-      scope: "local" | "branch" = "local",
+      scope: "local" | "branch" | "commit" = "local",
+      sha?: string,
     ): Promise<ChangedPathEntry[]> {
       const q = new URLSearchParams({ scope });
+      if (scope === "commit" && sha) q.set("sha", sha);
       const root = baseUrl();
       const res = await apiFetch(
         `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths?${q}`,
       );
       return parseJson<ChangedPathEntry[]>(res);
+    },
+
+    /** Aggregate `+insertions -deletions` against the worktree's base branch
+     *  (Requirement 10, LeftSidebar's LOC indicator). */
+    async getDiffStat(worktreeId: string): Promise<DiffStat> {
+      const q = new URLSearchParams({ scope: "branch" });
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/worktrees/${encodeURIComponent(worktreeId)}/diffstat?${q}`,
+      );
+      return parseJson<DiffStat>(res);
     },
 
     /** Commit history for the worktree, most-recent-first, with per-commit diffstat. */

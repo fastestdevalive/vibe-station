@@ -719,6 +719,22 @@
   transition: opacity var(--transition-fast);
 }
 
+/* Item 10 — `+N −N` LOC indicator against the base branch, immediately
+ * before `wt-row__id`. Hidden alongside it on hover/focus (same rule as
+ * `.wt-row__id` below) and on the collapsed rail (gated by the same
+ * `!collapsed` condition at each render site). */
+.wt-row__diffstat {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: var(--space-2);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  transition: opacity var(--transition-fast);
+}
+
 /* `pointer-events` used to gate on `:hover`/`:focus-within` alongside opacity
  * (none at rest, auto on hover) — the same pattern the touch-device fix below
  * already had to abandon: gating clickability on a `:hover` match that hasn't
@@ -739,7 +755,9 @@
 }
 
 .tree-row--worktree:hover .wt-row__id,
-.tree-row--worktree:focus-within .wt-row__id {
+.tree-row--worktree:focus-within .wt-row__id,
+.tree-row--worktree:hover .wt-row__diffstat,
+.tree-row--worktree:focus-within .wt-row__diffstat {
   opacity: 0;
 }
 
@@ -1222,6 +1240,14 @@
   background: var(--bg-active);
 }
 
+/* Phase 8 (Requirement 6) — visible keyboard cursor for arrow-key roving
+ * navigation (useRovingListNav), distinct from `--selected` (the currently
+ * open file, which can differ from where the cursor currently sits). */
+.changed-file-list-file--cursor {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .changed-file-list-file-icon {
   display: flex;
   flex-shrink: 0;
@@ -1235,6 +1261,18 @@
   font-size: var(--font-size-xs);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Task B.3 — per-file `+N -N` LOC indicator, between the file name and the
+ * status badge. Small/mono, matching `.wt-row__diffstat`'s convention. */
+.changed-file-list-file__loc {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
   white-space: nowrap;
 }
 
@@ -1563,6 +1601,14 @@
   background: var(--bg-active);
 }
 
+/* Phase 8 (Requirement 6) — visible keyboard cursor for arrow-key roving
+ * navigation (useRovingListNav), distinct from `data-active` (the currently
+ * OPEN file, which can differ from where the cursor currently sits). */
+.tree-row--cursor {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .tree-row[data-active="true"] .wt-row__label {
   color: var(--fg-primary);
   font-weight: var(--font-weight-normal);
@@ -1577,6 +1623,20 @@
   padding: 1px 5px;
   border-radius: 3px;
   line-height: 1.2;
+}
+
+/* Task B.4 — per-file `+N -N` LOC indicator, positioned just before the git
+ * status badge (which carries `margin-left: auto`, so this lands immediately
+ * to its left rather than needing its own margin). Small/mono to match
+ * `.wt-row__diffstat`'s established visual convention. */
+.tree-row__loc {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .tree-row--git-M .tree-row__label {
@@ -3847,6 +3907,29 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-secondary);
 }
 
+.vcs-panel__title-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.vcs-panel__branch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-secondary);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-full, 999px);
+  padding: 1px var(--space-2);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .vcs-panel__bar-actions {
   display: flex;
   align-items: center;
@@ -4034,6 +4117,25 @@ a.dashboard-card.dashboard-card--session {
   background: var(--bg-secondary);
   color: var(--fg-secondary);
   flex-shrink: 0;
+}
+
+/* The dot is the click target that opens the commit's quick-diff view
+ * (replaces a previously-rejected separate diffstat button / hover-reveal
+ * button — see VcsPanel.tsx CommitRow). Hover/focus treatment mirrors the
+ * icon-button convention used by `.project-plus-menu .menu-pop__item`. */
+.vcs-graph__dot--clickable {
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.vcs-graph__dot--clickable:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.vcs-graph__dot--clickable:focus-visible {
+  outline: 2px solid var(--accent-color, var(--fg-primary));
+  outline-offset: 2px;
 }
 
 .vcs-graph__line {
@@ -4473,6 +4575,15 @@ a.dashboard-card.dashboard-card--session {
   overflow: hidden;
 }
 
+/* Item 9 — "Commits › commit #x" breadcrumb, `VcsCommitView`'s `topbarExtra`. */
+.files-topbar__breadcrumb {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 0 var(--space-3);
+}
+
 .files-topbar__tree-toggle {
   display: inline-flex;
   align-items: center;
@@ -4608,6 +4719,78 @@ a.dashboard-card.dashboard-card--session {
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
+  container-type: inline-size;
+  container-name: preview-diffinfo;
+}
+
+/* Hide the scope chips on a narrow preview pane — the diff-stat + scope
+ * label still fit; the chips are the first thing to go (9.T5). */
+@container preview-diffinfo (max-width: 260px) {
+  .preview-diffinfo .file-tree-scope-chips {
+    display: none;
+  }
+}
+
+/* Decision 3 — commit-mode breadcrumb rendered by `DiffScopeSelector`
+ * instead of clickable local/branch chips. */
+.diff-scope-selector__breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.diff-scope-selector__back {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.diff-scope-selector__back:hover {
+  color: var(--fg-primary);
+}
+
+/* Item 8 — Source/Rendered segmented control for `.md` files in DiffView. */
+.preview-diff-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.preview-diff-mode-toggle__btn {
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.preview-diff-mode-toggle__btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+.preview-diff-mode-toggle__btn--active {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
 }
 
 .preview-diffinfo__stats {

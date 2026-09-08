@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { render, act } from "@testing-library/react";
+import { render, act, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { Layout } from "./Layout";
@@ -11,13 +11,17 @@ vi.mock("@/components/layout/PaneFullscreenChrome", () => ({
   ),
 }));
 
-// Mock react-resizable-panels components to avoid library side effects in DOM
+// Mock react-resizable-panels components to avoid library side effects in DOM.
+// `order` is surfaced as `data-order` so Phase 5's tests can assert on it
+// without depending on the library's own internal panel-ordering behavior.
 vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }: { children: ReactNode }) => (
     <div data-testid="panel-group">{children}</div>
   ),
-  Panel: ({ children }: { children: ReactNode }) => (
-    <div data-testid="panel">{children}</div>
+  Panel: ({ children, order }: { children: ReactNode; order?: number }) => (
+    <div data-testid="panel" data-order={order}>
+      {children}
+    </div>
   ),
   PanelResizeHandle: () => <div data-testid="resize-handle" />,
 }));
@@ -158,5 +162,61 @@ describe("Layout orientation toggle remount invariant", () => {
     expect(agentChildMounts).toBe(1);
     expect(agentChildUnmounts).toBe(0);
     expect(queryByTestId("agent-child")).toBeInTheDocument();
+  });
+});
+
+describe("Layout split-handle order fix (Phase 5, Decision 10)", () => {
+  function renderWithOrientation(orientation: "horizontal" | "vertical") {
+    act(() => {
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-order",
+        layoutByWorktree: {
+          "wt-order": {
+            toolPanelVisible: true,
+            toolPanelTab: "files",
+            terminalDockVisible: false,
+            toolSplitOrientation: orientation,
+            layoutMode: "classic",
+            activeWorkspaceId: null,
+            scratchCanvas: null,
+            canvasToolbarVisible: true,
+          },
+        },
+      });
+    });
+
+    return render(
+      <Layout
+        topBar={<div />}
+        leftSidebar={<div />}
+        agentPane={<div data-testid="agent-child">Agent</div>}
+        toolPanel={<div data-testid="tool-panel">Tools</div>}
+        terminalDock={<div />}
+        leftColumnPx={200}
+        isMobile={false}
+        mobileSidebarOpen={false}
+        onMobileSidebarClose={() => {}}
+      />,
+    );
+  }
+
+  it("vertical orientation: tools Panel gets order=1, agent Panel gets order=2", () => {
+    renderWithOrientation("vertical");
+
+    const toolsPanel = screen.getByTestId("tool-panel").closest('[data-testid="panel"]');
+    const agentPanel = screen.getByTestId("agent-child").closest('[data-testid="panel"]');
+
+    expect(toolsPanel).toHaveAttribute("data-order", "1");
+    expect(agentPanel).toHaveAttribute("data-order", "2");
+  });
+
+  it("horizontal orientation: agent Panel gets order=1, tools Panel gets order=2", () => {
+    renderWithOrientation("horizontal");
+
+    const toolsPanel = screen.getByTestId("tool-panel").closest('[data-testid="panel"]');
+    const agentPanel = screen.getByTestId("agent-child").closest('[data-testid="panel"]');
+
+    expect(agentPanel).toHaveAttribute("data-order", "1");
+    expect(toolsPanel).toHaveAttribute("data-order", "2");
   });
 });
