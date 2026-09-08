@@ -236,37 +236,42 @@ export function Layout({
 
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
   // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
+  //
+  // The PanelGroup is keyed on orientation so it remounts fresh when the user
+  // toggles. Without this, react-resizable-panels holds a stale panelDataArray
+  // (sorted by old order props) during the window between React's DOM commit
+  // and useEffect firing — causing drag direction inversion immediately after
+  // every toggle. Remounting is safe: agentPane is a PaneOutlet (portal
+  // destination), the live terminal lives in PaneHostLayer outside this group.
   const vertical = toolSplitOrientation === "vertical";
   const topRow = toolsInSplit ? (
     <PanelGroup
+      key={`vs-ide-top-${wt}-${toolSplitOrientation}`}
       direction={vertical ? "vertical" : "horizontal"}
       autoSaveId={`vs-ide-top-${wt}-${toolSplitOrientation}`}
       style={{ width: "100%", height: "100%" }}
     >
-      {[
-        vertical ? (
-          <Panel defaultSize={42} minSize={18} key="tools" order={1}>
+      {vertical ? (
+        <>
+          <Panel id="tools-pane" defaultSize={42} minSize={18}>
             {wrap(toolPanel)}
           </Panel>
-        ) : (
-          <Panel defaultSize={58} minSize={25} key="agent" order={1}>
+          <PanelResizeHandle className="resize-handle resize-handle--row" />
+          <Panel id="agent-pane" defaultSize={58} minSize={25}>
             {agentWrapper()}
           </Panel>
-        ),
-        <PanelResizeHandle
-          className={`resize-handle ${vertical ? "resize-handle--row" : "resize-handle--col"}`}
-          key="handle"
-        />,
-        vertical ? (
-          <Panel defaultSize={58} minSize={25} key="agent" order={2}>
+        </>
+      ) : (
+        <>
+          <Panel id="agent-pane" defaultSize={58} minSize={25}>
             {agentWrapper()}
           </Panel>
-        ) : (
-          <Panel defaultSize={42} minSize={18} key="tools" order={2}>
+          <PanelResizeHandle className="resize-handle resize-handle--col" />
+          <Panel id="tools-pane" defaultSize={42} minSize={18}>
             {wrap(toolPanel)}
           </Panel>
-        ),
-      ]}
+        </>
+      )}
     </PanelGroup>
   ) : (
     agentWrapper()

@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { render, act, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -12,38 +12,20 @@ vi.mock("@/components/layout/PaneFullscreenChrome", () => ({
 }));
 
 // Mock react-resizable-panels components to avoid library side effects in DOM.
-// `order` is surfaced as `data-order` so Phase 5's tests can assert on it
-// without depending on the library's own internal panel-ordering behavior.
 vi.mock("react-resizable-panels", () => ({
-  PanelGroup: ({ children }: { children: ReactNode }) => (
-    <div data-testid="panel-group">{children}</div>
+  PanelGroup: ({ children, id }: { children: ReactNode; id?: string }) => (
+    <div data-testid="panel-group" data-id={id}>{children}</div>
   ),
-  Panel: ({ children, order }: { children: ReactNode; order?: number }) => (
-    <div data-testid="panel" data-order={order}>
+  Panel: ({ children, id }: { children: ReactNode; id?: string }) => (
+    <div data-testid="panel" data-id={id}>
       {children}
     </div>
   ),
   PanelResizeHandle: () => <div data-testid="resize-handle" />,
 }));
 
-let agentChildMounts = 0;
-let agentChildUnmounts = 0;
-
-function AgentChild() {
-  useEffect(() => {
-    agentChildMounts += 1;
-    return () => {
-      agentChildUnmounts += 1;
-    };
-  }, []);
-  return <div data-testid="agent-child">Agent Content</div>;
-}
-
 describe("Layout orientation toggle remount invariant", () => {
   beforeEach(() => {
-    agentChildMounts = 0;
-    agentChildUnmounts = 0;
-
     // Reset workspace store state to horizontal orientation by default
     act(() => {
       useWorkspaceStore.setState({
@@ -64,11 +46,17 @@ describe("Layout orientation toggle remount invariant", () => {
     });
   });
 
-  it("does not unmount agentPane contents when toggling toolSplitOrientation between horizontal and vertical", () => {
-    const agentPane = <AgentChild />;
+  // The PanelGroup is keyed on orientation, so it remounts on every toggle.
+  // agentPane (a PaneOutlet in production) remounts with it, but the actual
+  // terminal lives in PaneHostLayer outside the PanelGroup — so no PTY is
+  // killed. This test verifies that after each toggle the agentPane content
+  // is still present in the DOM and that each orientation renders the correct
+  // panel ordering.
+  it("renders agentPane in DOM after toggling toolSplitOrientation horizontal→vertical→horizontal", () => {
+    const agentPane = <div data-testid="agent-child">Agent Content</div>;
     const toolPanel = <div data-testid="tool-panel">Tools</div>;
 
-    const { rerender, queryByTestId } = render(
+    const { rerender, queryByTestId, getAllByTestId } = render(
       <Layout
         topBar={<div />}
         leftSidebar={<div />}
@@ -82,12 +70,13 @@ describe("Layout orientation toggle remount invariant", () => {
       />
     );
 
-    // Initial check: horizontal
-    expect(agentChildMounts).toBe(1);
-    expect(agentChildUnmounts).toBe(0);
+    // Initial check: horizontal — agent panel first, tools second
     expect(queryByTestId("agent-child")).toBeInTheDocument();
+    const [agentPanel0, toolsPanel0] = getAllByTestId("panel");
+    expect(agentPanel0).toHaveAttribute("data-id", "agent-pane");
+    expect(toolsPanel0).toHaveAttribute("data-id", "tools-pane");
 
-    // Toggle orientation to vertical in the store
+    // Toggle orientation to vertical
     act(() => {
       useWorkspaceStore.setState({
         layoutByWorktree: {
@@ -105,7 +94,6 @@ describe("Layout orientation toggle remount invariant", () => {
       });
     });
 
-    // Rerender component to apply new store values
     rerender(
       <Layout
         topBar={<div />}
@@ -120,12 +108,13 @@ describe("Layout orientation toggle remount invariant", () => {
       />
     );
 
-    // Ensure agentChild has NOT unmounted/remounted
-    expect(agentChildMounts).toBe(1);
-    expect(agentChildUnmounts).toBe(0);
+    // Vertical: tools panel first, agent second
     expect(queryByTestId("agent-child")).toBeInTheDocument();
+    const [toolsPanel1, agentPanel1] = getAllByTestId("panel");
+    expect(toolsPanel1).toHaveAttribute("data-id", "tools-pane");
+    expect(agentPanel1).toHaveAttribute("data-id", "agent-pane");
 
-    // Toggle orientation back to horizontal in the store
+    // Toggle back to horizontal
     act(() => {
       useWorkspaceStore.setState({
         layoutByWorktree: {
@@ -143,7 +132,6 @@ describe("Layout orientation toggle remount invariant", () => {
       });
     });
 
-    // Rerender component to apply new store values
     rerender(
       <Layout
         topBar={<div />}
@@ -158,14 +146,15 @@ describe("Layout orientation toggle remount invariant", () => {
       />
     );
 
-    // Ensure agentChild still has NOT unmounted/remounted
-    expect(agentChildMounts).toBe(1);
-    expect(agentChildUnmounts).toBe(0);
+    // Back to horizontal: agent panel first, tools second
     expect(queryByTestId("agent-child")).toBeInTheDocument();
+    const [agentPanel2, toolsPanel2] = getAllByTestId("panel");
+    expect(agentPanel2).toHaveAttribute("data-id", "agent-pane");
+    expect(toolsPanel2).toHaveAttribute("data-id", "tools-pane");
   });
 });
 
-describe("Layout split-handle order fix (Phase 5, Decision 10)", () => {
+describe("Layout split-handle DOM order", () => {
   function renderWithOrientation(orientation: "horizontal" | "vertical") {
     act(() => {
       useWorkspaceStore.setState({
@@ -200,23 +189,19 @@ describe("Layout split-handle order fix (Phase 5, Decision 10)", () => {
     );
   }
 
-  it("vertical orientation: tools Panel gets order=1, agent Panel gets order=2", () => {
+  it("vertical orientation: tools panel appears before agent panel in DOM", () => {
     renderWithOrientation("vertical");
 
-    const toolsPanel = screen.getByTestId("tool-panel").closest('[data-testid="panel"]');
-    const agentPanel = screen.getByTestId("agent-child").closest('[data-testid="panel"]');
-
-    expect(toolsPanel).toHaveAttribute("data-order", "1");
-    expect(agentPanel).toHaveAttribute("data-order", "2");
+    const panels = screen.getAllByTestId("panel");
+    expect(panels[0]).toHaveAttribute("data-id", "tools-pane");
+    expect(panels[1]).toHaveAttribute("data-id", "agent-pane");
   });
 
-  it("horizontal orientation: agent Panel gets order=1, tools Panel gets order=2", () => {
+  it("horizontal orientation: agent panel appears before tools panel in DOM", () => {
     renderWithOrientation("horizontal");
 
-    const toolsPanel = screen.getByTestId("tool-panel").closest('[data-testid="panel"]');
-    const agentPanel = screen.getByTestId("agent-child").closest('[data-testid="panel"]');
-
-    expect(agentPanel).toHaveAttribute("data-order", "1");
-    expect(toolsPanel).toHaveAttribute("data-order", "2");
+    const panels = screen.getAllByTestId("panel");
+    expect(panels[0]).toHaveAttribute("data-id", "agent-pane");
+    expect(panels[1]).toHaveAttribute("data-id", "tools-pane");
   });
 });
