@@ -2,12 +2,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ExternalLink, GitCommit, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { CommitLogEntry, PrInfo, SubmoduleInfo } from "@/api/types";
+import { VcsCommitView } from "@/components/tools/VcsCommitView";
 
 interface VcsPanelProps {
   api: ApiInstance;
   worktreeId: string;
   /** Worktree's base branch (e.g. "main"), used to label the collapsed upstream-commits group. */
   baseBranch?: string;
+  /** Worktree's own branch name, rendered as a chip next to the title. Omitted for
+   *  project-scope/no-git callers (see ToolPanel/Workspace). */
+  branch?: string;
 }
 
 /** Relative time like "3m ago", "2h ago", "5d ago"; falls back to a date past ~30d. */
@@ -118,10 +122,13 @@ function CommitRow({
   c,
   isOpen,
   onToggle,
+  onOpenDiff,
 }: {
   c: CommitLogEntry;
   isOpen: boolean;
   onToggle: () => void;
+  /** Opens `VcsCommitView` scoped to this commit (item 9). */
+  onOpenDiff: (sha: string) => void;
 }) {
   // Only commits with a body beyond the subject line get the expand
   // affordance — a bare one-line commit has nothing more to reveal, so
@@ -130,8 +137,25 @@ function CommitRow({
   return (
     <li className="vcs-graph__item">
       <div className="vcs-graph__rail">
-        <span className="vcs-graph__dot">
-          <GitCommit size={11} aria-hidden />
+        <span
+          className="vcs-graph__dot vcs-graph__dot--clickable"
+          role="button"
+          tabIndex={0}
+          aria-label={`View diff for commit ${c.shortSha}`}
+          title="View commit diff"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenDiff(c.sha);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenDiff(c.sha);
+            }
+          }}
+        >
+          <GitCommit size={11} aria-hidden="true" />
         </span>
         <span className="vcs-graph__line" aria-hidden />
       </div>
@@ -209,7 +233,7 @@ const SERVER_MAX_LIMIT = 1000;
  * for each additional page on "Load more"; no live updates yet (commits/PR
  * state changes aren't push-notified to the UI today).
  */
-export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
+export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps) {
   // `commits` holds at most `pageLimit + 1` entries — the lookahead extra
   // entry (never rendered) is how `hasMore` is known for certain instead of
   // guessed from `commits.length === pageLimit`, which can't tell "exactly
@@ -237,6 +261,9 @@ export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
   // ON by default — the branch's own commits are the point of this view;
   // flipping it OFF reveals the full unfiltered log inline (Requirement 1a-1c).
   const [diffFromMain, setDiffFromMain] = useState(true);
+  // Item 9 — set when a commit's diff-stat button is clicked; renders
+  // `VcsCommitView` in place of the commit graph until "Commits" is clicked.
+  const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
 
   const toggleExpanded = (sha: string) => {
     setExpanded((prev) => {
@@ -408,11 +435,29 @@ export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
     void load(Math.min(pageLimit + PAGE_SIZE, SERVER_MAX_LIMIT), "more", loadMoreCheck);
   };
 
+  if (selectedCommitSha) {
+    return (
+      <VcsCommitView
+        api={api}
+        worktreeId={worktreeId}
+        sha={selectedCommitSha}
+        onBack={() => setSelectedCommitSha(null)}
+      />
+    );
+  }
+
   return (
     <div className="vcs-panel">
       <div className="vcs-panel__bar">
-        <span className="vcs-panel__title">
-          Commits{pageCommits ? ` (${diffFromMain ? ownCommits.length : pageCommits.length})` : ""}
+        <span className="vcs-panel__title-group">
+          <span className="vcs-panel__title">
+            Commits{pageCommits ? ` (${diffFromMain ? ownCommits.length : pageCommits.length})` : ""}
+          </span>
+          {branch ? (
+            <span className="vcs-panel__branch-chip" title={branch}>
+              {branch}
+            </span>
+          ) : null}
         </span>
         <div className="vcs-panel__bar-actions">
           <label className="vcs-panel__diff-toggle">
@@ -476,7 +521,13 @@ export function VcsPanel({ api, worktreeId, baseBranch }: VcsPanelProps) {
             ) : (
               <ol className="vcs-graph">
                 {displayedCommits.map((c) => (
-                  <CommitRow key={c.sha} c={c} isOpen={expanded.has(c.sha)} onToggle={() => toggleExpanded(c.sha)} />
+                  <CommitRow
+                    key={c.sha}
+                    c={c}
+                    isOpen={expanded.has(c.sha)}
+                    onToggle={() => toggleExpanded(c.sha)}
+                    onOpenDiff={setSelectedCommitSha}
+                  />
                 ))}
               </ol>
             )}

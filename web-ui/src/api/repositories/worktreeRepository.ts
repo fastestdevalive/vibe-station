@@ -38,6 +38,7 @@ export function createWorktreeRepository(api: ApiInstance) {
     listCommits: api.listCommits,
     getPr: api.getPr,
     listSubmodules: api.listSubmodules,
+    getDiffStat: api.getDiffStat,
     on: api.on,
   };
 }

@@ -18,6 +18,7 @@ import type {
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DiffStat,
   DiskUsageResponse,
   FileScope,
   FsCheckResponse,
@@ -828,11 +829,20 @@ export function createMockApi() {
     async getDiff(
       worktreeId: string,
       filePath: string,
-      _scope: "local" | "branch",
+      _scope: "local" | "branch" | "commit",
+      _sha?: string,
     ): Promise<string> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       const key = filePath.replace(/^\/+/, "");
       return unifiedDiffs[key] ?? "";
+    },
+
+    /** Aggregate `+insertions -deletions` against the worktree's base branch —
+     *  mock returns a fixed, deterministic value so LOC-indicator tests are
+     *  stable without a real git repo. */
+    async getDiffStat(worktreeId: string): Promise<DiffStat> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      return { insertions: 0, deletions: 0 };
     },
 
     async tree(worktreeId: string, path: string, scope: FileScope = "worktree"): Promise<TreeEntry[]> {
@@ -870,11 +880,23 @@ export function createMockApi() {
 
     async listChangedPaths(
       worktreeId: string,
-      _scope: "local" | "branch" = "local",
+      _scope: "local" | "branch" | "commit" = "local",
+      _sha?: string,
     ): Promise<ChangedPathEntry[]> {
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (worktreeId === "wt-1") {
-        return Object.keys(unifiedDiffs).map((path) => ({ path, status: "M" as const }));
+        // Plausible per-file LOC counts so the mock/demo path exercises the
+        // same `+N -N` rendering as the real daemon (undefined would be
+        // indistinguishable from a binary file).
+        const loc: Record<string, { insertions: number; deletions: number }> = {
+          "src/App.tsx": { insertions: 1, deletions: 0 },
+          "README.md": { insertions: 1, deletions: 0 },
+        };
+        return Object.keys(unifiedDiffs).map((path) => ({
+          path,
+          status: "M" as const,
+          ...loc[path],
+        }));
       }
       return [];
     },

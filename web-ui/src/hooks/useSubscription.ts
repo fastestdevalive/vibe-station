@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { FileScope, SessionState, WSEvent } from "@/api/types";
+import type { DiffStat, FileScope, SessionState, WSEvent } from "@/api/types";
 import { useWorkspaceStore } from "./useStore";
+
+/** How often `useWorktreeDiffStats` re-polls — matches the PR poller's
+ *  existing 30s cadence (`docs/STATUS-INDICATORS.md`), Decision 11. */
+const DIFF_STAT_POLL_MS = 30_000;
 
 export function useSubscription(sessionIds: string[], api: ApiInstance) {
   const key = useMemo(() => [...sessionIds].sort().join(","), [sessionIds]);
@@ -116,6 +120,88 @@ export function useFileWatch(
     };
   }, [api, path, worktreeId, scope]);
   return { lastChanged };
+}
+
+/**
+ * Batched, single-interval diffstat poll for the worktree sidebar's `+N −N`
+ * indicator (Decision 11, item 10) — one `setInterval` fetching every visible
+ * worktree id's diffstat via `Promise.all`, not one interval per row (which
+ * would mean N concurrent daemon calls every tick for no benefit).
+ *
+ * An id absent from `worktreeIds` on a later render is NOT pruned from the
+ * returned record — the reducer below only ever spreads `prev` and writes
+ * entries for the current `ids`, it never deletes a key that has dropped out
+ * of `worktreeIds`. In practice this is harmless (the sidebar only reads
+ * `stats[w.id]` for worktrees it's currently rendering), but a stale id's
+ * stat does linger in the record indefinitely rather than being dropped.
+ *
+ * `poll()` fires immediately whenever `key` (the sorted, joined id list)
+ * changes — including on mount and every time `worktreeIds` gains/loses an
+ * id — in addition to the steady `DIFF_STAT_POLL_MS` interval; it does not
+ * wait out the rest of the current interval first, so a caller that churns
+ * `worktreeIds` rapidly can trigger fetches more often than the nominal poll
+ * interval.
+ *
+ * Returns `null` for any id whose fetch is still in flight (first render
+ * after it appears) or whose last fetch failed — never `undefined`, so
+ * callers can render a stable "no data yet" state without an `in` check.
+ */
+export function useWorktreeDiffStats(
+  api: ApiInstance,
+  worktreeIds: string[],
+): Record<string, DiffStat | null> {
+  const key = useMemo(() => [...worktreeIds].sort().join(","), [worktreeIds]);
+  const [stats, setStats] = useState<Record<string, DiffStat | null>>({});
+
+  useEffect(() => {
+    const ids = key ? key.split(",").filter(Boolean) : [];
+    if (ids.length === 0) {
+      setStats({});
+      return undefined;
+    }
+    // Seed any newly-visible id with `null` immediately so it renders as
+    // "no data yet" rather than being silently absent while the first fetch
+    // for it is in flight.
+    setStats((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of ids) {
+        if (!(id in next)) {
+          next[id] = null;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+
+    let cancelled = false;
+    const poll = () => {
+      void Promise.all(
+        ids.map(async (id) => {
+          try {
+            return [id, await api.getDiffStat(id)] as const;
+          } catch {
+            return [id, null] as const;
+          }
+        }),
+      ).then((entries) => {
+        if (cancelled) return;
+        setStats((prev) => {
+          const next = { ...prev };
+          for (const [id, stat] of entries) next[id] = stat;
+          return next;
+        });
+      });
+    };
+    poll();
+    const interval = setInterval(poll, DIFF_STAT_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [api, key]);
+
+  return stats;
 }
 
 export function useTreeWatch(

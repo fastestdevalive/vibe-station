@@ -24,7 +24,7 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
-import { useSubscription } from "@/hooks/useSubscription";
+import { useSubscription, useWorktreeDiffStats } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
@@ -160,6 +160,19 @@ function worktreeIsInactive(sessions: Session[], live: Record<string, SessionSta
   });
 }
 
+/** `+N −N` LOC indicator (item 10, Decision 11) — reuses the VCS graph's
+ *  existing add/del text-color classes. Renders nothing while the stat is
+ *  unknown (still in flight / failed) or genuinely zero-diff. */
+function DiffStatBadge({ stat }: { stat: { insertions: number; deletions: number } | null }) {
+  if (!stat || (stat.insertions === 0 && stat.deletions === 0)) return null;
+  return (
+    <span className="wt-row__diffstat">
+      {stat.insertions > 0 ? <span className="vcs-graph__add">+{stat.insertions}</span> : null}
+      {stat.deletions > 0 ? <span className="vcs-graph__del">−{stat.deletions}</span> : null}
+    </span>
+  );
+}
+
 interface LeftSidebarProps {
   api: ApiInstance;
   /** Narrow desktop rail: abbreviated labels + compact controls */
@@ -196,6 +209,13 @@ export function LeftSidebar({
     }
     return m;
   }, [worktrees]);
+  /** Non-hidden worktree ids — batched into one `useWorktreeDiffStats` poll
+   *  (Decision 11) instead of each row owning its own interval. */
+  const visibleWorktreeIds = useMemo(
+    () => worktrees.filter((w) => w.hiddenAt == null).map((w) => w.id),
+    [worktrees],
+  );
+  const diffStats = useWorktreeDiffStats(api, visibleWorktreeIds);
   /** Hidden worktrees, grouped by project — feeds the "Hidden worktrees" dialog
    *  and the count shown in the project overflow menu. */
   const hiddenWorktreeMap = useMemo(() => {
@@ -1123,6 +1143,7 @@ export function LeftSidebar({
                                 </span>
                               </div>
                               <div className="wt-row__trail pinned-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                <DiffStatBadge stat={diffStats[w.id] ?? null} />
                                 <span className="wt-row__id" title={w.id}>
                                   {w.id}
                                 </span>
@@ -1690,6 +1711,7 @@ export function LeftSidebar({
                                     </div>
                                     {!collapsed ? (
                                       <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                        <DiffStatBadge stat={diffStats[w.id] ?? null} />
                                         <span className="wt-row__id" title={w.id}>
                                           {w.id}
                                         </span>

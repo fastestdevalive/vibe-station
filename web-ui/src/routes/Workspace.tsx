@@ -403,6 +403,7 @@ export function Workspace() {
           api={api}
           worktreeId={wtId}
           baseBranch={worktrees.find((w) => w.id === wtId)?.baseBranch}
+          branch={worktrees.find((w) => w.id === wtId)?.branch}
           hidePanelControls={inWorkspaceCanvas}
         />
       );
