@@ -771,14 +771,22 @@ export function LeftSidebar({
     const worktree = pendingDelete;
     setPendingDelete(null);
     try {
+      // No `enforceDone` here: this is an explicit, confirmed single-worktree
+      // delete, and the confirm copy already promises attached sessions go
+      // with it — the daemon releases/kills them as part of the delete. Only
+      // Settings → Storage opts into the `worktree_not_done` guard.
       await api.deleteWorktree(worktree.id);
       if (activeWorktreeId === worktree.id) {
         clearWorkspaceSelection();
       }
       // Store stays current via the `worktree:deleted` WS event handled in
       // useServerSync — no manual refresh needed.
-    } catch {
-      /* surface errors later */
+    } catch (err) {
+      // Previously a bare `catch { /* surface errors later */ }`, which made a
+      // failed removal look like nothing happened at all. Same mechanism as
+      // `confirmTerminateSession` below — web-ui still has no toast/banner
+      // infra, so this uses the browser-native alert rather than inventing it.
+      window.alert(err instanceof Error ? err.message : "Failed to remove worktree.");
     }
   }
 

@@ -407,21 +407,24 @@ export function createMockApi() {
       return structuredClone(wt);
     },
 
-    async deleteWorktree(id: string): Promise<{ ok: true }> {
+    async deleteWorktree(id: string, opts?: { enforceDone?: boolean }): Promise<{ ok: true }> {
       const idx = worktrees.findIndex((w) => w.id === id);
       if (idx === -1) throw new ApiError("not found", 404);
       const wt = worktrees[idx]!;
-      const wtSessions = sessions.filter((s) => s.worktreeId === wt.id);
-      const notDone = wtSessions.filter((s) =>
-        s.type === "agent"
-          ? s.state !== "done"
-          : s.state !== "done" && s.state !== "exited",
-      );
-      if (notDone.length > 0) {
-        throw new ApiError(
-          JSON.stringify({ error: "worktree_not_done", sessions: notDone.map((s) => s.id) }),
-          409,
+      // Mirrors the daemon: the done guard is opt-in (Settings → Storage only).
+      if (opts?.enforceDone) {
+        const wtSessions = sessions.filter((s) => s.worktreeId === wt.id);
+        const notDone = wtSessions.filter((s) =>
+          s.type === "agent"
+            ? s.state !== "done"
+            : s.state !== "done" && s.state !== "exited",
         );
+        if (notDone.length > 0) {
+          throw new ApiError(
+            JSON.stringify({ error: "worktree_not_done", sessions: notDone.map((s) => s.id) }),
+            409,
+          );
+        }
       }
       worktrees.splice(idx, 1);
       for (let i = sessions.length - 1; i >= 0; i--) {

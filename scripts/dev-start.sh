@@ -4,7 +4,12 @@
 # 1. Creates a stub sidecar binary so Tauri's build.rs resource-path check
 #    passes at compile time. The stub is never actually invoked in dev because
 #    detect_running_daemon() finds the tsx-launched daemon in config.json first.
-# 2. Runs the daemon (tsx watch) and Vite dev server concurrently.
+# 2. Builds web-ui/dist, which the daemon serves (via fastify-static) to any
+#    client that isn't the desktop window itself — LAN/tunnel clients, and
+#    `curl` against the daemon port. The desktop window always loads Vite
+#    directly instead, so it never needed this, but without it those other
+#    clients get whatever dist was last built for, however stale.
+# 3. Runs the daemon (tsx watch) and Vite dev server concurrently.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
 # CWD when invoked: desktop/ (where `tauri dev` is run)
@@ -50,6 +55,11 @@ if [[ ! -f "$VST_STUB" ]]; then
   chmod +x "$VST_STUB"
   echo "[dev-start] created vst stub: $VST_STUB"
 fi
+
+# Build web-ui/dist so the daemon serves current UI to non-Vite clients from
+# the moment it starts, instead of a build left over from a previous session.
+echo "[dev-start] building web-ui/dist..."
+pnpm --filter @vibestation/web build
 
 # Launch daemon (tsx watch) + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).

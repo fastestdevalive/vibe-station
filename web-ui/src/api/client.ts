@@ -338,9 +338,19 @@ export function createClientApi() {
       return parseJson<Worktree>(res);
     },
 
-    async deleteWorktree(id: string): Promise<{ ok: true }> {
+    /**
+     * Delete a worktree (always purges the checkout from disk). Live sessions
+     * are released/killed by the daemon as part of the delete.
+     *
+     * `enforceDone: true` opts into the daemon's safety net: the call fails
+     * with a 409 `worktree_not_done` if any session is still running. Only
+     * Settings → Storage passes it (its bulk-delete UI offers *done* worktrees
+     * only); explicit single deletes leave it off and force-clean instead.
+     */
+    async deleteWorktree(id: string, opts?: { enforceDone?: boolean }): Promise<{ ok: true }> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}`, {
+      const qs = opts?.enforceDone ? "?enforceDone=true" : "";
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}${qs}`, {
         method: "DELETE",
       });
       return parseJson<{ ok: true }>(res);
