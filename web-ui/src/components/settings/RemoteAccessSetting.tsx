@@ -116,9 +116,12 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // isDesktop: true when viewing from the desktop app (loopback), false for browser sessions.
   // Starts as false so browser viewers never see a spurious revoke button; corrected on first fetch.
   const [isDesktop, setIsDesktop] = useState(false);
-  // currentScope: the caller's token scope ('tauri', 'browser', 'mobile', etc.).
-  // Used to derive the correct label for the current-session card.
-  const [currentScope, setCurrentScope] = useState<string | null>(null);
+  // currentTokenId: the viewer's own tokenId, when it has one. Browser/mobile
+  // viewers appear as a real entry in `sessions`, so we badge that entry as
+  // "this session" instead of rendering a separate hardcoded card. Desktop
+  // (tauri/loopback) callers have no token and no list entry, so they keep the
+  // hardcoded "Desktop · this session" card.
+  const [currentTokenId, setCurrentTokenId] = useState<string | null>(null);
 
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
@@ -149,10 +152,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── Fetch remote sessions ───────────────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
-      const { sessions: list, isDesktop: desktop, currentScope: scope } = await api.listAuthSessions();
+      const { sessions: list, isDesktop: desktop, currentTokenId: tokenId } = await api.listAuthSessions();
       setSessions(list);
       setIsDesktop(desktop);
-      setCurrentScope(scope ?? null);
+      setCurrentTokenId(tokenId ?? null);
     } catch {
       // silently ignore (session list is non-critical)
     }
@@ -582,28 +585,32 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-          {/* Current session entry */}
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "var(--space-3)",
-            padding: "var(--space-3)",
-            border: "var(--border-width) solid var(--border-default)",
-            borderRadius: "var(--radius-md)",
-            background: "var(--bg-card)",
-          }}>
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
-                <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-                  {currentScope === "tauri" ? "Desktop" : currentScope === "browser" ? "This session" : isDesktop ? "Desktop" : "This session"}
-                </span>
-                <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
-                  this session
-                </span>
+          {/* Desktop has no entry in the sessions list (no tokenId), so it gets a
+              hardcoded card. Browser/mobile viewers are IN the list — their own
+              entry is badged below instead. */}
+          {isDesktop && (
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "var(--space-3)",
+              padding: "var(--space-3)",
+              border: "var(--border-width) solid var(--border-default)",
+              borderRadius: "var(--radius-md)",
+              background: "var(--bg-card)",
+            }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
+                  <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+                    Desktop
+                  </span>
+                  <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
+                    this session
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Remote sessions sorted by lastSeenAt desc */}
           {[...sessions].sort((a, b) => b.lastSeenAt - a.lastSeenAt).map((s) => (
@@ -625,6 +632,11 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                   <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
                     {s.deviceName ?? "Browser"}
                   </span>
+                  {s.tokenId === currentTokenId && (
+                    <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
+                      this session
+                    </span>
+                  )}
                   <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                     {s.scope}
                   </span>
