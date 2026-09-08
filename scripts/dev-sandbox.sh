@@ -16,15 +16,17 @@
 # isolated everything.
 #
 # Usage:
-#   scripts/dev-sandbox.sh up [worktree-name] [port] [--seed=file-search|demo]
+#   scripts/dev-sandbox.sh up [worktree-name] --port=N [--seed=file-search|demo]
 #   scripts/dev-sandbox.sh down [worktree-name]
 #   scripts/dev-sandbox.sh logs [worktree-name]
 #
 # worktree-name defaults to the current directory's basename (i.e. run this
 # from inside the worktree checkout you want a sandbox for — matches how
 # `vst worktree create` names worktree checkout directories).
-# port defaults to the first free port in 5174-5199 (scanned against
-# currently-running `vst-dev` containers) if omitted on `up`.
+# --port=N is REQUIRED on `up` and must be in 7100-7199. This range sits
+# above X11 TCP (6000+display, which auto-allocates into 6100+ with xpra)
+# and is clear of Vite (5173/5174) and all standard IANA well-known services.
+# Each concurrent worktree sandbox must use a distinct port in this range.
 # --seed defaults to "demo" — the realistic 3-project/9-worktree/14-session
 # dataset (scripts/demo-seed.sh) — so every sandbox has actual worktrees/
 # agent sessions to test against out of the box, still with hot-reload and
@@ -35,17 +37,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# --seed=<mode> can appear anywhere in argv; strip it out first so the
-# remaining positional args (command, worktree-name, port) parse the same as
-# before this flag existed. Defaults to an inherited VST_SEED_MODE (so
-# `VST_SEED_MODE=file-search scripts/dev-sandbox.sh up` also works, matching
-# docker-compose.dev.yml's own header comment), falling back to
-# "demo" — --seed on the command line, when given, wins over both.
+# --seed=<mode> and --port=N can appear anywhere in argv; strip them out
+# first so the remaining positional args parse cleanly. --seed defaults to an
+# inherited VST_SEED_MODE, falling back to "demo". --port defaults to an
+# inherited VST_SANDBOX_PORT (so agents/CI can set it via env without
+# repeating it on every call), with no further fallback — it is required.
 SEED_MODE="${VST_SEED_MODE:-demo}"
+PORT="${VST_SANDBOX_PORT:-}"
 ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --seed=*) SEED_MODE="${arg#--seed=}" ;;
+    --port=*) PORT="${arg#--port=}" ;;
     *) ARGS+=("$arg") ;;
   esac
 done
@@ -61,31 +64,33 @@ esac
 
 CMD="${1:-}"
 WORKTREE="${2:-$(basename "$PWD")}"
-PORT="${3:-}"
 
 if [ -z "$CMD" ]; then
-  echo "Usage: $0 {up|down|logs} [worktree-name] [port] [--seed=file-search|demo]" >&2
+  echo "Usage: $0 {up|down|logs} [worktree-name] --port=N [--seed=file-search|demo]" >&2
   exit 1
 fi
 
-pick_free_port() {
-  local used
-  used="$(docker ps --format '{{.Ports}}' 2>/dev/null | grep -oE '0\.0\.0\.0:[0-9]+->5173' | grep -oE '[0-9]+' | sort -u || true)"
-  for candidate in $(seq 5174 5199); do
-    if ! echo "$used" | grep -qx "$candidate"; then
-      echo "$candidate"
-      return
-    fi
-  done
-  echo "No free port found in 5174-5199 — pass one explicitly: $0 up $WORKTREE <port>" >&2
-  exit 1
+validate_port() {
+  local p="$1"
+  # Reject non-numeric (including leading zeros which cause octal surprises),
+  # then check the numeric range.
+  if ! [[ "$p" =~ ^[1-9][0-9]*$ ]] || [ "$p" -lt 7100 ] || [ "$p" -gt 7199 ]; then
+    echo "error: --port must be in 7100-7199 (got: '$p')." >&2
+    echo "       Pick a free port in that range; each concurrent worktree needs a distinct one." >&2
+    echo "       Run: docker ps --format '{{.Names}} {{.Ports}}' to see what is already bound." >&2
+    exit 1
+  fi
 }
 
 case "$CMD" in
   up)
     if [ -z "$PORT" ]; then
-      PORT="$(pick_free_port)"
+      echo "error: --port=N is required for 'up'." >&2
+      echo "       Usage: $0 up [$WORKTREE] --port=N  (N must be in 7100-7199)" >&2
+      echo "       Or set VST_SANDBOX_PORT=N in the environment." >&2
+      exit 1
     fi
+    validate_port "$PORT"
 
     running="$(docker ps --format '{{.Names}}' | grep -- '-vst-dev-1$' || true)"
     if [ -n "$running" ]; then
@@ -127,7 +132,7 @@ case "$CMD" in
     ;;
 
   *)
-    echo "Unknown command '$CMD'. Usage: $0 {up|down|logs} [worktree-name] [port]" >&2
+    echo "Unknown command '$CMD'. Usage: $0 {up|down|logs} [worktree-name]" >&2
     exit 1
     ;;
 esac
