@@ -599,7 +599,7 @@ export type WSEvent =
     }
   | {
       type: "remote:connected";
-      session: { tokenId: string; scope: string; connections: number; issuedAt: number; lastSeenAt: number; expiresAt?: number };
+      session: { tokenId: string; scope: string; connections: number; issuedAt: number; lastSeenAt: number; expiresAt?: number; deviceName?: string };
     }
   | {
       type: "remote:disconnected";
@@ -614,6 +614,7 @@ export interface AuthSession {
   issuedAt: number;
   lastSeenAt: number;
   expiresAt?: number;
+  deviceName?: string;
 }
 
 export type DiffScope = "local" | "branch" | "none";

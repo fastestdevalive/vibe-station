@@ -20,6 +20,18 @@ interface OneTimeCode {
 
 const oneTimeCodes = new Map<string, OneTimeCode>();
 
+/** Extract a short human-readable device label from a User-Agent string. */
+function parseDeviceName(ua: string): string {
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  const androidMatch = ua.match(/Android[^;]*;\s*([^)]+)\)/);
+  if (androidMatch) return androidMatch[1].trim().split(" ").slice(0, 2).join(" ");
+  if (/Macintosh/.test(ua)) return "Mac";
+  if (/Windows/.test(ua)) return "Windows PC";
+  if (/Linux/.test(ua)) return "Linux";
+  return "Browser";
+}
+
 // Periodic cleanup of stale codes (older than 60s)
 setInterval(() => {
   const cutoff = Date.now() - 60_000;
@@ -240,12 +252,14 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
     // connected a WS yet, so tokenSessions (WS-derived) would otherwise be empty
     // until it enters the app. tokenId is the payload half of the token.
     const tokenId = cookieValue.slice(0, cookieValue.lastIndexOf("."));
+    const rawUa = req.headers["user-agent"] ?? "";
     recordBrowserSession({
       tokenId,
       scope: "browser",
       issuedAt: Date.now(),
       expiresAt: Date.now() + BROWSER_MAX_AGE_SECONDS * 1000,
       epoch: state.browserEpoch,
+      deviceName: parseDeviceName(rawUa),
     });
 
     // `Secure` is only valid over HTTPS. The tunnel is HTTPS, but the local /
