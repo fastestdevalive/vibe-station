@@ -1085,6 +1085,79 @@ describe("LeftSidebar", () => {
     });
   });
 
+  // ─── Worktree delete ("Delete worktree…" in the ⋯ menu) ────────────────
+  // The daemon's `worktree_not_done` guard is opt-in (`?enforceDone=true`) and
+  // belongs to Settings → Storage's bulk delete. The sidebar's explicit,
+  // confirmed single delete force-cleans instead: it must succeed even when
+  // the worktree still has running sessions.
+  describe("delete worktree", () => {
+    async function openDeleteConfirm(user: ReturnType<typeof userEvent.setup>) {
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
+      const trigger = wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement;
+      await user.click(trigger);
+      await user.click(await screen.findByRole("menuitem", { name: /^Delete worktree…$/i }));
+      await user.click(await screen.findByRole("button", { name: /^Delete$/i }));
+    }
+
+    it("deletes a worktree whose sessions are NOT done, in a single unguarded call", async () => {
+      // `wt-1`'s main session is `working` in the mock fixture — the exact case
+      // that used to 409 and vanish into an empty catch.
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const delSpy = vi.spyOn(localApi, "deleteWorktree");
+      const doneSpy = vi.spyOn(localApi, "markWorktreeDone");
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      try {
+        render(
+          <MemoryRouter>
+            <Harness api={localApi}>
+              <LeftSidebar api={localApi} />
+            </Harness>
+          </MemoryRouter>,
+        );
+        await openDeleteConfirm(user);
+
+        await waitFor(() => {
+          expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+        });
+        expect(delSpy).toHaveBeenCalledTimes(1);
+        // No `enforceDone` opt-in from the sidebar, and no extra "mark done"
+        // round trip — one call does the whole job.
+        expect(delSpy).toHaveBeenCalledWith("wt-1");
+        expect(doneSpy).not.toHaveBeenCalled();
+        expect(alertSpy).not.toHaveBeenCalled();
+      } finally {
+        alertSpy.mockRestore();
+      }
+    });
+
+    it("a failed delete surfaces the error instead of failing silently", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      vi.spyOn(localApi, "deleteWorktree").mockRejectedValue(
+        new Error("Worktree 'wt-1' not found"),
+      );
+      try {
+        render(
+          <MemoryRouter>
+            <Harness api={localApi}>
+              <LeftSidebar api={localApi} />
+            </Harness>
+          </MemoryRouter>,
+        );
+        await openDeleteConfirm(user);
+
+        await waitFor(() => {
+          expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining("not found"));
+        });
+      } finally {
+        alertSpy.mockRestore();
+      }
+    });
+  });
+
   // ─── Inline rename (Part 03 Phase 3 — double-click, no modal fallback) ──
   // The modal `RenameDialog` is removed entirely (Decision 8); the sidebar
   // now mirrors TabsStrip.tsx's inline double-click rename exactly.

@@ -941,10 +941,18 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
   // DELETE /worktrees/:id
   // Always purges (removes the git checkout from disk). The ?purge param is
   // accepted but ignored for backward compat with existing callers.
-  // Only deletable when all agent sessions are `done` and all terminal sessions
-  // are `done` or `exited` — mirrors what POST /worktrees/:id/done produces.
+  //
+  // The "done guard" (409 `worktree_not_done`) is OPT-IN via `?enforceDone=true`.
+  // The delete itself never needed it: every session is released + its data dir
+  // cleaned up unconditionally below, so deleting a worktree with live sessions
+  // is a supported force-cleanup. The guard exists for Settings → Storage, whose
+  // bulk-delete UI deliberately only offers *done* worktrees and wants a
+  // server-side safety net against deleting something still running. The left
+  // sidebar's single "Remove worktree" action is an explicit, confirmed
+  // per-worktree destructive action, so it omits the flag and is not gated.
   app.delete("/worktrees/:id", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
+    const { enforceDone } = req.query as { enforceDone?: string };
 
     // Find the project that owns this worktree
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
@@ -952,17 +960,19 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     const worktree = project.worktrees.find((w) => w.id === wtId)!;
 
-    // Done guard: agents must be `done`; terminals accept `done` or `exited`
-    const notDone = worktree.sessions.filter((s) =>
-      s.type === "agent"
-        ? s.lifecycle.state !== "done"
-        : s.lifecycle.state !== "done" && s.lifecycle.state !== "exited",
-    );
-    if (notDone.length > 0) {
-      return reply.status(409).send({
-        error: "worktree_not_done",
-        sessions: notDone.map((s) => s.id),
-      });
+    // Done guard (opt-in): agents must be `done`; terminals accept `done` or `exited`
+    if (enforceDone === "true" || enforceDone === "1") {
+      const notDone = worktree.sessions.filter((s) =>
+        s.type === "agent"
+          ? s.lifecycle.state !== "done"
+          : s.lifecycle.state !== "done" && s.lifecycle.state !== "exited",
+      );
+      if (notDone.length > 0) {
+        return reply.status(409).send({
+          error: "worktree_not_done",
+          sessions: notDone.map((s) => s.id),
+        });
+      }
     }
 
     // Kill all sessions (tmux or direct-pty)
