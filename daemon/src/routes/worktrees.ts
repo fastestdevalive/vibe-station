@@ -17,6 +17,10 @@ import {
   listCommits,
   listSubmodules,
   resolveBaseSha,
+  resolveParentSha,
+  getDiffStat,
+  parseNumstatZ,
+  type PathNumstat,
 } from "../services/git.js";
 import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
@@ -36,6 +40,16 @@ import type { AgentPlugin } from "../services/spawn.js";
 import type { WorktreeRecord, SessionRecord, ProjectRecord, Channel } from "../types.js";
 
 const MAX_DIFF_BYTES = 512 * 1024;
+
+/**
+ * `scope=commit&sha=` contract (Decision 9): 40-char full or abbreviated hex
+ * sha only. Rejecting anything else here — before the raw query param
+ * reaches `revParse`/`git diff` as an argv element — closes off both a
+ * leading `-` being interpreted as a git option flag and inputs like `HEAD`
+ * or a branch name silently "working" instead of being rejected per the
+ * intended hex-sha-only contract.
+ */
+const COMMIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
 
 const IMAGE_MIME: Record<string, string> = {
   png: "image/png",
@@ -123,6 +137,74 @@ function parseBranchNameStatus(stdout: string): { path: string; status: string }
     }
   }
   return result;
+}
+
+/**
+ * Runs `git diff --numstat -z <diffArgs>` in `wtPath` and parses the result
+ * via `parseNumstatZ`. Fails open to an empty map on any git error (spawn
+ * failure, non-0/1 exit, unborn HEAD, etc.) — insertions/deletions are
+ * additive info on top of the path/status list, so a numstat failure should
+ * never take down the whole `/changed-paths` response.
+ */
+function runNumstat(wtPath: string, diffArgs: string[]): Map<string, PathNumstat> {
+  const res = spawnSync("git", ["diff", "--numstat", "-z", ...diffArgs], {
+    cwd: wtPath,
+    encoding: "utf-8",
+    maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  if (res.error || (res.status !== 0 && res.status !== 1)) {
+    return new Map();
+  }
+  return parseNumstatZ(res.stdout ?? "");
+}
+
+/**
+ * Per-untracked-file numstat via `git diff --no-index --numstat -- /dev/null
+ * <path>` (plain `git diff` never shows untracked files, with or without a
+ * base sha, so there's no single invocation that covers them — see Decision
+ * in the changed-paths route below). `--no-index` diffs exit 1 whenever the
+ * two sides differ (i.e. always, here), which is why this doesn't reuse
+ * `runNumstat`'s 0/1 exit check against a single combined command. Returns
+ * `{}` (no insertions/deletions) on any failure — e.g. the path resolves to
+ * a directory or was removed between `git status` and this call.
+ */
+function untrackedNumstat(wtPath: string, relPath: string): PathNumstat {
+  const res = spawnSync(
+    "git",
+    ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", relPath],
+    {
+      cwd: wtPath,
+      encoding: "utf-8",
+      maxBuffer: 4 * 1024 * 1024,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    },
+  );
+  if (res.error || (res.status !== 0 && res.status !== 1)) {
+    return {};
+  }
+  const parsed = parseNumstatZ(res.stdout ?? "");
+  // `--no-index` reports the path as given (relPath), not resolved against
+  // --name-status conventions, so look it up directly.
+  return parsed.get(relPath) ?? {};
+}
+
+/**
+ * Merges per-path `insertions`/`deletions` (from `parseNumstatZ`/
+ * `untrackedNumstat`) into a list of `{ path, status }` entries, matching by
+ * path. Entries with no numstat match (shouldn't normally happen, but fails
+ * open) are returned unchanged — no `insertions`/`deletions` keys at all,
+ * which JSON-serializes identically to explicit `undefined`.
+ */
+function mergeNumstat<T extends { path: string }>(
+  entries: T[],
+  numstat: Map<string, PathNumstat>,
+): (T & PathNumstat)[] {
+  return entries.map((entry) => {
+    const stat = numstat.get(entry.path);
+    if (!stat) return entry;
+    return { ...entry, insertions: stat.insertions, deletions: stat.deletions };
+  });
 }
 
 /** Map internal WorktreeRecord to API shape (adds projectId, drops nested sessions). */
@@ -1130,11 +1212,11 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     }
   });
 
-  // GET /worktrees/:id/diff/*path?scope=local|branch
+  // GET /worktrees/:id/diff/*path?scope=local|branch|commit&sha=<sha>
   app.get("/worktrees/:id/diff/*", async (req, reply) => {
     const { id: wtId } = req.params as { id: string; "*": string };
     const filePath = (req.params as { "*": string })["*"];
-    const { scope = "local" } = req.query as { scope?: string };
+    const { scope = "local", sha } = req.query as { scope?: string; sha?: string };
 
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
@@ -1150,6 +1232,20 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       return reply.status(422).send({ error: "Could not resolve base branch fork point" });
     }
 
+    let commitParentSha: string | null = null;
+    let resolvedCommitSha: string | null = null;
+    if (scope === "commit") {
+      if (!sha || !COMMIT_SHA_RE.test(sha)) {
+        return reply.status(422).send({ error: "Could not resolve commit sha" });
+      }
+      try {
+        resolvedCommitSha = await revParse(wtPath, `${sha}^{commit}`);
+      } catch {
+        return reply.status(422).send({ error: "Could not resolve commit sha" });
+      }
+      commitParentSha = await resolveParentSha(wtPath, resolvedCommitSha);
+    }
+
     const gitArgs =
       scope === "branch"
         ? ([
@@ -1162,16 +1258,28 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
             "--",
             filePath,
           ] as const)
-        : ([
-            "-c",
-            "color.diff=false",
-            "-c",
-            "core.quotepath=false",
-            "diff",
-            "HEAD",
-            "--",
-            filePath,
-          ] as const);
+        : scope === "commit"
+          ? ([
+              "-c",
+              "color.diff=false",
+              "-c",
+              "core.quotepath=false",
+              "diff",
+              commitParentSha!,
+              resolvedCommitSha!,
+              "--",
+              filePath,
+            ] as const)
+          : ([
+              "-c",
+              "color.diff=false",
+              "-c",
+              "core.quotepath=false",
+              "diff",
+              "HEAD",
+              "--",
+              filePath,
+            ] as const);
 
     const diffResult = spawnSync("git", [...gitArgs], {
       cwd: wtPath,
@@ -1226,10 +1334,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     return reply.header("ETag", etag).type("text/plain").send(stdout);
   });
 
-  // GET /worktrees/:id/changed-paths?scope=local|branch
+  // GET /worktrees/:id/changed-paths?scope=local|branch|commit&sha=<sha>
   app.get("/worktrees/:id/changed-paths", async (req, reply) => {
     const { id: wtId } = req.params as { id: string };
-    const { scope = "local" } = req.query as { scope?: string };
+    const { scope = "local", sha } = req.query as { scope?: string; sha?: string };
 
     const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
     if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
@@ -1238,6 +1346,40 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const wtPath = getWorktreePath(project.id, wtId);
 
     try {
+      if (scope === "commit") {
+        if (!sha || !COMMIT_SHA_RE.test(sha)) {
+          return reply.status(422).send({ error: "Could not resolve commit sha" });
+        }
+        let resolvedCommitSha: string;
+        try {
+          resolvedCommitSha = await revParse(wtPath, `${sha}^{commit}`);
+        } catch {
+          return reply.status(422).send({ error: "Could not resolve commit sha" });
+        }
+        const parentSha = await resolveParentSha(wtPath, resolvedCommitSha);
+        const ns = spawnSync(
+          "git",
+          ["-c", "core.quotepath=false", "diff", "-z", "--name-status", parentSha, resolvedCommitSha],
+          {
+            cwd: wtPath,
+            encoding: "utf-8",
+            maxBuffer: 4 * 1024 * 1024,
+            env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          },
+        );
+        if (ns.error) {
+          return reply.status(500).send({ error: `git diff --name-status failed: ${ns.error.message}` });
+        }
+        if (ns.status !== 0 && ns.status !== 1) {
+          return reply.status(500).send({
+            error: (ns.stderr ?? "").trim() || "git diff --name-status failed",
+          });
+        }
+        const entries = parseBranchNameStatus(ns.stdout ?? "");
+        const numstat = runNumstat(wtPath, [parentSha, resolvedCommitSha]);
+        return reply.send(mergeNumstat(entries, numstat));
+      }
+
       if (scope === "branch") {
         const branchBaseSha = await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha);
         if (!branchBaseSha) {
@@ -1261,7 +1403,9 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
             error: (ns.stderr ?? "").trim() || "git diff --name-status failed",
           });
         }
-        return reply.send(parseBranchNameStatus(ns.stdout ?? ""));
+        const entries = parseBranchNameStatus(ns.stdout ?? "");
+        const numstat = runNumstat(wtPath, [branchBaseSha]);
+        return reply.send(mergeNumstat(entries, numstat));
       }
 
       const st = spawnSync(
@@ -1282,9 +1426,52 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
           error: (st.stderr ?? "").trim() || "git status failed",
         });
       }
-      return reply.send(parsePorcelainZ(st.stdout ?? ""));
+      const entries = parsePorcelainZ(st.stdout ?? "");
+      // `git diff --numstat HEAD` covers every tracked path (staged and
+      // unstaged combined, same as `git status`'s single-entry-per-path
+      // view) but — like any plain `git diff` — never reports untracked
+      // ("?") files, since there's no tree-side blob to diff against. Fails
+      // open (empty map) on an unborn HEAD (brand-new repo with no commits
+      // yet) rather than erroring the whole endpoint.
+      const numstat = runNumstat(wtPath, ["HEAD"]);
+      for (const entry of entries) {
+        if (entry.status === "?" && !numstat.has(entry.path)) {
+          numstat.set(entry.path, untrackedNumstat(wtPath, entry.path));
+        }
+      }
+      return reply.send(mergeNumstat(entries, numstat));
     } catch (err) {
       return reply.status(500).send({ error: `changed-paths failed: ${String(err)}` });
+    }
+  });
+
+  // GET /worktrees/:id/diffstat?scope=branch
+  // Line-count summary (insertions/deletions) against the base branch's fork
+  // point, for the worktree sidebar's `+N -N` indicator (Decision 11). Only
+  // `scope=branch` is supported today.
+  app.get("/worktrees/:id/diffstat", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const { scope = "branch" } = req.query as { scope?: string };
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: `Worktree '${wtId}' not found` });
+
+    const worktree = project.worktrees.find((w) => w.id === wtId)!;
+    const wtPath = getWorktreePath(project.id, wtId);
+
+    if (scope !== "branch") {
+      return reply.status(400).send({ error: "Unsupported scope; only 'branch' is supported" });
+    }
+
+    try {
+      const baseSha = await resolveBaseSha(wtPath, worktree.baseBranch, worktree.baseSha);
+      if (!baseSha) {
+        return reply.status(422).send({ error: "Could not resolve base branch fork point" });
+      }
+      const stat = await getDiffStat(wtPath, baseSha);
+      return reply.send(stat);
+    } catch (err) {
+      return reply.status(500).send({ error: `diffstat failed: ${String(err)}` });
     }
   });
 
