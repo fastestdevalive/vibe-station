@@ -113,7 +113,9 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
 
   // ── Remote sessions ─────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<AuthSession[]>([]);
-  const [isRemoteSession, setIsRemoteSession] = useState(false);
+  // isDesktop: true when viewing from the desktop app (loopback), false for browser sessions.
+  // Starts as false so browser viewers never see a spurious revoke button; corrected on first fetch.
+  const [isDesktop, setIsDesktop] = useState(false);
 
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
@@ -144,13 +146,11 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── Fetch remote sessions ───────────────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
-      const list = await api.listAuthSessions();
+      const { sessions: list, isDesktop: desktop } = await api.listAuthSessions();
       setSessions(list);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 403) {
-        setIsRemoteSession(true);
-      }
-      // non-403 errors: silently ignore (session list is non-critical)
+      setIsDesktop(desktop);
+    } catch {
+      // silently ignore (session list is non-critical)
     }
   }, [api]);
 
@@ -439,14 +439,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     );
   }
 
-  if (isRemoteSession) {
-    return (
-      <div style={{ padding: "var(--space-5)", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)" }}>
-        Remote session management can only be done from the primary desktop session.
-      </div>
-    );
-  }
-
   // Truncate tunnel URL for display
   const truncatedUrl = tunnel.tunnelUrl
     ? tunnel.tunnelUrl.replace(/^https?:\/\//, "").slice(0, 40) +
@@ -561,7 +553,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           <div style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
             Active sessions
           </div>
-          {sessions.length > 0 && (
+          {isDesktop && sessions.length > 0 && (
             <button
               type="button"
               className="btn btn--danger"
@@ -586,7 +578,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-          {/* Fixed desktop entry */}
+          {/* Current session entry */}
           <div style={{
             display: "flex",
             alignItems: "center",
@@ -599,7 +591,9 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           }}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
-                <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>Desktop</span>
+                <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
+                  {isDesktop ? "Desktop" : "This browser"}
+                </span>
                 <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                   this session
                 </span>
@@ -625,10 +619,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
                   <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-                    {/* TODO: mobile scope is browser for now — no dedicated "mobile" scope is
-                        minted yet. Re-enable the "Mobile" label when a real mobile scope exists.
-                        {s.scope === "mobile" ? "Mobile" : "Browser"} */}
-                    Browser
+                    {s.deviceName ?? "Browser"}
                   </span>
                   <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                     {s.scope}
@@ -645,14 +636,16 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                   Last seen {formatRelative(s.lastSeenAt)} · issued {s.issuedAt ? formatRelative(s.issuedAt) : "unknown"}
                 </div>
               </div>
-              <button
-                type="button"
-                className="btn btn--secondary"
-                disabled={revokingId === s.tokenId || revokingAll}
-                onClick={() => void handleRevokeOne(s.tokenId)}
-              >
-                {revokingId === s.tokenId ? "…" : "Revoke"}
-              </button>
+              {isDesktop && (
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  disabled={revokingId === s.tokenId || revokingAll}
+                  onClick={() => void handleRevokeOne(s.tokenId)}
+                >
+                  {revokingId === s.tokenId ? "…" : "Revoke"}
+                </button>
+              )}
             </div>
           ))}
 

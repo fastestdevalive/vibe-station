@@ -25,19 +25,20 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
   });
 
   // GET /auth/sessions — list currently connected remote (browser/mobile) sessions.
-  // Returns 403 for requests arriving via the Cloudflare tunnel so that browser
-  // clients see a clear "desktop only" signal rather than a generic error.
+  // Available to all session types. Includes isDesktop so the UI can adapt its
+  // display (e.g. hide revoke buttons for non-desktop viewers).
   app.get("/auth/sessions", async (req, reply) => {
-    if (req.headers["cf-connecting-ip"]) {
-      return reply.status(403).send({ error: "DESKTOP_ONLY" });
-    }
-    return reply.send({ sessions: getRemoteSessions() });
+    const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
+    // Loopback callers have no authPayload (auth guard is bypassed for them).
+    const isDesktop = !authPayload;
+    return reply.send({ sessions: getRemoteSessions(), isDesktop });
   });
 
   // POST /auth/sessions/:id/revoke — revoke a remote session by tokenId.
-  // Marks the token as revoked (in-memory) and closes all its WS connections.
+  // Desktop (loopback) only — browser sessions cannot revoke other sessions.
   app.post("/auth/sessions/:id/revoke", async (req, reply) => {
-    if (req.headers["cf-connecting-ip"]) {
+    const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
+    if (authPayload) {
       return reply.status(403).send({ error: "DESKTOP_ONLY" });
     }
     const { id } = req.params as { id: string };
@@ -48,9 +49,12 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
   });
 
   // POST /auth/revoke-browser — bump browserEpoch to invalidate all browser tokens.
-  // Any valid token (any scope) can call this. CLI running locally can revoke all
-  // remote browser sessions.
-  app.post("/auth/revoke-browser", async (_req, reply) => {
+  // Desktop (loopback) only.
+  app.post("/auth/revoke-browser", async (req, reply) => {
+    const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
+    if (authPayload) {
+      return reply.status(403).send({ error: "DESKTOP_ONLY" });
+    }
     const newEpoch = await bumpBrowserEpoch(persistEpoch);
     closeConnectionsByScope("browser", 4403, "Session revoked");
     return reply.send({ ok: true, browserEpoch: newEpoch });

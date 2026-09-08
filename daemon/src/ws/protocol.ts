@@ -538,7 +538,7 @@ const NavigateEvent = z.object({
 
 const RemoteConnectedEvent = z.object({
   type: z.literal("remote:connected"),
-  session: z.object({ tokenId: z.string(), scope: z.string(), connections: z.number(), issuedAt: z.number(), lastSeenAt: z.number(), expiresAt: z.number().optional() }),
+  session: z.object({ tokenId: z.string(), scope: z.string(), connections: z.number(), issuedAt: z.number(), lastSeenAt: z.number(), expiresAt: z.number().optional(), deviceName: z.string().optional() }),
 });
 
 const RemoteDisconnectedEvent = z.object({

@@ -23,6 +23,8 @@ export interface BrowserSession {
   expiresAt: number | null;
   /** browserEpoch at mint time — used to drop tokens invalidated by revoke-all. */
   epoch: number;
+  /** Human-readable device name parsed from the User-Agent at QR exchange time. */
+  deviceName?: string;
 }
 
 export interface AuthState {
@@ -69,6 +71,11 @@ export function getActiveBrowserSessions(): BrowserSession[] {
     out.push(session);
   }
   return out;
+}
+
+/** Return the deviceName for a minted browser session, if available. */
+export function getDeviceNameForToken(tokenId: string): string | undefined {
+  return _state?.mintedBrowserSessions.get(tokenId)?.deviceName;
 }
 
 /** Revoke a specific token by its payloadB64 id. Future verifyToken calls will reject it. */

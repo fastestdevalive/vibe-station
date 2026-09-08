@@ -1,7 +1,7 @@
 import type { ServerMessage } from "./ws/protocol.js";
 import type { WSConnection } from "./ws/connection.js";
 import type { TokenScope } from "./types.js";
-import { getActiveBrowserSessions } from "./state/auth-state.js";
+import { getActiveBrowserSessions, getDeviceNameForToken } from "./state/auth-state.js";
 
 /**
  * WS broadcaster: manages broadcast events to connected clients.
@@ -22,6 +22,7 @@ export type TokenSession = {
   expiresAt: number | null;
   lastSeenAt: number;
   connections: number;
+  deviceName?: string;
 };
 
 /** Token-level session map. One entry per unique auth token (0+ WS connections each). */
@@ -47,10 +48,11 @@ export function registerConnection(conn: WSConnection): void {
         expiresAt: conn.tokenExpiresAt ?? null,
         lastSeenAt: now,
         connections: 1,
+        deviceName: getDeviceNameForToken(conn.tokenId),
       });
     }
     const session = tokenSessions.get(conn.tokenId)!;
-    broadcastAll({ type: "remote:connected", session: { tokenId: session.tokenId, scope: session.scope, connections: session.connections, issuedAt: session.issuedAt, lastSeenAt: session.lastSeenAt, expiresAt: session.expiresAt ?? undefined } });
+    broadcastAll({ type: "remote:connected", session: { tokenId: session.tokenId, scope: session.scope, connections: session.connections, issuedAt: session.issuedAt, lastSeenAt: session.lastSeenAt, expiresAt: session.expiresAt ?? undefined, deviceName: session.deviceName } });
   }
 }
 
@@ -91,6 +93,7 @@ export function getRemoteSessions(): TokenSession[] {
       expiresAt: m.expiresAt,
       lastSeenAt: m.issuedAt,
       connections: 0,
+      deviceName: m.deviceName,
     });
   }
 
