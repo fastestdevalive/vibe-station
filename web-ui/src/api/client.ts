@@ -56,17 +56,33 @@ function baseUrl() {
   return "/api";
 }
 
+function tauriToken(): string {
+  const t = (window as unknown as Record<string, unknown>).__VST_TOKEN__;
+  return typeof t === "string" ? t : "";
+}
+
 function wsUrl() {
   const base = baseUrl();
+  let url: string;
   // Relative base (e.g. "/api") — connect to /ws on the same origin (Vite proxies it).
   if (base.startsWith("/")) {
-    return `${window.location.origin.replace(/^http/, "ws")}/ws`;
+    url = `${window.location.origin.replace(/^http/, "ws")}/ws`;
+  } else {
+    const u = new URL(base);
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    u.pathname = "/ws";
+    u.search = "";
+    url = u.toString();
   }
-  const u = new URL(base);
-  u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  u.pathname = "/ws";
-  u.search = "";
-  return u.toString();
+  // Browsers can't set custom headers on WebSocket upgrades, so the Tauri app
+  // passes its identity token as a query param instead.
+  const token = tauriToken();
+  if (token) {
+    const u = new URL(url);
+    u.searchParams.set("token", token);
+    url = u.toString();
+  }
+  return url;
 }
 
 /**
@@ -89,12 +105,18 @@ async function parseJson<T>(res: Response): Promise<T> {
 /** Thin fetch wrapper that always sends credentials (session cookie).
  *  credentials: 'include' is required because in dev the web UI (port 5173)
  *  and daemon (port 7421) are different origins — 'same-origin' would silently
- *  drop the cookie. */
+ *  drop the cookie. When running inside the Tauri shell, also sends the
+ *  injected VST_TOKEN as a Bearer header so the daemon can identify the
+ *  request as 'tauri'-scoped rather than a generic loopback caller. */
 function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = tauriToken();
+  const authHeaders: Record<string, string> = token
+    ? { Authorization: `Bearer ${token}` }
+    : {};
   return fetch(url, {
     ...init,
     credentials: "include",
-    headers: { ...init?.headers },
+    headers: { ...authHeaders, ...init?.headers },
   });
 }
 
@@ -1206,9 +1228,9 @@ export function createClientApi() {
       return parseJson<LocalQrResponse>(res);
     },
 
-    async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean }> {
+    async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string }> {
       const res = await apiFetch(`${baseUrl()}/auth/sessions`);
-      return parseJson<{ sessions: AuthSession[]; isDesktop: boolean }>(res);
+      return parseJson<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string }>(res);
     },
 
     async revokeAuthSession(tokenId: string): Promise<void> {

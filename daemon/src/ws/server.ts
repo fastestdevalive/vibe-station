@@ -50,14 +50,10 @@ type WSAuthResult = {
 function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): WSAuthResult | false {
   if (!authState) return { scope: null, tokenId: null, issuedAt: null, expiresAt: null };
 
-  // Same loopback bypass as the HTTP guard in server.ts.
-  // The local desktop UI connects from loopback and never has a cookie or Bearer token,
-  // so without this bypass it would be closed with 4401.
   const viaTunnel = !!req.headers["cf-connecting-ip"];
-  const ip = req.socket.remoteAddress ?? "";
-  if (!viaTunnel && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1")) {
-    return { scope: null, tokenId: null, issuedAt: null, expiresAt: null };
-  }
+  // Use req.ip instead of socket.remoteAddress so X-Forwarded-For set by the
+  // Vite dev proxy (xfwd: true) is respected when trustProxy is enabled.
+  const ip = req.ip;
 
   const auth = req.headers.authorization;
   const rawToken = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -65,7 +61,32 @@ function authenticateWS(req: FastifyRequest, authState: AuthState | undefined): 
   const cookieHeader = req.headers.cookie ?? "";
   const cookieToken = parseCookieValue(cookieHeader, COOKIE_NAME);
 
-  const token = rawToken ?? cookieToken;
+  // Also read token from query param — browsers can't set WS headers, so the
+  // Tauri app passes its Bearer token as ?token=... in the upgrade URL.
+  const urlParams = new URLSearchParams(req.url?.split("?")[1] ?? "");
+  const queryToken = urlParams.get("token") ?? "";
+
+  const token: string | null = rawToken || cookieToken || queryToken || null;
+
+  if (!viaTunnel && (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1")) {
+    // Trusted loopback — always allowed. If a token IS present (Tauri Bearer,
+    // browser cookie from Vite proxy, or query param), verify it so the
+    // connection carries the correct scope instead of null.
+    if (token) {
+      const result = verifyToken(token, authState);
+      if (result.ok) {
+        const tokenId = token.slice(0, token.lastIndexOf("."));
+        return {
+          scope: result.payload.scope,
+          tokenId,
+          issuedAt: result.payload.iat,
+          expiresAt: result.payload.exp ?? null,
+        };
+      }
+    }
+    return { scope: null, tokenId: null, issuedAt: null, expiresAt: null };
+  }
+
   if (!token) return false;
 
   const result = verifyToken(token, authState);

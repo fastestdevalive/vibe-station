@@ -29,16 +29,20 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
   // display (e.g. hide revoke buttons for non-desktop viewers).
   app.get("/auth/sessions", async (req, reply) => {
     const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
-    // Loopback callers have no authPayload (auth guard is bypassed for them).
-    const isDesktop = !authPayload;
-    return reply.send({ sessions: getRemoteSessions(), isDesktop });
+    // isDesktop: true for the Tauri desktop app (scope='tauri') or a plain loopback
+    // caller with no token (CLI tools, etc.). Browser/mobile sessions have a verified
+    // token with scope='browser'/'mobile' and are not desktop.
+    const isDesktop = !authPayload || authPayload.scope === "tauri";
+    // currentScope: the caller's token scope; loopback-with-no-token is treated as 'tauri'.
+    const currentScope: string = authPayload?.scope ?? "tauri";
+    return reply.send({ sessions: getRemoteSessions(), isDesktop, currentScope });
   });
 
   // POST /auth/sessions/:id/revoke — revoke a remote session by tokenId.
-  // Desktop (loopback) only — browser sessions cannot revoke other sessions.
+  // Desktop (loopback, scope=null or 'tauri') only — browser/mobile sessions cannot revoke.
   app.post("/auth/sessions/:id/revoke", async (req, reply) => {
     const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
-    if (authPayload) {
+    if (authPayload && authPayload.scope !== "tauri") {
       return reply.status(403).send({ error: "DESKTOP_ONLY" });
     }
     const { id } = req.params as { id: string };
@@ -49,10 +53,10 @@ export function registerAuthRoutes(app: FastifyInstance, persistEpoch: () => Pro
   });
 
   // POST /auth/revoke-browser — bump browserEpoch to invalidate all browser tokens.
-  // Desktop (loopback) only.
+  // Desktop (loopback, scope=null or 'tauri') only.
   app.post("/auth/revoke-browser", async (req, reply) => {
     const authPayload = (req as typeof req & { authPayload?: TokenPayload }).authPayload;
-    if (authPayload) {
+    if (authPayload && authPayload.scope !== "tauri") {
       return reply.status(403).send({ error: "DESKTOP_ONLY" });
     }
     const newEpoch = await bumpBrowserEpoch(persistEpoch);

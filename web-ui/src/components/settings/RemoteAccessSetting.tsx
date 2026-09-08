@@ -116,6 +116,9 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // isDesktop: true when viewing from the desktop app (loopback), false for browser sessions.
   // Starts as false so browser viewers never see a spurious revoke button; corrected on first fetch.
   const [isDesktop, setIsDesktop] = useState(false);
+  // currentScope: the caller's token scope ('tauri', 'browser', 'mobile', etc.).
+  // Used to derive the correct label for the current-session card.
+  const [currentScope, setCurrentScope] = useState<string | null>(null);
 
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
@@ -146,9 +149,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── Fetch remote sessions ───────────────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
-      const { sessions: list, isDesktop: desktop } = await api.listAuthSessions();
+      const { sessions: list, isDesktop: desktop, currentScope: scope } = await api.listAuthSessions();
       setSessions(list);
       setIsDesktop(desktop);
+      setCurrentScope(scope ?? null);
     } catch {
       // silently ignore (session list is non-critical)
     }
@@ -592,7 +596,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
                 <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-                  {isDesktop ? "Desktop" : "This browser"}
+                  {currentScope === "tauri" ? "Desktop" : currentScope === "browser" ? "This session" : isDesktop ? "Desktop" : "This session"}
                 </span>
                 <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                   this session
