@@ -1,0 +1,24 @@
+feature: ui-improvements
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-91
+created: 2026-09-07T00:00:00Z
+master:
+  prd: skipped   # deliberately skipped — .vibekit/reports/2026-09-07-ui-improvements-scoping.md served as the requirements input instead
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "11.T5"
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    # Daemon/web-ui SHAs below are post-amendment finals (history was rewritten
+    # twice for user-requested corrections; see backup/pre-item7-fold-*,
+    # backup/pre-vcs-hover-btn-* branches for pre-correction snapshots). Docs
+    # commit SHA follows once this squashed commit is made.
+    commit: "0f5c658,1e37c10,147c700"
