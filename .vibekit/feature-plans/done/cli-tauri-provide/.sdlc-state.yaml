@@ -1,0 +1,25 @@
+feature: cli-tauri-provide
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-92
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: verifying
+    last_completed: "6.4"
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/wip/cli-tauri-provide/plan-cli-tauri-provide.md
+    phase_chain: [plan, implement, verify]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: 27b9824
+    deferred:
+      - "5.2: postInstallScript for .deb/.rpm — requires Tauri packaging research"
+    notes:
+      - "Rust changes (Phase 1.6/1.6b) written correctly but not compiled — no toolchain available"
+      - "navigate WS event routes to / (dashboard) not /projects/:id (no project-specific route exists)"
+      - "vst open with no args defaults to CWD (. ), not a usage error — better UX matching 'code .' analogy"

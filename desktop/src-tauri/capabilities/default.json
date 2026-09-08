@@ -15,7 +15,8 @@
       "identifier": "shell:allow-execute",
       "allow": [
         { "name": "vst-daemon", "sidecar": true },
-        { "name": "cloudflared", "sidecar": true }
+        { "name": "cloudflared", "sidecar": true },
+        { "name": "vst", "sidecar": true }
       ]
     }
   ]

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import fastifyStatic from "@fastify/static";
 import { fileURLToPath } from "node:url";
 import { registerHealthRoute } from "./routes/health.js";
+import { registerOpenRoute } from "./routes/open.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerWorktreeRoutes } from "./routes/worktrees.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
@@ -193,6 +194,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     registerAuthRoutes(app, persistEpoch ?? (() => Promise.resolve()));
   }
   registerMobileAuthRoutes(app, { authState, noAuth, port: opts.port });
+  registerOpenRoute(app);
   registerProjectRoutes(app);
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);

@@ -605,6 +605,11 @@ export type WSEvent =
       type: "remote:disconnected";
       tokenId: string;
       connections: number;
+    }
+  | {
+      /** Sent by POST /open — navigate the UI to this project. */
+      type: "navigate";
+      projectId: string;
     };
 
 export interface AuthSession {

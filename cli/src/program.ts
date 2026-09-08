@@ -3,9 +3,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerDaemonStatus } from "./commands/daemon/status.js";
-import { registerDaemonStart } from "./commands/daemon/start.js";
-import { registerDaemonStop } from "./commands/daemon/stop.js";
-import { registerDaemonRestart } from "./commands/daemon/restart.js";
 import { registerProjectAdd } from "./commands/project/add.js";
 import { registerProjectCreate } from "./commands/project/create.js";
 import { registerProjectRm } from "./commands/project/rm.js";
@@ -65,9 +62,6 @@ export function buildProgram(): Command {
     .command("daemon")
     .description("Manage the vibe-station daemon");
   registerDaemonStatus(daemon);
-  registerDaemonStart(daemon);
-  registerDaemonStop(daemon);
-  registerDaemonRestart(daemon);
 
   // Project commands
   const project = program

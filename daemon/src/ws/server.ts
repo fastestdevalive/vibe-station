@@ -16,6 +16,7 @@ import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { handleDebugLog } from "./handlers/debugLog.js";
 import { handleChatOpen, handleChatClose } from "./handlers/chatOpen.js";
 import { registerConnection, unregisterConnection } from "../broadcaster.js";
+import { replayNavigateToConnection } from "../routes/open.js";
 import { COOKIE_NAME, verifyToken } from "../auth.js";
 import type { AuthState } from "../state/auth-state.js";
 import type { TokenScope } from "../types.js";
@@ -102,6 +103,9 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
 
     // Register connection for broadcasts
     registerConnection(conn);
+
+    // Replay any pending navigate event (from POST /open) to this new client.
+    replayNavigateToConnection(conn);
 
     // Monitor buffered amount for backpressure. The hard close threshold is
     // intentionally very generous (50MB) — terminal scrollback replay across

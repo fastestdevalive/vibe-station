@@ -42,7 +42,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/vst-daemon", "binaries/cloudflared"],
+    "externalBin": ["binaries/vst-daemon", "binaries/cloudflared", "binaries/vst"],
+    "resources": ["../../skill/SKILL.md"],
     "macOS": {
       "entitlements": "entitlements.mac.plist",
       "frameworks": [],

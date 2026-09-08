@@ -22,6 +22,8 @@ import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "
 import { startPrPoller, stopPrPoller } from "./services/prPoller.js";
 import { readSettings } from "./services/config.js";
 import { setSkillPaths } from "./services/userSkillCatalog.js";
+import { setupVstEnvironment, patchShellConfigs } from "./lib/resolveVstPaths.js";
+import { installHarnessSkillDirs } from "./lib/harnessSkillDirs.js";
 
 const VST_HOME = join(homedir(), ".vibe-station");
 const CONFIG_PATH = join(VST_HOME, "config.json");
@@ -152,6 +154,16 @@ async function main() {
   // additional locking needed here.
   await acquireLock();
 
+  // Write ~/.vibe-station/bin/vst shim and ~/.vibe-station/skill/vst/SKILL.md.
+  // Best-effort: failures are logged, never fatal.
+  try {
+    await setupVstEnvironment();
+    await installHarnessSkillDirs();
+    await patchShellConfigs();
+  } catch (err) {
+    console.error("[vst] setupVstEnvironment failed (non-fatal):", err);
+  }
+
   // One-time migration of every project's manifest.json into vibe-station.db
   // (idempotent — a no-op after the first successful boot). Reads then go
   // through project-store's in-memory cache in front of SQLite.
@@ -210,7 +222,9 @@ async function main() {
   // Best-effort: a scan/watch failure must never prevent daemon boot.
   try {
     const settings = await readSettings();
-    await setSkillPaths(settings.skillPaths ?? []);
+    const vstSkillDir = join(homedir(), ".vibe-station", "skill");
+    const allPaths = [...(settings.skillPaths ?? []), vstSkillDir];
+    await setSkillPaths(allPaths);
   } catch (err) {
     console.error("Failed to initialize skill catalog (non-fatal):", err);
   }
