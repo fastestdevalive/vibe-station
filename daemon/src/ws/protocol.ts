@@ -531,6 +531,11 @@ const SessionForkEvent = z.object({
   supersededTurnIds: z.array(z.string()),
 });
 
+const NavigateEvent = z.object({
+  type: z.literal("navigate"),
+  projectId: z.string(),
+});
+
 const RemoteConnectedEvent = z.object({
   type: z.literal("remote:connected"),
   session: z.object({ tokenId: z.string(), scope: z.string(), connections: z.number(), issuedAt: z.number(), lastSeenAt: z.number(), expiresAt: z.number().optional() }),
@@ -576,6 +581,8 @@ export const ServerMessage = z.discriminatedUnion("type", [
   // Remote session presence (desktop only)
   RemoteConnectedEvent,
   RemoteDisconnectedEvent,
+  // Navigation (vst open)
+  NavigateEvent,
   // System
   PongMessage,
   SystemErrorEvent,

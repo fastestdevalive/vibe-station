@@ -163,3 +163,5 @@ If you hit a blocker you cannot resolve (missing credentials, ambiguous requirem
 - Run `vst worktree rm` or `vst session terminate` on sessions you did not create.
 - Ignore test failures and commit anyway.
 - After `vst worktree create`, do NOT run `vst session create` for the same worktree — the main session already exists.
+
+The full `vst` CLI reference (REST API, WS protocol, advanced patterns) is at $VST_SKILL_PATH — read it when you need detail beyond what's listed above.
