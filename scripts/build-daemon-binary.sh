@@ -15,8 +15,8 @@
 #
 # Prerequisites:
 #   - Node.js 24 (or whichever version pkg targets)
-#   - @yao-pkg/pkg available via npx
-#   - esbuild available via npx (or on PATH)
+#   - @yao-pkg/pkg installed (pnpm exec pkg)
+#   - esbuild installed (pnpm exec esbuild)
 #   - TypeScript already compiled: cli/dist/daemon/main.js must exist
 #     Run `pnpm --filter cli build` first if not.
 
@@ -85,7 +85,7 @@ fi
 # 2. Bundle with esbuild — externalise *.node addons (pkg will snapshot them separately).
 echo ""
 echo "==> Step 1/3: esbuild bundle..."
-npx esbuild "$ENTRY" \
+pnpm exec esbuild "$ENTRY" \
   --bundle \
   --platform=node \
   --format=cjs \
@@ -98,7 +98,7 @@ echo "    Bundle written to $BUNDLE_FILE ($(du -h "$BUNDLE_FILE" | cut -f1))"
 mkdir -p "$DIST_DIR"
 echo ""
 echo "==> Step 2/3: pkg → $OUT_BIN ..."
-npx @yao-pkg/pkg "$BUNDLE_FILE" \
+pnpm exec pkg "$BUNDLE_FILE" \
   --target "$PKG_TARGET" \
   --output "$OUT_BIN"
 
