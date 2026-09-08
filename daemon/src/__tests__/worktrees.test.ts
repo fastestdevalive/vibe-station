@@ -795,6 +795,31 @@ describe("Worktree routes", () => {
     expect(listRes.json<WorktreeRecord[]>()).toHaveLength(0);
   });
 
+  it("DELETE /worktrees/:id enforces the done guard ONLY with ?enforceDone=true", async () => {
+    // The guard belongs to Settings → Storage's bulk delete (which offers done
+    // worktrees only). The sidebar's explicit single delete omits the flag and
+    // force-cleans the live sessions instead.
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: `guard-optin-${Date.now()}`, modeId: "bug-fix" },
+    });
+    const wt = createRes.json<WorktreeRecord>();
+
+    const guarded = await app.inject({
+      method: "DELETE",
+      url: `/worktrees/${wt.id}?enforceDone=true`,
+    });
+    // The fresh worktree's main session is not `done`, so the opt-in guard fires.
+    expect(guarded.statusCode).toBe(409);
+    expect(guarded.json().error).toBe("worktree_not_done");
+
+    // The same delete WITHOUT the flag force-cleans and succeeds.
+    const forced = await app.inject({ method: "DELETE", url: `/worktrees/${wt.id}` });
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json().ok).toBe(true);
+  });
+
   it("DELETE /worktrees/:id broadcasts session:deleted per session BEFORE worktree:deleted", async () => {
     // Client-side tile cleanup keys off `session:deleted`; without the cascade
     // a deleted worktree's tiles survived in every canvas as empty ghosts.

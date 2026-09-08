@@ -116,7 +116,10 @@ export function StorageSetting({ api }: StorageSettingProps) {
     setDeleteError(null);
     for (const wt of targets) {
       try {
-        await api.deleteWorktree(wt.id);
+        // enforceDone: this panel only ever offers *done* worktrees for
+        // deletion (non-done rows are disabled), and opts into the daemon's
+        // 409 `worktree_not_done` safety net in case that state went stale.
+        await api.deleteWorktree(wt.id, { enforceDone: true });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "An error occurred";
         let label = wt.branch;
