@@ -24,10 +24,6 @@
         "trafficLightPosition": { "x": 10, "y": 10 }
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true
-    },
     "security": {
       "capabilities": ["default"]
     }

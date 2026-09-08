@@ -47,5 +47,5 @@ fi
 # Launch daemon (tsx watch) + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 exec npx concurrently --kill-others-on-fail \
-  "pnpm --filter @vibestation/web dev -- --port 5180" \
+  "pnpm --filter @vibestation/web dev --port 5180" \
   "tsx watch --tsconfig '$REPO_ROOT/daemon/tsconfig.json' '$REPO_ROOT/daemon/src/main.ts'"
