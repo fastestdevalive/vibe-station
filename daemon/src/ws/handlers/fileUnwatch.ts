@@ -3,7 +3,9 @@ import type { ClientMessage } from "../protocol.js";
 import type { FileWatcher } from "../streams/fileWatcher.js";
 
 /**
- * Handle file:unwatch: stop watching a file.
+ * Handle file:unwatch: release this consumer's reference to a file watch.
+ * The underlying watcher is only actually closed once every consumer has
+ * released it (Decision 8: refcounted watcher maps).
  */
 export async function handleFileUnwatch(
   conn: WSConnection,
@@ -14,11 +16,10 @@ export async function handleFileUnwatch(
   const watchKey = `file:${worktreeId}:${path}`;
 
   try {
-    const watcher = (conn as any).fileWatches?.get?.(watchKey) as FileWatcher | undefined;
+    const watcher = conn.releaseFileWatcher(watchKey) as FileWatcher | null;
     if (watcher) {
       await watcher.close();
     }
-    conn.unregisterFileWatcher(watchKey);
   } catch (err) {
     console.error(`[WS] Error unwatching file ${path}:`, err);
   }

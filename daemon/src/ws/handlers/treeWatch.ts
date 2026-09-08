@@ -18,9 +18,9 @@ export function handleTreeWatch(
   const treePath = treePathOverride ?? "";
   const watchKey = `tree:${worktreeId}:${treePath}`;
 
-  // Check if already watching
-  if ((conn as any).treeWatches?.has?.(watchKey)) {
-    // Already watching — no-op
+  // If another consumer already watches this key, just add a reference —
+  // do NOT create a second watcher (Decision 8: refcounted watcher maps).
+  if (conn.retainTreeWatcher(watchKey)) {
     return;
   }
 
@@ -63,6 +63,9 @@ export function handleTreeWatch(
       // On error, stop watching. Close first so the underlying chokidar
       // instance releases its inotify handles — unregistering before closing
       // would orphan the watcher (cleanup() can no longer find it).
+      // Force-teardown path (distinct from `releaseTreeWatcher`'s per-consumer
+      // decrement): the one shared watcher for this key has died, so every
+      // retainer loses service regardless of refCount.
       void watcher.close();
       conn.unregisterTreeWatcher(watchKey);
       conn.send({

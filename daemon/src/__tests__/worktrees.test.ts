@@ -329,7 +329,7 @@ describe("Worktree routes", () => {
     expect(startJsonCreateTurnMock).toHaveBeenCalledTimes(1);
   });
 
-  it("GET changed-paths scope=local lists staged file", async () => {
+  it("GET changed-paths scope=local lists staged file with insertions/deletions", async () => {
     const createRes = await app.inject({
       method: "POST",
       url: "/worktrees",
@@ -338,19 +338,52 @@ describe("Worktree routes", () => {
     expect(createRes.statusCode).toBe(201);
     const wt = createRes.json<{ id: string }>();
     const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    // A tracked, committed file that then gets an unstaged modification —
+    // exercises `git diff --numstat HEAD` (staged+unstaged combined).
+    await writeFile(join(wtPath, "existing.txt"), "a\nb\nc\n");
+    execSync(
+      `git -C "${wtPath}" add existing.txt && git -C "${wtPath}" commit -m "add existing"`,
+      { stdio: "ignore" },
+    );
+    await writeFile(join(wtPath, "existing.txt"), "a\nb\nc\nd\n");
     await writeFile(join(wtPath, "tracked.txt"), "v1\n");
     execSync(`git -C "${wtPath}" add tracked.txt`, { stdio: "ignore" });
+    // A binary file — numstat reports "-"/"-", which must surface as
+    // undefined (omitted), never 0.
+    await writeFile(join(wtPath, "image.bin"), Buffer.from([0, 1, 2, 0, 255, 254]));
+    execSync(`git -C "${wtPath}" add image.bin`, { stdio: "ignore" });
+    // A genuinely untracked file — never staged/added.
+    await writeFile(join(wtPath, "untracked.txt"), "one\ntwo\n");
 
     const res = await app.inject({
       method: "GET",
       url: `/worktrees/${wt.id}/changed-paths?scope=local`,
     });
     expect(res.statusCode).toBe(200);
-    const entries = res.json<Array<{ path: string; status: string }>>();
-    expect(entries.some((e) => e.path === "tracked.txt")).toBe(true);
+    const entries = res.json<
+      Array<{ path: string; status: string; insertions?: number; deletions?: number }>
+    >();
+
+    const existing = entries.find((e) => e.path === "existing.txt");
+    expect(existing?.insertions).toBe(1);
+    expect(existing?.deletions).toBe(0);
+
+    const tracked = entries.find((e) => e.path === "tracked.txt");
+    expect(tracked?.insertions).toBe(1);
+    expect(tracked?.deletions).toBe(0);
+
+    const binary = entries.find((e) => e.path === "image.bin");
+    expect(binary).toBeDefined();
+    expect(binary?.insertions).toBeUndefined();
+    expect(binary?.deletions).toBeUndefined();
+
+    const untracked = entries.find((e) => e.path === "untracked.txt");
+    expect(untracked?.status).toBe("?");
+    expect(untracked?.insertions).toBe(2);
+    expect(untracked?.deletions).toBe(0);
   });
 
-  it("GET changed-paths scope=branch lists commit-only paths vs fork base", async () => {
+  it("GET changed-paths scope=branch lists commit-only paths vs fork base with insertions/deletions", async () => {
     const createRes = await app.inject({
       method: "POST",
       url: "/worktrees",
@@ -360,8 +393,9 @@ describe("Worktree routes", () => {
     const wt = createRes.json<{ id: string }>();
     const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
     await writeFile(join(wtPath, "branch-only.txt"), "hi\n");
+    await writeFile(join(wtPath, "branch-only.bin"), Buffer.from([0, 1, 2, 0, 255]));
     execSync(
-      `git -C "${wtPath}" add branch-only.txt && git -C "${wtPath}" commit -m "branch-only"`,
+      `git -C "${wtPath}" add branch-only.txt branch-only.bin && git -C "${wtPath}" commit -m "branch-only"`,
       { stdio: "ignore" },
     );
 
@@ -370,8 +404,18 @@ describe("Worktree routes", () => {
       url: `/worktrees/${wt.id}/changed-paths?scope=branch`,
     });
     expect(res.statusCode).toBe(200);
-    const entries = res.json<Array<{ path: string; status: string }>>();
-    expect(entries.some((e) => e.path === "branch-only.txt")).toBe(true);
+    const entries = res.json<
+      Array<{ path: string; status: string; insertions?: number; deletions?: number }>
+    >();
+    const text = entries.find((e) => e.path === "branch-only.txt");
+    expect(text).toBeDefined();
+    expect(text?.insertions).toBe(1);
+    expect(text?.deletions).toBe(0);
+
+    const binary = entries.find((e) => e.path === "branch-only.bin");
+    expect(binary).toBeDefined();
+    expect(binary?.insertions).toBeUndefined();
+    expect(binary?.deletions).toBeUndefined();
   });
 
   it("GET diff scope=local returns unified patch text", async () => {
@@ -396,6 +440,247 @@ describe("Worktree routes", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain("@@");
     expect(res.body).toContain("+");
+  });
+
+  it("GET changed-paths scope=commit lists the commit's own changed paths with insertions/deletions", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-commit-scope", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "commit-file.txt"), "hi\nthere\n");
+    await writeFile(join(wtPath, "commit-file.bin"), Buffer.from([0, 1, 2, 0, 255]));
+    execSync(
+      `git -C "${wtPath}" add commit-file.txt commit-file.bin && git -C "${wtPath}" commit -m "add commit-file"`,
+      { stdio: "ignore" },
+    );
+    const sha = execSync(`git -C "${wtPath}" rev-parse HEAD`, { encoding: "utf-8" }).trim();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/changed-paths?scope=commit&sha=${sha}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const entries = res.json<
+      Array<{ path: string; status: string; insertions?: number; deletions?: number }>
+    >();
+    const text = entries.find((e) => e.path === "commit-file.txt");
+    expect(text).toBeDefined();
+    expect(text?.insertions).toBe(2);
+    expect(text?.deletions).toBe(0);
+
+    const binary = entries.find((e) => e.path === "commit-file.bin");
+    expect(binary).toBeDefined();
+    expect(binary?.insertions).toBeUndefined();
+    expect(binary?.deletions).toBeUndefined();
+  });
+
+  it("GET changed-paths scope=commit 422s when sha doesn't resolve", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-commit-bad-sha", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/changed-paths?scope=commit&sha=${"0".repeat(40)}`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "Could not resolve commit sha" });
+  });
+
+  it("GET changed-paths scope=commit 422s when sha param is missing", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-commit-no-sha", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/changed-paths?scope=commit`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "Could not resolve commit sha" });
+  });
+
+  it("GET changed-paths scope=commit 422s when sha fails the hex-sha regex (e.g. a branch name or a flag-like value)", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "chg-commit-invalid-sha", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    for (const badSha of ["HEAD", "main", "-x", "not-hex!"]) {
+      const res = await app.inject({
+        method: "GET",
+        url: `/worktrees/${wt.id}/changed-paths?scope=commit&sha=${encodeURIComponent(badSha)}`,
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toEqual({ error: "Could not resolve commit sha" });
+    }
+  });
+
+  it("GET diff scope=commit returns the same content as `git show <sha> -- <path>` for a non-merge commit", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diff-commit-scope", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "t.md"), "# x\n");
+    execSync(`git -C "${wtPath}" add t.md && git -C "${wtPath}" commit -m add-md`, {
+      stdio: "ignore",
+    });
+    await writeFile(join(wtPath, "t.md"), "# x\n\nline\n");
+    execSync(`git -C "${wtPath}" commit -am modify-md`, { stdio: "ignore" });
+    const sha = execSync(`git -C "${wtPath}" rev-parse HEAD`, { encoding: "utf-8" }).trim();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diff/t.md?scope=commit&sha=${sha}`,
+    });
+    expect(res.statusCode).toBe(200);
+
+    // `git show <sha> -- <path>` for a non-merge, single-parent commit is a
+    // commit-metadata header followed by the exact same diff hunk `git diff
+    // <sha>^1 <sha> -- <path>` produces (the daemon route's actual command,
+    // per Decision 9) — so the route's body must be a suffix of `git show`'s
+    // output, and byte-identical to the direct parent-vs-sha diff.
+    const shown = execSync(
+      `git -C "${wtPath}" -c color.diff=false -c core.quotepath=false show ${sha} -- t.md`,
+      { encoding: "utf-8" },
+    );
+    const directDiff = execSync(
+      `git -C "${wtPath}" -c color.diff=false -c core.quotepath=false diff ${sha}^1 ${sha} -- t.md`,
+      { encoding: "utf-8" },
+    );
+    expect(res.body).toBe(directDiff);
+    expect(shown.endsWith(res.body)).toBe(true);
+  });
+
+  it("GET diff scope=commit handles a root commit via the empty-tree fallback", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diff-commit-root", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    const rootSha = execSync(
+      `git -C "${wtPath}" rev-list --max-parents=0 HEAD`,
+      { encoding: "utf-8" },
+    ).trim();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diff/nonexistent.txt?scope=commit&sha=${rootSha}`,
+    });
+    // Root commit + a path that doesn't exist in it -> empty diff, still 200.
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("GET diff scope=commit 422s when sha doesn't resolve", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diff-commit-bad-sha", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diff/t.md?scope=commit&sha=${"0".repeat(40)}`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "Could not resolve commit sha" });
+  });
+
+  it("GET diff scope=commit 422s when sha fails the hex-sha regex", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diff-commit-invalid-sha", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diff/t.md?scope=commit&sha=${encodeURIComponent("--upload-pack=x")}`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "Could not resolve commit sha" });
+  });
+
+  it("GET /worktrees/:id/diffstat with an unsupported scope returns 400 with a distinct message from the fork-point-resolution failure", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diffstat-unsupported-scope", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diffstat?scope=commit`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "Unsupported scope; only 'branch' is supported" });
+  });
+
+  it("GET /worktrees/:id/diffstat?scope=branch returns insertions/deletions against the fork point", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diffstat-scope-branch", modeId: "bug-fix" },
+    });
+    expect(createRes.statusCode).toBe(201);
+    const wt = createRes.json<{ id: string }>();
+    const wtPath = join(tempDir, "projects", projectId, "worktrees", wt.id);
+    await writeFile(join(wtPath, "stat.txt"), "one\ntwo\n");
+    execSync(
+      `git -C "${wtPath}" add stat.txt && git -C "${wtPath}" commit -m "add stat.txt"`,
+      { stdio: "ignore" },
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diffstat?scope=branch`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ insertions: number; deletions: number }>();
+    expect(body.insertions).toBe(2);
+    expect(body.deletions).toBe(0);
+  });
+
+  it("GET /worktrees/:id/diffstat?scope=branch 422s when base branch fork point can't be resolved", async () => {
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/worktrees",
+      payload: { projectId, branch: "diffstat-scope-branch-unresolvable", modeId: "bug-fix" },
+    });
+    const wt = createRes.json<{ id: string }>();
+
+    const git = await import("../services/git.js");
+    const resolveSpy = vi.spyOn(git, "resolveBaseSha").mockResolvedValue(null);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/worktrees/${wt.id}/diffstat?scope=branch`,
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toEqual({ error: "Could not resolve base branch fork point" });
+
+    resolveSpy.mockRestore();
   });
 
   it("GET /worktrees/:id/file-list returns flat list of files", async () => {

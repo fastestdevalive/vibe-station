@@ -1,6 +1,7 @@
 import { watch, type FSWatcher } from "chokidar";
 import type { Stats } from "node:fs";
 import { EventEmitter } from "node:events";
+import { dirname } from "node:path";
 import { buildIgnoreMatcher } from "../../services/ignoreFilter.js";
 
 /**
@@ -63,6 +64,60 @@ export class FileWatcher extends EventEmitter {
       this.watcher.on("unlinkDir", (path: string) => {
         this._debounceEvent("unlink", path);
       });
+
+      this.watcher.on("error", (err: unknown) => {
+        console.warn(`[FileWatcher] Error watching ${absPath}:`, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        this.emit("error", msg);
+      });
+    } catch (err) {
+      this.emit("error", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Watch a single file for changes by watching its PARENT directory
+   * (depth: 0) and filtering chokidar events down to this exact path.
+   *
+   * A direct single-file chokidar watch loses the watch on an atomic
+   * rename-replace save — a common editor save pattern (write to a temp
+   * file in the same directory, then rename it over the original): the
+   * rename gives the target path a new inode, but chokidar's single-file
+   * watch stays attached to the OLD inode, so no further events ever fire
+   * for that path. Watching the parent directory instead survives the
+   * rename because the directory's own watch is unaffected by files inside
+   * it being replaced.
+   */
+  watchFile(absPath: string, worktreeRoot: string): void {
+    try {
+      const parentDir = dirname(absPath);
+      const matcher = buildIgnoreMatcher(worktreeRoot);
+      const ignoreFilter = (path: string, stats?: Stats) =>
+        matcher.ignores(path, stats ? stats.isDirectory() : false);
+
+      // `depth: 0` keeps this cheap — only the parent directory's immediate
+      // children are watched, not the whole worktree. Sibling files' events
+      // are filtered out below by exact path match, same cost as watching
+      // the file directly.
+      this.watcher = watch(parentDir, {
+        ignored: ignoreFilter,
+        persistent: true,
+        depth: 0,
+        ignoreInitial: true,
+      });
+
+      const onAddOrChange = (path: string) => {
+        if (path !== absPath) return;
+        this._debounceEvent("change", path);
+      };
+      const onUnlink = (path: string) => {
+        if (path !== absPath) return;
+        this._debounceEvent("unlink", path);
+      };
+
+      this.watcher.on("add", onAddOrChange);
+      this.watcher.on("change", onAddOrChange);
+      this.watcher.on("unlink", onUnlink);
 
       this.watcher.on("error", (err: unknown) => {
         console.warn(`[FileWatcher] Error watching ${absPath}:`, err);

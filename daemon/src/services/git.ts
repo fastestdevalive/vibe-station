@@ -144,6 +144,45 @@ export async function revParse(repoPath: string, ref: string): Promise<string> {
 }
 
 /**
+ * The well-known empty-tree SHA (`git hash-object -t tree /dev/null`) — the
+ * same value in every git repository, used as the "before" side of a diff
+ * when a commit has no parent (a root commit).
+ */
+export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/**
+ * Resolves the parent of `sha` for a commit-scoped diff (Decision 9,
+ * `scope=commit&sha=`). Tries `<sha>^1` first; if that fails to resolve
+ * ONLY because `sha` genuinely has no parent (a root commit), falls back to
+ * `EMPTY_TREE_SHA` so the diff can still be computed as "everything in
+ * `sha`" rather than failing outright.
+ *
+ * Any other failure (transient git error, corrupt object, index lock, an
+ * unresolvable `sha`, etc.) is re-thrown rather than silently treated as
+ * "root commit" — verified explicitly via `git rev-list --max-parents=0`,
+ * not by pattern-matching git's error message.
+ */
+export async function resolveParentSha(repoPath: string, sha: string): Promise<string> {
+  try {
+    return await runGit(["-C", repoPath, "rev-parse", `${sha}^1`], repoPath);
+  } catch (err) {
+    let isRootCommit = false;
+    try {
+      const [resolvedSha, nearestRootSha] = await Promise.all([
+        runGit(["-C", repoPath, "rev-parse", sha], repoPath),
+        runGit(["-C", repoPath, "rev-list", "--max-parents=0", "-1", sha], repoPath),
+      ]);
+      isRootCommit = resolvedSha === nearestRootSha;
+    } catch {
+      // Couldn't even confirm root-commit status — treat as the original
+      // failure below, not as "root commit".
+    }
+    if (isRootCommit) return EMPTY_TREE_SHA;
+    throw err;
+  }
+}
+
+/**
  * Returns true if `ancestor` is an ancestor of (or equal to) `descendant`,
  * via `git merge-base --is-ancestor` (exit code 0 = true, 1 = false). Used by
  * `resolveBaseSha` to pick the more-advanced of two merge-base candidates.
@@ -266,6 +305,29 @@ export async function resolveBaseSha(
     }
   }
   return null;
+}
+
+/**
+ * Parses `git diff --shortstat <baseSha>` output into a summed
+ * insertions/deletions count for the worktree sidebar's `+N -N` indicator
+ * (Decision 11). `--shortstat` prints a single summary line such as:
+ *   " 2 files changed, 3 insertions(+), 1 deletion(-)"
+ *   " 1 file changed, 5 insertions(+)"          (deletions-only diffs omit "insertions(+)")
+ *   " 1 file changed, 2 deletions(-)"           (insertions-only diffs omit "deletions(-)")
+ * and prints NOTHING (empty stdout) when there is no diff at all. Each half
+ * is matched independently since either can be absent.
+ */
+export async function getDiffStat(
+  repoPath: string,
+  baseSha: string,
+): Promise<{ insertions: number; deletions: number }> {
+  const stdout = await runGit(["-C", repoPath, "diff", "--shortstat", baseSha], repoPath);
+  const insertionsMatch = stdout.match(/(\d+) insertions?\(\+\)/);
+  const deletionsMatch = stdout.match(/(\d+) deletions?\(-\)/);
+  return {
+    insertions: insertionsMatch ? Number(insertionsMatch[1]) : 0,
+    deletions: deletionsMatch ? Number(deletionsMatch[1]) : 0,
+  };
 }
 
 /** Add a git worktree with a new branch. */
@@ -583,6 +645,77 @@ export async function listCommits(
   }
 
   return commits;
+}
+
+/** Per-path line-level diffstat from `git diff --numstat`. Both fields are
+ *  `undefined` (never `0`) for a binary file, matching numstat's `-`/`-`. */
+export interface PathNumstat {
+  insertions?: number;
+  deletions?: number;
+}
+
+/**
+ * Parses `git diff --numstat -z` output into a map from path to
+ * insertions/deletions, keyed by the file's **new** path for renames/copies
+ * (matching `--name-status -z`'s convention of reporting the new path as the
+ * primary path — see `parseBranchNameStatus`/`parsePorcelainZ` in
+ * `routes/worktrees.ts`, which key their entries the same way so numstat
+ * results can be merged in by simple path lookup).
+ *
+ * Reuses the same tab-separated `insertions\tdeletions\tpath` format (and
+ * the same `-`/`-` binary-file convention) that `listCommits` above already
+ * parses line-by-line for its per-commit totals — the only difference here
+ * is that `-z` NUL-delimits records instead of newlines, and a rename/copy
+ * record has an **empty** inline path (git leaves the third tab-separated
+ * field blank and instead appends the old and new paths as two further
+ * NUL-delimited tokens), which a newline-based parse never has to handle.
+ */
+export function parseNumstatZ(stdout: string): Map<string, PathNumstat> {
+  const result = new Map<string, PathNumstat>();
+  const tokens = stdout.split("\0");
+  let i = 0;
+  while (i < tokens.length) {
+    const rec = tokens[i] ?? "";
+    if (!rec) {
+      i += 1;
+      continue;
+    }
+    const firstTab = rec.indexOf("\t");
+    const secondTab = firstTab === -1 ? -1 : rec.indexOf("\t", firstTab + 1);
+    if (firstTab === -1 || secondTab === -1) {
+      i += 1;
+      continue;
+    }
+    const addedStr = rec.slice(0, firstTab);
+    const removedStr = rec.slice(firstTab + 1, secondTab);
+    const inlinePath = rec.slice(secondTab + 1);
+
+    let path: string;
+    if (inlinePath === "") {
+      // Rename/copy: the path field is blank; old and new paths follow as
+      // separate NUL-delimited tokens. Only the new path is kept, matching
+      // --name-status -z's rename convention.
+      const newPath = tokens[i + 2];
+      i += 3;
+      if (!newPath) continue;
+      path = newPath;
+    } else {
+      path = inlinePath;
+      i += 1;
+    }
+
+    if (addedStr === "-" || removedStr === "-") {
+      result.set(path, {});
+      continue;
+    }
+    const insertions = Number(addedStr);
+    const deletions = Number(removedStr);
+    result.set(path, {
+      insertions: Number.isFinite(insertions) ? insertions : undefined,
+      deletions: Number.isFinite(deletions) ? deletions : undefined,
+    });
+  }
+  return result;
 }
 
 /**

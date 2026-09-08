@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listCommits } from "../services/git.js";
+import { listCommits, resolveParentSha, getDiffStat, EMPTY_TREE_SHA } from "../services/git.js";
 import { createGitFixture, removeGitFixture, type GitFixture } from "./gitFixture.js";
 
 let fixture: GitFixture;
@@ -197,5 +197,126 @@ describe("listCommits", () => {
       expect(commits).toHaveLength(1);
       expect(commits[0]!.isOnBranch).toBe(true);
     });
+  });
+});
+
+describe("resolveParentSha", () => {
+  beforeEach(async () => {
+    fixture = await createGitFixture("vst-git-resolveparentsha-test");
+    repoDir = fixture.dir;
+    git = fixture.git;
+  });
+
+  afterEach(async () => {
+    await removeGitFixture(fixture);
+  });
+
+  it("returns the correct parent SHA for a normal (non-root) commit", async () => {
+    await writeFile(join(repoDir, "a.txt"), "a\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "first"]);
+    const firstSha = git(["rev-parse", "HEAD"]).trim();
+
+    await writeFile(join(repoDir, "b.txt"), "b\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "second"]);
+    const secondSha = git(["rev-parse", "HEAD"]).trim();
+
+    const parent = await resolveParentSha(repoDir, secondSha);
+    expect(parent).toBe(firstSha);
+  });
+
+  it("falls back to EMPTY_TREE_SHA for a root commit (no parent)", async () => {
+    await writeFile(join(repoDir, "a.txt"), "a\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "root commit"]);
+    const rootSha = git(["rev-parse", "HEAD"]).trim();
+
+    const parent = await resolveParentSha(repoDir, rootSha);
+    expect(parent).toBe(EMPTY_TREE_SHA);
+  });
+
+  it("propagates the error for a sha that doesn't resolve at all, instead of silently falling back to EMPTY_TREE_SHA", async () => {
+    // A genuinely unresolvable/garbage sha is neither "has a parent" nor "is
+    // a root commit" — `<sha>^1` fails, but so does confirming root-commit
+    // status via `rev-list --max-parents=0`, so the original error must
+    // propagate rather than being swallowed into EMPTY_TREE_SHA (which would
+    // previously happen for ANY `<sha>^1` failure, masking transient git
+    // errors, corrupt objects, index locks, etc.).
+    await writeFile(join(repoDir, "a.txt"), "a\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "root commit"]);
+
+    await expect(
+      resolveParentSha(repoDir, "0000000000000000000000000000000000000000"),
+    ).rejects.toThrow();
+  });
+});
+
+describe("getDiffStat", () => {
+  beforeEach(async () => {
+    fixture = await createGitFixture("vst-git-diffstat-test");
+    repoDir = fixture.dir;
+    git = fixture.git;
+  });
+
+  afterEach(async () => {
+    await removeGitFixture(fixture);
+  });
+
+  it("parses a --shortstat line with both insertions and deletions", async () => {
+    await writeFile(join(repoDir, "a.txt"), "one\ntwo\nthree\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+
+    await writeFile(join(repoDir, "a.txt"), "one\nTWO-CHANGED\nfour\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "modify"]);
+
+    const stat = await getDiffStat(repoDir, baseSha);
+    expect(stat.insertions).toBe(2);
+    expect(stat.deletions).toBe(2);
+  });
+
+  it("parses an insertions-only --shortstat line", async () => {
+    await writeFile(join(repoDir, "a.txt"), "one\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+
+    await writeFile(join(repoDir, "b.txt"), "new file\nline two\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "add file"]);
+
+    const stat = await getDiffStat(repoDir, baseSha);
+    expect(stat.insertions).toBe(2);
+    expect(stat.deletions).toBe(0);
+  });
+
+  it("parses a deletions-only --shortstat line", async () => {
+    await writeFile(join(repoDir, "a.txt"), "one\ntwo\nthree\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+
+    await writeFile(join(repoDir, "a.txt"), "one\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "remove lines"]);
+
+    const stat = await getDiffStat(repoDir, baseSha);
+    expect(stat.insertions).toBe(0);
+    expect(stat.deletions).toBe(2);
+  });
+
+  it("returns zero/zero when there are no changes since baseSha", async () => {
+    await writeFile(join(repoDir, "a.txt"), "one\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    const baseSha = git(["rev-parse", "HEAD"]).trim();
+
+    const stat = await getDiffStat(repoDir, baseSha);
+    expect(stat.insertions).toBe(0);
+    expect(stat.deletions).toBe(0);
   });
 });

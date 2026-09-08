@@ -16,9 +16,9 @@ export function handleFileWatch(
 
   const watchKey = `file:${worktreeId}:${path}`;
 
-  // Check if already watching
-  if ((conn as any).fileWatches?.has?.(watchKey)) {
-    // Already watching — no-op
+  // If another consumer already watches this key, just add a reference —
+  // do NOT create a second watcher (Decision 8: refcounted watcher maps).
+  if (conn.retainFileWatcher(watchKey)) {
     return;
   }
 
@@ -57,6 +57,9 @@ export function handleFileWatch(
       // On error, stop watching. Close first so the underlying chokidar
       // instance releases its inotify handles — unregistering before closing
       // would orphan the watcher (cleanup() can no longer find it).
+      // Force-teardown path (distinct from `releaseFileWatcher`'s per-consumer
+      // decrement): the one shared watcher for this key has died, so every
+      // retainer loses service regardless of refCount.
       void watcher.close();
       conn.unregisterFileWatcher(watchKey);
       conn.send({
@@ -68,8 +71,12 @@ export function handleFileWatch(
     // Register the watcher
     conn.registerFileWatcher(watchKey, watcher);
 
-    // Start watching
-    watcher.watch(absPath, worktreeRoot);
+    // Start watching. `watchFile` watches the file's parent directory
+    // (depth: 0) and filters events to this exact path, rather than
+    // watching the file's own inode directly — chokidar loses the watch on
+    // an atomic rename-replace save (editor writes a tmp file then renames
+    // over the original), which orphans a direct single-file watch.
+    watcher.watchFile(absPath, worktreeRoot);
   } catch (err) {
     conn.send({
       type: "system:error",
