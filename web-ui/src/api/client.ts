@@ -1228,9 +1228,9 @@ export function createClientApi() {
       return parseJson<LocalQrResponse>(res);
     },
 
-    async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string }> {
+    async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string; currentTokenId?: string }> {
       const res = await apiFetch(`${baseUrl()}/auth/sessions`);
-      return parseJson<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string }>(res);
+      return parseJson<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string; currentTokenId?: string }>(res);
     },
 
     async revokeAuthSession(tokenId: string): Promise<void> {
