@@ -1,8 +1,13 @@
 use std::fs;
 
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Runtime};
+
+// Transparent, single-color glyph (not the full-bleed app icon) so macOS can
+// re-tint it for the menu bar via icon_as_template.
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
 
 /// Build and register the system tray icon with its context menu.
 pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
@@ -11,11 +16,12 @@ pub fn build_tray<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
     let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
 
-    let mut builder = TrayIconBuilder::new().menu(&menu);
-    // Use the bundled window icon for the tray when available; skip it (tray
-    // falls back to a system default) rather than panicking if none is set.
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    let mut builder = TrayIconBuilder::new().menu(&menu).icon_as_template(true);
+    // Skip the icon (tray falls back to a system default) rather than
+    // panicking the whole app if the embedded PNG is ever bad.
+    match Image::from_bytes(TRAY_ICON_BYTES) {
+        Ok(icon) => builder = builder.icon(icon),
+        Err(e) => eprintln!("[vst] failed to load tray icon: {e}"),
     }
     builder
         .on_menu_event(|app, event| match event.id.as_ref() {
