@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "pnpm --filter @vibe-station/desktop dev",
     "build": "pnpm --filter @vibe-station/desktop build",
-    "docker": "bash scripts/dev-sandbox.sh up",
+    "docker": "VST_SANDBOX_PORT=${VST_SANDBOX_PORT:-7100} bash scripts/dev-sandbox.sh up",
     "lint": "eslint web-ui/src web-ui/e2e",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
