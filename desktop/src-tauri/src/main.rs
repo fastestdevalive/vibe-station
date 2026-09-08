@@ -29,6 +29,27 @@ fn main() {
                 })
                 .unwrap_or_else(|| PathBuf::from("cloudflared"));
 
+            let vst_bin: PathBuf = app_handle
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|dir| {
+                    let name = if cfg!(target_os = "windows") { "vst.exe" } else { "vst" };
+                    let p = dir.join(name);
+                    if p.exists() { p } else { PathBuf::from("vst") }
+                })
+                .unwrap_or_else(|| PathBuf::from("vst"));
+
+            let skill_path: PathBuf = app_handle
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|dir| {
+                    let p = dir.join("SKILL.md");
+                    if p.exists() { p } else { PathBuf::from("SKILL.md") }
+                })
+                .unwrap_or_else(|| PathBuf::from("SKILL.md"));
+
             let daemon_info = match daemon::detect_running_daemon() {
                 Some(info) => {
                     println!("[vst] found running daemon on port {}", info.port);
@@ -36,7 +57,7 @@ fn main() {
                 }
                 None => {
                     println!("[vst] no running daemon — spawning sidecar...");
-                    match daemon::spawn_daemon(&app_handle, &cloudflared_bin) {
+                    match daemon::spawn_daemon(&app_handle, &cloudflared_bin, &vst_bin, &skill_path) {
                         Ok(info) => {
                             println!("[vst] daemon ready on port {}", info.port);
                             info

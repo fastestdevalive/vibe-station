@@ -33,6 +33,8 @@
  * or infer "direct" from an unrelated null.
  */
 
+import { join } from "node:path";
+import { homedir } from "node:os";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
 import {
   worktreePath,
@@ -131,6 +133,8 @@ export interface BuildVstEnvOptions {
  */
 export function buildVstEnv(opts: BuildVstEnvOptions): Record<string, string> {
   const { project, worktree, session, daemonPort } = opts;
+  const vstBinDir = join(homedir(), ".vibe-station", "bin");
+  const vstSkillPath = join(homedir(), ".vibe-station", "skill", "vst", "SKILL.md");
   return {
     VST_SESSION: session.id,
     VST_SPAWN_TOKEN: session.id,
@@ -138,5 +142,7 @@ export function buildVstEnv(opts: BuildVstEnvOptions): Record<string, string> {
     VST_PROJECT: project.id,
     VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
     VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    PATH: `${vstBinDir}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
+    VST_SKILL_PATH: vstSkillPath,
   };
 }

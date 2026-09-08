@@ -12,6 +12,7 @@ import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { configPath, vstHome } from "./paths.js";
+import { resolveHarnessSkillDirs } from "../lib/harnessSkillDirs.js";
 
 /** Fields written by main.ts on daemon start. */
 interface MainConfig {
@@ -57,10 +58,7 @@ export function defaultProjectsDir(): string {
  * shipping a default for a CLI the user has not installed is harmless.
  */
 export function defaultSkillPaths(): string[] {
-  return [
-    join(homedir(), ".claude", "skills"),
-    join(homedir(), ".gemini", "skills"),
-  ];
+  return resolveHarnessSkillDirs();
 }
 
 /**

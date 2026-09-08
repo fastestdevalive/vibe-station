@@ -1,13 +1,27 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
 import { Workspace } from "./routes/Workspace";
 import { LoginScreen } from "./components/auth/LoginScreen";
 import { TopBar } from "./components/layout/TopBar";
 import { useAuth } from "./hooks/useAuth";
 import { DevStatePanel } from "./components/dev/DevStatePanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { api } from "./api";
 
 function AppShell() {
   const { authed, loading, onLoginSuccess } = useAuth();
+  const navigate = useNavigate();
+
+  // Handle `navigate` WS events emitted by POST /open (vst open <path>).
+  useEffect(() => {
+    return api.on("navigate", (ev) => {
+      if (ev.type === "navigate") {
+        // TODO: add a /project/:id route and page so this can navigate directly
+        // to the project instead of the dashboard home. ev.projectId is available.
+        navigate(`/`);
+      }
+    });
+  }, [navigate]);
 
   if (loading) {
     // Minimal loading state — TopBar with login mode, blank content area

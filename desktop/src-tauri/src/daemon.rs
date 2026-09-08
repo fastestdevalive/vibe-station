@@ -72,12 +72,14 @@ pub fn detect_running_daemon() -> Option<DaemonInfo> {
 /// Spawn the bundled vst-daemon sidecar and wait for it to be ready.
 /// Returns DaemonInfo once the daemon is listening.
 ///
-/// `cloudflared_bin` is the absolute path to the bundled cloudflared binary.
-/// It is passed to the daemon via the VST_CLOUDFLARED_BIN environment variable
-/// so the daemon uses the bundled copy instead of searching $PATH.
+/// `cloudflared_bin` — absolute path to the bundled cloudflared binary.
+/// `vst_bin` — absolute path to the bundled vst CLI binary.
+/// `skill_path` — absolute path to the bundled SKILL.md resource.
 pub fn spawn_daemon(
     app_handle: &tauri::AppHandle,
     cloudflared_bin: &Path,
+    vst_bin: &Path,
+    skill_path: &Path,
 ) -> Result<DaemonInfo, String> {
     use tauri_plugin_shell::ShellExt;
     use tauri_plugin_shell::process::CommandEvent;
@@ -91,6 +93,12 @@ pub fn spawn_daemon(
     let cloudflared_str = cloudflared_bin
         .to_str()
         .ok_or("cloudflared path is not valid UTF-8")?;
+    let vst_bin_str = vst_bin
+        .to_str()
+        .ok_or("vst_bin path is not valid UTF-8")?;
+    let skill_path_str = skill_path
+        .to_str()
+        .ok_or("skill_path is not valid UTF-8")?;
 
     // The bundled vst-daemon binary is the daemon entrypoint itself —
     // it starts listening immediately on launch without any subcommand args.
@@ -99,6 +107,8 @@ pub fn spawn_daemon(
         .sidecar("vst-daemon")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
         .env("VST_CLOUDFLARED_BIN", cloudflared_str)
+        .env("VST_CLI_BIN", vst_bin_str)
+        .env("VST_SKILL_PATH", skill_path_str)
         .spawn()
         .map_err(|e| format!("failed to spawn vst-daemon sidecar: {e}"))?;
 

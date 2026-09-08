@@ -12,7 +12,7 @@ async function daemonRequest<T>(
 ): Promise<DaemonResult<T>> {
   const url = getDaemonUrl();
   if (!url) {
-    die("Daemon is not running. Run `vst daemon start`.", 4);
+    die("Daemon is not running. Open the vibe-station app to start it.", 4);
   }
 
   try {
@@ -50,7 +50,7 @@ async function daemonRequest<T>(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("ECONNREFUSED") || message.includes("connect")) {
-      die("Daemon is not running. Run `vst daemon start`.", 4);
+      die("Daemon is not running. Open the vibe-station app to start it.", 4);
     }
     throw err;
   }

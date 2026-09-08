@@ -31,7 +31,7 @@ export function getDaemonUrl(): string | null {
 export function getDaemonUrlOrThrow(): string {
   const url = getDaemonUrl();
   if (!url) {
-    die("Daemon is not running. Run `vst daemon start`.", 4);
+    die("Daemon is not running. Open the vibe-station app to start it.", 4);
   }
   return url;
 }

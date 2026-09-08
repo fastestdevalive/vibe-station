@@ -62,7 +62,44 @@ cp "$SRC_BIN" "$DEST_BIN"
 chmod +x "$DEST_BIN"
 echo "    $(du -h "$DEST_BIN" | cut -f1)  $DEST_BIN"
 
-# ── Step 5: download cloudflared ─────────────────────────────────────────────
+# ── Step 5: build vst CLI binary ─────────────────────────────────────────────
+
+echo ""
+echo "==> Building vst CLI binary for $TRIPLE..."
+
+# Map target triple to pkg's platform/arch notation (same mapping as daemon).
+case "$TRIPLE" in
+  x86_64-unknown-linux-gnu)  PKG_TARGET="node24-linux-x64" ;;
+  aarch64-apple-darwin)      PKG_TARGET="node24-macos-arm64" ;;
+  x86_64-apple-darwin)       PKG_TARGET="node24-macos-x64" ;;
+  *)
+    echo "Warning: unsupported triple for vst binary ($TRIPLE) — skipping vst sidecar build" >&2
+    PKG_TARGET=""
+    ;;
+esac
+
+if [[ -n "$PKG_TARGET" ]]; then
+  CLI_ENTRY="$REPO_ROOT/cli/dist/main.js"
+  if [[ ! -f "$CLI_ENTRY" ]]; then
+    echo "Error: $CLI_ENTRY not found — run pnpm --filter @vibestation/cli build first." >&2
+    exit 1
+  fi
+  CLI_BUNDLE="/tmp/vst-cli.bundle.cjs"
+  npx esbuild "$CLI_ENTRY" \
+    --bundle \
+    --platform=node \
+    --format=cjs \
+    --external:"*.node" \
+    --outfile="$CLI_BUNDLE"
+  npx @yao-pkg/pkg "$CLI_BUNDLE" \
+    --target "$PKG_TARGET" \
+    --output "$REPO_ROOT/dist/vst-$TRIPLE"
+  cp "$REPO_ROOT/dist/vst-$TRIPLE" "$BINARIES_DIR/vst-$TRIPLE"
+  chmod +x "$BINARIES_DIR/vst-$TRIPLE"
+  echo "    vst binary: $BINARIES_DIR/vst-$TRIPLE ($(du -h "$BINARIES_DIR/vst-$TRIPLE" | cut -f1))"
+fi
+
+# ── Step 6: download cloudflared ─────────────────────────────────────────────
 
 echo ""
 echo "==> Downloading cloudflared for $TRIPLE..."
