@@ -87,6 +87,14 @@ export async function buildServer(opts: BuildServerOptions = {}) {
 
   const app = Fastify({
     logger: opts.logger ?? false,
+    // Honour X-Forwarded-For ONLY when the TCP peer is itself loopback (the Vite
+    // dev proxy). The daemon binds 0.0.0.0, so `trustProxy: true` would let any
+    // LAN client forge `X-Forwarded-For: 127.0.0.1` and hit the loopback auth
+    // bypass. proxy-addr walks the chain right-to-left and stops at the first
+    // untrusted hop, so a forged leading entry relayed through Vite is ignored
+    // as well. cloudflared connections are identified by CF-Connecting-IP and
+    // the loopback bypass is skipped for them before the IP is consulted.
+    trustProxy: "loopback",
     // Mirrors the Vite dev proxy rewrite so /api/auth/login and /auth/login both
     // reach the same route handler regardless of caller (browser, CLI, curl).
     rewriteUrl: (req) => {
@@ -152,7 +160,21 @@ export async function buildServer(opts: BuildServerOptions = {}) {
             return reply.status(403).send({ error: "Forbidden." });
           }
         }
-        // Trusted loopback (CSRF check passed) — no credentials needed for any route.
+        // Trusted loopback (CSRF check passed) — always allowed, but if a token IS
+        // present (e.g. Tauri Bearer or browser cookie from Vite proxy), verify it
+        // and attach authPayload so routes can distinguish caller scope ('tauri' vs
+        // 'browser') rather than treating all loopback callers as desktop.
+        const authHeader = req.headers.authorization;
+        const cookies = (req as typeof req & { cookies?: Record<string, string> }).cookies ?? {};
+        const rawToken = authHeader?.startsWith("Bearer ")
+          ? authHeader.slice(7)
+          : (cookies[COOKIE_NAME] ?? "");
+        if (rawToken && authState) {
+          const result = verifyToken(rawToken, authState);
+          if (result.ok) {
+            (req as typeof req & { authPayload?: TokenPayload }).authPayload = result.payload;
+          }
+        }
         return;
       }
 

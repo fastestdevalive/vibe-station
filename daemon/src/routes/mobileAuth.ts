@@ -25,7 +25,11 @@ function parseDeviceName(ua: string): string {
   if (/iPhone/.test(ua)) return "iPhone";
   if (/iPad/.test(ua)) return "iPad";
   const androidMatch = ua.match(/Android[^;]*;\s*([^)]+)\)/);
-  if (androidMatch) return androidMatch[1].trim().split(" ").slice(0, 2).join(" ");
+  if (androidMatch) {
+    const model = (androidMatch[1] ?? "").trim().split(" ").slice(0, 2).join(" ");
+    // Modern Android Chrome (v110+) sends 'K' as a privacy-preserving model placeholder.
+    return model.length <= 2 ? "Android" : model;
+  }
   if (/Macintosh/.test(ua)) return "Mac";
   if (/Windows/.test(ua)) return "Windows PC";
   if (/Linux/.test(ua)) return "Linux";
