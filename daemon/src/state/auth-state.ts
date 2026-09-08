@@ -7,18 +7,68 @@
  * survives a daemon restart (all pre-bump browser tokens stay invalid after
  * restart anyway because daemonToken rotates, but the epoch is kept for clarity).
  */
+import type { TokenScope } from "../types.js";
+
+/**
+ * A browser-scoped token that has been minted (e.g. via the mobile QR
+ * auth-code exchange) but may not yet have an active WS connection. Tracked so
+ * the sessions list can show a device the moment it authenticates — before it
+ * opens the dashboard and connects a WS. In-memory only; resets on restart
+ * (all old browser tokens become invalid anyway because daemonToken rotates).
+ */
+export interface BrowserSession {
+  tokenId: string;
+  scope: TokenScope;
+  issuedAt: number;
+  expiresAt: number | null;
+  /** browserEpoch at mint time — used to drop tokens invalidated by revoke-all. */
+  epoch: number;
+}
+
 export interface AuthState {
   daemonToken: string;
   browserEpoch: number;
   /** In-memory token revocation set. Resets on daemon restart. */
   revokedTokenIds: Set<string>;
+  /** Minted browser sessions, keyed by tokenId. Resets on daemon restart. */
+  mintedBrowserSessions: Map<string, BrowserSession>;
 }
 
 let _state: AuthState | null = null;
 
 /** Load the auth singleton at daemon startup. Must be called before getAuthState(). */
 export function loadAuthState(daemonToken: string, browserEpoch: number): void {
-  _state = { daemonToken, browserEpoch, revokedTokenIds: new Set() };
+  _state = { daemonToken, browserEpoch, revokedTokenIds: new Set(), mintedBrowserSessions: new Map() };
+}
+
+/** Record a freshly minted browser session so it appears in the sessions list before its WS connects. */
+export function recordBrowserSession(session: BrowserSession): void {
+  if (!_state) throw new Error("Auth state not initialised");
+  _state.mintedBrowserSessions.set(session.tokenId, session);
+}
+
+/**
+ * Return all minted browser sessions that are still valid — pruning (and
+ * dropping) any that are revoked, epoch-mismatched (revoke-all), or expired.
+ * Source of truth for the sessions list; broadcaster enriches these with live
+ * WS connection counts.
+ */
+export function getActiveBrowserSessions(): BrowserSession[] {
+  if (!_state) throw new Error("Auth state not initialised");
+  const now = Date.now();
+  const out: BrowserSession[] = [];
+  for (const [tokenId, session] of _state.mintedBrowserSessions) {
+    const stale =
+      _state.revokedTokenIds.has(tokenId) ||
+      session.epoch !== _state.browserEpoch ||
+      (session.expiresAt !== null && session.expiresAt <= now);
+    if (stale) {
+      _state.mintedBrowserSessions.delete(tokenId);
+      continue;
+    }
+    out.push(session);
+  }
+  return out;
 }
 
 /** Revoke a specific token by its payloadB64 id. Future verifyToken calls will reject it. */

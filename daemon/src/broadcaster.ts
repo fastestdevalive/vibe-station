@@ -1,6 +1,7 @@
 import type { ServerMessage } from "./ws/protocol.js";
 import type { WSConnection } from "./ws/connection.js";
 import type { TokenScope } from "./types.js";
+import { getActiveBrowserSessions } from "./state/auth-state.js";
 
 /**
  * WS broadcaster: manages broadcast events to connected clients.
@@ -10,7 +11,9 @@ import type { TokenScope } from "./types.js";
 
 const connections = new Set<WSConnection>();
 
-const REMOTE_SCOPES: ReadonlySet<TokenScope> = new Set(["browser", "mobile"]);
+// TODO: mobile scope is browser for now — there is no dedicated "mobile" scope
+// minted anywhere yet. Re-add "mobile" here once a real mobile scope is implemented.
+const REMOTE_SCOPES: ReadonlySet<TokenScope> = new Set(["browser" /*, "mobile" */]);
 
 export type TokenSession = {
   tokenId: string;
@@ -67,10 +70,42 @@ export function unregisterConnection(conn: WSConnection): void {
   }
 }
 
-/** Return a snapshot of token-level remote sessions, pruning expired tokens. */
+/**
+ * Return a snapshot of token-level remote sessions.
+ *
+ * Minted browser tokens (from auth-state) are the source of truth — a device
+ * that completed the QR auth-code exchange appears here immediately, with
+ * `connections: 0`, even before it opens the dashboard and connects a WS.
+ * WS-derived entries in `tokenSessions` supply the live connection count and
+ * `lastSeenAt`, and also cover any connected token not in the minted store.
+ */
 export function getRemoteSessions(): TokenSession[] {
   const now = Date.now();
-  return [...tokenSessions.values()].filter((s) => !s.expiresAt || s.expiresAt > now);
+  const byId = new Map<string, TokenSession>();
+
+  for (const m of getActiveBrowserSessions()) {
+    byId.set(m.tokenId, {
+      tokenId: m.tokenId,
+      scope: m.scope,
+      issuedAt: m.issuedAt,
+      expiresAt: m.expiresAt,
+      lastSeenAt: m.issuedAt,
+      connections: 0,
+    });
+  }
+
+  for (const ws of tokenSessions.values()) {
+    if (ws.expiresAt && ws.expiresAt <= now) continue;
+    const existing = byId.get(ws.tokenId);
+    if (existing) {
+      existing.connections = ws.connections;
+      existing.lastSeenAt = ws.lastSeenAt;
+    } else {
+      byId.set(ws.tokenId, ws);
+    }
+  }
+
+  return [...byId.values()];
 }
 
 /** Close all WS connections for a token and remove it from the session map. Best-effort. */
@@ -109,9 +144,16 @@ export function notifySession(sessionId: string, msg: ServerMessage): void {
 
 /**
  * Close all WebSocket connections authenticated with the given token scope.
- * Called by POST /auth/revoke-browser after bumping browserEpoch.
+ * Called by POST /auth/revoke-browser after bumping browserEpoch. Also prunes
+ * matching entries from `tokenSessions` — otherwise revoked sessions linger
+ * with connections:0 and reappear in the next `getRemoteSessions()` poll.
  */
 export function closeConnectionsByScope(scope: TokenScope, code: number, reason: string): void {
+  for (const [tokenId, session] of tokenSessions) {
+    if (session.scope === scope) {
+      tokenSessions.delete(tokenId);
+    }
+  }
   for (const conn of connections) {
     if (conn.scope === scope) {
       try {

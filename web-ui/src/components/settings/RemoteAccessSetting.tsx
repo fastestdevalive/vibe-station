@@ -625,7 +625,10 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
                   <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-                    {s.scope === "mobile" ? "Mobile" : "Browser"}
+                    {/* TODO: mobile scope is browser for now — no dedicated "mobile" scope is
+                        minted yet. Re-enable the "Mobile" label when a real mobile scope exists.
+                        {s.scope === "mobile" ? "Mobile" : "Browser"} */}
+                    Browser
                   </span>
                   <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                     {s.scope}

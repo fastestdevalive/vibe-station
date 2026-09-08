@@ -8,7 +8,7 @@ import {
   checkMobileAuthRateLimit,
 } from "../auth.js";
 import * as cloudflared from "../services/cloudflared.js";
-import { getAuthState } from "../state/auth-state.js";
+import { getAuthState, recordBrowserSession } from "../state/auth-state.js";
 import type { AuthState } from "../state/auth-state.js";
 
 interface OneTimeCode {
@@ -232,7 +232,21 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
 
     // Mint a browser-scope token. getAuthState() is safe here — authState is
     // checked above and the module singleton is the same reference.
-    const cookieValue = mintToken("browser", getAuthState());
+    const state = getAuthState();
+    const cookieValue = mintToken("browser", state);
+
+    // Record the minted session so it shows up in the desktop's sessions list
+    // immediately — the phone is on the "open dashboard" screen and hasn't
+    // connected a WS yet, so tokenSessions (WS-derived) would otherwise be empty
+    // until it enters the app. tokenId is the payload half of the token.
+    const tokenId = cookieValue.slice(0, cookieValue.lastIndexOf("."));
+    recordBrowserSession({
+      tokenId,
+      scope: "browser",
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + BROWSER_MAX_AGE_SECONDS * 1000,
+      epoch: state.browserEpoch,
+    });
 
     // `Secure` is only valid over HTTPS. The tunnel is HTTPS, but the local /
     // Tailscale QR is plain http://<ip>:<port> — browsers silently DROP a
