@@ -31,6 +31,7 @@ mkdir -p "$BINARIES_DIR"
 
 DAEMON_STUB="$BINARIES_DIR/vst-daemon-$TRIPLE"
 CF_STUB="$BINARIES_DIR/cloudflared-$TRIPLE"
+VST_STUB="$BINARIES_DIR/vst-$TRIPLE"
 
 if [[ ! -f "$DAEMON_STUB" ]]; then
   printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$DAEMON_STUB"
@@ -44,8 +45,14 @@ if [[ ! -f "$CF_STUB" ]]; then
   echo "[dev-start] created cloudflared stub: $CF_STUB"
 fi
 
+if [[ ! -f "$VST_STUB" ]]; then
+  printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$VST_STUB"
+  chmod +x "$VST_STUB"
+  echo "[dev-start] created vst stub: $VST_STUB"
+fi
+
 # Launch daemon (tsx watch) + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 exec npx concurrently --kill-others-on-fail \
-  "pnpm --filter @vibestation/web dev --port 5180" \
+  "PORT=5180 pnpm --filter @vibestation/web dev" \
   "tsx watch --tsconfig '$REPO_ROOT/daemon/tsconfig.json' '$REPO_ROOT/daemon/src/main.ts'"
