@@ -1,13 +1,16 @@
 import { File, FileText } from "lucide-react";
-import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ChangedPathEntry, GitStatusChar } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useRovingListNav } from "@/hooks/useRovingListNav";
 
 interface FlatFile {
   path: string;
   name: string;
   dir: string;
   status: GitStatusChar;
+  insertions?: number;
+  deletions?: number;
 }
 
 interface Group {
@@ -33,11 +36,11 @@ function statusLabel(status: GitStatusChar): string {
 
 function flattenChanged(entries: ChangedPathEntry[]): FlatFile[] {
   const files: FlatFile[] = [];
-  for (const { path, status } of entries) {
+  for (const { path, status, insertions, deletions } of entries) {
     const lastSlash = path.lastIndexOf("/");
     const name = lastSlash >= 0 ? path.slice(lastSlash + 1) : path;
     const dir = lastSlash >= 0 ? path.slice(0, lastSlash) : "";
-    files.push({ path, name, dir, status });
+    files.push({ path, name, dir, status, insertions, deletions });
   }
   files.sort((a, b) => {
     if (a.dir !== b.dir) return a.dir.localeCompare(b.dir);
@@ -61,16 +64,28 @@ function textLike(name: string): boolean {
   return ["md", "txt", "json", "yaml", "yml", "ts", "tsx", "js", "jsx", "css", "html", "py", "go", "rs"].includes(ext);
 }
 
+/** Decision 6 — bypasses the global `activeFilePath` store slice so a caller
+ *  outside the Files tab (the VCS commit view) doesn't steal focus from /
+ *  clobber whatever file the Files tab has open. */
+export interface ChangedFileListControlled {
+  activePath: string | null;
+  onSelect: (path: string) => void;
+}
+
 interface ChangedFileListProps {
   entries: ChangedPathEntry[];
   loading?: boolean;
   error?: string | null;
+  /** When set, clicking/keying a row calls `onSelect` instead of
+   *  `setActiveFile`/`setToolPanelTab` (Decision 6). */
+  controlled?: ChangedFileListControlled;
 }
 
-export function ChangedFileList({ entries, loading, error }: ChangedFileListProps) {
-  const activePath = useWorkspaceStore((s) => s.activeFilePath);
+export function ChangedFileList({ entries, loading, error, controlled }: ChangedFileListProps) {
+  const activePathFromStore = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
+  const activePath = controlled ? controlled.activePath : activePathFromStore;
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
 
   const flatFiles = useMemo(() => flattenChanged(entries), [entries]);
@@ -90,28 +105,24 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
     });
   }, []);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent, path: string) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        setActiveFile(path);
-        setToolPanelTab("files");
-      }
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const idx = visibleFiles.findIndex((f) => f.path === path);
-        if (idx < 0) return;
-        const next = e.key === "ArrowDown" ? visibleFiles[idx + 1] : visibleFiles[idx - 1];
-        if (next) setActiveFile(next.path);
-      }
-    },
-    [visibleFiles, setActiveFile, setToolPanelTab],
-  );
-
   function selectFile(path: string) {
+    if (controlled) {
+      controlled.onSelect(path);
+      return;
+    }
     setActiveFile(path);
     setToolPanelTab("files");
   }
+
+  // Shared roving-cursor keyboard nav (Decision 2) — every row here is a
+  // plain file (never expandable), so ArrowLeft/ArrowRight are no-ops.
+  const rovingRows = useMemo(
+    () => visibleFiles.map((f) => ({ path: f.path })),
+    [visibleFiles],
+  );
+  const { cursorPath, setCursorPath, handleKeyDown, isTabbable } = useRovingListNav(rovingRows, {
+    onOpen: selectFile,
+  });
 
   if (error) {
     return <div className="changed-file-list-empty">Error: {error}</div>;
@@ -149,16 +160,18 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
               <div>
                 {group.files.map((file) => {
                   const isSelected = activePath === file.path;
+                  const isCursor = file.path === cursorPath;
                   return (
                     <div
                       key={file.path}
                       role="treeitem"
-                      tabIndex={0}
+                      tabIndex={isTabbable(file.path) ? 0 : -1}
                       aria-selected={isSelected}
                       aria-label={file.path}
-                      className={`changed-file-list-file${isSelected ? " changed-file-list-file--selected" : ""}`}
+                      className={`changed-file-list-file${isSelected ? " changed-file-list-file--selected" : ""}${isCursor ? " changed-file-list-file--cursor" : ""}`}
                       onClick={() => selectFile(file.path)}
-                      onKeyDown={(e) => handleKeyDown(e, file.path)}
+                      onFocus={() => setCursorPath(file.path)}
+                      onKeyDown={handleKeyDown}
                     >
                       <span className="changed-file-list-file-icon" aria-hidden>
                         {textLike(file.name) ? (
@@ -168,6 +181,12 @@ export function ChangedFileList({ entries, loading, error }: ChangedFileListProp
                         )}
                       </span>
                       <span className="changed-file-list-file-name">{file.name}</span>
+                      {file.insertions !== undefined || file.deletions !== undefined ? (
+                        <span className="changed-file-list-file__loc" aria-hidden>
+                          {file.insertions ? <span className="vcs-graph__add">+{file.insertions}</span> : null}
+                          {file.deletions ? <span className="vcs-graph__del">−{file.deletions}</span> : null}
+                        </span>
+                      ) : null}
                       <span
                         className={`changed-file-list-file-status changed-file-list-file-status--${file.status === "?" ? "A" : file.status}`}
                         aria-label={`status: ${file.status}`}

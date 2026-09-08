@@ -1,4 +1,5 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { DiffView } from "./DiffView";
 
@@ -34,5 +35,26 @@ describe("DiffView regression — existing diffText/heuristic path (4.T4)", () =
     expect(container.querySelectorAll(".diff-line--removed")).toHaveLength(1);
     expect(container.querySelectorAll(".diff-line--added")).toHaveLength(1);
     expect(container.querySelectorAll(".diff-line--context")).toHaveLength(1);
+  });
+});
+
+describe("DiffView Source/Rendered toggle for .md files (9.T3)", () => {
+  const diffText = "@@ -1 +1,2 @@\n # Demo\n+added line\n";
+
+  it("shows no toggle for a non-markdown file", () => {
+    render(<DiffView diffText={diffText} filePath="src/App.tsx" fileContentFallback="# Demo\n" />);
+    expect(screen.queryByRole("button", { name: "Rendered" })).not.toBeInTheDocument();
+  });
+
+  it("clicking Rendered shows MarkdownView output instead of raw diff text", async () => {
+    const user = userEvent.setup();
+    render(<DiffView diffText={diffText} filePath="README.md" fileContentFallback={"# Demo\n\nsome body text\n"} />);
+    // Defaults to Source — raw diff lines are present.
+    expect(screen.getByText("added line")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Rendered" }));
+    // Rendered markdown heading, not the raw diff-line text.
+    expect(await screen.findByRole("heading", { name: "Demo" })).toBeInTheDocument();
+    expect(screen.queryByText("added line")).not.toBeInTheDocument();
   });
 });

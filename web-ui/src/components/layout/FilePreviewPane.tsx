@@ -5,7 +5,7 @@ import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { useFileWatch } from "@/hooks/useSubscription";
+import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { CodeView } from "@/components/preview/CodeView";
@@ -13,20 +13,39 @@ import { DiffView } from "@/components/preview/DiffView";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
 import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
 
+/** Decision 6 — bypasses the global store's `activeFilePath`/`diffScopeByWorktree`
+ *  slices so a caller outside the Files tab (the VCS commit view) doesn't steal
+ *  focus from / clobber whatever the Files tab has open. */
+export interface FilePreviewControlled {
+  path: string | null;
+  scope: DiffScope;
+  /** Required when `scope === "commit"` — the commit sha to diff against its parent. */
+  commitSha?: string;
+}
+
 interface FilePreviewPaneProps {
   api: ApiInstance;
   /** Context id: worktree id (scope="worktree") or project id (scope="project"). */
   worktreeId: string | null;
   scope?: FileScope;
+  /** When set, `path`/`scope` come from here instead of the global store
+   *  (Decision 6) — used by `VcsCommitView`. */
+  controlled?: FilePreviewControlled;
 }
 
-export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree" }: FilePreviewPaneProps) {
-  const path = useWorkspaceStore((s) => s.activeFilePath);
+export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
+  const storePath = useWorkspaceStore((s) => s.activeFilePath);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
   );
+  const path = controlled ? controlled.path : storePath;
   // Project scope (direct sessions) has no git/diff — always plain file view.
-  const scope: DiffScope = fileScope === "project" ? "none" : (scopeFromStore ?? "none");
+  const scope: DiffScope = controlled
+    ? controlled.scope
+    : fileScope === "project"
+      ? "none"
+      : (scopeFromStore ?? "none");
+  const commitSha = controlled?.commitSha;
   const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
 
   const { theme } = useTheme();
@@ -34,6 +53,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const [fileBody, setFileBody] = useState<string | null>(null);
   const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
+  // Cheap insurance for directory-level rename-replace events (Phase 1's
+  // watchFile() watches the parent dir): a tree-level change to this
+  // worktree also nudges the fetch effect, even if the per-file watcher
+  // missed the exact rename. Additive only — does not change either hook's
+  // contract (Phase 7, Requirement 5).
+  const { lastChanged: treeLastChanged } = useTreeWatch(api, worktreeId, fileScope);
 
   const [diffBody, setDiffBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +78,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     void (async () => {
       try {
         if (scope === "none") {
-          const text = await api.getFile(worktreeId, path, fileScope);
+          // Decision 4: plain preview also fetches the local diff (best-effort
+          // — an untracked/non-git file must not block the plain preview) so
+          // it can show the same diff-stat + scope toggle diff mode has.
+          // Project scope has no notion of a git diff against a worktree
+          // (`worktreeId` here is actually a *project* id in that case) — a
+          // diff fetch there is a guaranteed 404, so skip it entirely rather
+          // than firing a call that can only fail.
+          const [text, d] = await Promise.all([
+            api.getFile(worktreeId, path, fileScope),
+            fileScope === "project" ? Promise.resolve(null) : api.getDiff(worktreeId, path, "local").catch(() => null),
+          ]);
           if (!cancelled) {
             setFileBody(text);
-            setDiffBody(null);
+            setDiffBody(d);
           }
         } else if (scope === "local") {
           const [text, d] = await Promise.all([
@@ -67,8 +102,24 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             setFileBody(text);
             setDiffBody(d);
           }
+        } else if (scope === "branch") {
+          // Decision 7: `git diff <baseSha> -- <path>` already diffs the base
+          // SHA against the working tree, i.e. the same content `getFile`
+          // serves from disk — so branch scope can fetch file content
+          // unconditionally, exactly like local scope, no new endpoint.
+          const [text, d] = await Promise.all([
+            api.getFile(worktreeId, path),
+            api.getDiff(worktreeId, path, "branch"),
+          ]);
+          if (!cancelled) {
+            setFileBody(text);
+            setDiffBody(d);
+          }
         } else {
-          const d = await api.getDiff(worktreeId, path, "branch");
+          // scope === "commit" — a single commit's diff against its parent
+          // (or the empty tree for a root commit). No plain file content:
+          // the commit view is diff-only, same as branch scope used to be.
+          const d = await api.getDiff(worktreeId, path, "commit", commitSha);
           if (!cancelled) {
             setFileBody(null);
             setDiffBody(d);
@@ -89,7 +140,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -150,7 +201,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
-    if (scope !== "local" && scope !== "branch") return null;
+    // Decision 4 (9.4): plain mode (`"none"`) also computes a diff-stat from
+    // the same local-diff fetch diff/branch mode already use. `DiffScope` is
+    // `"local" | "branch" | "none" | "commit"` — every value is handled here,
+    // so there is no scope left to early-return `null` for.
     const diffText = diffBody ?? "";
     const trimmed = diffText.trim();
     const hunks =
@@ -185,22 +239,29 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     );
   }
 
-  // Slim, content-scoped strip shown only in diff mode — line counts + which
-  // baseline. File name + panel controls now live on the Files bar above.
-  const diffInfo =
-    scope === "local" || scope === "branch" ? (
-      <div className="preview-diffinfo">
-        {diffStats ? (
-          <span className="preview-diffinfo__stats" aria-label="Diff line counts">
-            <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
-            <span className="preview-diffinfo__stats-minus">−{diffStats.deletions}</span>
-          </span>
-        ) : null}
-        <span className="preview-diffinfo__scope">
-          {scope === "branch" ? "Compared to fork base" : "Compared to HEAD"}
+  // Slim, content-scoped strip — line counts + which baseline. The
+  // local/branch scope toggle itself lives only in the Files header
+  // (`FileTreeSidebar`) now — one control, not one per surface — and both
+  // panes read the same `diffScopeByWorktree` store slice, so a change made
+  // there is reflected here automatically without this pane owning any UI
+  // for it. File name + panel controls live on the Files bar above.
+  const diffInfo = (
+    <div className="preview-diffinfo">
+      {diffStats ? (
+        <span className="preview-diffinfo__stats" aria-label="Diff line counts">
+          <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
+          <span className="preview-diffinfo__stats-minus">−{diffStats.deletions}</span>
         </span>
-      </div>
-    ) : null;
+      ) : null}
+      <span className="preview-diffinfo__scope">
+        {scope === "branch"
+          ? "Compared to fork base"
+          : scope === "commit"
+            ? "Commit diff"
+            : "Compared to HEAD"}
+      </span>
+    </div>
+  );
 
   if (tooLarge) {
     return (
@@ -223,11 +284,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const isMd = path.endsWith(".md");
 
   const body = (() => {
-    if (scope === "local" || scope === "branch") {
+    if (scope === "local" || scope === "branch" || scope === "commit") {
       const diffText = diffBody ?? "";
       const fallback = fileBody ?? undefined;
       return (
-        <DiffView diffText={diffText} fileContentFallback={fallback} filePath={path} themeMode={themeMode} />
+        <DiffView
+          diffText={diffText}
+          fileContentFallback={fallback}
+          filePath={path}
+          themeMode={themeMode}
+          api={api}
+          worktreeId={worktreeId}
+          scope={fileScope}
+        />
       );
     }
     if (!fileBody) {
@@ -250,7 +319,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
   })();
 
-  const useCodeChrome = scope === "local" || scope === "branch" || (!isMd && scope === "none");
+  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && scope === "none");
 
   return (
     <div className="pane pane-stack">

@@ -5,6 +5,7 @@ import { Dialog } from "./Dialog";
 import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
+import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
 
 interface NewTabDialogProps {
   open: boolean;
@@ -22,17 +23,24 @@ export function NewTabDialog({
   worktreeId,
   onCreated,
 }: NewTabDialogProps) {
+  const draftKey = `vst-newtab-draft-${worktreeId}`;
+  const draft = useDraftPersistence(draftKey);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPromptState] = useState(() => loadDraft(draftKey));
   const [useTmux, setUseTmux] = useState(true);
   const [channel, setChannel] = useState<"terminal" | "json">("terminal");
   const [files, setFiles] = useState<File[]>([]);
   const [clis, setClis] = useState<SupportedCli[]>([]);
 
+  function setPrompt(value: string) {
+    setPromptState(value);
+    draft.save(value);
+  }
+
   useEffect(() => {
     if (!open) return;
-    setPrompt("");
+    setPromptState(loadDraft(draftKey));
     setChannel("terminal");
     setFiles([]);
     void (async () => {
@@ -41,7 +49,8 @@ export function NewTabDialog({
       setClis(cs);
       if (ms[0]) setModeId(ms[0].id);
     })();
-  }, [open, api]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, api, draftKey]);
 
   // JSON channel is only offered for CLIs whose plugin supportsJson (daemon
   // gates this too). Default to allowed until capabilities load.
@@ -99,6 +108,7 @@ export function NewTabDialog({
       sessionId = sess.id;
     }
     onCreated?.(sessionId);
+    draft.clear();
     onClose();
   }
 

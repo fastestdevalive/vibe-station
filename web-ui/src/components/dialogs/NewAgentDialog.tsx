@@ -10,6 +10,7 @@ import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { FolderChooserDialog } from "./FolderChooserDialog";
 import { useDirSuggestions } from "@/hooks/useDirSuggestions";
+import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
 
 interface NewAgentDialogProps {
   open: boolean;
@@ -191,7 +192,13 @@ export function NewAgentDialog({
   const [branches, setBranches] = useState<string[]>([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchesError, setBranchesError] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
+  const draftKey = `vst-newagent-draft-${selectedProject?.id ?? "new"}`;
+  const draft = useDraftPersistence(draftKey);
+  const [prompt, setPromptState] = useState(() => loadDraft(draftKey));
+  function setPrompt(value: string) {
+    setPromptState(value);
+    draft.save(value);
+  }
   const [channel, setChannel] = useState<"terminal" | "json">("terminal");
   const [files, setFiles] = useState<File[]>([]);
   const [modes, setModes] = useState<Mode[]>([]);
@@ -235,6 +242,16 @@ export function NewAgentDialog({
       }
     })();
   }, [open, api]);
+
+  // Restore the saved draft (if any) each time the dialog opens — the
+  // component stays mounted between opens (see LeftSidebar), so the
+  // `useState(() => loadDraft(...))` initializer only runs once at first
+  // mount and would otherwise miss a draft saved during a prior open.
+  useEffect(() => {
+    if (!open) return;
+    setPromptState(loadDraft(draftKey));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // JSON channel is only offered for CLIs whose plugin supportsJson (daemon
   // gates this too). Default to allowed until capabilities load.
@@ -338,7 +355,7 @@ export function NewAgentDialog({
     setBaseBranch("");
     setBranches([]);
     setBranchesError(null);
-    setPrompt("");
+    setPromptState("");
     setChannel("terminal");
     setFiles([]);
     setError(null);
@@ -845,6 +862,7 @@ export function NewAgentDialog({
           sessionId = sess.id;
           await sendJsonFirstTurn(api, sess.id, prompt, files);
         }
+        draft.clear();
         handleClose();
         if (worktreeId) navigate(`/worktree/${worktreeId}`);
         else if (sessionId) navigate(`/session/${sessionId}`);
@@ -857,6 +875,7 @@ export function NewAgentDialog({
         setError(result.warning);
         return;
       }
+      draft.clear();
       handleClose();
       if (result.worktree) {
         navigate(`/worktree/${result.worktree.id}`);
@@ -961,6 +980,7 @@ export function NewAgentDialog({
       }
 
       // onCreated already fired right after registration (above).
+      draft.clear();
       handleClose();
       if (worktreeId) {
         navigate(`/worktree/${worktreeId}`);
@@ -1040,6 +1060,7 @@ export function NewAgentDialog({
       }
 
       onCreated?.(selectedProject);
+      draft.clear();
       handleClose();
       if (worktreeId) {
         navigate(`/worktree/${worktreeId}`);

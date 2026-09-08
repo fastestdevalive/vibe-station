@@ -156,6 +156,15 @@ export interface WorkspaceState {
   /** Active *terminal* session shown in the bottom terminal dock. */
   activeTerminalSessionId: string | null;
   activeFilePath: string | null;
+  /**
+   * Which flat/tree list currently owns arrow-key focus (e.g. "file-tree",
+   * "changed-file-list"). Not persisted — transient UI focus. Set on
+   * pointerdown/focus of a pane's root; not consumed by anything yet (Decision
+   * 2) — it's the hook point future global-hotkey/arrow-key conflict
+   * resolution needs so two roving-nav lists never fight over the same
+   * keydown.
+   */
+  focusedPane: string | null;
   /** Last opened file path per worktree (persisted). */
   lastFileByWorktree: Record<string, string>;
   /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted). */
@@ -168,6 +177,12 @@ export interface WorkspaceState {
   /** Last selected terminal tab per worktree (persisted) */
   lastTerminalByWorktree: Record<string, string>;
   diffScopeByWorktree: Record<string, DiffScope>;
+  /** Local/branch scope for the PLAIN tree's per-file status badges (Files
+   *  header selector while browsing the tree, diff mode off) — kept separate
+   *  from `diffScopeByWorktree` so selecting a scope while tree-browsing
+   *  never flips the "Changes" flat-list / full-diff-preview mode on; that
+   *  mode is controlled exclusively by the "Diff view" (GitCompare) button. */
+  treeScopeByWorktree: Record<string, "local" | "branch">;
   previewFontScale: number;
   /** Whether the Files tool shows its file-tree column (persisted, view pref). */
   fileTreeVisible: boolean;
@@ -212,8 +227,11 @@ export interface WorkspaceState {
   setActiveSession: (sessionId: string) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null) => void;
+  /** Set (or clear with null) which flat/tree list owns arrow-key focus. */
+  setFocusedPane: (id: string | null) => void;
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
+  setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   bumpPreviewFont: (delta: number) => void;
   /** Show/hide the Files tool's file-tree column. */
   toggleFileTree: () => void;
@@ -552,6 +570,7 @@ const initial = {
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
+  focusedPane: null as string | null,
   lastFileByWorktree: {} as Record<string, string>,
   fileScrollByKey: {} as Record<string, number>,
   showDotFiles: true,
@@ -559,6 +578,7 @@ const initial = {
   lastSessionByWorktree: {} as Record<string, string>,
   lastTerminalByWorktree: {} as Record<string, string>,
   diffScopeByWorktree: {} as Record<string, DiffScope>,
+  treeScopeByWorktree: {} as Record<string, "local" | "branch">,
   previewFontScale: 1,
   fileTreeVisible: true,
   terminalFontScale: 1,
@@ -763,6 +783,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 : s.lastFileByWorktree;
             return { activeFilePath: path, lastFileByWorktree: nextLastFile };
           }),
+        setFocusedPane: (id) => set({ focusedPane: id }),
         setFileScroll: (worktreeId, filePath, scrollTop) =>
           set((s) => ({
             fileScrollByKey: { ...s.fileScrollByKey, [`${worktreeId}:${filePath}`]: scrollTop },
@@ -770,6 +791,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setDiffScopeForWorktree: (worktreeId, scope) =>
           set((s) => ({
             diffScopeByWorktree: { ...s.diffScopeByWorktree, [worktreeId]: scope },
+          })),
+        setTreeScopeForWorktree: (worktreeId, scope) =>
+          set((s) => ({
+            treeScopeByWorktree: { ...s.treeScopeByWorktree, [worktreeId]: scope },
           })),
         bumpPreviewFont: (delta) =>
           set((s) => ({
@@ -1335,6 +1360,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lastSessionByWorktree: s.lastSessionByWorktree,
         lastTerminalByWorktree: s.lastTerminalByWorktree,
         diffScopeByWorktree: s.diffScopeByWorktree,
+        treeScopeByWorktree: s.treeScopeByWorktree,
         previewFontScale: s.previewFontScale,
         fileTreeVisible: s.fileTreeVisible,
         terminalFontScale: s.terminalFontScale,

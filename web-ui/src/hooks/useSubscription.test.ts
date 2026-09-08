@@ -1,7 +1,7 @@
 import { renderHook, waitFor, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { useSubscription, useSessionOutput } from "./useSubscription";
+import { useSubscription, useSessionOutput, useWorktreeDiffStats } from "./useSubscription";
 import { useWorkspaceStore } from "./useStore";
 
 describe("useSubscription", () => {
@@ -94,5 +94,67 @@ describe("useSessionOutput — exit inference", () => {
 
     await new Promise((r) => setTimeout(r, 20));
     expect(result.current.sessionState).not.toBe("exited");
+  });
+});
+
+describe("useWorktreeDiffStats — batched poll (11.T1, Decision 11)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("batches one getDiffStat call per id per interval tick", async () => {
+    const api = createMockApi();
+    const spy = vi.spyOn(api, "getDiffStat").mockResolvedValue({ insertions: 3, deletions: 1 });
+
+    const { result } = renderHook(() => useWorktreeDiffStats(api, ["wt-1", "wt-2"]));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy).toHaveBeenCalledWith("wt-1");
+    expect(spy).toHaveBeenCalledWith("wt-2");
+    expect(result.current["wt-1"]).toEqual({ insertions: 3, deletions: 1 });
+
+    // Next tick (30s) — exactly one more call per id, not one per row/render.
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+      await Promise.resolve();
+    });
+    expect(spy).toHaveBeenCalledTimes(4);
+  });
+
+  it("returns null for an id whose fetch is still in flight", async () => {
+    const api = createMockApi();
+    let resolveFetch: (v: { insertions: number; deletions: number }) => void = () => {};
+    vi.spyOn(api, "getDiffStat").mockReturnValue(
+      new Promise((resolve) => {
+        resolveFetch = resolve;
+      }),
+    );
+
+    const { result } = renderHook(() => useWorktreeDiffStats(api, ["wt-1"]));
+    expect(result.current["wt-1"]).toBeNull();
+
+    await act(async () => {
+      resolveFetch({ insertions: 2, deletions: 0 });
+      await Promise.resolve();
+    });
+    expect(result.current["wt-1"]).toEqual({ insertions: 2, deletions: 0 });
+  });
+
+  it("returns null for an id whose fetch failed", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getDiffStat").mockRejectedValue(new Error("boom"));
+
+    const { result } = renderHook(() => useWorktreeDiffStats(api, ["wt-1"]));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current["wt-1"]).toBeNull();
   });
 });

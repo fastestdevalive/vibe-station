@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -464,5 +464,151 @@ describe("VcsPanel", () => {
 
     loadMoreDeferred.resolve(makeCommits(80).slice(0, 101));
     await screen.findByText("Commits (80)");
+  });
+
+  it("Phase 6 — renders the branch chip when `branch` is set, omits it when absent", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
+    vi.spyOn(api, "getPr").mockResolvedValue(null);
+
+    const { rerender } = render(<VcsPanel api={api} worktreeId="wt-1" branch="feature/my-branch" />);
+    await screen.findByText("Commits (3)");
+    expect(screen.getByText("feature/my-branch")).toBeInTheDocument();
+
+    rerender(<VcsPanel api={api} worktreeId="wt-1" />);
+    expect(screen.queryByText("feature/my-branch")).not.toBeInTheDocument();
+  });
+
+  describe("Phase 10 — commit quick-diff view (10.T2)", () => {
+    it("clicking a CommitRow's dot opens VcsCommitView; 'Commits' breadcrumb returns to the graph", async () => {
+      const user = userEvent.setup();
+      const api = createMockApi();
+      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
+      vi.spyOn(api, "getPr").mockResolvedValue(null);
+      const changedPathsSpy = vi
+        .spyOn(api, "listChangedPaths")
+        .mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+
+      render(<VcsPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("Commits (3)");
+
+      const dot = screen.getByRole("button", { name: /view diff for commit sha-0/i });
+      await user.click(dot);
+
+      // VcsCommitView takes over — the commit graph is gone, replaced by the
+      // breadcrumb + the commit's changed file list.
+      await waitFor(() => {
+        expect(changedPathsSpy).toHaveBeenCalledWith(
+          "wt-1",
+          "commit",
+          expect.stringMatching(/^sha-0-/),
+        );
+      });
+      expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
+      await screen.findByText("App.tsx");
+      expect(screen.getByRole("button", { name: "Commits" })).toBeInTheDocument();
+
+      // Clicking the breadcrumb "Commits" button returns to the commit graph.
+      await user.click(screen.getByRole("button", { name: "Commits" }));
+      await screen.findByText("Commits (3)");
+    });
+
+    it("the dot responds to Enter and Space keydown, opening the diff view", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
+      vi.spyOn(api, "getPr").mockResolvedValue(null);
+      const changedPathsSpy = vi
+        .spyOn(api, "listChangedPaths")
+        .mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+
+      render(<VcsPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("Commits (3)");
+
+      const dot = screen.getByRole("button", { name: /view diff for commit sha-0/i });
+      fireEvent.keyDown(dot, { key: "Enter" });
+      await waitFor(() => {
+        expect(changedPathsSpy).toHaveBeenCalledWith(
+          "wt-1",
+          "commit",
+          expect.stringMatching(/^sha-0-/),
+        );
+      });
+      await screen.findByText("App.tsx");
+
+      // Back to the graph, then confirm Space also opens it.
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("button", { name: "Commits" }));
+      await screen.findByText("Commits (3)");
+      changedPathsSpy.mockClear();
+      const dot2 = screen.getByRole("button", { name: /view diff for commit sha-0/i });
+      fireEvent.keyDown(dot2, { key: " " });
+      await waitFor(() => {
+        expect(changedPathsSpy).toHaveBeenCalledWith(
+          "wt-1",
+          "commit",
+          expect.stringMatching(/^sha-0-/),
+        );
+      });
+    });
+
+    it("the diffstat text is plain, non-interactive text — no button role, no click handler", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(3) }));
+      vi.spyOn(api, "getPr").mockResolvedValue(null);
+
+      render(<VcsPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("Commits (3)");
+
+      const row = screen.getByText("commit #0").closest(".vcs-graph__card")!;
+      const stats = row.querySelector(".vcs-graph__stats")!;
+      expect(stats.tagName).toBe("SPAN");
+      expect(stats).not.toHaveAttribute("role");
+      expect(stats).not.toHaveAttribute("onclick");
+      // Only the dot carries this commit's diff-view aria-label now.
+      expect(screen.getAllByLabelText(/view diff for commit sha-0/i)).toHaveLength(1);
+    });
+
+    it("clicking the dot does not toggle the card's own body expand/collapse (independent click targets)", async () => {
+      const user = userEvent.setup();
+      const api = createMockApi();
+      vi.spyOn(api, "listCommits").mockImplementation(
+        limitAwareListCommits({
+          "wt-1": [
+            {
+              sha: "sha-body-".padEnd(40, "x"),
+              shortSha: "sha-bod",
+              authorName: "Ada Lovelace",
+              authorEmail: "ada@example.com",
+              date: new Date(2026, 0, 1, 12, 0, 0).toISOString(),
+              subject: "subject line",
+              body: "subject line\n\nmore detail in the body",
+              insertions: 1,
+              deletions: 0,
+              hasBinaryChanges: false,
+              isOnBranch: true,
+            },
+          ],
+        }),
+      );
+      vi.spyOn(api, "getPr").mockResolvedValue(null);
+      vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
+
+      render(<VcsPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("Commits (1)");
+
+      const dot = screen.getByRole("button", { name: /view diff for commit sha-bod/i });
+      await user.click(dot);
+      // The dot click opened the diff view, not the body — the graph is gone
+      // and the body text was never revealed inline.
+      await waitFor(() => expect(api.listChangedPaths).toHaveBeenCalled());
+      expect(screen.queryByText(/more detail in the body/)).not.toBeInTheDocument();
+
+      // Back to the graph — clicking the card body still toggles it normally.
+      await user.click(screen.getByRole("button", { name: "Commits" }));
+      await screen.findByText("Commits (1)");
+      const card = screen.getByText("subject line").closest(".vcs-graph__card")!;
+      await user.click(card);
+      expect(screen.getByText(/more detail in the body/)).toBeInTheDocument();
+    });
   });
 });

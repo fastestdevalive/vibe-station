@@ -17,6 +17,8 @@ interface ToolPanelProps {
   scope?: FileScope;
   /** Worktree's base branch (e.g. "main"), for the VCS tab's upstream-commits group label. */
   baseBranch?: string;
+  /** Worktree's own branch name, rendered as a chip in the VCS tab header. */
+  branch?: string;
   /**
    * True when this same ToolPanel instance is currently portaled into a
    * workspace-canvas tile (WorkspaceCanvas.tsx) rather than the classic
@@ -53,6 +55,7 @@ export function ToolPanel({
   worktreeId,
   scope = "worktree",
   baseBranch,
+  branch,
   hidePanelControls = false,
 }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
@@ -107,7 +110,7 @@ export function ToolPanel({
             {toolPanelTab === "devices" ? <DevicesPanel /> : null}
             {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
             {toolPanelTab === "vcs" ? (
-              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} />
+              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} />
             ) : null}
           </>
         )}

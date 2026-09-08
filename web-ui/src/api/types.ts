@@ -621,13 +621,24 @@ export interface AuthSession {
   expiresAt?: number;
 }
 
-export type DiffScope = "local" | "branch" | "none";
+export type DiffScope = "local" | "branch" | "none" | "commit";
+
+/** Aggregate insertions/deletions against the worktree's base branch — see
+ *  `GET /worktrees/:id/diffstat`. */
+export interface DiffStat {
+  insertions: number;
+  deletions: number;
+}
 
 export type GitStatusChar = "M" | "A" | "D" | "R" | "?";
 
 export interface ChangedPathEntry {
   path: string;
   status: GitStatusChar;
+  /** Per-file line counts against the compared baseline. Undefined (both
+   *  omitted together) for binary files, which have no meaningful line diff. */
+  insertions?: number;
+  deletions?: number;
 }
 
 export interface CommitLogEntry {
