@@ -1,5 +1,3 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   ArrowLeft,
   ChevronDown,
@@ -14,7 +12,6 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { useLayout } from "@/hooks/useLayout";
-import { useWorkspaceStore } from "@/hooks/useStore";
 import type { Project, Session, Worktree } from "@/api/types";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
@@ -63,7 +60,6 @@ interface TopBarProps {
   settingsSectionLabel?: string;
   /** Mobile settings drill-in: back to section list */
   onSettingsBack?: () => void;
-  leftColumnPx?: number;
 }
 
 export function TopBar({
@@ -78,7 +74,6 @@ export function TopBar({
   leftSidebarCollapsed,
   mobileSidebarOpen,
   onOpenQuickOpen,
-  leftColumnPx,
   settingsSectionLabel,
   onSettingsBack,
 }: TopBarProps) {
@@ -102,33 +97,12 @@ export function TopBar({
     layoutMode: paneLayoutMode,
     setLayoutMode,
   } = useLayout();
-  const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
-
   const project = projects.find((p) => p.id === activeProjectId);
   const wt = worktrees.find((w) => w.id === activeWorktreeId);
 
   const hints = shortcutHints();
 
   const sidebarExpanded = isMobile ? mobileSidebarOpen : !leftSidebarCollapsed;
-
-  // Measure the brand button so we can align the crumb to the sidebar's right edge.
-  const brandRef = useRef<HTMLAnchorElement>(null);
-  const [brandWidth, setBrandWidth] = useState(0);
-  useEffect(() => {
-    if (brandRef.current) setBrandWidth(brandRef.current.offsetWidth);
-  }, []);
-
-  // Target x = leftColumnPx + 12 (the sidebar's right edge, PLUS the same
-  // --space-3 left padding every content panel below uses — WorkspaceCanvas's
-  // own toolbar row and every other pane's chrome all start there, not flush
-  // against the bare sidebar edge — see workspace-canvas.css's
-  // `.workspace-canvas__toolbar` padding). This top bar's own left
-  // padding-left(12) + toggle(36) + gap(8) + brand + gap(8) is the offset
-  // already consumed before the crumb, so the two +12/-12 cancel out.
-  const crumbMarginLeft =
-    !isMobile && !leftSidebarCollapsed && leftColumnPx != null && brandWidth > 0
-      ? Math.max(8, leftColumnPx - 36 - 8 - brandWidth - 8)
-      : undefined;
 
   const crumbParts: { label: string; highlight?: boolean }[] = [];
   if (layoutMode === "dashboard") {
@@ -222,7 +196,7 @@ export function TopBar({
   const inCanvasMode = paneLayoutMode === "workspace";
 
   return (
-    <header className="top-bar" data-tauri-drag-region>
+    <header className={`top-bar${!isMobile ? " top-bar--desktop" : ""}`} data-tauri-drag-region>
       <div className="top-bar__row" data-tauri-drag-region>
       {isMobile && layoutMode === "settings" && onSettingsBack ? (
         <button
@@ -246,27 +220,9 @@ export function TopBar({
         </button>
       )}
       {!isMobile ? (
-        <>
-          <Link
-            ref={brandRef}
-            to="/"
-            replace
-            className="top-bar__brand"
-            aria-label="Home"
-            onClick={() => clearWorkspaceSelection()}
-            style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-          >
-            <Logo />
-            Vibe Station
-          </Link>
-          <div
-            className="top-bar__crumb"
-            title={crumbTitle}
-            style={crumbMarginLeft != null ? { marginLeft: crumbMarginLeft, transition: "margin-left 150ms ease" } : undefined}
-          >
-            {crumbNode}
-          </div>
-        </>
+        <div className="top-bar__crumb" title={crumbTitle}>
+          {crumbNode}
+        </div>
       ) : (
         <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
           {layoutMode === "dashboard" ? (
@@ -293,23 +249,7 @@ export function TopBar({
               {viewedWorkspaceName ?? "Workspace"}
             </span>
           ) : (
-            <>
-              <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>
-              <div className="top-bar__mobile-wt-row">
-                {wt ? (
-                  <>
-                    <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
-                      {wt.id}
-                    </span>
-                    <span className="top-bar__crumb-seg top-bar__crumb-seg--highlight top-bar__mobile-line">
-                      {wt.branch}
-                    </span>
-                  </>
-                ) : (
-                  <span className="top-bar__crumb-seg top-bar__mobile-line">—</span>
-                )}
-              </div>
-            </>
+            <span className="top-bar__crumb-seg top-bar__mobile-line">{project?.name ?? "—"}</span>
           )}
         </div>
       )}

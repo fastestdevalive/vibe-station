@@ -26,6 +26,7 @@ import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription, useWorktreeDiffStats } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { sessionLabel } from "@/lib/sessionLabel";
@@ -35,7 +36,6 @@ import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
 import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
 import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
-import { Logo } from "@/components/shared/Logo";
 
 /**
  * Drag-reorder wrapper for a sidebar row (worktree or direct-session).
@@ -919,26 +919,36 @@ export function LeftSidebar({
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
-      {isMobile ? (
-        <Link
-          to="/"
-          className="left-sidebar__brand"
-          aria-label="Home"
-          onClick={() => {
-            clearWorkspaceSelection();
-            setMobileSidebarOpen(false);
-          }}
-          style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}
-        >
-          <Logo />
-          Vibe Station
-        </Link>
-      ) : null}
       <div
         ref={scrollRef}
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+          <Link
+            to="/"
+            className="left-sidebar__nav-item"
+            aria-label="Vibe Station Home"
+            onClick={() => {
+              clearWorkspaceSelection();
+              if (isMobile) setMobileSidebarOpen(false);
+            }}
+          >
+            <Logo size={16} />
+            {!collapsed ? "Vibe Station Home" : null}
+          </Link>
+          <button
+            type="button"
+            className="left-sidebar__nav-item"
+            aria-label="Create new agent"
+            title="Create new agent"
+            onClick={() => setAddProjectOpen(true)}
+          >
+            <Plus size={16} aria-hidden />
+            {!collapsed ? "Create new agent" : null}
+          </button>
+        </div>
+        {!collapsed ? <div className="sidebar-section-divider" aria-hidden style={{ marginTop: "var(--space-6)", marginBottom: "var(--space-2)" }} /> : null}
         {!collapsed && hasPinned ? (
           <section className="pinned-section" aria-label="Pinned">
             <div className="sidebar-projects-heading pinned-section__heading">
@@ -1341,15 +1351,6 @@ export function LeftSidebar({
               <span className="sidebar-projects-heading__title">Projects</span>
               <button
                 type="button"
-                className="icon-btn sidebar-projects-heading__add"
-                title="New agent"
-                aria-label="New agent"
-                onClick={() => setAddProjectOpen(true)}
-              >
-                <Plus size={14} />
-              </button>
-              <button
-                type="button"
                 data-filter-menu-trigger
                 className="icon-btn"
                 title={hideInactiveWorktrees ? "Showing active only" : "Filter worktrees"}
@@ -1365,6 +1366,15 @@ export function LeftSidebar({
                   fill={hideInactiveWorktrees ? "currentColor" : "none"}
                   color={hideInactiveWorktrees ? "var(--accent-color, var(--fg-primary))" : undefined}
                 />
+              </button>
+              <button
+                type="button"
+                className="icon-btn sidebar-projects-heading__add"
+                title="New project"
+                aria-label="New project"
+                onClick={() => setAddProjectOpen(true)}
+              >
+                <FolderPlus size={14} />
               </button>
             </>
           )}
@@ -1919,6 +1929,10 @@ export function LeftSidebar({
                 zIndex: 4000,
               }}
             >
+              <div className="wt-menu__info-row">
+                <span className="wt-menu__info-label">ID</span>
+                <span className="wt-menu__info-value">{wtMenu.worktree.id}</span>
+              </div>
               <button
                 type="button"
                 role="menuitem"
