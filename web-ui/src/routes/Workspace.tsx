@@ -605,7 +605,6 @@ export function Workspace() {
             leftSidebarCollapsed={leftSidebarCollapsed}
             mobileSidebarOpen={mobileSidebarOpen}
             onOpenQuickOpen={() => setQuickOpen(true)}
-            leftColumnPx={leftColumnPx}
             settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
             // replace, not push: a plain push would leave the section entry in
             // history, so the phone's Back gesture right after tapping Back

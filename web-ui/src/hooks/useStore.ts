@@ -28,6 +28,8 @@ export interface WorktreeLayout {
   terminalDockVisible: boolean;
   /** "horizontal" = agent | tools side by side; "vertical" = agent / tools stacked. */
   toolSplitOrientation: ToolSplitOrientation;
+  /** Set to true once the user has explicitly toggled the split orientation. */
+  toolSplitOrientationUserSet?: boolean;
   /** "classic" = today's fixed split; "workspace" = tiled/free-form canvas of live panes. */
   layoutMode: "classic" | "workspace";
   /** Which saved WorkspaceDoc (below) is currently loaded for this worktree, if any. */
@@ -654,7 +656,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
               : DEFAULT_WORKTREE_LAYOUT;
             const next = cur.toolSplitOrientation === "horizontal" ? "vertical" : "horizontal";
-            return patchLayout(s, { toolSplitOrientation: next });
+            return patchLayout(s, { toolSplitOrientation: next, toolSplitOrientationUserSet: true });
           }),
         toggleCanvasToolbar: () =>
           set((s) => {

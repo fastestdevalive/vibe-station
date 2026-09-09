@@ -54,6 +54,7 @@ export function Layout({
     toolPanelVisible,
     terminalDockVisible,
     toolSplitOrientation,
+    toolSplitOrientationUserSet,
     activeWorktreeId,
     activeDirectContextId,
     // ⚠️ `layoutMode` here is the per-worktree pane-arrangement mode
@@ -61,6 +62,11 @@ export function Layout({
     // TopBar's page-routing `layoutMode` prop. Alias it to avoid collisions.
     layoutMode: paneLayoutMode,
   } = useLayout();
+
+  // On mobile, default to vertical (tools above, chat below) unless the user
+  // has explicitly toggled the orientation themselves.
+  const effectiveOrientation =
+    !toolSplitOrientationUserSet && isMobile ? "vertical" : toolSplitOrientation;
 
   const mainContentRef = useRef<HTMLDivElement>(null);
 
@@ -236,11 +242,11 @@ export function Layout({
 
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
   // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
-  const vertical = toolSplitOrientation === "vertical";
+  const vertical = effectiveOrientation === "vertical";
   const topRow = toolsInSplit ? (
     <PanelGroup
       direction={vertical ? "vertical" : "horizontal"}
-      autoSaveId={`vs-ide-top-${wt}-${toolSplitOrientation}`}
+      autoSaveId={`vs-ide-top-${wt}-${effectiveOrientation}`}
       style={{ width: "100%", height: "100%" }}
     >
       {[

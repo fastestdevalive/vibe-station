@@ -262,11 +262,13 @@
   position: absolute;
   top: 0;
   right: 0;
-  width: 6px;
+  width: 8px;
   height: 100%;
-  z-index: 3;
+  z-index: 10;
   cursor: col-resize;
   background: transparent;
+  user-select: none;
+  touch-action: none;
 }
 
 .pane-left-resize-handle:hover,
@@ -425,22 +427,31 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  min-height: 28px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
   text-decoration: none;
-  color: inherit;
+  color: var(--fg-secondary);
   width: 100%;
   cursor: pointer;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  border: none;
+  background: transparent;
+  text-align: left;
 }
 
 .left-sidebar__nav-item:hover {
   background: var(--bg-hover);
+  color: var(--fg-primary);
 }
 
 .left-sidebar__nav-item--active {
   background: var(--bg-active);
   color: var(--fg-primary);
+  font-weight: var(--font-weight-medium);
 }
 
 .left-sidebar--collapsed .left-sidebar__nav-item {
@@ -1374,7 +1385,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-left: var(--space-6);
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -1397,6 +1407,36 @@
   flex-shrink: 0;
 }
 
+.top-bar--desktop .top-bar__row {
+  padding: 4px var(--space-3);
+}
+
+.wt-menu__info-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  user-select: text;
+  cursor: default;
+}
+
+.wt-menu__info-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.wt-menu__info-value {
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .top-bar__crumb--mobile-stack {
   flex-direction: column;
   align-items: stretch;
@@ -1411,13 +1451,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
-}
-
-.top-bar__mobile-wt-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
   min-width: 0;
 }
 
@@ -1586,7 +1619,7 @@
 }
 
 .left-sidebar .tree-row--project {
-  font-size: calc(var(--font-size-sm) + 1px);
+  font-size: var(--font-size-sm);
 }
 
 .left-sidebar--collapsed .tree-row.tree-row--worktree {
