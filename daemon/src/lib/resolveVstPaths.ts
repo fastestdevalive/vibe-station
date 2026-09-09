@@ -70,7 +70,7 @@ export async function setupVstEnvironment(): Promise<void> {
     try {
       await mkdir(binDir, { recursive: true });
       const shimContent = src.endsWith(".js")
-        ? `#!/bin/sh\nexec node ${src} "$@"\n`
+        ? `#!/bin/sh\nexec "${process.execPath}" "${src}" "$@"\n`
         : `#!/bin/sh\nexec ${src} "$@"\n`;
       await writeFile(shimPath, shimContent, { encoding: "utf8", mode: 0o755 });
       await chmod(shimPath, 0o755);
