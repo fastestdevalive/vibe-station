@@ -21,7 +21,7 @@
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 10, "y": 10 }
+        "trafficLightPosition": { "x": 14, "y": 19 }
       }
     ],
     "security": {
