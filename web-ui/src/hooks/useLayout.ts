@@ -43,6 +43,7 @@ export function useLayout() {
     toolPanelTab: activeLayout.toolPanelTab,
     terminalDockVisible: activeLayout.terminalDockVisible,
     toolSplitOrientation: activeLayout.toolSplitOrientation ?? "horizontal",
+    toolSplitOrientationUserSet: activeLayout.toolSplitOrientationUserSet ?? false,
     /** Pane-arrangement mode ("classic" | "workspace") for the active worktree/direct
      *  context. NOT the page-routing `layoutMode` prop TopBar/Workspace pass around
      *  ("workspace"|"dashboard"|"settings"|...) — callers destructuring this should
