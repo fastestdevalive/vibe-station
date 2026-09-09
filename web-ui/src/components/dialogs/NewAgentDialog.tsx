@@ -830,6 +830,7 @@ export function NewAgentDialog({
       if (isJson) {
         let worktreeId: string | undefined;
         let sessionId: string | undefined;
+        let firstTurnSessionId: string | undefined;
         if (useWorktree && result.project.isGit) {
           const wt = await api.createWorktree({
             projectId: result.project.id,
@@ -841,9 +842,8 @@ export function NewAgentDialog({
             skipAutoTurn: true,
           });
           worktreeId = wt.id;
-          if (wt.mainSessionId) {
-            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
-          } else {
+          firstTurnSessionId = wt.mainSessionId ?? undefined;
+          if (!wt.mainSessionId) {
             // No main session id came back (unexpected) — never guess one
             // (ids are independently generated, Decision 1); the worktree
             // still exists and is usable, just without a first turn queued.
@@ -860,12 +860,19 @@ export function NewAgentDialog({
             skipAutoTurn: true,
           });
           sessionId = sess.id;
-          await sendJsonFirstTurn(api, sess.id, prompt, files);
+          firstTurnSessionId = sess.id;
         }
         draft.clear();
         handleClose();
         if (worktreeId) navigate(`/worktree/${worktreeId}`);
         else if (sessionId) navigate(`/session/${sessionId}`);
+        // Fire the first turn after the dialog closes so it doesn't block
+        // dismiss — the row is already visible in the sidebar at this point.
+        if (firstTurnSessionId) {
+          sendJsonFirstTurn(api, firstTurnSessionId, prompt, files).catch((err) => {
+            console.error("[NewAgentDialog] first-turn send failed:", err);
+          });
+        }
         return;
       }
 
@@ -935,6 +942,7 @@ export function NewAgentDialog({
       const isJson = channel === "json";
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
+      let firstTurnSessionId: string | undefined;
       if (useWorktree && project.isGit) {
         // JSON (Dec 8): create idle (prompt included only so the daemon can
         // derive the auto name/initialPrompt — skipAutoTurn:true stops
@@ -950,7 +958,7 @@ export function NewAgentDialog({
         worktreeId = wt.id;
         if (isJson) {
           if (wt.mainSessionId) {
-            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
+            firstTurnSessionId = wt.mainSessionId;
           } else {
             // No main session id came back (unexpected) — never guess one
             // (ids are independently generated, Decision 1); the worktree
@@ -972,7 +980,7 @@ export function NewAgentDialog({
         });
         sessionId = sess.id;
         if (isJson) {
-          await sendJsonFirstTurn(api, sess.id, prompt, files);
+          firstTurnSessionId = sess.id;
         } else if (files.length > 0) {
           // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(sess.id, files);
@@ -986,6 +994,13 @@ export function NewAgentDialog({
         navigate(`/worktree/${worktreeId}`);
       } else if (sessionId) {
         navigate(`/session/${sessionId}`);
+      }
+      // Fire the first turn after the dialog closes so it doesn't block
+      // dismiss — the row is already visible in the sidebar at this point.
+      if (firstTurnSessionId) {
+        sendJsonFirstTurn(api, firstTurnSessionId, prompt, files).catch((err) => {
+          console.error("[NewAgentDialog] first-turn send failed:", err);
+        });
       }
     } catch (err) {
       setError(errorMessage(err, "Failed to add project."));
@@ -1014,6 +1029,7 @@ export function NewAgentDialog({
       const isJson = channel === "json";
       let worktreeId: string | undefined;
       let sessionId: string | undefined;
+      let firstTurnSessionId: string | undefined;
       if (useWorktree && !worktreeDisabled) {
         // JSON (Dec 8): create idle (prompt included only so the daemon can
         // derive the auto name/initialPrompt — skipAutoTurn:true stops
@@ -1030,7 +1046,7 @@ export function NewAgentDialog({
         worktreeId = wt.id;
         if (isJson) {
           if (wt.mainSessionId) {
-            await sendJsonFirstTurn(api, wt.mainSessionId, prompt, files);
+            firstTurnSessionId = wt.mainSessionId;
           } else {
             // No main session id came back (unexpected) — never guess one
             // (ids are independently generated, Decision 1); the worktree
@@ -1052,7 +1068,7 @@ export function NewAgentDialog({
         });
         sessionId = sess.id;
         if (isJson) {
-          await sendJsonFirstTurn(api, sess.id, prompt, files);
+          firstTurnSessionId = sess.id;
         } else if (files.length > 0) {
           // Known initial-prompt race — see the comment above submitCreate's uploadAttachments call.
           await api.uploadAttachments(sess.id, files);
@@ -1066,6 +1082,13 @@ export function NewAgentDialog({
         navigate(`/worktree/${worktreeId}`);
       } else if (sessionId) {
         navigate(`/session/${sessionId}`);
+      }
+      // Fire the first turn after the dialog closes so it doesn't block
+      // dismiss — the row is already visible in the sidebar at this point.
+      if (firstTurnSessionId) {
+        sendJsonFirstTurn(api, firstTurnSessionId, prompt, files).catch((err) => {
+          console.error("[NewAgentDialog] first-turn send failed:", err);
+        });
       }
     } catch (err) {
       setError(errorMessage(err, "Failed to start agent."));
