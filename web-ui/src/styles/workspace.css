@@ -1408,7 +1408,16 @@
 }
 
 .top-bar--desktop .top-bar__row {
-  padding: 4px var(--space-3);
+  padding: 2px var(--space-3);
+}
+
+.top-bar--desktop .top-bar__brand {
+  height: 28px;
+}
+
+.top-bar--desktop .top-bar__pane-btn {
+  width: 30px;
+  height: 28px;
 }
 
 .wt-menu__info-row {
@@ -5047,10 +5056,10 @@ a.dashboard-card.dashboard-card--session {
  * ───────────────────────────────────────────────────────────────────────── */
 
 /* macOS overlay title bar: shift the top-bar content right to clear the
- * traffic lights (position x:10 y:10, ~75px wide). We set this via
+ * traffic lights (position x:14 y:19, ~58px wide). We set this via
  * window.__TAURI_OS__ injected by main.rs; falls back to the UA-based
  * check done by WindowControls.tsx. */
 body[data-tauri-os="macos"] .top-bar {
-  padding-left: 80px;
+  padding-left: 70px;
 }
 
