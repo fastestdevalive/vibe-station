@@ -114,9 +114,13 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await app.register(fastifyCookie);
 
   // CORS — reflect the request origin (any origin) and allow credentials.
+  // allowedHeaders must be explicit: @fastify/cors does not reliably reflect
+  // Authorization in preflights for uncached DELETE/PATCH URLs (each session id
+  // is unique, so the preflight cache never hits), causing WebKit "Load failed".
   await app.register(fastifyCors, {
     origin: true,
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   });
 
   // ── Auth guard ───────────────────────────────────────────────────────────────
