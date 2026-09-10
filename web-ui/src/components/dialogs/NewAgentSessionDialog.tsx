@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode, SupportedCli, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
@@ -60,6 +60,15 @@ export function NewAgentSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
+  const promptShellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!editorReady) return;
+    const id = requestAnimationFrame(() => {
+      promptShellRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [editorReady]);
 
   useEffect(() => {
     if (!open) return;
@@ -335,16 +344,18 @@ export function NewAgentSessionDialog({
       </button>
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Initial prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
       {editorReady && (
-        <SkillEditor
-          editorKey={`newsession-${editorSeq}`}
-          initialText={initialPrompt}
-          commands={skillCommands}
-          ariaLabel="Initial prompt"
-          placeholder="Describe what you want the agent to do…"
-          className="chat-composer__textarea chat-composer__textarea--dialog"
-          onChangeText={(next) => setInitialPrompt(next)}
-          onSubmit={() => void submit()}
-        />
+        <div ref={promptShellRef}>
+          <SkillEditor
+            editorKey={`newsession-${editorSeq}`}
+            initialText={initialPrompt}
+            commands={skillCommands}
+            ariaLabel="Initial prompt"
+            placeholder="Describe what you want the agent to do…"
+            className="chat-composer__textarea chat-composer__textarea--dialog"
+            onChangeText={(next) => setInitialPrompt(next)}
+            onSubmit={() => void submit()}
+          />
+        </div>
       )}
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
         Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
