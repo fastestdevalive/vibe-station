@@ -7,7 +7,7 @@ mod tray;
 use std::path::PathBuf;
 
 use tauri::{Manager, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_shell::AppHandleExt;
+use tauri_plugin_shell::ShellExt;
 
 fn is_internal_url(url: &tauri::Url) -> bool {
     url.host_str() == Some("localhost")
