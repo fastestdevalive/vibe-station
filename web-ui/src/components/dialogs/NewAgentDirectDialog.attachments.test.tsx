@@ -2,10 +2,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { DirectAgentDialog } from "./DirectAgentDialog";
+import { NewAgentDirectDialog } from "./NewAgentDirectDialog";
 
 /** Attachments at creation for the direct (no-worktree) JSON path. */
-describe("DirectAgentDialog JSON attachments at creation", () => {
+describe("NewAgentDirectDialog JSON attachments at creation", () => {
   it("creates idle → uploads staged file → sends first chat with the attachment id", async () => {
     const api = createMockApi();
     const createSpy = vi.spyOn(api, "createDirectSession");
@@ -13,7 +13,7 @@ describe("DirectAgentDialog JSON attachments at creation", () => {
     const chatSpy = vi.spyOn(api, "sendChat");
 
     render(
-      <DirectAgentDialog
+      <NewAgentDirectDialog
         open
         api={api}
         projectId="proj-a"

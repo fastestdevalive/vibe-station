@@ -113,7 +113,13 @@ describe("POST /sessions/:id/reset", () => {
     const wtRes = await app.inject({
       method: "POST",
       url: "/worktrees",
-      payload: { projectId, branch: "reset-target", modeId: "bug-fix", prompt: "original task prompt" },
+      payload: {
+        projectId,
+        branch: "reset-target",
+        modeId: "bug-fix",
+        prompt: "original task prompt",
+        channel: "tmux",
+      },
     });
     const wt = wtRes.json<{ id: string; mainSessionId: string }>();
     worktreeId = wt.id;

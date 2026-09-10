@@ -32,9 +32,9 @@ import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/workt
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
-import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
+import { NewAgentSessionDialog } from "@/components/dialogs/NewAgentSessionDialog";
 import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
-import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
+import { NewAgentDirectDialog } from "@/components/dialogs/NewAgentDirectDialog";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 
 /**
@@ -1829,7 +1829,7 @@ export function LeftSidebar({
 
       {/* New worktree dialog */}
       {newSessProject ? (
-        <NewSessionDialog
+        <NewAgentSessionDialog
           open
           projectId={newSessProject.id}
           projectName={newSessProject.name}
@@ -1852,7 +1852,7 @@ export function LeftSidebar({
 
       {/* Direct agent dialog */}
       {directAgentProject ? (
-        <DirectAgentDialog
+        <NewAgentDirectDialog
           open
           projectId={directAgentProject.id}
           projectName={directAgentProject.name}

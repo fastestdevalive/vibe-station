@@ -878,7 +878,7 @@ describe("Worktree routes", () => {
     const injectPromise = app.inject({
       method: "POST",
       url: "/worktrees",
-      payload: { projectId, branch: `opt-${Date.now()}`, modeId: "bug-fix" },
+      payload: { projectId, branch: `opt-${Date.now()}`, modeId: "bug-fix", channel: "tmux" },
     });
 
     const res = await Promise.race([
@@ -923,7 +923,7 @@ describe("Worktree routes", () => {
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
-      payload: { projectId, branch: `working-${Date.now()}`, modeId: "bug-fix" },
+      payload: { projectId, branch: `working-${Date.now()}`, modeId: "bug-fix", channel: "tmux" },
     });
     expect(res.statusCode).toBe(201);
     const wt = res.json<{ id: string; mainSessionId: string }>();
@@ -950,12 +950,12 @@ describe("Worktree routes", () => {
     const broadcast = await import("../broadcaster.js");
     const spy = vi.spyOn(broadcast, "broadcastAll");
     const spawnModule = await import("../services/spawn.js");
-    vi.mocked(spawnModule.spawnSession).mockRejectedValueOnce(new Error("boom"));
+    vi.mocked(spawnModule.spawnSession).mockRejectedValue(new Error("boom"));
 
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
-      payload: { projectId, branch: `failure-${Date.now()}`, modeId: "bug-fix" },
+      payload: { projectId, branch: `failure-${Date.now()}`, modeId: "bug-fix", channel: "tmux" },
     });
     expect(res.statusCode).toBe(201);
     const wt = res.json<{ id: string; mainSessionId: string }>();
@@ -989,7 +989,7 @@ describe("Worktree routes", () => {
     const res = await app.inject({
       method: "POST",
       url: "/worktrees",
-      payload: { projectId, branch: `mark-done-${Date.now()}`, modeId: "bug-fix" },
+      payload: { projectId, branch: `mark-done-${Date.now()}`, modeId: "bug-fix", channel: "tmux" },
     });
     expect(res.statusCode).toBe(201);
     const wt = res.json<{ id: string; mainSessionId: string }>();

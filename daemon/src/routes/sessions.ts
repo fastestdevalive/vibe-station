@@ -540,19 +540,29 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         if (data.channel === undefined && sourceCtx.session.channel) inheritedChannel = sourceCtx.session.channel;
       }
     }
-    // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false;
-    // otherwise fall back to the tmux/pty split.
+    // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false.
+    // When the caller supplies neither a channel nor useTmux, the default is
+    // now the `json` (Rich Chat) channel for agent sessions; terminal sessions
+    // cannot be json, so they keep the legacy tmux default in that case.
     const resolvedChannel = data.channel ?? inheritedChannel;
-    const isJson = resolvedChannel === "json";
+    const noChannel = resolvedChannel === undefined;
+    const noUseTmux = data.useTmux === undefined;
+    const defaultedChannel: Channel | undefined =
+      noChannel && noUseTmux ? (type === "terminal" ? "tmux" : "json") : undefined;
     // `useTmux` MUST agree with `channel`, or the record is self-contradictory:
     // `spawnSession` branches on `useTmux` while every read path goes through
     // `sessionChannel(session)`, and `normalizeChannel` only repairs the json
     // case — so a `{channel:"pty", useTmux:true}` row spawns tmux forever while
     // the UI drives the direct-PTY stream. Derive it from the channel whenever
-    // one is known (explicitly given OR inherited); only fall back to the
-    // request's `useTmux` when no channel was supplied at all.
-    const useTmux = isJson ? false : resolvedChannel ? resolvedChannel === "tmux" : resolveUseTmux(rawUseTmux);
-    const channel: Channel = resolvedChannel ?? resolveChannel(useTmux);
+    // one is known (explicitly given, inherited, OR defaulted); only fall back
+    // to the request's `useTmux` when no channel was supplied at all.
+    const useTmux = resolvedChannel
+      ? resolvedChannel === "tmux"
+      : defaultedChannel
+        ? defaultedChannel === "tmux"
+        : resolveUseTmux(rawUseTmux);
+    const channel: Channel = defaultedChannel ?? resolvedChannel ?? resolveChannel(useTmux);
+    const isJson = channel === "json";
 
     if (type === "agent" && !modeId) {
       return reply.status(400).send({ error: "'modeId' is required for agent sessions" });

@@ -31,7 +31,7 @@ import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
-import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
+import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 interface WorkspaceCanvasProps {
@@ -1471,7 +1471,7 @@ export function WorkspaceCanvas({
           : toolbarNode
         : null}
       {!isDetachedView ? (
-        <NewTabDialog
+        <NewAgentTabDialog
           open={newAgentOpen}
           api={api}
           worktreeId={worktreeId}

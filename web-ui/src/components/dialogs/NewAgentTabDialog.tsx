@@ -4,10 +4,12 @@ import type { Mode, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { SkillEditor } from "../chat/SkillEditor";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
+import { useSkillCommands } from "@/hooks/useSkillCommands";
 
-interface NewTabDialogProps {
+interface NewAgentTabDialogProps {
   open: boolean;
   onClose: () => void;
   api: ApiInstance;
@@ -16,22 +18,23 @@ interface NewTabDialogProps {
 }
 
 /** Create a new agent session. Terminals use NewTerminalDialog. */
-export function NewTabDialog({
+export function NewAgentTabDialog({
   open,
   onClose,
   api,
   worktreeId,
   onCreated,
-}: NewTabDialogProps) {
+}: NewAgentTabDialogProps) {
   const draftKey = `vst-newtab-draft-${worktreeId}`;
   const draft = useDraftPersistence(draftKey);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [prompt, setPromptState] = useState(() => loadDraft(draftKey));
   const [useTmux, setUseTmux] = useState(true);
-  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [channel, setChannel] = useState<"terminal" | "json">("json");
   const [files, setFiles] = useState<File[]>([]);
   const [clis, setClis] = useState<SupportedCli[]>([]);
+  const { skillCommands, editorSeq, editorReady } = useSkillCommands(open, api);
 
   function setPrompt(value: string) {
     setPromptState(value);
@@ -41,7 +44,7 @@ export function NewTabDialog({
   useEffect(() => {
     if (!open) return;
     setPromptState(loadDraft(draftKey));
-    setChannel("terminal");
+    setChannel("json");
     setFiles([]);
     void (async () => {
       const [ms, cs] = await Promise.all([api.listModes(), api.getSupportedClis()]);
@@ -139,14 +142,18 @@ export function NewTabDialog({
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
         Prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
       </div>
-      <textarea
-        className="field-textarea"
-        aria-label="Prompt"
-        placeholder="Describe what you want the agent to do…"
-        rows={4}
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-      />
+      {editorReady && (
+        <SkillEditor
+          editorKey={`newtab-${editorSeq}`}
+          initialText={prompt}
+          commands={skillCommands}
+          ariaLabel="Prompt"
+          placeholder="Describe what you want the agent to do…"
+          className="chat-composer__textarea chat-composer__textarea--dialog"
+          onChangeText={(next) => setPrompt(next)}
+          onSubmit={() => void submit()}
+        />
+      )}
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
         Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
       </div>

@@ -19,7 +19,7 @@ describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
     const uploadSpy = vi.spyOn(api, "uploadAttachments");
     const chatSpy = vi.spyOn(api, "sendChat");
 
-    render(
+    const { rerender } = render(
       <MemoryRouter>
         <NewAgentDialog open api={api} onClose={() => {}} />
       </MemoryRouter>,
@@ -36,8 +36,23 @@ describe("NewAgentDialog JSON attachments at creation (worktree main)", () => {
       expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeInTheDocument(),
     );
 
+    // jsdom can't type prose into the Lexical prompt editor (see
+    // NewAgentDialog.draft.test.tsx header) — seed the prompt via the saved-
+    // draft restore path: stash a draft for proj-a, then close/reopen so the
+    // open-restore effect loads it into the freshly-remounted editor.
+    localStorage.setItem("vst-newagent-draft-proj-a", "refactor");
+    rerender(
+      <MemoryRouter>
+        <NewAgentDialog open={false} api={api} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <NewAgentDialog open api={api} onClose={() => {}} />
+      </MemoryRouter>,
+    );
+
     await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
-    await userEvent.type(screen.getByLabelText(/Initial prompt/i), "refactor");
     const file = new File(["x"], "notes.md", { type: "text/markdown" });
     await userEvent.upload(screen.getByLabelText("Attach files"), file);
     expect(await screen.findByText("notes.md")).toBeInTheDocument();

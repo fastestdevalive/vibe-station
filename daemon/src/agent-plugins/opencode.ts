@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 const execFileAsync = promisify(execFile);
 import { join } from "node:path";
 import type { AgentPlugin, LaunchConfig, TurnInput, TurnContext } from "../services/spawn.js";
+import { formatSkillDirective } from "./claude.js";
 import { opencodeConfigPathFor, systemPromptPathFor, resolvedContextOf } from "../services/context.js";
 import { writeOpenCodeConfig } from "../services/opencodeConfig.js";
 import { mkdirSync } from "node:fs";
@@ -357,6 +358,10 @@ export function createOpencodePlugin(): AgentPlugin {
     /** ACP migration (Decision 7/1.4): gates jsonAgent's stop/release semantics. */
     supportsAcp(): boolean {
       return true;
+    },
+
+    formatSkillDirective(message, skillInvocations) {
+      return formatSkillDirective(message, skillInvocations);
     },
 
     /**

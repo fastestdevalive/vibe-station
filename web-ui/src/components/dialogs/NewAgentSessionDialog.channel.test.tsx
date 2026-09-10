@@ -2,15 +2,15 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { NewSessionDialog } from "./NewSessionDialog";
+import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 
 function renderDialog(api: ReturnType<typeof createMockApi>) {
   return render(
-    <NewSessionDialog open api={api} projectId="proj-a" projectName="Proj A" onClose={() => {}} />,
+    <NewAgentSessionDialog open api={api} projectId="proj-a" projectName="Proj A" onClose={() => {}} />,
   );
 }
 
-describe("NewSessionDialog channel + attachments", () => {
+describe("NewAgentSessionDialog channel + attachments", () => {
   it("new-worktree JSON path → createWorktree channel:'json' (no useTmux, prompt carried for naming, auto-turn skipped)", async () => {
     const api = createMockApi();
     const wtSpy = vi.spyOn(api, "createWorktree");
@@ -60,12 +60,28 @@ describe("NewSessionDialog channel + attachments", () => {
     expect("useTmux" in body).toBe(false);
   });
 
-  it("terminal default is unchanged — useTmux sent, no channel", async () => {
+  it("default is now Rich Chat — no channel selection sends channel:'json' (skipAutoTurn)", async () => {
     const api = createMockApi();
     const wtSpy = vi.spyOn(api, "createWorktree");
     renderDialog(api);
 
     await screen.findByText("Bugfix");
+    await userEvent.type(screen.getByLabelText("New worktree branch"), "feat/z");
+    await userEvent.click(screen.getByText("Create"));
+
+    await waitFor(() => expect(wtSpy).toHaveBeenCalled());
+    const body = wtSpy.mock.calls[0]![0];
+    expect(body.channel).toBe("json");
+    expect(body.skipAutoTurn).toBe(true);
+  });
+
+  it("terminal (explicitly selected) — useTmux sent, no channel", async () => {
+    const api = createMockApi();
+    const wtSpy = vi.spyOn(api, "createWorktree");
+    renderDialog(api);
+
+    await screen.findByText("Bugfix");
+    await userEvent.click(screen.getByRole("radio", { name: /Terminal/i }));
     await userEvent.type(screen.getByLabelText("New worktree branch"), "feat/y");
     await userEvent.click(screen.getByText("Create"));
 

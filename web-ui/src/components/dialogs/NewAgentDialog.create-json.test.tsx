@@ -17,6 +17,12 @@ describe("NewAgentDialog create-new-project JSON path", () => {
     const sessSpy = vi.spyOn(api, "createDirectSession");
     const chatSpy = vi.spyOn(api, "sendChat");
 
+    // jsdom cannot type into the Lexical prompt editor (no working
+    // `beforeinput`), so seed the prompt via the per-project draft. In
+    // create-new mode there is no selected project, so the draft key is the
+    // bare "new" one and the restore effect seeds `prompt` from it at open.
+    localStorage.setItem("vst-newagent-draft-new", "scaffold it");
+
     render(
       <MemoryRouter>
         <NewAgentDialog open api={api} onClose={() => {}} />
@@ -33,7 +39,6 @@ describe("NewAgentDialog create-new-project JSON path", () => {
       expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeInTheDocument(),
     );
     await userEvent.click(screen.getByRole("radio", { name: /Rich Chat/i }));
-    await userEvent.type(screen.getByLabelText(/Initial prompt/i), "scaffold it");
 
     const startBtn = await screen.findByRole("button", { name: /Create & Start/i });
     await waitFor(() => expect(startBtn).not.toBeDisabled());
