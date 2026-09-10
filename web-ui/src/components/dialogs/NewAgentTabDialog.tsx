@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Mode, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
@@ -35,6 +35,15 @@ export function NewAgentTabDialog({
   const [files, setFiles] = useState<File[]>([]);
   const [clis, setClis] = useState<SupportedCli[]>([]);
   const { skillCommands, editorSeq, editorReady } = useSkillCommands(open, api);
+  const promptShellRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!editorReady) return;
+    const id = requestAnimationFrame(() => {
+      promptShellRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [editorReady]);
 
   function setPrompt(value: string) {
     setPromptState(value);
@@ -143,16 +152,18 @@ export function NewAgentTabDialog({
         Prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
       </div>
       {editorReady && (
-        <SkillEditor
-          editorKey={`newtab-${editorSeq}`}
-          initialText={prompt}
-          commands={skillCommands}
-          ariaLabel="Prompt"
-          placeholder="Describe what you want the agent to do…"
-          className="chat-composer__textarea chat-composer__textarea--dialog"
-          onChangeText={(next) => setPrompt(next)}
-          onSubmit={() => void submit()}
-        />
+        <div ref={promptShellRef}>
+          <SkillEditor
+            editorKey={`newtab-${editorSeq}`}
+            initialText={prompt}
+            commands={skillCommands}
+            ariaLabel="Prompt"
+            placeholder="Describe what you want the agent to do…"
+            className="chat-composer__textarea chat-composer__textarea--dialog"
+            onChangeText={(next) => setPrompt(next)}
+            onSubmit={() => void submit()}
+          />
+        </div>
       )}
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
         Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
