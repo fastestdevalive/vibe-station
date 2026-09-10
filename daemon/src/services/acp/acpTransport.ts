@@ -179,6 +179,13 @@ export class AcpConnection {
     const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
     rl.on("line", (line) => this.handleLine(line));
 
+    child.stdout?.on("error", (err) => {
+      console.error("[acp] stdout error (pid %d):", child.pid ?? -1, err.message);
+      // Absorbed here; child.on("close") handles pending-request rejection.
+    });
+    child.stderr?.on("error", () => {});
+    child.stdin?.on("error", () => {});
+
     child.on("close", () => {
       // Reject every still-pending request — the process is gone, nothing
       // will ever answer them.
