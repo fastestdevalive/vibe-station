@@ -477,8 +477,11 @@ function SkillEditorPlugin({
             selectActivePopoverItem();
             return true;
           }
+          const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
+          const isModifiedEnter = !!event && (event.ctrlKey || event.metaKey);
           const isNewlineCombo = !!event && (event.shiftKey || event.altKey);
-          if (isNewlineCombo) {
+          // On touch phones, plain Enter adds a newline; Ctrl/Cmd+Enter still sends.
+          if (isNewlineCombo || (isTouchDevice && !isModifiedEnter)) {
             event?.preventDefault();
             editor.dispatchCommand(INSERT_LINE_BREAK_COMMAND, false);
             return true;

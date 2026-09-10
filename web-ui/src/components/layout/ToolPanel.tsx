@@ -35,6 +35,16 @@ interface ToolPanelProps {
    * ToolPanel can determine on its own.
    */
   hidePanelControls?: boolean;
+  /**
+   * Called when the user wants to remove this ToolPanel from the workspace
+   * canvas tile it is currently inside. When present alongside
+   * `hidePanelControls`, the X close button is rendered — the one action
+   * the tile's own header X does NOT cover (the header X removes the whole
+   * tile chrome; this X is discoverable from within the tools tab bar
+   * itself). Not passed in classic/docked mode — the top bar toggle
+   * already hides the panel there, so the X would be redundant.
+   */
+  onClose?: () => void;
 }
 
 const TABS: { id: ToolTab; label: string }[] = [
@@ -57,6 +67,7 @@ export function ToolPanel({
   baseBranch,
   branch,
   hidePanelControls = false,
+  onClose,
 }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
 
@@ -81,7 +92,11 @@ export function ToolPanel({
         {/* Panel-level controls — fullscreen + close act on the whole tool
             panel (whichever tool is shown), so they live on the selector bar.
             Hidden inside a workspace-canvas tile — see `hidePanelControls`'s
-            doc comment; the tile's own header already owns both concepts. */}
+            doc comment; the tile's own header already owns both concepts.
+            When inside a canvas tile, show only the X close button (wired to
+            `onClose`, which removes the tools tile) — the tile header's own
+            X already removes the whole tile, but an X inside the tab bar
+            is more discoverable from within the tools content itself. */}
         {!hidePanelControls ? (
           <div className="tool-panel__tabs-actions">
             <ToolFullscreenButton />
@@ -91,6 +106,18 @@ export function ToolPanel({
               aria-label="Close tool panel"
               title="Close tool panel"
               onClick={() => toggleToolPanel()}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ) : onClose ? (
+          <div className="tool-panel__tabs-actions">
+            <button
+              type="button"
+              className="tab tab--icon tool-bar-btn"
+              aria-label="Close tool tile"
+              title="Close tool tile"
+              onClick={onClose}
             >
               <X size={13} />
             </button>
