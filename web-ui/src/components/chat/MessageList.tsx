@@ -291,6 +291,7 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
         markToolCallDuringThinking(ev.turnId);
         const target = ev.toolId ? toolRefById.get(ev.toolId) : undefined;
         if (target) {
+          if (ev.toolInput != null) target.toolInput = ev.toolInput;
           if (ev.toolResult !== undefined) {
             target.result = { content: ev.toolResult.content, isError: ev.toolResult.isError };
           }

@@ -207,9 +207,19 @@ export function normalizeSessionUpdate(
       // populates `toolResult` — an in-progress update with no content leaves
       // `toolResult` undefined rather than overwriting a previously-set result.
       const text = textFromToolCallContent(raw.content);
+      // Propagate rawInput from refinement events (Claude ACP emits the full
+      // bash command in a tool_call_update after the initial empty tool_call).
+      // `raw.input` is a fallback for adapters that use that field name instead.
+      const rawInputValue = raw.rawInput ?? raw.input;
+      const refinedInput =
+        rawInputValue != null &&
+        !(typeof rawInputValue === "object" && Object.keys(rawInputValue as Record<string, unknown>).length === 0)
+          ? rawInputValue
+          : undefined;
       base = stamp({
         kind: "tool_result",
         toolId: toolCallId,
+        toolInput: refinedInput,
         toolResult: raw.content !== undefined ? { content: text, isError: status === "failed" } : undefined,
         toolStatus:
           status === "pending" || status === "in_progress" || status === "completed" || status === "failed"

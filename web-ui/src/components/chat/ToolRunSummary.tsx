@@ -138,7 +138,10 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
     READ_ONLY_TOOL_NAMES.has(name);
   // Edit/Write/Delete/Move tools start expanded so diffs are immediately visible.
   const [open, setOpen] = useState(!isBash && !isReadOnly);
-  const inlineFull = summarizeToolInput(tool.toolInput, tool.locations, cwd);
+  // For bash/execute tools, `locations` holds the cwd directory, not a file —
+  // skip it so the cwd path isn't shown inline as if it were the command. No
+  // known bash adapter populates locations with anything else today.
+  const inlineFull = summarizeToolInput(tool.toolInput, isBash ? undefined : tool.locations, cwd);
   // Cap long inline text (e.g. Task tool prompts) so it doesn't overflow the row.
   const INLINE_CAP = 80;
   const inline = inlineFull.length > INLINE_CAP ? `${inlineFull.slice(0, INLINE_CAP)}…` : inlineFull;
@@ -146,7 +149,14 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   // `toolInput` is often `{}` for an ACP adapter that reports the target via
   // `locations` instead (see summarizeToolInput) — an empty-object body adds
   // nothing over the inline location text above, so don't expand into one.
-  const hasInputBody = tool.toolInput != null && pretty !== "undefined" && pretty !== "{}";
+  // For OpenCode bash calls, toolInput is `{ cwd: '/path' }` — useless metadata
+  // that confuses the user when shown as a JSON body; treat it as no body.
+  const inputKeys =
+    isBash && tool.toolInput != null && typeof tool.toolInput === "object"
+      ? Object.keys(tool.toolInput as Record<string, unknown>)
+      : null;
+  const isCwdOnlyInput = inputKeys !== null && inputKeys.length === 1 && inputKeys[0] === "cwd";
+  const hasInputBody = !isCwdOnlyInput && tool.toolInput != null && pretty !== "undefined" && pretty !== "{}";
   const result = tool.result;
   const resultText = result?.content ? capForDisplay(result.content) : "";
   const hasResultBody = resultText.length > 0;
