@@ -12,7 +12,7 @@
  * through the separate `attachFullBodies()` call untouched.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { writeFile } from "node:fs/promises";
+import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCommits, resolveParentSha, getDiffStat, EMPTY_TREE_SHA } from "../services/git.js";
@@ -65,6 +65,7 @@ describe("listCommits", () => {
     const msgFile = join(tmpdir(), `vst-adversarial-msg-${process.pid}-${Date.now()}`);
     await writeFile(msgFile, `evil\x1esubject\x1fwith-delimiters`);
     git(["commit", "-q", "-F", msgFile]);
+    await unlink(msgFile);
 
     await writeFile(join(repoDir, "b.txt"), "b\nb2\n");
     git(["add", "-A"]);
