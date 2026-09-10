@@ -473,7 +473,10 @@ export const notifyDeps: NotifyDeps = {
   // Async: emit the message_generated pill on the parent's chat stream.
   emitPill: async (parentSessionId, payload) => {
     const { resolveJsonAgent } = await import("./jsonAgentChat.js");
-    const resolved = await resolveJsonAgent(parentSessionId, daemonPortForNotify);
+    // Real port, not a placeholder: this call can be the one that CREATES the
+    // parent's JsonAgentSession, which freezes the port used for its spawn env.
+    const { getDaemonPort } = await import("./daemonPort.js");
+    const resolved = await resolveJsonAgent(parentSessionId, getDaemonPort());
     if (!resolved.ok) return;
     // FIX-D2: if the parent had no live agent when populateNoticeSlot ran (the
     // registry was empty), it returned `true` without actually populating the
@@ -493,9 +496,3 @@ export const notifyDeps: NotifyDeps = {
   },
 };
 
-/** Set once at boot so the notifier can resolve agents without threading the
- *  port through every lifecycle call site. */
-let daemonPortForNotify = 0;
-export function setNotifyDaemonPort(port: number): void {
-  daemonPortForNotify = port;
-}

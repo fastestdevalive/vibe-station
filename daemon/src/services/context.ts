@@ -36,6 +36,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ProjectRecord, WorktreeRecord, SessionRecord } from "../types.js";
+import { resolveDaemonPort } from "./daemonPort.js";
 import {
   worktreePath,
   sessionDataDir,
@@ -141,7 +142,11 @@ export function buildVstEnv(opts: BuildVstEnvOptions): Record<string, string> {
     ...(worktree ? { VST_WORKTREE: worktree.id } : {}),
     VST_PROJECT: project.id,
     VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
-    VST_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    // Never emit port 0: a caller with no live server handle passes 0, and an
+    // agent with VST_DAEMON_URL=http://127.0.0.1:0 cannot reach the daemon at
+    // all (`vst …` → "Failed to reach daemon"). resolveDaemonPort() falls back
+    // to the registered/persisted port.
+    VST_DAEMON_URL: `http://127.0.0.1:${resolveDaemonPort(daemonPort)}`,
     PATH: `${vstBinDir}:${process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin"}`,
     VST_SKILL_PATH: vstSkillPath,
   };

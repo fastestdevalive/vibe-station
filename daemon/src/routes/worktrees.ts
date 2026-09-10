@@ -25,6 +25,7 @@ import {
 import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
 import { spawnSession } from "../services/spawn.js";
+import { resolveDaemonPort } from "../services/daemonPort.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir, vstHome, projectDir } from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
 import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
@@ -594,7 +595,7 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         userPrompt: result.data.prompt,
       });
 
-      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
 
       const apiWorktreeEarly = serializeWorktree(projectId, createdWorktree);
       broadcastAll({

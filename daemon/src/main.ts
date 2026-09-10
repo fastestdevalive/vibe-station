@@ -18,7 +18,8 @@ import * as cloudflared from "./services/cloudflared.js";
 import { resolveTunnelPort } from "./services/tunnelPort.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
-import { startLifecyclePoller, stopLifecyclePoller, setNotifyDaemonPort } from "./services/lifecycle.js";
+import { startLifecyclePoller, stopLifecyclePoller } from "./services/lifecycle.js";
+import { setDaemonPort } from "./services/daemonPort.js";
 import { startPrPoller, stopPrPoller } from "./services/prPoller.js";
 import { readSettings } from "./services/config.js";
 import { setSkillPaths } from "./services/userSkillCatalog.js";
@@ -233,9 +234,11 @@ async function main() {
   // The tunnel requires explicit user action to enable after each restart.
   await cloudflared.restoreOnBoot(resolveTunnelPort(port));
 
-  // Subagent → parent notifications resolve the parent's agent lazily and need
-  // the port to do it (subagent-ux-v2).
-  setNotifyDaemonPort(port);
+  // Publish the real port process-wide. Everything that spawns an agent puts
+  // it in VST_DAEMON_URL, and callers without a live Fastify handle (WS chat
+  // open, subagent notifications, timers) read it from here instead of passing
+  // a placeholder 0.
+  setDaemonPort(port);
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
   // Poll for PR outcome (open/merged/closed) on the orthogonal `session.pr`
