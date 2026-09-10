@@ -42,8 +42,15 @@ const SHELL_CONFIGS = [
 export function resolveVstCliBinSource(): string | undefined {
   if (process.env.VST_CLI_BIN) return process.env.VST_CLI_BIN;
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidate = resolve(here, "../../main.js");
-  return existsSync(candidate) ? candidate : undefined;
+  // In dev, import.meta.url ends in .ts (tsx running source directly).
+  // Only add the repo-relative dev fallback in that case — prod should only
+  // use VST_CLI_BIN (set by the Tauri packager) or the bundled main.js.
+  const isDev = import.meta.url.endsWith(".ts");
+  const candidates = [
+    resolve(here, "../../main.js"),
+    ...(isDev ? [resolve(here, "../../../cli/dist/main.js")] : []),
+  ];
+  return candidates.find(existsSync);
 }
 
 /** Absolute path to the bundled SKILL.md, or undefined if unavailable. */
