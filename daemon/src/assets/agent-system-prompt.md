@@ -103,6 +103,10 @@ sessions coordinate via files (e.g. write a spec file, let the sibling implement
 
 ### Send a message to a session
 
+> **Harness tools (`SendMessage`, `ListAgents`) cannot reach vst sessions.**
+> They are Claude harness internals and will always fail with "No agent named …
+> is reachable". Use `vst session send` below — it is the only correct channel.
+
 If you only know a session by its UI-set display name (e.g. "send a message
 to reviewer"), resolve it to an id first — don't guess or construct one:
 

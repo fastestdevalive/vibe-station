@@ -21,6 +21,16 @@ That is the whole thing. No flags to look up, no tool to find.
   it runs inside this conversation, creates no session, and the user cannot
   see or open it. Do not go looking through your tool list for a way to spawn
   a session; there is no tool for it, only the command above.
+- **To MESSAGE a vst subagent, use `vst session send`, NOT harness tools.**
+  `SendMessage`, `ListAgents`, and `ToolSearch` are Claude harness tools —
+  they operate within the harness process and cannot see or reach vst sessions.
+  If you search for a tool to contact a subagent, you will find `SendMessage`
+  and it will fail with "No agent named … is reachable". The correct command:
+  ```bash
+  vst session send <subagent-id> "your message" --wait
+  ```
+  The session id comes from the output of `vst session create` (the line
+  printed when you spawned it) or from `vst session ls --worktree=$VST_WORKTREE --json`.
 - **When to use which.** Use `Task` for a short internal lookup whose result
   you will consume within this same turn. Spawn a vst subagent for anything
   the user might want to watch, open, or keep running — and ALWAYS when the
