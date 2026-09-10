@@ -14,7 +14,7 @@ import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { PaneOutletProvider, PaneOutlet } from "@/components/layout/paneOutlets";
 import { PaneHostLayer, type PaneKey } from "@/components/layout/PaneHostLayer";
 import { WorkspaceCanvas } from "@/components/layout/WorkspaceCanvas";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore, removeTileFromCanvas } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
@@ -398,6 +398,29 @@ export function Workspace() {
         return <TerminalPane api={api} sessionId={id} session={sessions.find((s) => s.id === id)} />;
       }
       const wtId = key.slice("tools:".length);
+      const onCloseToolsTile = inWorkspaceCanvas
+        ? () => {
+            const store = useWorkspaceStore.getState();
+            let canvas;
+            if (isWorkspaceView && viewedWorkspace) {
+              canvas = store.workspaceDocs[viewedWorkspace.id] ?? null;
+            } else if (wtId) {
+              canvas = store.layoutByWorktree[wtId]?.scratchCanvas ?? null;
+            }
+            if (!canvas) return;
+            const existing = canvas.tiles.find(
+              (t: { kind: string; worktreeId?: string }) =>
+                t.kind === "tools" && (t.worktreeId ?? wtId) === wtId,
+            );
+            if (!existing) return;
+            const next = removeTileFromCanvas(canvas, existing.id);
+            if (isWorkspaceView && viewedWorkspace) {
+              store.updateWorkspaceDoc(viewedWorkspace.id, next);
+            } else if (wtId) {
+              store.updateScratchCanvas(wtId, next);
+            }
+          }
+        : undefined;
       return (
         <ToolPanel
           api={api}
@@ -405,10 +428,11 @@ export function Workspace() {
           baseBranch={worktrees.find((w) => w.id === wtId)?.baseBranch}
           branch={worktrees.find((w) => w.id === wtId)?.branch}
           hidePanelControls={inWorkspaceCanvas}
+          onClose={onCloseToolsTile}
         />
       );
     },
-    [sessions, worktrees, inWorkspaceCanvas],
+    [sessions, worktrees, inWorkspaceCanvas, isWorkspaceView, viewedWorkspace],
   );
   const worktreePaneHostLayer = (
     <PaneHostLayer paneKeys={worktreePaneKeys} renderPane={renderWorktreePane} />

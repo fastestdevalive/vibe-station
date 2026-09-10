@@ -4,13 +4,17 @@ import {
   ChevronUp,
   Columns2,
   LayoutGrid,
+  MoreHorizontal,
   PanelLeft,
   PanelRight,
   PanelTop,
   Rows2,
   Search,
+  Settings,
   SquareTerminal,
 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLayout } from "@/hooks/useLayout";
 import type { Project, Session, Worktree } from "@/api/types";
 import { sessionLabel } from "@/lib/sessionLabel";
@@ -20,17 +24,18 @@ import { ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
-    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P" };
+    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P", toolPane: "⌘\\" };
   }
   const mac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform ?? navigator.userAgent);
   if (mac) {
-    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P" };
+    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P", toolPane: "⌘\\" };
   }
   return {
     fileTree: "Ctrl+Shift+F",
     preview: "Ctrl+Shift+P",
     terminal: "Ctrl+Shift+Z",
     quickOpen: "Ctrl+P",
+    toolPane: "Ctrl+\\",
   };
 }
 
@@ -85,6 +90,7 @@ export function TopBar({
     terminalDockVisible,
     toggleTerminalDock,
     toolSplitOrientation,
+    toolSplitOrientationUserSet,
     toggleToolSplitOrientation,
     canvasToolbarVisible,
     toggleCanvasToolbar,
@@ -97,8 +103,38 @@ export function TopBar({
     layoutMode: paneLayoutMode,
     setLayoutMode,
   } = useLayout();
+  // On mobile the layout defaults to vertical stacking regardless of the stored value;
+  // mirror the same logic as Layout.tsx so the overflow button reflects actual state.
+  const effectiveSplitOrientation =
+    !toolSplitOrientationUserSet && isMobile ? "vertical" : toolSplitOrientation;
   const project = projects.find((p) => p.id === activeProjectId);
   const wt = worktrees.find((w) => w.id === activeWorktreeId);
+
+  const navigate = useNavigate();
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const overflowMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!overflowOpen) return;
+    let raf: number;
+    const onDown = (e: MouseEvent) => {
+      raf = requestAnimationFrame(() => {
+        if (!overflowMenuRef.current?.contains(e.target as Node)) {
+          setOverflowOpen(false);
+        }
+      });
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOverflowOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      cancelAnimationFrame(raf);
+    };
+  }, [overflowOpen]);
 
   const hints = shortcutHints();
 
@@ -262,6 +298,18 @@ export function TopBar({
           <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
         ) : null}
         <ConnectionStatus />
+        {layoutMode !== "workspace" && layoutMode !== "direct-session" ? (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Settings"
+            title="Settings"
+            aria-current={layoutMode === "settings" ? "page" : undefined}
+            onClick={() => navigate("/settings")}
+          >
+            <Settings size={18} />
+          </button>
+        ) : null}
         {layoutMode === "workspace" || layoutMode === "direct-session" ? (
           <>
             <button
@@ -273,125 +321,133 @@ export function TopBar({
             >
               <Search size={18} />
             </button>
-            <div className="top-bar__pane-toggles" role="toolbar" aria-label="Workspace panes">
-              {canvasChipWorktreeId ? (
-                // One visually-merged pill holding TWO independent buttons:
-                // enter/leave canvas mode, and (thin, narrower) disclose the
-                // canvas's own toolbar. They read as a unit because they act
-                // on the same thing, but each stays a real, separately
-                // focusable/labelled <button> — the chevron is never a
-                // decoration hanging off the grid button.
-                <div className="top-bar__canvas-chip">
+            <div className="top-bar__overflow-wrapper">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="More options"
+                title="More options"
+                aria-expanded={overflowOpen}
+                aria-haspopup="true"
+                onClick={() => setOverflowOpen((o) => !o)}
+              >
+                <MoreHorizontal size={18} />
+              </button>
+              {overflowOpen ? (
+                <div className="top-bar__overflow-menu" role="menu" ref={overflowMenuRef}>
+                  {canvasChipWorktreeId ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`top-bar__overflow-item${inCanvasMode ? " top-bar__overflow-item--active" : ""}`}
+                        role="menuitemcheckbox"
+                        aria-checked={inCanvasMode}
+                        onClick={() => {
+                          setLayoutMode(canvasChipWorktreeId, inCanvasMode ? "classic" : "workspace");
+                          setOverflowOpen(false);
+                        }}
+                      >
+                        <LayoutGrid size={14} />
+                        <span>{inCanvasMode ? "Canvas layout (on)" : "Canvas layout"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="top-bar__overflow-item"
+                        role="menuitem"
+                        disabled={!inCanvasMode}
+                        title={
+                          !inCanvasMode
+                            ? "Switch to canvas mode first"
+                            : canvasToolbarVisible
+                              ? "Hide canvas toolbar"
+                              : "Show canvas toolbar"
+                        }
+                        onClick={() => {
+                          toggleCanvasToolbar();
+                          setOverflowOpen(false);
+                        }}
+                      >
+                        {canvasToolbarVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        <span>{canvasToolbarVisible ? "Hide toolbar" : "Show toolbar"}</span>
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     type="button"
-                    className={`top-bar__pane-btn ${inCanvasMode ? "top-bar__pane-btn--on" : ""}`}
-                    aria-pressed={inCanvasMode}
-                    aria-label="Toggle workspace canvas layout"
-                    title={
-                      inCanvasMode
-                        ? "Switch to classic layout"
-                        : "Switch to workspace canvas (tiled/free-form panes)"
-                    }
-                    onClick={() =>
-                      setLayoutMode(canvasChipWorktreeId, inCanvasMode ? "classic" : "workspace")
-                    }
+                    className="top-bar__overflow-item"
+                    role="menuitemcheckbox"
+                    aria-checked={effectiveSplitOrientation === "vertical"}
+                    disabled={paneLayoutMode === "workspace"}
+                    onClick={() => {
+                      toggleToolSplitOrientation();
+                      setOverflowOpen(false);
+                    }}
                   >
-                    <LayoutGrid size={17} />
+                    {effectiveSplitOrientation === "horizontal" ? <Columns2 size={14} /> : <Rows2 size={14} />}
+                    <span>
+                      {effectiveSplitOrientation === "horizontal"
+                        ? "Split: horizontal"
+                        : "Split: vertical"}
+                    </span>
                   </button>
                   <button
                     type="button"
-                    className="top-bar__pane-btn top-bar__canvas-chip-chevron"
-                    aria-expanded={inCanvasMode ? canvasToolbarVisible : undefined}
-                    // Same visible-but-disabled treatment as the split-
-                    // orientation / terminal-dock buttons below: outside
-                    // canvas mode there's no dedicated bar to disclose, but
-                    // unmounting it would make the chip's second half blink
-                    // in and out as the mode toggles.
-                    disabled={!inCanvasMode}
-                    aria-label={
-                      !inCanvasMode
-                        ? "Show canvas toolbar"
-                        : canvasToolbarVisible
-                          ? "Hide canvas toolbar"
-                          : "Show canvas toolbar"
-                    }
-                    title={
-                      !inCanvasMode
-                        ? "Only available in canvas mode — switch to the workspace canvas first"
-                        : canvasToolbarVisible
-                          ? "Hide canvas toolbar (mode, save, add tile)"
-                          : "Show canvas toolbar (mode, save, add tile)"
-                    }
-                    onClick={toggleCanvasToolbar}
+                    className={`top-bar__overflow-item${terminalDockVisible ? " top-bar__overflow-item--active" : ""}`}
+                    role="menuitemcheckbox"
+                    aria-checked={terminalDockVisible}
+                    disabled={paneLayoutMode === "workspace"}
+                    onClick={() => {
+                      toggleTerminalDock();
+                      setOverflowOpen(false);
+                    }}
                   >
-                    {inCanvasMode && canvasToolbarVisible ? (
-                      <ChevronUp size={15} />
-                    ) : (
-                      <ChevronDown size={15} />
-                    )}
+                    <SquareTerminal size={14} />
+                    <span>
+                      Terminal
+                      {paneLayoutMode !== "workspace" ? ` (${hints.terminal})` : ""}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="top-bar__overflow-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setOverflowOpen(false);
+                      navigate("/settings");
+                    }}
+                  >
+                    <Settings size={14} />
+                    <span>Settings</span>
                   </button>
                 </div>
               ) : null}
-              <button
-                type="button"
-                className="top-bar__pane-btn"
-                aria-label="Toggle agent/tools split orientation"
-                disabled={paneLayoutMode === "workspace"}
-                title={
-                  paneLayoutMode === "workspace"
-                    ? "Not applicable in canvas mode — each pane is its own tile"
-                    : toolSplitOrientation === "horizontal"
-                      ? "Stack agent and tools vertically"
-                      : "Place agent and tools side by side"
-                }
-                onClick={toggleToolSplitOrientation}
-              >
-                {toolSplitOrientation === "horizontal" ? <Columns2 size={17} /> : <Rows2 size={17} />}
-              </button>
-              <button
-                type="button"
-                className={`top-bar__pane-btn ${terminalDockVisible ? "top-bar__pane-btn--on" : ""}`}
-                aria-pressed={terminalDockVisible}
-                aria-label="Toggle terminal dock"
-                disabled={paneLayoutMode === "workspace"}
-                title={
-                  paneLayoutMode === "workspace"
-                    ? "Not applicable in canvas mode — every terminal is its own tile (use Windows)"
-                    : `Toggle terminal dock (${hints.terminal})`
-                }
-                onClick={toggleTerminalDock}
-              >
-                <SquareTerminal size={17} />
-              </button>
-              <button
-                type="button"
-                className={`top-bar__pane-btn ${
-                  (paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible)
-                    ? "top-bar__pane-btn--on"
-                    : ""
-                }`}
-                aria-pressed={paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible}
-                aria-label={
-                  paneLayoutMode === "workspace"
-                    ? hasWorktreeToolsTile
-                      ? "Remove Tools tile from canvas"
-                      : "Add Tools tile to canvas"
-                    : "Toggle tool panel"
-                }
-                title={
-                  paneLayoutMode === "workspace"
-                    ? hasWorktreeToolsTile
-                      ? "Remove Tools tile from canvas"
-                      : "Add Tools tile to canvas"
-                    : "Toggle tool panel"
-                }
-                onClick={paneLayoutMode === "workspace" ? toggleWorktreeToolsTile : toggleToolPanel}
-              >
-                {/* Vertical split docks the tool panel to the top, so mirror
-                    that with a top-panel icon instead of the right-panel one. */}
-                {toolSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
-              </button>
             </div>
+            <button
+              type="button"
+              className={`top-bar__pane-btn ${
+                (paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible)
+                  ? "top-bar__pane-btn--on"
+                  : ""
+              }`}
+              aria-pressed={paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible}
+              aria-label={
+                paneLayoutMode === "workspace"
+                  ? hasWorktreeToolsTile
+                    ? "Remove Tools tile from canvas"
+                    : "Add Tools tile to canvas"
+                  : "Toggle tool panel"
+              }
+              title={
+                paneLayoutMode === "workspace"
+                  ? hasWorktreeToolsTile
+                    ? "Remove Tools tile from canvas"
+                    : "Add Tools tile to canvas"
+                  : `Toggle tool panel (${hints.toolPane})`
+              }
+              onClick={paneLayoutMode === "workspace" ? toggleWorktreeToolsTile : toggleToolPanel}
+            >
+              {toolSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
+            </button>
           </>
         ) : null}
       </div>

@@ -1,8 +1,9 @@
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Moon, MoreHorizontal, Pin, Plus, SlidersHorizontal, Trash2, Type } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Home, Moon, MoreHorizontal, Pin, Plus, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import pkgJson from "../../../package.json";
 import {
   DndContext,
   PointerSensor,
@@ -912,8 +913,6 @@ export function LeftSidebar({
     return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
   }
 
-  const isSettings = location.pathname === "/settings";
-
   return (
     <div
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
@@ -924,18 +923,31 @@ export function LeftSidebar({
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
+        <div className="left-sidebar__brand" aria-hidden>
+          {!collapsed ? (
+            <div className="left-sidebar__brand-inner">
+              <span className="left-sidebar__brand-name">Vibe Station</span>
+              <Logo size={11} />
+              <span className="left-sidebar__brand-version">{pkgJson.version}</span>
+            </div>
+          ) : (
+            <div className="left-sidebar__brand-inner">
+              <Logo size={13} />
+            </div>
+          )}
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
           <Link
             to="/"
             className="left-sidebar__nav-item"
-            aria-label="Vibe Station Home"
+            aria-label="Home"
             onClick={() => {
               clearWorkspaceSelection();
               if (isMobile) setMobileSidebarOpen(false);
             }}
           >
-            <Logo size={16} />
-            {!collapsed ? "Vibe Station Home" : null}
+            <Home size={16} />
+            {!collapsed ? "Home" : null}
           </Link>
           <button
             type="button"
@@ -1775,19 +1787,6 @@ export function LeftSidebar({
         </DndContext>
       </div>
       <div className="left-sidebar__footer">
-        <Link
-          to="/settings"
-          className={`left-sidebar__nav-item${isSettings ? " left-sidebar__nav-item--active" : ""}`}
-          title="Settings"
-          aria-label="Settings"
-          aria-current={isSettings ? "page" : undefined}
-          onClick={() => {
-            if (isMobile) setMobileSidebarOpen(false);
-          }}
-        >
-          <SlidersHorizontal size={16} aria-hidden />
-          {!collapsed ? "Settings" : null}
-        </Link>
         <div className="left-sidebar__icon-row">
           <button
             type="button"

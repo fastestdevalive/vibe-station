@@ -396,22 +396,6 @@
   color: var(--fg-muted);
 }
 
-.left-sidebar__brand {
-  display: block;
-  /* left padding matches scroll-area(8px) + tree-row(8px) so text sits
-     at the same x-position as the status dot column */
-  padding: var(--space-2) var(--space-4);
-  font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-base);
-  text-decoration: none;
-  color: inherit;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.left-sidebar__brand:hover {
-  background: var(--bg-hover);
-}
 
 .left-sidebar__footer {
   display: flex;
@@ -421,6 +405,37 @@
   padding: var(--space-2);
   border-top: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
+}
+
+.left-sidebar__brand {
+  display: flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-1) var(--space-4);
+  pointer-events: none;
+  user-select: none;
+}
+
+.left-sidebar__brand-inner {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.38;
+}
+
+.left-sidebar__brand-name {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-1);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.left-sidebar__brand-version {
+  font-size: 0.6rem;
+  font-weight: 400;
+  color: var(--text-1);
+  opacity: 0.7;
+  white-space: nowrap;
 }
 
 .left-sidebar__nav-item {
@@ -1487,6 +1502,60 @@
     background var(--transition-fast),
     opacity var(--transition-fast);
   opacity: 0.55;
+}
+
+/* Overflow menu — position: relative wrapper + absolute popover */
+.top-bar__overflow-wrapper {
+  position: relative;
+}
+
+.top-bar__overflow-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 200;
+  min-width: 200px;
+  background: var(--bg-overlay);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg, 0 4px 12px rgba(0,0,0,0.15));
+  padding: var(--space-1) 0;
+}
+
+.top-bar__overflow-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+  transition: background var(--transition-fast);
+}
+
+.top-bar__overflow-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.top-bar__overflow-item--active {
+  color: var(--fg-primary);
+}
+
+.top-bar__overflow-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.top-bar__overflow-item:disabled:hover {
+  background: transparent;
+  color: var(--fg-secondary);
 }
 
 /* Hover = a NEUTRAL, transient highlight (grey bg, mid opacity). Deliberately a

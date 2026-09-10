@@ -3,7 +3,10 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 
 /**
  * ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
- * ⌘/Ctrl+P quick-open files; Alt+N → new agent in the current worktree;
+ * ⌘/Ctrl+P quick-open files; ⌘/Ctrl+\ → toggle tool pane;
+ * ⌘/Ctrl+Shift+G → new agent in current worktree;
+ * ⌘/Ctrl+Shift+M → new worktree in the current project;
+ * Alt+N → new agent in the current worktree;
  * Alt+Shift+N → new worktree in the current project.
  *
  * The new-agent/new-worktree shortcuts deliberately use bare Alt (no ⌘/Ctrl)
@@ -30,6 +33,7 @@ export function useWorkspaceKeyboardShortcuts(
 
     const setToolPanelTab = useWorkspaceStore.getState().setToolPanelTab;
     const toggleTerminalDock = useWorkspaceStore.getState().toggleTerminalDock;
+    const toggleToolPanel = useWorkspaceStore.getState().toggleToolPanel;
 
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -73,6 +77,15 @@ export function useWorkspaceKeyboardShortcuts(
 
       if (inEditable) return;
 
+      // ⌘/Ctrl+\ — toggle tool pane (layout-agnostic: `e.key === "\\"` matches
+      // the backslash on US and similar layouts; Ctrl+Shift+\ produces
+      // `e.key === "|"` so this never conflicts).
+      if (!e.shiftKey && e.key === "\\") {
+        e.preventDefault();
+        toggleToolPanel();
+        return;
+      }
+
       if (e.shiftKey) {
         const k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
         if (k === "F") {
@@ -84,6 +97,20 @@ export function useWorkspaceKeyboardShortcuts(
         } else if (k === "Z") {
           e.preventDefault();
           if (!canvasMode) toggleTerminalDock();
+        } else if (e.code === "KeyG") {
+          // ⌘/Ctrl+Shift+G — new agent in current worktree (replaces the
+          // original Ctrl+Shift+A which Chrome on Windows captures for its
+          // tab search UI before the page can preventDefault()).
+          if (onNewAgent && !canvasMode) {
+            e.preventDefault();
+            onNewAgent();
+          }
+        } else if (e.code === "KeyM") {
+          // ⌘/Ctrl+Shift+M — new worktree in the current project.
+          if (onNewWorktree) {
+            e.preventDefault();
+            onNewWorktree();
+          }
         }
       }
     };
