@@ -18,6 +18,7 @@
         { "name": "cloudflared", "sidecar": true },
         { "name": "vst", "sidecar": true }
       ]
-    }
+    },
+    "shell:allow-open"
   ]
 }
