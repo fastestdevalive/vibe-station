@@ -7,12 +7,22 @@ mod tray;
 use std::path::PathBuf;
 
 use tauri::{Manager, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_shell::AppHandleExt;
+
+fn is_internal_url(url: &tauri::Url) -> bool {
+    url.host_str() == Some("localhost")
+        || url.scheme() == "tauri"
+        || (url.scheme() == "https" && url.host_str() == Some("tauri.localhost"))
+        || url.scheme() == "about"
+        || url.scheme() == "blob"
+}
 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
+            let nav_handle = app.handle().clone();
 
             let cloudflared_bin: PathBuf = app_handle
                 .path()
@@ -101,6 +111,17 @@ fn main() {
                 .ok_or("no window config found")?;
             WebviewWindowBuilder::from_config(app.handle(), &conf)?
                 .initialization_script(&script)
+                .on_navigation(move |url| {
+                    if is_internal_url(url) {
+                        return true;
+                    }
+                    let url_str = url.to_string();
+                    let handle = nav_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = handle.shell().open(url_str, None);
+                    });
+                    false
+                })
                 .build()?;
 
             tray::build_tray(&app_handle)?;
@@ -141,6 +162,18 @@ fn build_init_script(port: u16, token: &str, os_name: &str) -> String {
            }} else {{\
              tag();\
            }}\
+         }})();\
+         (function() {{\
+           document.addEventListener('click', function(e) {{\
+             var el = e.target && e.target.closest('a');\
+             if (!el) return;\
+             var href = el.getAttribute('href') || '';\
+             var isExternal = /^https?:/.test(href) && !/^https?:\\/\\/(localhost|tauri\\.localhost)(:\\d+)?(\\/|$)/.test(href);\
+             if (el.target === '_blank' && isExternal && window.__TAURI_INTERNALS__) {{\
+               e.preventDefault();\
+               window.__TAURI_INTERNALS__.invoke('plugin:shell|open', {{ path: href, openWith: null }});\
+             }}\
+           }}, true);\
          }})();"
     )
 }

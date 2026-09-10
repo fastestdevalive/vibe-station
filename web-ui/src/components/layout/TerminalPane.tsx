@@ -160,8 +160,16 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     fitRef.current = fit;
     term.loadAddon(fit);
 
-    // Make http:// and https:// URLs clickable — opens in a new tab
-    term.loadAddon(new WebLinksAddon((_, url) => window.open(url, "_blank", "noopener,noreferrer")));
+    // Make http:// and https:// URLs clickable — opens in system browser (Tauri) or new tab (browser dev)
+    term.loadAddon(new WebLinksAddon((_, url) => {
+      if (/^https?:/.test(url) && typeof (window as any).__TAURI_INTERNALS__ !== 'undefined') {
+        (window as any).__TAURI_INTERNALS__.invoke('plugin:shell|open', { path: url, openWith: null }).catch(() => {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        });
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    }));
 
     term.open(host);
 
