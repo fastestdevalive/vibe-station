@@ -8,6 +8,7 @@ import { killSession, newSession, pasteBuffer, capturePane, hasSession, sendKeys
 import { directPtyRegistry } from "../state/directPtyRegistry.js";
 import { spawnSession, spawnSessionFromArgv, spawnDirectSession } from "../services/spawn.js";
 import { resolvedContextOf } from "../services/context.js";
+import { resolveDaemonPort, getDaemonPort } from "../services/daemonPort.js";
 import type { AgentPlugin } from "../services/spawn.js";
 import {
   cleanupSessionDataDir,
@@ -712,7 +713,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       // create (Decision 2/8) — the process starts on turn 1, auto-enqueued from
       // the create-dialog prompt via the JSON turn queue.
       if (type === "agent" && modeId) {
-        const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+        const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
         void spawnNewSessionForChannel({
           project,
           session: sessionRecord,
@@ -861,7 +862,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // JSON-channel sessions do NOT spawn a TTY at create (Decision 2/8) — the
     // process starts on turn 1, auto-enqueued from the create-dialog prompt.
     if (type === "agent" && modeId) {
-      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
       void spawnNewSessionForChannel({
         project,
         worktree,
@@ -1322,7 +1323,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             project,
             ctx: resolvedContextOf(project, worktree ?? null),
             session,
-            daemonPort: 0,
+            daemonPort: getDaemonPort(),
             ...(mode.model ? { model: mode.model } : {}),
           };
           const env: Record<string, string> = {
@@ -1332,7 +1333,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
             ...(worktree ? { VST_WORKTREE: worktree.id } : {}),
             VST_PROJECT: project.id,
             VST_DATA_DIR: `${process.env.HOME ?? "~"}/.vibe-station/projects/${project.id}`,
-            VST_DAEMON_URL: `http://127.0.0.1:${(app.server.address() as { port?: number })?.port ?? 7421}`,
+            VST_DAEMON_URL: `http://127.0.0.1:${resolveDaemonPort((app.server.address() as { port?: number })?.port)}`,
             ...plugin.getEnvironment(launchCfg),
           };
 
@@ -1367,7 +1368,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           // first prompt on every future resume would silently re-issue a
           // stale instruction to an agent that may have finished long ago.
           const replayInitialPrompt = !session.agentChatId && !!session.initialPrompt;
-          const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+          const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
 
           if (isWorktreeSession) {
             const { buildPrompt } = await import("../services/promptBuilder.js");
@@ -1669,7 +1670,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // here instead would be the exact bug reset-with-mode-switch exists to
     // avoid: the stored record would show the new mode while the spawned
     // process still ran the old CLI.
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     void spawnNewSessionForChannel({
       project,
       worktree: ctx.kind === "worktree" ? ctx.worktree : undefined,
@@ -1738,7 +1739,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         attachments.push(att);
       }
 
-      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
       // D8 — steer a running turn by default; `queue: true` opts out.
       let res;
       try {
@@ -1842,7 +1843,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       attachments.push(att);
     }
 
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     let res;
     try {
       res = await enqueueChatTurn({ sessionId: id, message, attachments, daemonPort });
@@ -1983,7 +1984,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const { turnId, message, attachmentIds } = parsed.data;
 
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     const resolved = await resolveJsonAgent(id, daemonPort);
     if (!resolved.ok) {
       return reply.status(resolved.reason === "not_found" ? 404 : 400).send({ error: resolved.message });
@@ -2046,7 +2047,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       });
     }
 
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     const resolved = await resolveJsonAgent(id, daemonPort);
     if (!resolved.ok) {
       return reply.status(resolved.reason === "not_found" ? 404 : 400).send({ error: resolved.message });
@@ -2086,7 +2087,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
   }): Promise<void> {
     const { project, worktree, session, plugin, model, context } = opts;
     const cwd = worktree ? worktreePath(project.id, worktree.id) : project.absolutePath;
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
 
     const restoreArgv = await plugin.getRestoreCommand?.({
       session,
@@ -2102,7 +2103,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         project,
         ctx: resolvedContextOf(project, worktree ?? null),
         session,
-        daemonPort: 0,
+        daemonPort: getDaemonPort(),
         ...(model ? { model } : {}),
       };
       const env: Record<string, string> = {
@@ -2225,7 +2226,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const fromJson = current === "json";
     const toJson = target === "json";
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
 
     // R1.1 idle gate — only a live JSON session has a turn queue/holds to protect.
     if (fromJson) {
@@ -2462,7 +2463,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findJsonSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
-    const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     return reply.send(await readSessionMeta(ctx, daemonPort));
   });
 }
