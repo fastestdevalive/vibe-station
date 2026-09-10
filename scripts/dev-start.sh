@@ -63,6 +63,23 @@ pnpm --filter @vibestation/web build
 
 # Launch daemon (tsx watch) + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
-exec npx concurrently --kill-others-on-fail \
+# Don't exec — we need the shell alive to run the SIGTERM trap below.
+npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "tsx watch --tsconfig '$REPO_ROOT/daemon/tsconfig.json' '$REPO_ROOT/daemon/src/main.ts'"
+  "tsx watch --tsconfig '$REPO_ROOT/daemon/tsconfig.json' '$REPO_ROOT/daemon/src/main.ts'" &
+CONC_PID=$!
+
+trap '
+  TS=$(date -Iseconds)
+  echo "[dev-start] $TS — SIGTERM received by dev-start.sh (pid $$)"
+  if pgrep -x vibe-station-desktop > /dev/null 2>&1; then
+    echo "[dev-start] $TS — Tauri window is STILL ALIVE (something else sent SIGTERM)"
+    pgrep -la vibe-station-desktop
+  else
+    echo "[dev-start] $TS — Tauri window is GONE (Tauri closed and killed its process group)"
+  fi
+  echo "[dev-start] $TS — killing concurrently (pid $CONC_PID)"
+  kill "$CONC_PID" 2>/dev/null
+' SIGTERM SIGINT
+
+wait "$CONC_PID"
