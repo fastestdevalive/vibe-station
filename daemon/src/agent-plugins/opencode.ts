@@ -58,7 +58,7 @@ async function* runTurnAcp(
   const promptFile = systemPromptPathFor(resolvedCtx, ctx.session.id);
   try {
     mkdirSync(dirname(configPath), { recursive: true });
-    writeOpenCodeConfig(configPath, [promptFile]);
+    writeOpenCodeConfig(configPath, [promptFile], ctx.model);
   } catch {
     /* best-effort — spawn still proceeds without instructions */
   }

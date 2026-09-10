@@ -14,16 +14,18 @@ import { writeFileSync } from "node:fs";
 export interface OpenCodeConfig {
   instructions: string[];
   permission: Record<string, Record<string, "allow" | "ask" | "deny">>;
+  model?: string;
 }
 
 /**
- * Write { instructions: [<absolutePaths>], permission: {...} } to <configPath>.
+ * Write { instructions: [<absolutePaths>], permission: {...}[, model: <model>] } to <configPath>.
  * Returns the config path for convenience.
  */
-export function writeOpenCodeConfig(configPath: string, instructionFiles: string[]): string {
+export function writeOpenCodeConfig(configPath: string, instructionFiles: string[], model?: string): string {
   const config: OpenCodeConfig = {
     instructions: instructionFiles,
     permission: { "*": { "*": "allow" } },
+    ...(model ? { model } : {}),
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2), "utf8");
   return configPath;
