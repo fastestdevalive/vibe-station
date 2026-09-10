@@ -121,6 +121,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await app.register(fastifyCors, {
     origin: true,
     credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   });
 
