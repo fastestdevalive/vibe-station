@@ -7,10 +7,12 @@ import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { SkillEditor } from "../chat/SkillEditor";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { FolderChooserDialog } from "./FolderChooserDialog";
 import { useDirSuggestions } from "@/hooks/useDirSuggestions";
 import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
+import { useSkillCommands } from "@/hooks/useSkillCommands";
 
 interface NewAgentDialogProps {
   open: boolean;
@@ -157,8 +159,11 @@ export function NewAgentDialog({
   const [activeIndex, setActiveIndex] = useState(0);
   const projectWrapperRef = useRef<HTMLDivElement>(null);
   // Autofocus target for the agent/worktree/prompt section — see the
-  // `showConfig`-keyed effect below.
-  const promptRef = useRef<HTMLTextAreaElement>(null);
+  // `showConfig`-keyed effect below. DOM-referenced (not the SkillEditor
+  // imperative handle) because Lexical's `editor.focus()` doesn't focus the
+  // root element in jsdom; focusing the contenteditable element directly is
+  // behaviorally identical in a real browser.
+  const promptShellRef = useRef<HTMLDivElement | null>(null);
   const pathSuggs = useDirSuggestions(api);
   const [dirChooserOpen, setDirChooserOpen] = useState(false);
 
@@ -199,7 +204,8 @@ export function NewAgentDialog({
     setPromptState(value);
     draft.save(value);
   }
-  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [channel, setChannel] = useState<"terminal" | "json">("json");
+  const { skillCommands, editorSeq, editorReady } = useSkillCommands(open, api);
   const [files, setFiles] = useState<File[]>([]);
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
@@ -240,13 +246,13 @@ export function NewAgentDialog({
       } catch {
         // Settings not available.
       }
+
     })();
   }, [open, api]);
 
-  // Restore the saved draft (if any) each time the dialog opens — the
-  // component stays mounted between opens (see LeftSidebar), so the
-  // `useState(() => loadDraft(...))` initializer only runs once at first
-  // mount and would otherwise miss a draft saved during a prior open.
+  // Restore the saved draft each time the dialog opens. The component stays
+  // mounted between opens (see LeftSidebar) so the useState initializer only
+  // runs once; we need this effect to pick up drafts saved in prior opens.
   useEffect(() => {
     if (!open) return;
     setPromptState(loadDraft(draftKey));
@@ -292,7 +298,7 @@ export function NewAgentDialog({
   }, [mode]);
 
   // Fetch branches for the "use existing (git)" case. A fetch failure falls
-  // back to a free-text base-branch input (mirrors NewSessionDialog).
+  // back to a free-text base-branch input (mirrors NewAgentSessionDialog).
   useEffect(() => {
     if (mode !== "existing" || !selectedProject || !selectedProject.isGit) {
       setBranches([]);
@@ -356,7 +362,7 @@ export function NewAgentDialog({
     setBranches([]);
     setBranchesError(null);
     setPromptState("");
-    setChannel("terminal");
+    setChannel("json");
     setFiles([]);
     setError(null);
     setSubmitting(false);
@@ -733,13 +739,16 @@ export function NewAgentDialog({
     if (!open || !showConfig) return;
     const id = requestAnimationFrame(() => {
       const active = document.activeElement;
+      // Don't steal focus from a field the user already started interacting
+      // with. The SkillEditor's own contenteditable is exempt (it IS the
+      // prompt field) — its tag is a div, not a form control, so it would
+      // otherwise read as "something else" and never get focus.
       const userAlreadyFocusedSomethingElse =
         active instanceof HTMLElement &&
-        active !== promptRef.current &&
-        active !== document.body &&
+        active.getAttribute("contenteditable") !== "true" &&
         ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName);
       if (!userAlreadyFocusedSomethingElse) {
-        promptRef.current?.focus();
+        promptShellRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
       }
     });
     return () => cancelAnimationFrame(id);
@@ -953,7 +962,7 @@ export function NewAgentDialog({
           baseBranch: project.defaultBranch,
           modeId,
           prompt: prompt.trim() || undefined,
-          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : { channel: "tmux" as const }),
         });
         worktreeId = wt.id;
         if (isJson) {
@@ -976,7 +985,7 @@ export function NewAgentDialog({
           type: "agent",
           modeId,
           prompt: prompt.trim() || undefined,
-          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : { channel: "tmux" as const }),
         });
         sessionId = sess.id;
         if (isJson) {
@@ -1041,7 +1050,7 @@ export function NewAgentDialog({
           baseBranch: baseBranch.trim() || undefined,
           modeId,
           prompt: prompt.trim() || undefined,
-          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : { channel: "tmux" as const }),
         });
         worktreeId = wt.id;
         if (isJson) {
@@ -1064,7 +1073,7 @@ export function NewAgentDialog({
           type: "agent",
           modeId,
           prompt: prompt.trim() || undefined,
-          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : {}),
+          ...(isJson ? { channel: "json" as const, skipAutoTurn: true } : { channel: "tmux" as const }),
         });
         sessionId = sess.id;
         if (isJson) {
@@ -1536,19 +1545,20 @@ export function NewAgentDialog({
             </div>
 
             <div className="form-field">
-              <label htmlFor="agent-prompt">
-                Initial prompt <span className="form-optional">(optional)</span>
-              </label>
-              <textarea
-                id="agent-prompt"
-                ref={promptRef}
-                data-autofocus
-                className="input"
-                rows={3}
-                placeholder="What should the agent work on?"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-              />
+              <div ref={promptShellRef}>
+                {editorReady && (
+                <SkillEditor
+                  editorKey={`newagent-${editorSeq}`}
+                  initialText={prompt}
+                  commands={skillCommands}
+                  ariaLabel="Initial prompt"
+                  placeholder="What should the agent work on?"
+                  className="chat-composer__textarea chat-composer__textarea--dialog"
+                  onChangeText={(next) => setPrompt(next)}
+                  onSubmit={() => void submit()}
+                />
+                )}
+              </div>
             </div>
 
             <div className="form-field">

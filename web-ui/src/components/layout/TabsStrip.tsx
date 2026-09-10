@@ -24,7 +24,7 @@ import { sessionLabel } from "@/lib/sessionLabel";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
-import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
+import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
@@ -776,7 +776,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       <PaneTools fsTarget={fsTarget} onCloseDock={!isAgent ? () => toggleTerminalDock() : undefined} />
 
       {isAgent ? (
-        <NewTabDialog
+        <NewAgentTabDialog
           open={newOpen}
           api={api}
           worktreeId={worktreeId ?? ""}

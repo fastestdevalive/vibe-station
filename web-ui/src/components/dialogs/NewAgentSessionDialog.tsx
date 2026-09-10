@@ -7,11 +7,13 @@ import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { SkillEditor } from "../chat/SkillEditor";
 import { NewModeDialog } from "./NewModeDialog";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
 import { loadDraft, useDraftPersistence } from "@/hooks/useDraftPersistence";
+import { useSkillCommands } from "@/hooks/useSkillCommands";
 
-interface NewSessionDialogProps {
+interface NewAgentSessionDialogProps {
   open: boolean;
   onClose: () => void;
   api: ApiInstance;
@@ -24,7 +26,7 @@ interface NewSessionDialogProps {
   initialModeId?: string;
 }
 
-export function NewSessionDialog({
+export function NewAgentSessionDialog({
   open,
   onClose,
   api,
@@ -33,7 +35,7 @@ export function NewSessionDialog({
   onCreated,
   initialPrompt: initialPromptProp,
   initialModeId,
-}: NewSessionDialogProps) {
+}: NewAgentSessionDialogProps) {
   const [wtChoice, setWtChoice] = useState<"new" | "existing">("new");
   const [worktrees, setWorktrees] = useState<Worktree[]>([]);
   const [existingWtId, setExistingWtId] = useState("");
@@ -51,9 +53,10 @@ export function NewSessionDialog({
     draft.save(value);
   }
   const [useTmux, setUseTmux] = useState(true);
-  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [channel, setChannel] = useState<"terminal" | "json">("json");
   const [files, setFiles] = useState<File[]>([]);
   const [clis, setClis] = useState<SupportedCli[]>([]);
+  const { skillCommands, editorSeq, editorReady } = useSkillCommands(open, api);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
@@ -63,7 +66,7 @@ export function NewSessionDialog({
     // Prefer an explicit carried-over prompt (e.g. from another dialog); else
     // restore whatever draft is saved for this project's key.
     setInitialPromptState(initialPromptProp || loadDraft(draftKey));
-    setChannel("terminal");
+    setChannel("json");
     setFiles([]);
     void (async () => {
       const [wts, ms, cs] = await Promise.all([
@@ -158,7 +161,7 @@ export function NewSessionDialog({
             // No main session id came back (unexpected) — never guess one
             // (ids are independently generated, Decision 1); the worktree
             // still exists and is usable, just without a first turn queued.
-            console.error(`[NewSessionDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
+            console.error(`[NewAgentSessionDialog] worktree ${wt.id} has no mainSessionId — skipping first-turn send`);
           }
         } else {
           // KNOWN RACE (unlike the JSON path above, which creates idle and
@@ -331,15 +334,18 @@ export function NewSessionDialog({
         + New mode
       </button>
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>Initial prompt <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span></div>
-      <textarea
-        data-autofocus
-        className="field-textarea"
-        aria-label="Initial prompt"
-        placeholder="Describe what you want the agent to do…"
-        rows={4}
-        value={initialPrompt}
-        onChange={(e) => setInitialPrompt(e.target.value)}
-      />
+      {editorReady && (
+        <SkillEditor
+          editorKey={`newsession-${editorSeq}`}
+          initialText={initialPrompt}
+          commands={skillCommands}
+          ariaLabel="Initial prompt"
+          placeholder="Describe what you want the agent to do…"
+          className="chat-composer__textarea chat-composer__textarea--dialog"
+          onChangeText={(next) => setInitialPrompt(next)}
+          onSubmit={() => void submit()}
+        />
+      )}
       <div className="field-label" style={{ marginTop: "var(--space-4)" }}>
         Attachments <span style={{ color: "var(--fg-muted)", fontWeight: "normal" }}>(optional)</span>
       </div>

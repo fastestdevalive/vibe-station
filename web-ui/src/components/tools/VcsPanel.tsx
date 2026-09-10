@@ -449,17 +449,17 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
   return (
     <div className="vcs-panel">
       <div className="vcs-panel__bar">
-        <span className="vcs-panel__title-group">
-          <span className="vcs-panel__title">
-            Commits{pageCommits ? ` (${diffFromMain ? ownCommits.length : pageCommits.length})` : ""}
-          </span>
-          {branch ? (
-            <span className="vcs-panel__branch-chip" title={branch}>
-              {branch}
+        <div className="vcs-panel__title-col">
+          <span className="vcs-panel__title-group">
+            <span className="vcs-panel__title">
+              Commits{pageCommits ? ` (${diffFromMain ? ownCommits.length : pageCommits.length})` : ""}
             </span>
-          ) : null}
-        </span>
-        <div className="vcs-panel__bar-actions">
+            {branch ? (
+              <span className="vcs-panel__branch-chip" title={branch}>
+                {branch}
+              </span>
+            ) : null}
+          </span>
           <label className="vcs-panel__diff-toggle">
             <input
               type="checkbox"
@@ -468,6 +468,8 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
             />
             Diff from {baseBranch || "main"}
           </label>
+        </div>
+        <div className="vcs-panel__bar-actions">
           <button
             type="button"
             className="tab tab--icon tool-bar-btn"

@@ -2,7 +2,7 @@
  * DEV-ONLY visual gallery for the JSON agent chat UI.
  *
  * Renders the REAL chat components (ChatPane, MessageList, StatusBar,
- * AttachmentPicker/Chip, TabsStrip, DirectAgentDialog) against the in-repo mock
+ * AttachmentPicker/Chip, TabsStrip, NewAgentDirectDialog) against the in-repo mock
  * API, one scene per `?scene=` query param. Not referenced by index.html, so it
  * is excluded from `vite build`; used only by the screenshot harness.
  */
@@ -18,7 +18,7 @@ import { StatusBar } from "@/components/chat/StatusBar";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
 import { AttachmentPicker } from "@/components/chat/AttachmentPicker";
 import { TabsStrip } from "@/components/layout/TabsStrip";
-import { DirectAgentDialog } from "@/components/dialogs/DirectAgentDialog";
+import { NewAgentDirectDialog } from "@/components/dialogs/NewAgentDirectDialog";
 
 import "@/styles/tokens.css";
 import "@/styles/global.css";
@@ -401,7 +401,7 @@ function CreateDialogScene() {
   const api = useMemo(() => createMockApi(), []);
   return (
     <BrowserRouter>
-      <DirectAgentDialog
+      <NewAgentDirectDialog
         open
         api={api}
         projectId="proj-a"

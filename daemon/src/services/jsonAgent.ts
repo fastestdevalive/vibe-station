@@ -36,7 +36,6 @@ import { AcpConnection, SessionLoadFailed, type AcpLaunchSpec } from "./acp/acpT
 import type { AcpEnrichHook } from "./acp/normalize.js";
 import { getMergedSkillCatalog, type MergedSkillEntry } from "./userSkillCatalog.js";
 import { parseSkillSegments } from "./skillTokens.js";
-import { resolvePlugin, type CliId } from "../agent-plugins/registry.js";
 import type {
   ProjectRecord,
   WorktreeRecord,
@@ -257,16 +256,17 @@ function mergeWithSkillCatalog(
   }));
 }
 
-/** M6: whether `cli`'s plugin implements `formatSkillDirective` — the gate
- *  `mergeWithSkillCatalog` uses to decide whether directory-scanned skills
- *  (which need the directive to actually dispatch) are offered at all.
- *  Resolves via the plugin registry, never a bare `if (cli === ...)`. */
-function cliSupportsSkillDirective(cli: string): boolean {
-  try {
-    return typeof resolvePlugin(cli as CliId).formatSkillDirective === "function";
-  } catch {
-    return false;
-  }
+/** Skills are CLI-agnostic on the no-live-session rebuild path. `getMeta`
+ *  (a live `JsonAgentSession` with a resolved `AgentPlugin`) decides the
+ *  directory-scanned-skill gate by querying `formatSkillDirective` — its
+ *  plugin knows the CLI's actual capabilities. `assembleMeta` has no plugin
+ *  at hand (only the store's `cli` string), so it cannot make that query and
+ *  must not silently drop skills it can't attribute: it offers everything.
+ *  The `mergeWithSkillCatalog` filter still exists and stays meaningful — the
+ *  live path uses it to keep directive-less-CLI entries out; the rebuild path
+ *  simply never rejects. */
+function cliSupportsSkillDirective(_cli: string): boolean {
+  return true;
 }
 
 export function injectAttachments(
@@ -1058,10 +1058,7 @@ export class JsonAgentSession {
 
   /** Latest cross-harness meta (rebuilt from transcript tail on construction). */
   getMeta(): SessionMeta {
-    const commands = mergeWithSkillCatalog(
-      this.commands,
-      typeof this.plugin.formatSkillDirective === "function",
-    );
+    const commands = mergeWithSkillCatalog(this.commands, true);
     // Derive noticeSlot: use activeNotice when a notice turn is running,
     // else use the pending noticeSlot. Absent when neither is set.
     const slotSource = this.activeNotice ?? this.noticeSlot;

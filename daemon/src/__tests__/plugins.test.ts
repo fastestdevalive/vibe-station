@@ -369,7 +369,7 @@ describe("Agent plugins", () => {
       const res = await app.inject({
         method: "POST",
         url: "/worktrees",
-        payload: { projectId, branch: "test-claude", modeId: "mode-claude" },
+        payload: { projectId, branch: "test-claude", modeId: "mode-claude", channel: "tmux" },
       });
 
       expect(res.statusCode).toBe(201);
@@ -388,7 +388,7 @@ describe("Agent plugins", () => {
       const wtRes = await app.inject({
         method: "POST",
         url: "/worktrees",
-        payload: { projectId, branch: "test-session", modeId: "mode-cursor" },
+        payload: { projectId, branch: "test-session", modeId: "mode-cursor", channel: "tmux" },
       });
       const worktree = wtRes.json<WorktreeRecord>();
       mockSpawn.mockClear(); // Reset after worktree creation
@@ -402,6 +402,7 @@ describe("Agent plugins", () => {
           type: "agent",
           modeId: "mode-cursor",
           prompt: "Review this code",
+          channel: "tmux",
         },
       });
 

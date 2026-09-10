@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { NewTabDialog } from "./NewTabDialog";
+import { NewAgentTabDialog } from "./NewAgentTabDialog";
 
 /**
  * Attachments at creation for the additional-tab JSON path: the dialog must
@@ -11,14 +11,14 @@ import { NewTabDialog } from "./NewTabDialog";
  * from also auto-enqueueing turn 1), upload the staged file, then send the
  * prompt + attachment id as turn 1 itself.
  */
-describe("NewTabDialog JSON attachments at creation", () => {
+describe("NewAgentTabDialog JSON attachments at creation", () => {
   it("creates idle → uploads staged file → sends first chat with the attachment id", async () => {
     const api = createMockApi();
     const createSpy = vi.spyOn(api, "createSession");
     const uploadSpy = vi.spyOn(api, "uploadAttachments");
     const chatSpy = vi.spyOn(api, "sendChat");
 
-    render(<NewTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
+    render(<NewAgentTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
     await screen.findByText("Bugfix"); // modes loaded
 
     // Choose JSON, type a prompt, stage a file.
@@ -52,15 +52,16 @@ describe("NewTabDialog JSON attachments at creation", () => {
     );
   });
 
-  it("terminal path is unchanged — no upload/chat, prompt in the create body", async () => {
+  it("terminal path (explicitly selected) — no upload/chat, prompt in the create body", async () => {
     const api = createMockApi();
     const createSpy = vi.spyOn(api, "createSession");
     const uploadSpy = vi.spyOn(api, "uploadAttachments");
     const chatSpy = vi.spyOn(api, "sendChat");
 
-    render(<NewTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
+    render(<NewAgentTabDialog open api={api} worktreeId="wt-1" onClose={() => {}} />);
     await screen.findByText("Bugfix");
 
+    await userEvent.click(screen.getByRole("radio", { name: /Terminal/i }));
     await userEvent.type(screen.getByLabelText("Prompt"), "do it");
     await userEvent.click(screen.getByText("Create"));
 
