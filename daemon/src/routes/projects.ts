@@ -27,6 +27,7 @@ import { projectDir, assertSafeToDelete } from "../services/paths.js";
 import { readSettings } from "../services/config.js";
 import { broadcastAll } from "../broadcaster.js";
 import { releaseSessionRuntime } from "../services/sessionRuntime.js";
+import { resolveDaemonPort } from "../services/daemonPort.js";
 import type { ProjectRecord, SessionRecord } from "../types.js";
 
 /**
@@ -494,7 +495,7 @@ export function registerProjectRoutes(app: FastifyInstance): void {
         });
       }
 
-      const daemonPort = (app.server.address() as { port?: number })?.port ?? 7421;
+      const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
 
       if (useWorktree) {
         // Create worktree + session. `branch` was resolved and validated

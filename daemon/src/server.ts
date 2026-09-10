@@ -20,6 +20,7 @@ import { registerAuthRoutes } from "./routes/auth.js";
 import { registerMobileAuthRoutes } from "./routes/mobileAuth.js";
 import { registerWSEndpoint } from "./ws/server.js";
 import { COOKIE_NAME, verifyToken } from "./auth.js";
+import { setDaemonPort } from "./services/daemonPort.js";
 import type { AuthState } from "./state/auth-state.js";
 import type { TokenPayload } from "./types.js";
 
@@ -239,6 +240,15 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   }
 
   await registerWSEndpoint(app, noAuth ? undefined : authState);
+
+  // Publish the bound port process-wide the moment we start listening, so code
+  // with no Fastify handle (WS handlers, timers, lifecycle notifications) can
+  // put a REACHABLE VST_DAEMON_URL in an agent's spawn env. Covers ephemeral
+  // ports (`listen({ port: 0 })`) too, where the requested port isn't the real one.
+  app.addHook("onListen", async () => {
+    const addr = app.server.address() as { port?: number } | null;
+    if (addr?.port) setDaemonPort(addr.port);
+  });
 
   return app;
 }

@@ -27,6 +27,7 @@ import {
   readSessionMeta,
   type JsonSessionContext,
 } from "../../services/jsonAgentChat.js";
+import { getDaemonPort } from "../../services/daemonPort.js";
 import type { NormalizedEvent, SessionMeta } from "../../types.js";
 
 /** Default bounded replay window on open (turns). Reduced from 20 → 15 (Part B). */
@@ -66,7 +67,12 @@ export async function handleChatOpen(
 
   // Resolve (lazily create) the JsonAgentSession so we can attach to its stream
   // and read its current meta. No spawn happens here — only on enqueue.
-  const resolved = await resolveJsonAgent(sessionId, 0).catch(() => null);
+  // The port matters: `resolveJsonAgent` CREATES the JsonAgentSession on first
+  // call and freezes the port it was given, and every later turn spawns its CLI
+  // with VST_DAEMON_URL=http://127.0.0.1:<that port>. Opening a chat in the UI is
+  // usually the first touch of a session, so passing a placeholder 0 here handed
+  // agents an unreachable daemon URL.
+  const resolved = await resolveJsonAgent(sessionId, getDaemonPort()).catch(() => null);
 
   if (!resolved || !resolved.ok) {
     // Not a JSON session or mode unresolved — no live stream to attach; send a
