@@ -6,9 +6,11 @@ import { Dialog } from "./Dialog";
 import { Select } from "../ui/Select";
 import { NewModeDialog } from "./NewModeDialog";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
+import { SkillEditor } from "../chat/SkillEditor";
 import { sendJsonFirstTurn } from "@/api/firstTurn";
+import { useSkillCommands } from "@/hooks/useSkillCommands";
 
-interface DirectAgentDialogProps {
+interface NewAgentDirectDialogProps {
   open: boolean;
   onClose: () => void;
   api: ApiInstance;
@@ -21,23 +23,24 @@ interface DirectAgentDialogProps {
  * Dialog for creating a direct agent session (no worktree).
  * Runs the agent directly in the project directory.
  */
-export function DirectAgentDialog({
+export function NewAgentDirectDialog({
   open,
   onClose,
   api,
   projectId,
   projectName,
   onCreated,
-}: DirectAgentDialogProps) {
+}: NewAgentDirectDialogProps) {
   const [modes, setModes] = useState<Mode[]>([]);
   const [modeId, setModeId] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
-  const [channel, setChannel] = useState<"terminal" | "json">("terminal");
+  const [channel, setChannel] = useState<"terminal" | "json">("json");
   const [files, setFiles] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [newModeOpen, setNewModeOpen] = useState(false);
   const [clis, setClis] = useState<SupportedCli[]>([]);
+  const { skillCommands, editorSeq, editorReady } = useSkillCommands(open, api);
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +68,7 @@ export function DirectAgentDialog({
   function reset() {
     setModeId(modes[0]?.id ?? "");
     setInitialPrompt("");
-    setChannel("terminal");
+    setChannel("json");
     setFiles([]);
     setError(null);
     setSubmitting(false);
@@ -117,6 +120,7 @@ export function DirectAgentDialog({
           type: "agent",
           modeId,
           prompt: initialPrompt.trim() || undefined,
+          channel: "tmux",
         });
         if (files.length > 0) {
           await api.uploadAttachments(sess.id, files);
@@ -190,16 +194,19 @@ export function DirectAgentDialog({
           </div>
 
           <div className="form-field">
-            <label htmlFor="direct-prompt">Initial Prompt (optional)</label>
-            <textarea
-              id="direct-prompt"
-              data-autofocus
-              className="input"
-              rows={4}
-              placeholder="What would you like the agent to work on?"
-              value={initialPrompt}
-              onChange={(e) => setInitialPrompt(e.target.value)}
-            />
+            <label>Initial Prompt (optional)</label>
+            {editorReady && (
+              <SkillEditor
+                editorKey={`directagent-${editorSeq}`}
+                initialText={initialPrompt}
+                commands={skillCommands}
+                ariaLabel="Initial Prompt"
+                placeholder="What would you like the agent to work on?"
+                className="chat-composer__textarea chat-composer__textarea--dialog"
+                onChangeText={(next) => setInitialPrompt(next)}
+                onSubmit={() => void submit()}
+              />
+            )}
           </div>
 
           <div className="form-field">

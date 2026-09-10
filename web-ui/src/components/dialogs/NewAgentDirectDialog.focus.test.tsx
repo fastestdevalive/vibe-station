@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { DirectAgentDialog } from "./DirectAgentDialog";
+import { NewAgentDirectDialog } from "./NewAgentDirectDialog";
 
 /**
  * The mode <Select> renders before the Initial Prompt textarea in DOM order,
@@ -9,11 +9,11 @@ import { DirectAgentDialog } from "./DirectAgentDialog";
  * would land on the dropdown unless the prompt field opts in via
  * `data-autofocus`.
  */
-describe("DirectAgentDialog — prompt autofocus", () => {
+describe("NewAgentDirectDialog — prompt autofocus", () => {
   it("focuses the initial-prompt textarea on open, not the mode dropdown", async () => {
     const api = createMockApi();
     render(
-      <DirectAgentDialog
+      <NewAgentDirectDialog
         open
         api={api}
         projectId="proj-a"

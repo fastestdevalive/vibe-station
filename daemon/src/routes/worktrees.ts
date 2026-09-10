@@ -418,9 +418,17 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
     const branchInput = result.data.branch?.trim() || undefined;
     let { modeId } = result.data;
     // Channel resolution (Decision 1/11): `channel: "json"` pins useTmux=false.
-    const isJson = result.data.channel === "json";
-    const useTmux = isJson ? false : resolveUseTmux(rawUseTmux);
-    const channel: Channel = result.data.channel ?? resolveChannel(useTmux);
+    // A worktree's main session is always an agent, so when the caller supplies
+    // neither a channel nor useTmux the default is now `json` (Rich Chat)
+    // instead of the legacy tmux terminal.
+    const channel: Channel =
+      result.data.channel ??
+      (result.data.useTmux === undefined
+        ? "json"
+        : resolveChannel(resolveUseTmux(rawUseTmux)));
+    const isJson = channel === "json";
+    // `useTmux` MUST agree with `channel` (see the sessions route derivation).
+    const useTmux = channel === "tmux";
 
     // Resolve modeId by name fallback so CLI callers using --mode <name> work.
     try {

@@ -24,8 +24,8 @@ import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShort
 import { sessionLabel } from "@/lib/sessionLabel";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
-import { NewSessionDialog } from "@/components/dialogs/NewSessionDialog";
-import { NewTabDialog } from "@/components/dialogs/NewTabDialog";
+import { NewAgentSessionDialog } from "@/components/dialogs/NewAgentSessionDialog";
+import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
 
 export function Workspace() {
   const location = useLocation();
@@ -570,7 +570,7 @@ export function Workspace() {
         )
       ) : null}
       {activeWorktreeProject ? (
-        <NewSessionDialog
+        <NewAgentSessionDialog
           open={shortcutNewWorktreeOpen}
           projectId={activeWorktreeProject.id}
           projectName={activeWorktreeProject.name}
@@ -580,7 +580,7 @@ export function Workspace() {
         />
       ) : null}
       {activeWorktree ? (
-        <NewTabDialog
+        <NewAgentTabDialog
           open={shortcutNewAgentOpen}
           api={api}
           worktreeId={activeWorktree.id}

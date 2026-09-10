@@ -375,7 +375,7 @@ describe("project-store (SQL-backed)", () => {
       const wtRes = await app.inject({
         method: "POST",
         url: "/worktrees",
-        payload: { projectId: project.id, branch: "feature-x", modeId: "bug-fix" },
+        payload: { projectId: project.id, branch: "feature-x", modeId: "bug-fix", channel: "tmux" },
       });
       expect(wtRes.statusCode).toBe(201);
       const created = wtRes.json<{ id: string; branch: string }>();

@@ -2,16 +2,16 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
-import { NewSessionDialog } from "./NewSessionDialog";
+import { NewAgentSessionDialog } from "./NewAgentSessionDialog";
 
-describe("NewSessionDialog", () => {
+describe("NewAgentSessionDialog", () => {
   it("new worktree with an explicit branch calls create APIs", async () => {
     const user = userEvent.setup();
     const api = createMockApi();
     const cw = vi.spyOn(api, "createWorktree");
     const cs = vi.spyOn(api, "createSession");
     render(
-      <NewSessionDialog
+      <NewAgentSessionDialog
         open
         api={api}
         projectId="proj-a"
@@ -41,7 +41,7 @@ describe("NewSessionDialog", () => {
     const api = createMockApi();
     const cw = vi.spyOn(api, "createWorktree");
     render(
-      <NewSessionDialog
+      <NewAgentSessionDialog
         open
         api={api}
         projectId="proj-a"
@@ -68,7 +68,7 @@ describe("NewSessionDialog", () => {
     const api = createMockApi();
     const cw = vi.spyOn(api, "createWorktree");
     render(
-      <NewSessionDialog
+      <NewAgentSessionDialog
         open
         api={api}
         projectId="proj-a"
@@ -97,7 +97,7 @@ describe("NewSessionDialog", () => {
     vi.spyOn(api, "listProjectBranches").mockRejectedValue(new Error("offline"));
     const cw = vi.spyOn(api, "createWorktree");
     render(
-      <NewSessionDialog
+      <NewAgentSessionDialog
         open
         api={api}
         projectId="proj-a"
@@ -121,7 +121,7 @@ describe("NewSessionDialog", () => {
   it("focuses the initial-prompt textarea on open, not the Branch field", async () => {
     const api = createMockApi();
     render(
-      <NewSessionDialog
+      <NewAgentSessionDialog
         open
         api={api}
         projectId="proj-a"

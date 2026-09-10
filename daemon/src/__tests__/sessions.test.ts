@@ -579,15 +579,19 @@ describe("Session routes", () => {
     const spawnMock = vi.mocked(spawnSession);
     const spawnArgvMock = vi.mocked(spawnSessionFromArgv);
 
-    const listRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
-    const mainId = listRes.json<SessionRecord[]>()[0]?.id;
+    const createRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "tmux" },
+    });
+    const created = createRes.json<SessionRecord>();
     await new Promise((r) => setTimeout(r, 200));
 
     spawnMock.mockClear();
     spawnArgvMock.mockClear();
     hasSessionMock.mockResolvedValueOnce(true);
 
-    const res = await app.inject({ method: "POST", url: `/sessions/${mainId}/resume` });
+    const res = await app.inject({ method: "POST", url: `/sessions/${created.id}/resume` });
     expect(res.statusCode).toBe(200);
     // Neither spawn path should run — an already-live pane must never be
     // killed and replaced by a racing resume.
@@ -605,7 +609,13 @@ describe("Session routes", () => {
     it("2.T1 — kills the tmux pane and keeps the session record", async () => {
       const tmux = await import("../services/tmux.js");
       vi.mocked(tmux.killSession).mockClear();
-      const main = await mainSession();
+      // TMXU-channel agent — `done`'s pane-kill path is a TTY concern.
+      const createRes = await app.inject({
+        method: "POST",
+        url: "/sessions",
+        payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "tmux" },
+      });
+      const main = createRes.json<SessionRecord>();
 
       const res = await app.inject({ method: "POST", url: `/sessions/${main.id}/done` });
       expect(res.statusCode).toBe(200);
@@ -646,7 +656,7 @@ describe("Session routes", () => {
       const created = await app.inject({
         method: "POST",
         url: "/sessions",
-        payload: { projectId, target: "direct", type: "agent", modeId: "bugfix" },
+        payload: { projectId, target: "direct", type: "agent", modeId: "bugfix", channel: "tmux" },
       });
       expect(created.statusCode).toBe(201);
       const direct = created.json<SessionRecord>();
@@ -682,7 +692,7 @@ describe("Session routes", () => {
       const created = await app.inject({
         method: "POST",
         url: "/sessions",
-        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+        payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "tmux" },
       });
       const sess = created.json<SessionRecord>();
 
@@ -713,7 +723,7 @@ describe("Session routes", () => {
       const created = await app.inject({
         method: "POST",
         url: "/sessions",
-        payload: { worktreeId, type: "agent", modeId: "bugfix" },
+        payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "tmux" },
       });
       const sess = created.json<SessionRecord>();
       await app.inject({ method: "POST", url: `/sessions/${sess.id}/done` });
@@ -895,11 +905,23 @@ describe("Session routes", () => {
     expect(res.json<{ channel?: string }>().channel).toBe("json");
   });
 
-  it("2.T4 — TTY (default channel) agent create still spawns (state → working)", async () => {
+  it("2.T4 — default channel for a plain agent create is now json (Rich Chat)", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/sessions",
       payload: { worktreeId, type: "agent", modeId: "bugfix" },
+    });
+    expect(res.statusCode).toBe(201);
+    const created = res.json<{ id: string; channel?: string; useTmux?: boolean }>();
+    expect(created.channel).toBe("json");
+    expect(created.useTmux).toBe(false);
+  });
+
+  it("2.T4b — explicit channel:tmux agent create still spawns a TTY (state → working)", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { worktreeId, type: "agent", modeId: "bugfix", channel: "tmux" },
     });
     expect(res.statusCode).toBe(201);
     const created = res.json<{ id: string; channel?: string }>();
