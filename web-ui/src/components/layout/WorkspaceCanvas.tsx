@@ -691,7 +691,7 @@ export function WorkspaceCanvas({
   // Free-form drag: window-level mousemove/mouseup, fixed drag-start baseline
   // (Layout.tsx's startSidebarResize idiom) — never incremental against the
   // live rect, or the tile chases the cursor.
-  function startDrag(e: React.MouseEvent, tileId: string) {
+  function startDrag(e: React.PointerEvent, tileId: string) {
     e.preventDefault();
     const container = bodyRef.current;
     const rect = cv.freeRects[tileId];
@@ -701,12 +701,12 @@ export function WorkspaceCanvas({
     const startY = e.clientY;
     const startRect = { ...rect };
     // Same threshold idiom as startTileDrag below — without it, the tiniest
-    // mouse jitter during a click nudges the tile by a fraction of a percent,
+    // pointer jitter during a click nudges the tile by a fraction of a percent,
     // AND a plain click (title-bar-click-to-fullscreen) would never reach
     // `onUp` with zero movement to distinguish it from a real drag.
     let armed = false;
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       if (!armed) {
         if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 5) return;
         armed = true;
@@ -718,8 +718,8 @@ export function WorkspaceCanvas({
       const cur = readCanvas();
       if (!cur) return;
       // `z` is read live, not from `startRect`: the click-to-front listener
-      // (mousedown, capture phase) raises `z` before this handler's own
-      // mousedown-triggered `startRect` snapshot is taken, but React hasn't
+      // (pointerdown, capture phase) raises `z` before this handler's own
+      // pointerdown-triggered `startRect` snapshot is taken, but React hasn't
       // re-rendered yet, so `startRect.z` is already stale — using it here
       // would silently undo the raise on the very first drag frame.
       const liveZ = cur.freeRects[tileId]?.z ?? startRect.z;
@@ -728,15 +728,17 @@ export function WorkspaceCanvas({
       });
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       if (!armed) toggleFullscreen(tileId);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
-  function startResize(e: React.MouseEvent, tileId: string) {
+  function startResize(e: React.PointerEvent, tileId: string) {
     e.preventDefault();
     e.stopPropagation();
     const container = bodyRef.current;
@@ -747,7 +749,7 @@ export function WorkspaceCanvas({
     const startY = e.clientY;
     const startRect = { ...rect };
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const dwPct = ((ev.clientX - startX) / containerRect.width) * 100;
       const dhPct = ((ev.clientY - startY) / containerRect.height) * 100;
       const nextW = clamp(startRect.w + dwPct, 12, Math.max(12, 100 - startRect.x));
@@ -760,18 +762,20 @@ export function WorkspaceCanvas({
       });
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Tiled divider drag: baseSizes captured ONCE at drag-start (the two
   // adjacent children's sizes right now), deltaFraction computed cumulative-
   // from-drag-start against a fixed container-of-this-split size — never
   // incremental, per lib/tiling.ts's resizeSplit contract.
-  function startDividerDrag(e: React.MouseEvent, node: SplitNode, dividerIndex: number) {
+  function startDividerDrag(e: React.PointerEvent, node: SplitNode, dividerIndex: number) {
     e.preventDefault();
     const splitEl = splitRefs.current[node.id] ?? bodyRef.current;
     if (!splitEl) return;
@@ -785,7 +789,7 @@ export function WorkspaceCanvas({
     ];
     const splitId = node.id;
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const deltaPx = node.axis === "row" ? ev.clientX - startX : ev.clientY - startY;
       const deltaFraction = totalPx > 0 ? deltaPx / totalPx : 0;
       const cur = readCanvas();
@@ -794,11 +798,13 @@ export function WorkspaceCanvas({
       patchCanvas({ tree: nextTree });
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   /**
@@ -879,13 +885,13 @@ export function WorkspaceCanvas({
    * Tiled-mode header drag → drop onto another tile's edge (split) or center
    * (swap). Same window-level mousemove/mouseup idiom as every other drag here.
    */
-  function startTileDrag(e: React.MouseEvent, tileId: string) {
+  function startTileDrag(e: React.PointerEvent, tileId: string) {
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
     let armed = false;
 
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       if (!armed) {
         // Small threshold so a click on the header (e.g. to focus) isn't a drag.
         if (Math.abs(ev.clientX - startX) + Math.abs(ev.clientY - startY) < 5) return;
@@ -895,16 +901,18 @@ export function WorkspaceCanvas({
       setDrop(hitTestDrop(ev.clientX, ev.clientY, tileId));
     }
     function onUp() {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       const target = dropTargetRef.current;
       setDrop(null);
       setDraggingTileId(null);
       if (armed && target) applyDrop(tileId, target);
       else if (!armed) toggleFullscreen(tileId);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   function renderTileChrome(tile: TileSpec, style?: CSSProperties): ReactNode {
@@ -1003,7 +1011,7 @@ export function WorkspaceCanvas({
                 ? "Click to fullscreen · drag to move"
                 : "Click to fullscreen · drag to rearrange"
           }
-          onMouseDown={
+          onPointerDown={
             cv.mode === "free"
               ? (e) => startDrag(e, tile.id)
               : (e) => startTileDrag(e, tile.id)
@@ -1018,7 +1026,7 @@ export function WorkspaceCanvas({
               aria-label={`${label} actions`}
               title="Agent actions"
               aria-expanded={tileMenu?.tileId === tile.id}
-              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
                 setTileMenu((prev) =>
@@ -1040,7 +1048,7 @@ export function WorkspaceCanvas({
             className="workspace-canvas__tile-close"
             aria-label={isFullscreen ? "Exit fullscreen" : `Remove ${label} tile`}
             title={isFullscreen ? "Exit fullscreen" : "Remove from canvas"}
-            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               if (isFullscreen) toggleFullscreen(tile.id);
@@ -1060,7 +1068,7 @@ export function WorkspaceCanvas({
         {cv.mode === "free" && !isFullscreen ? (
           <div
             className="workspace-canvas__tile-resize"
-            onMouseDown={(e) => startResize(e, tile.id)}
+            onPointerDown={(e) => startResize(e, tile.id)}
           />
         ) : null}
       </div>
@@ -1096,7 +1104,7 @@ export function WorkspaceCanvas({
               <div
                 key={`${child.id}-divider`}
                 className={`workspace-canvas__divider workspace-canvas__divider--${node.axis}`}
-                onMouseDown={(e) => startDividerDrag(e, node, i)}
+                onPointerDown={(e) => startDividerDrag(e, node, i)}
               />,
             );
           }
