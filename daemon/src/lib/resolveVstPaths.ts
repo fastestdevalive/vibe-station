@@ -57,7 +57,7 @@ export function resolveVstCliBinSource(): string | undefined {
 export function resolveVstSkillSource(): string | undefined {
   if (process.env.VST_SKILL_PATH) return process.env.VST_SKILL_PATH;
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidate = resolve(here, "../../../../skill/SKILL.md");
+  const candidate = resolve(here, "../../../skill/SKILL.md");
   return existsSync(candidate) ? candidate : undefined;
 }
 
