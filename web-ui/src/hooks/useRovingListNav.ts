@@ -14,6 +14,9 @@ export interface UseRovingListNavOptions {
   onOpen: (path: string) => void;
   /** Called on ArrowRight/ArrowLeft for a row with `expandable: true`. */
   onToggle?: (path: string) => void;
+  /** When true, ArrowUp/ArrowDown also call `onOpen` for non-expandable rows,
+   *  giving instant preview-as-you-navigate behaviour (like VSCode's explorer). */
+  openOnArrow?: boolean;
 }
 
 export interface UseRovingListNavResult {
@@ -48,13 +51,19 @@ export function useRovingListNav(
       case "ArrowDown": {
         e.preventDefault();
         const next = idx < 0 ? rows[0] : rows[idx + 1];
-        if (next) setCursorPath(next.path);
+        if (next) {
+          setCursorPath(next.path);
+          if (opts.openOnArrow && !next.expandable) opts.onOpen(next.path);
+        }
         break;
       }
       case "ArrowUp": {
         e.preventDefault();
         const prev = idx < 0 ? rows[0] : rows[idx - 1];
-        if (prev) setCursorPath(prev.path);
+        if (prev) {
+          setCursorPath(prev.path);
+          if (opts.openOnArrow && !prev.expandable) opts.onOpen(prev.path);
+        }
         break;
       }
       case "ArrowRight":

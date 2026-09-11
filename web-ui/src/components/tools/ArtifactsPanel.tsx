@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { Copy, Download, FileText, FolderUp, Image as ImageIcon, Package, Trash2, Upload } from "lucide-react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Columns2, Copy, Download, FileText, FolderUp, Image as ImageIcon, Package, Rows2, Trash2, Upload } from "lucide-react";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 
 /**
  * Artifacts tool — files the agent produced outside the worktree (screenshots,
@@ -29,10 +31,78 @@ function kindIcon(kind: ArtifactKind) {
   return <FileText size={14} aria-hidden />;
 }
 
-export function ArtifactsPanel() {
+interface ArtifactsPanelProps {
+  worktreeId?: string | null;
+}
+
+export function ArtifactsPanel({ worktreeId }: ArtifactsPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
+  const setMasterDetailVertical = useWorkspaceStore((s) => s.setMasterDetailVertical);
+  const vertical = worktreeId
+    ? !!(layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical
+    : false;
   const items = SAMPLE;
   const selected = items.find((a) => a.id === selectedId) ?? null;
+
+  const list = (
+    <ul className="artifacts-list" role="listbox" aria-label="Artifacts">
+      {items.map((a) => (
+        <li key={a.id}>
+          <button
+            type="button"
+            role="option"
+            aria-selected={a.id === selectedId}
+            data-active={a.id === selectedId}
+            className="artifacts-list__row"
+            onClick={() => setSelectedId(a.id)}
+          >
+            <span className="artifacts-list__icon">{kindIcon(a.kind)}</span>
+            <span className="artifacts-list__name">{a.name}</span>
+            <span className="artifacts-list__meta">{a.size} · {a.when} · {a.source}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+
+  const detail = (
+    <div className="artifacts-detail">
+      {selected ? (
+        <>
+          <div className="artifacts-detail__head">
+            <span className="artifacts-detail__title">{selected.name}</span>
+            <div className="artifacts-detail__actions">
+              <button type="button" className="artifacts-detail__btn" disabled title="Download (coming soon)">
+                <Download size={14} />
+              </button>
+              <button type="button" className="artifacts-detail__btn" disabled title="Copy path (coming soon)">
+                <Copy size={14} />
+              </button>
+              <button type="button" className="artifacts-detail__btn" disabled title="Delete (coming soon)">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+          <div className="artifacts-detail__view">
+            {selected.kind === "image" ? (
+              <div className="artifacts-detail__image-ph" aria-hidden>
+                <ImageIcon size={32} />
+                <span>Image preview</span>
+              </div>
+            ) : (
+              <pre className="artifacts-detail__text-ph" aria-hidden>{`// ${selected.name}\n// text/log preview renders here`}</pre>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="artifacts-detail__empty">
+          <Package size={28} aria-hidden />
+          <p>Select an artifact to preview it here. Tapping opens an image lightbox or text viewer with download, copy-path, and delete.</p>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="artifacts-panel">
@@ -46,62 +116,32 @@ export function ArtifactsPanel() {
             <FolderUp size={14} /> Upload folder
           </button>
         </div>
+        {worktreeId ? (
+          <button
+            type="button"
+            className={`files-topbar__tree-toggle${vertical ? " files-topbar__tree-toggle--on" : ""}`}
+            aria-label={vertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
+            aria-pressed={vertical}
+            title={vertical ? "Side-by-side layout" : "Stacked layout"}
+            onClick={() => setMasterDetailVertical(worktreeId, !vertical)}
+          >
+            {vertical ? <Columns2 size={15} /> : <Rows2 size={15} />}
+          </button>
+        ) : null}
       </div>
-      <div className="artifacts-panel__split">
-        <ul className="artifacts-list" role="listbox" aria-label="Artifacts">
-          {items.map((a) => (
-            <li key={a.id}>
-              <button
-                type="button"
-                role="option"
-                aria-selected={a.id === selectedId}
-                data-active={a.id === selectedId}
-                className="artifacts-list__row"
-                onClick={() => setSelectedId(a.id)}
-              >
-                <span className="artifacts-list__icon">{kindIcon(a.kind)}</span>
-                <span className="artifacts-list__name">{a.name}</span>
-                <span className="artifacts-list__meta">{a.size} · {a.when} · {a.source}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="artifacts-detail">
-          {selected ? (
-            <>
-              <div className="artifacts-detail__head">
-                <span className="artifacts-detail__title">{selected.name}</span>
-                <div className="artifacts-detail__actions">
-                  <button type="button" className="artifacts-detail__btn" disabled title="Download (coming soon)">
-                    <Download size={14} />
-                  </button>
-                  <button type="button" className="artifacts-detail__btn" disabled title="Copy path (coming soon)">
-                    <Copy size={14} />
-                  </button>
-                  <button type="button" className="artifacts-detail__btn" disabled title="Delete (coming soon)">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-              <div className="artifacts-detail__view">
-                {selected.kind === "image" ? (
-                  <div className="artifacts-detail__image-ph" aria-hidden>
-                    <ImageIcon size={32} />
-                    <span>Image preview</span>
-                  </div>
-                ) : (
-                  <pre className="artifacts-detail__text-ph" aria-hidden>{`// ${selected.name}\n// text/log preview renders here`}</pre>
-                )}
-              </div>
-            </>
-          ) : (
-            <div className="artifacts-detail__empty">
-              <Package size={28} aria-hidden />
-              <p>Select an artifact to preview it here. Tapping opens an image lightbox or text viewer with download, copy-path, and delete.</p>
-            </div>
-          )}
-        </div>
-      </div>
+      <PanelGroup
+        direction={vertical ? "vertical" : "horizontal"}
+        autoSaveId={`vs-artifacts${worktreeId ? `-${worktreeId}` : ""}-${vertical ? "v" : "h"}`}
+        className="artifacts-panel__split"
+      >
+        <Panel defaultSize={vertical ? 40 : 34} minSize={20}>
+          {list}
+        </Panel>
+        <PanelResizeHandle className={vertical ? "resize-handle resize-handle--row" : "resize-handle resize-handle--col"} />
+        <Panel defaultSize={vertical ? 60 : 66} minSize={30}>
+          {detail}
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }

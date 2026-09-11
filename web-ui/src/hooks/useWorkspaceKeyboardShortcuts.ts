@@ -3,7 +3,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 
 /**
  * ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
- * ⌘/Ctrl+P quick-open files; ⌘/Ctrl+\ → toggle tool pane;
+ * ⌘/Ctrl+P quick-open files; ⌘/Ctrl+\ or ⌘/Ctrl+B → toggle tool pane;
  * ⌘/Ctrl+Shift+G → new agent in current worktree;
  * ⌘/Ctrl+Shift+M → new worktree in the current project;
  * Alt+N → new agent in the current worktree;
@@ -81,6 +81,13 @@ export function useWorkspaceKeyboardShortcuts(
       // the backslash on US and similar layouts; Ctrl+Shift+\ produces
       // `e.key === "|"` so this never conflicts).
       if (!e.shiftKey && e.key === "\\") {
+        e.preventDefault();
+        toggleToolPanel();
+        return;
+      }
+
+      // ⌘/Ctrl+B — toggle tool pane (VS Code-style sidebar shortcut).
+      if (!e.shiftKey && e.key.toLowerCase() === "b") {
         e.preventDefault();
         toggleToolPanel();
         return;

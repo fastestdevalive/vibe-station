@@ -78,19 +78,84 @@
   cursor: not-allowed;
 }
 
+/* Chat pane top-right overlay — font buttons + ⇄ Terminal toggle. Same visual
+   treatment as the terminal-font-overlay but anchored to .chat-pane instead. */
+.chat-font-overlay {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.chat-font-overlay .channel-toggle-button {
+  position: static;
+  top: auto;
+  right: auto;
+}
+.chat-font-overlay__btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Font size + channel toggle overlay — groups −/+ buttons with the ⇄ toggle
+   in the top-right corner of the terminal pane. The channel-toggle-button's
+   own absolute positioning is neutralized here; the wrapper owns it instead. */
+.terminal-font-overlay {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.terminal-font-overlay .channel-toggle-button {
+  position: static;
+  top: auto;
+  right: auto;
+}
+.terminal-font-overlay__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  opacity: 0.85;
+}
+.terminal-font-overlay__btn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+  opacity: 1;
+}
+
 /* Exited terminal: the toggle drops out of the top-right overlay and sits in
    normal flow just below the "Session exited / Resume" banner. Neutralize the
-   shared button's absolute positioning so it lays out inline (right-aligned). */
+   wrapper's absolute positioning so it lays out inline (right-aligned). */
 .terminal-exited-toggle {
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   padding: var(--space-2);
 }
-.terminal-exited-toggle .channel-toggle-button {
+.terminal-exited-toggle .channel-toggle-button,
+.terminal-exited-toggle .terminal-font-overlay {
   position: static;
   top: auto;
   right: auto;
+}
+.terminal-exited-toggle .terminal-font-overlay {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* ── Terminal-mode file upload (item 3) — separate control from the channel

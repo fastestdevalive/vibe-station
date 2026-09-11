@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { SessionMeta, TurnState } from "@/api/types";
 import { ModelSwitch } from "./ModelSwitch";
@@ -23,6 +23,8 @@ interface StatusBarProps {
   atBottom?: boolean;
   /** Notice slot (subagent-ux-v2) — when running, overrides the status label. */
   noticeSlot?: { children: Record<string, string>; running: boolean };
+  /** Font -/+ controls rendered to the left of the channel toggle overlay. */
+  fontControls?: ReactNode;
 }
 
 function fmt(n: number): string {
@@ -61,7 +63,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * branching). Fields absent from `meta` (e.g. costUsd, contextWindow) hide
  * gracefully.
  */
-export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true, noticeSlot }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true, noticeSlot, fontControls }: StatusBarProps) {
   const usage = meta?.usage;
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
@@ -178,27 +180,33 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
       </div>
       {/* Positioned via CSS as a top-right overlay of the whole `.chat-pane`
           (item 4) — NOT visually anchored to this row, even though it's
-          declared here alongside the rest of the toggle's gating logic. */}
-      {canToggle ? (
-        <ChannelToggleButton
-          api={api!}
-          sessionId={sessionId!}
-          direction="toTerminal"
-          triggerDisabled={!idle}
-          confirmBlocked={!idle}
-          blockedMessage="The session just went busy — wait for it to finish (or clear the queue) before switching."
-          {...(() => {
-            const warnings = [
-              supportsResume === false
-                ? `⚠ ${cli} can't resume in the terminal — this switch starts a FRESH terminal conversation instead of continuing this one. Your Rich Chat history stays intact and untouched.`
-                : null,
-              importsHistory === false
-                ? `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`
-                : null,
-            ].filter((w): w is string => w !== null);
-            return warnings.length > 0 ? { warning: warnings.join("\n\n") } : {};
-          })()}
-        />
+          declared here alongside the rest of the toggle's gating logic. Font
+          controls are co-located here for discoverability. */}
+      {canToggle || fontControls ? (
+        <div className="chat-font-overlay">
+          {fontControls}
+          {canToggle ? (
+            <ChannelToggleButton
+              api={api!}
+              sessionId={sessionId!}
+              direction="toTerminal"
+              triggerDisabled={!idle}
+              confirmBlocked={!idle}
+              blockedMessage="The session just went busy — wait for it to finish (or clear the queue) before switching."
+              {...(() => {
+                const warnings = [
+                  supportsResume === false
+                    ? `⚠ ${cli} can't resume in the terminal — this switch starts a FRESH terminal conversation instead of continuing this one. Your Rich Chat history stays intact and untouched.`
+                    : null,
+                  importsHistory === false
+                    ? `⚠ ${cli} can't read its terminal history yet — anything you do in the terminal won't appear back in Rich Chat, though the agent still remembers it.`
+                    : null,
+                ].filter((w): w is string => w !== null);
+                return warnings.length > 0 ? { warning: warnings.join("\n\n") } : {};
+              })()}
+            />
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

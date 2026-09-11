@@ -392,6 +392,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
       else openFile(path);
     },
     onToggle: (path) => toggle(path),
+    openOnArrow: true,
   });
 
   // Keep DOM focus following the roving cursor so subsequent key events land
@@ -481,6 +482,8 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
               ? "Worktree files, git markers loading"
               : "Worktree files"
         }
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
         onFocusCapture={() => setFocusedPane("file-tree")}
       >
         <div style={{ minWidth: "max-content" }}>
@@ -522,7 +525,6 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
                   style={{ paddingLeft: `calc(${row.level} * var(--space-4) + var(--space-2))` }}
                   onClick={() => (isDir ? toggle(row.path) : openFile(row.path))}
                   onFocus={() => setCursorPath(row.path)}
-                  onKeyDown={handleKeyDown}
                 >
                   <span className="tree-row__kind-icon" aria-hidden>
                     {isDir ? (
