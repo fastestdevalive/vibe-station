@@ -2687,6 +2687,117 @@
   margin: var(--space-2) 0;
 }
 
+/* Inline markdown image — static (no zoom/pan), click opens fullscreen overlay. */
+.markdown-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: var(--space-2) 0;
+  cursor: zoom-in;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Zoomable media (shared image zoom/pan — TODO 2/3) ──────────────────── */
+
+.zoomable-media {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: zoom-in;
+  user-select: none;
+}
+
+.zoomable-media--fullscreen {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+.zoomable-media--fullscreen:active {
+  cursor: grabbing;
+}
+
+.zoomable-media__img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  will-change: transform;
+  transform-origin: center;
+  border-radius: var(--radius-sm);
+}
+
+.zoomable-media--fullscreen .zoomable-media__img {
+  border-radius: 0;
+}
+
+.zoomable-media__reset {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 1;
+  border: none;
+  background: color-mix(in srgb, var(--bg-elevated) 85%, transparent);
+  color: var(--fg-primary);
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.image-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.image-zoom-overlay__controls {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.image-zoom-overlay__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-zoom-overlay__btn:hover {
+  background: var(--bg-input);
+}
+
+/* File-preview image — fills the pane; object-fit: contain letterboxes it. */
+.preview-image {
+  width: 100%;
+  height: 100%;
+}
+
+.preview-image .zoomable-media__img {
+  width: 100%;
+  height: 100%;
+}
+
 .workspace-markdown-preview strong {
   color: var(--fg-primary);
   font-weight: 700;

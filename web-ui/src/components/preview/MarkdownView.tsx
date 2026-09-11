@@ -4,6 +4,8 @@ import rehypeHighlight from "rehype-highlight";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { CodeBlock } from "./CodeBlock";
+import { ImageZoomOverlay } from "./ImageZoomOverlay";
+import { resolveImagePath } from "@/lib/imageFile";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 
@@ -19,6 +21,7 @@ interface MarkdownImageProps {
 
 function MarkdownImage({ src, alt, api, worktreeId, scope, fileDir }: MarkdownImageProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const isRemote =
     !src ||
@@ -32,11 +35,9 @@ function MarkdownImage({ src, alt, api, worktreeId, scope, fileDir }: MarkdownIm
     let cancelled = false;
     let objectUrl: string | null = null;
 
-    // Root-absolute paths (src="/images/foo.png") resolve from worktree root,
-    // not relative to fileDir — strip the leading slash and skip joining.
-    const imagePath = src.startsWith("/")
-      ? src.replace(/^\/+/, "")
-      : fileDir ? `${fileDir}/${src}` : src;
+    // Root-absolute paths (src="/images/foo.png") resolve from the context
+    // root; relative paths resolve against `fileDir` (null in chat → root).
+    const imagePath = resolveImagePath(src, fileDir);
 
     api.getFileBlob(worktreeId, imagePath, scope).then((blob) => {
       if (cancelled) return;
@@ -51,11 +52,20 @@ function MarkdownImage({ src, alt, api, worktreeId, scope, fileDir }: MarkdownIm
     };
   }, [src, api, worktreeId, scope, fileDir, isRemote]);
 
-  if (isRemote && src) {
-    return <img src={src} alt={alt ?? ""} className="markdown-img" />;
-  }
-  if (!blobUrl) return null;
-  return <img src={blobUrl} alt={alt ?? ""} className="markdown-img" />;
+  const imgSrc = isRemote ? src : blobUrl;
+  if (!imgSrc) return null;
+  return (
+    <>
+      <img
+        src={imgSrc}
+        alt={alt ?? ""}
+        className="markdown-img"
+        draggable={false}
+        onClick={() => setFullscreen(true)}
+      />
+      <ImageZoomOverlay src={fullscreen ? imgSrc : null} alt={alt} onClose={() => setFullscreen(false)} />
+    </>
+  );
 }
 
 interface MarkdownViewProps {

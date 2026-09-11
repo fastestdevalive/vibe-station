@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 import mermaid from "mermaid";
 import { MermaidView } from "./MermaidView";
@@ -69,3 +69,31 @@ describe("MermaidView hardening (RA2)", () => {
     }
   });
 });
+
+describe("MermaidView fullscreen (4.T1)", () => {
+  it("wraps a successful render in a clickable wrapper (role=button)", async () => {
+    const { container } = render(<MermaidView chart="graph TD; A-->B" theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
+    const clickable = container.querySelector(".mermaid-view--clickable");
+    expect(clickable).toBeTruthy();
+    expect(clickable?.getAttribute("role")).toBe("button");
+  });
+
+  it("opens the shared fullscreen overlay on click", async () => {
+    const { container } = render(<MermaidView chart="graph TD; A-->B" theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
+    fireEvent.click(container.querySelector(".mermaid-view--clickable") as HTMLElement);
+    // Portal renders into document.body.
+    expect(document.body.querySelector(".image-zoom-overlay")).toBeTruthy();
+    expect(document.body.querySelector(".image-zoom-overlay img")).toBeTruthy();
+  });
+
+  it("does NOT open fullscreen from a failed render (<pre> fallback not clickable)", async () => {
+    mockedMermaid.render.mockRejectedValueOnce(new Error("boom"));
+    const { container } = render(<MermaidView chart="not a diagram" theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-fallback")).toBeTruthy());
+    expect(container.querySelector(".mermaid-view--clickable")).toBeNull();
+    expect(document.body.querySelector(".image-zoom-overlay")).toBeNull();
+  });
+});
+

@@ -9,7 +9,10 @@ import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { CodeView } from "@/components/preview/CodeView";
+import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
+import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
+import { isImagePath } from "@/lib/imageFile";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
 import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
 
@@ -51,7 +54,29 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const { theme } = useTheme();
   const themeMode = theme;
 
-  const [fileBody, setFileBody] = useState<string | null>(null);
+  // Identity of the content this pane is currently asked to show. Fetched
+  // bodies are stored together with the key they were fetched for and only
+  // rendered while that key still matches — so the previous file's markdown
+  // is never rendered under the new `path` while the new fetch is in flight.
+  // (That mismatch made `MarkdownView` resolve the old file's relative image
+  // srcs against the new file's directory: blob URLs were revoked and
+  // refetched from paths that don't exist, so images blinked out or 404'd.)
+  // A watcher-triggered refetch keeps the same key, so the old body stays on
+  // screen until the fresh one lands — no "Loading…" flash on every save.
+  const bodyKey =
+    worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}` : null;
+  const [loaded, setLoaded] = useState<{ key: string; fileBody: string | null; diffBody: string | null } | null>(null);
+  const fileBody = loaded && loaded.key === bodyKey ? loaded.fileBody : null;
+  const diffBody = loaded && loaded.key === bodyKey ? loaded.diffBody : null;
+  // Blob URL for binary image files — fetched separately since images aren't
+  // text; rendered via ZoomableMedia instead of CodeView. Stored together with
+  // the key it was fetched for (mirrors `bodyKey` above) so a watcher-triggered
+  // refetch keeps the current blob on screen until the fresh one lands.
+  const imageKey =
+    worktreeId && path && isImagePath(path) ? `${fileScope}\0${worktreeId}\0${path}` : null;
+  const [imageBlob, setImageBlob] = useState<{ key: string; url: string } | null>(null);
+  const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
+  const [imageFullscreen, setImageFullscreen] = useState(false);
   const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
   // watchFile() watches the parent dir): a tree-level change to this
@@ -60,14 +85,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // contract (Phase 7, Requirement 5).
   const { lastChanged: treeLastChanged } = useTreeWatch(api, worktreeId, fileScope);
 
-  const [diffBody, setDiffBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
 
   useEffect(() => {
-    if (!worktreeId || !path) {
-      setFileBody(null);
-      setDiffBody(null);
+    if (!bodyKey || !worktreeId || !path || isImagePath(path)) {
+      setLoaded(null);
       setError(null);
       setTooLarge(false);
       return;
@@ -89,19 +112,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             api.getFile(worktreeId, path, fileScope),
             fileScope === "project" ? Promise.resolve(null) : api.getDiff(worktreeId, path, "local").catch(() => null),
           ]);
-          if (!cancelled) {
-            setFileBody(text);
-            setDiffBody(d);
-          }
+          if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "local") {
           const [text, d] = await Promise.all([
             api.getFile(worktreeId, path),
             api.getDiff(worktreeId, path, "local"),
           ]);
-          if (!cancelled) {
-            setFileBody(text);
-            setDiffBody(d);
-          }
+          if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "branch") {
           // Decision 7: `git diff <baseSha> -- <path>` already diffs the base
           // SHA against the working tree, i.e. the same content `getFile`
@@ -111,26 +128,19 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
             api.getFile(worktreeId, path),
             api.getDiff(worktreeId, path, "branch"),
           ]);
-          if (!cancelled) {
-            setFileBody(text);
-            setDiffBody(d);
-          }
+          if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else {
           // scope === "commit" — a single commit's diff against its parent
           // (or the empty tree for a root commit). No plain file content:
           // the commit view is diff-only, same as branch scope used to be.
           const d = await api.getDiff(worktreeId, path, "commit", commitSha);
-          if (!cancelled) {
-            setFileBody(null);
-            setDiffBody(d);
-          }
+          if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
       } catch (e) {
         if (e instanceof ApiError && e.status === 422) {
           if (!cancelled) {
             setTooLarge(true);
-            setFileBody(null);
-            setDiffBody(null);
+            setLoaded(null);
           }
         } else if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load");
@@ -140,7 +150,44 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha]);
+  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha]);
+
+  // Binary image files: fetch as a blob (not text) for ZoomableMedia. Gated on
+  // the path being an image + a context id existing. The blob is keyed by
+  // (fileScope, worktreeId, path); a watcher-triggered refetch keeps the same
+  // key, so the current blob stays on screen and any open fullscreen overlay
+  // stays open until the fresh blob lands (mirrors `bodyKey` for text).
+  const imageKeyRef = useRef<string | null>(imageKey);
+  useEffect(() => {
+    if (imageKeyRef.current === imageKey) return;
+    // Only when the image identity changes (switching files) do we revoke the
+    // old blob and close any open fullscreen overlay.
+    setImageFullscreen(false);
+    setImageBlob((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+    imageKeyRef.current = imageKey;
+  }, [imageKey]);
+
+  useEffect(() => {
+    if (!worktreeId || !path || !imageKey) return;
+    let cancelled = false;
+    api
+      .getFileBlob(worktreeId, path, fileScope)
+      .then((blob) => {
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setImageBlob((prev) => {
+          if (prev && prev.key === imageKey) URL.revokeObjectURL(prev.url);
+          return { key: imageKey, url };
+        });
+      })
+      .catch(() => { /* image not found — render the loading/empty state */ });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -215,7 +262,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           : [];
     if (hunks.length === 0) return null;
     return summarizeDiffLines(hunks);
-  }, [scope, diffBody, fileBody]);
+  }, [diffBody, fileBody]);
 
   // No worktree context (e.g. nothing selected yet). The dashboard has its own
   // route now, so this is a plain empty state — never dashboard/kanban content.
@@ -282,8 +329,24 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   }
 
   const isMd = path.endsWith(".md");
+  const isImage = isImagePath(path);
 
   const body = (() => {
+    if (isImage) {
+      // Binary image — render the actual image (zoomable), not raw text.
+      // Images bypass the diff scope entirely: getDiff returns 422 for binary
+      // files, and there is no meaningful text diff to show for an image.
+      return imageBlobUrl ? (
+        <ZoomableMedia
+          src={imageBlobUrl}
+          alt={path}
+          className="preview-image"
+          onOpenFullscreen={() => setImageFullscreen(true)}
+        />
+      ) : (
+        <div className="empty-state">Loading image…</div>
+      );
+    }
     if (scope === "local" || scope === "branch" || scope === "commit") {
       const diffText = diffBody ?? "";
       const fallback = fileBody ?? undefined;
@@ -319,7 +382,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
   })();
 
-  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && scope === "none");
+  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && !isImage && scope === "none");
 
   return (
     <div className="pane pane-stack">
@@ -332,6 +395,11 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       >
         {body}
       </div>
+      <ImageZoomOverlay
+        src={imageFullscreen ? imageBlobUrl : null}
+        alt={path}
+        onClose={() => setImageFullscreen(false)}
+      />
     </div>
   );
 }
