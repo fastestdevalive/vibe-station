@@ -68,7 +68,7 @@ export function registerWorktreeCreate(worktree: Command): void {
         const explicitlyPassed = opts.parent !== undefined;
         const sourceAgentId = explicitlyPassed
           ? explicitParent || undefined
-          : process.env.VST_SESSION || undefined;
+          : undefined;
 
         try {
           const result = await daemonPost<WorktreeCreateResponse>(
