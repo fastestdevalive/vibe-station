@@ -51,10 +51,12 @@ STUB
   init_repo northstar-api
   init_repo atlas-dashboard
   init_repo forge-cli
+  init_repo luminary-docs
 
   NAPI_SHA=$(git -C "$PROJECTS/northstar-api" rev-parse HEAD)
   ATLS_SHA=$(git -C "$PROJECTS/atlas-dashboard" rev-parse HEAD)
   FRGE_SHA=$(git -C "$PROJECTS/forge-cli" rev-parse HEAD)
+  LDOC_SHA=$(git -C "$PROJECTS/luminary-docs" rev-parse HEAD)
 
   # ─── 3. modes.json ──────────────────────────────────────────────────────────
   cat >"$VST/modes.json" <<'JSON'
@@ -882,6 +884,240 @@ TRANS
   ⎿  Running...
 TRANS
 
+  # luminary-docs ─────────────────────────────────────
+  read -r -d '' LDOC_MANIFEST <<JSON || true
+{
+  "id": "luminary-docs",
+  "absolutePath": "$PROJECTS/luminary-docs",
+  "prefix": "ldoc",
+  "defaultBranch": "main",
+  "createdAt": "2025-05-01T09:20:00.000Z",
+  "nextWorktreeNum": 2,
+  "worktrees": [
+    {
+      "id": "ldoc-1",
+      "branch": "feat/image-rendering-demo",
+      "baseBranch": "main",
+      "baseSha": "$LDOC_SHA",
+      "createdAt": "2025-05-06T09:00:00.000Z",
+      "sessions": [
+        { "id": "ldoc-1-m", "slot": "m", "type": "agent", "modeId": "mode-claude-001", "tmuxName": "vr-ldoc-1-m", "useTmux": true, "lifecycle": { "state": "idle", "lastTransitionAt": "2025-05-06T10:00:00.000Z" } }
+      ]
+    }
+  ]
+}
+JSON
+  write_manifest luminary-docs ldoc "$LDOC_SHA" "$LDOC_MANIFEST"
+
+  # ─── 6b. Populate ldoc-1 worktree checkout (image-rendering demo) ──────────
+  WT="$VST/projects/luminary-docs/worktrees/ldoc-1"
+  mkdir -p "$WT/docs/images" "$WT/screenshots" "$WT/assets"
+
+  cat >"$WT/README.md" <<'MD'
+# Luminary Docs
+
+Luminary Docs is a documentation platform for teams that care about clarity.
+It combines structured writing tools with a powerful search engine so your
+engineering knowledge stays discoverable as the team grows.
+
+## Features
+
+- Markdown-first authoring with live preview
+- Version-controlled docs alongside your code
+- Full-text search across all projects
+- Diagram-as-code via Mermaid
+
+## Hero
+
+![Hero Screenshot](./screenshots/hero.png)
+
+## Brand
+
+![Logo](./assets/logo.png)
+
+## Getting Started
+
+```bash
+npm install
+npm run dev
+```
+
+Browse to `http://localhost:4000` and sign in with your GitHub account.
+MD
+
+  mkdir -p "$WT/docs"
+  cat >"$WT/docs/ARCHITECTURE.md" <<'MD'
+# Architecture
+
+Luminary Docs is split into three tiers: a browser client, an API server, and
+a storage layer. All communication between tiers is JSON over HTTPS.
+
+## System overview
+
+![System overview](./images/overview.png)
+
+## Component flow
+
+```mermaid
+flowchart LR
+    Browser -->|HTTPS| APIGateway
+    APIGateway --> AuthService
+    APIGateway --> DocsService
+    DocsService --> PostgreSQL
+    DocsService --> SearchIndex[(Meilisearch)]
+    AuthService --> PostgreSQL
+```
+
+## Request lifecycle
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant G as API Gateway
+    participant A as Auth Service
+    participant D as Docs Service
+    participant DB as PostgreSQL
+
+    B->>G: GET /docs/:id (Bearer token)
+    G->>A: verify token
+    A-->>G: { sub, roles }
+    G->>D: GET /docs/:id
+    D->>DB: SELECT * FROM docs WHERE id = ?
+    DB-->>D: doc row
+    D-->>G: { id, title, body, ... }
+    G-->>B: 200 OK
+```
+
+## Services
+
+### API Gateway
+
+The gateway is a thin Fastify proxy. It handles TLS termination, rate
+limiting, and JWT verification before forwarding requests downstream. No
+business logic lives here.
+
+### Auth Service
+
+Issues short-lived JWT access tokens (15 min) and long-lived refresh tokens
+(7 days). Tokens are signed with RS256; the public key is published at
+`/.well-known/jwks.json` so downstream services can verify without a network
+round-trip.
+
+### Docs Service
+
+Stores documents in PostgreSQL (structured metadata + full Markdown body) and
+keeps Meilisearch in sync via an outbox pattern. Every write to the `docs`
+table appends a row to `doc_events`; a background worker drains the outbox and
+updates the search index.
+
+## Data model
+
+| Table | Key columns |
+|---|---|
+| `users` | id, email, password_hash, roles |
+| `docs` | id, project_id, title, body, created_at, updated_at |
+| `doc_events` | id, doc_id, event_type, payload, processed_at |
+| `projects` | id, name, owner_id, created_at |
+MD
+
+  cat >"$WT/docs/DEPLOYMENT.md" <<'MD'
+# Deployment
+
+Luminary Docs ships as three Docker images: `luminary-gateway`,
+`luminary-auth`, and `luminary-docs`. They are orchestrated with
+Docker Compose for local development and Kubernetes in production.
+
+## CI pipeline
+
+![CI pipeline](/assets/ci-pipeline.png)
+
+## Deployment topology
+
+```mermaid
+graph TD
+    Internet -->|443| LoadBalancer
+    LoadBalancer --> GatewayA[Gateway replica A]
+    LoadBalancer --> GatewayB[Gateway replica B]
+    GatewayA --> AuthPod
+    GatewayB --> AuthPod
+    GatewayA --> DocsPodA[Docs replica A]
+    GatewayB --> DocsPodB[Docs replica B]
+    DocsPodA --> PrimaryDB[(PostgreSQL primary)]
+    DocsPodB --> PrimaryDB
+    DocsPodA --> Meilisearch
+    DocsPodB --> Meilisearch
+    PrimaryDB --> ReplicaDB[(PostgreSQL replica)]
+```
+
+## Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | yes | Postgres connection string |
+| `JWT_SECRET` | yes | RS256 private key PEM |
+| `JWKS_URL` | yes | URL of the auth service's JWKS endpoint |
+| `SEARCH_URL` | yes | Meilisearch base URL |
+| `SEARCH_KEY` | yes | Meilisearch master key |
+| `PORT` | no | HTTP port, default 3000 |
+| `LOG_LEVEL` | no | Pino log level, default `info` |
+| `RATE_LIMIT_MAX` | no | Max requests/min per IP, default 200 |
+
+## Runbook
+
+### Rolling restart
+
+```bash
+kubectl rollout restart deployment/luminary-docs
+kubectl rollout status  deployment/luminary-docs
+```
+
+### Scale out
+
+```bash
+kubectl scale deployment/luminary-docs --replicas=4
+```
+
+### Database backup
+
+```bash
+pg_dump "$DATABASE_URL" | gzip > "backup-$(date +%Y%m%d).sql.gz"
+```
+MD
+
+  # Binary PNG files — generate solid-color placeholder images via Python so they
+  # are large enough to actually be visible in the file preview and markdown view.
+  python3 - "$WT" <<'PYEOF'
+import zlib, struct, sys, os
+
+def make_png(w, h, r, g, b):
+    def chunk(tag, data):
+        raw = tag + data
+        return struct.pack('>I', len(data)) + raw + struct.pack('>I', zlib.crc32(raw) & 0xffffffff)
+    ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+    row = b'\x00' + bytes([r, g, b] * w)
+    idat = chunk(b'IDAT', zlib.compress(row * h, 9))
+    iend = chunk(b'IEND', b'')
+    return b'\x89PNG\r\n\x1a\n' + ihdr + idat + iend
+
+wt = sys.argv[1]
+images = {
+    'screenshots/hero.png':    (480, 280, 41, 128, 185),   # steel blue — hero banner
+    'assets/logo.png':         (200, 200, 80, 160, 100),   # green — brand logo
+    'assets/ci-pipeline.png':  (600, 160, 160, 80, 120),   # mauve — pipeline diagram
+    'docs/images/overview.png':(480, 300, 60, 90, 160),    # indigo — architecture diagram
+}
+for rel_path, (w, h, r, g, b) in images.items():
+    dest = os.path.join(wt, rel_path)
+    with open(dest, 'wb') as f:
+        f.write(make_png(w, h, r, g, b))
+PYEOF
+
+  git -C "$WT" init -q -b feat/image-rendering-demo
+  git -C "$WT" config user.email "demo@vibe-station.dev"
+  git -C "$WT" config user.name "Demo Agent"
+  git -C "$WT" add . >/dev/null
+  git -C "$WT" commit -q -m "docs: add architecture and deployment docs with diagrams"
+
   # ─── 7. Mark seeded ────────────────────────────────────────────────────────
   touch "$VST/.seeded"
   echo "[seed] data init complete"
@@ -898,6 +1134,7 @@ ALL_TMUX=(
   vr-napi-2-m vr-napi-3-m vr-napi-4-m
   vr-atls-1-m vr-atls-2-m vr-atls-3-m
   vr-frge-1-m vr-frge-2-m
+  vr-ldoc-1-m
 )
 for name in "${ALL_TMUX[@]}"; do
   tmux kill-session -t "$name" 2>/dev/null || true
@@ -962,6 +1199,9 @@ start_idle_session vr-atls-2-m
 start_done_session vr-napi-4-m
 start_done_session vr-atls-3-m
 start_done_session vr-frge-2-m
+
+# luminary-docs idle session
+start_idle_session vr-ldoc-1-m
 
 echo "[seed] tmux sessions ready: $(tmux ls 2>/dev/null | wc -l) running"
 echo "[seed] done."

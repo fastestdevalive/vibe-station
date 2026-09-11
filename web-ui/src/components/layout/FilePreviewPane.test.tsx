@@ -38,6 +38,31 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
   });
 
+  it("never renders the previous file's body under a new path while the new fetch is in flight", async () => {
+    // Regression: the old `fileBody` used to stay on screen after `path`
+    // changed, so `MarkdownView` resolved the OLD file's relative image srcs
+    // against the NEW file's directory (README's `./assets/logo.png` became
+    // `docs/assets/logo.png` → 404, blob revoked, image blinked out).
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "README.md",
+      diffScopeByWorktree: {},
+    });
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument();
+    });
+
+    const getFileSpy = vi.spyOn(api, "getFile").mockImplementation(() => new Promise(() => {}));
+    act(() => {
+      useWorkspaceStore.setState({ activeFilePath: "docs/GUIDE.md" });
+    });
+    // Stale README body must be gone immediately — not lingering under docs/.
+    expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    getFileSpy.mockRestore();
+  });
+
   it("no longer renders a DiffScopeSelector in the diffInfo strip (toggle moved to FileTreeSidebar's header, single control)", async () => {
     render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => {
@@ -93,3 +118,35 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
   });
 });
+
+describe("FilePreviewPane image files (3.T1 / TODO 2)", () => {
+  it("renders a zoomable image for an image file via getFileBlob (not CodeView)", async () => {
+    const api = createMockApi();
+    const getFileBlobSpy = vi.spyOn(api, "getFileBlob");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "assets/logo.png",
+      diffScopeByWorktree: {},
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".zoomable-media")).toBeTruthy());
+    expect(getFileBlobSpy).toHaveBeenCalledWith("wt-1", "assets/logo.png", "worktree");
+    expect(container.querySelector(".workspace-code-viewer")).toBeNull();
+    getFileBlobSpy.mockRestore();
+  });
+
+  it("renders CodeView for a non-image file and never calls getFileBlob", async () => {
+    const api = createMockApi();
+    const getFileBlobSpy = vi.spyOn(api, "getFileBlob");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.ts",
+      diffScopeByWorktree: {},
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+    expect(getFileBlobSpy).not.toHaveBeenCalled();
+    getFileBlobSpy.mockRestore();
+  });
+});
+

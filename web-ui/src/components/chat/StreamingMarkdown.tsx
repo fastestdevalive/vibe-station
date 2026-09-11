@@ -3,6 +3,8 @@ import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
+import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 
 /**
  * Close an unterminated ``` fence so a mid-stream delta doesn't swallow the rest
@@ -31,14 +33,25 @@ export function closeUnterminatedFences(src: string): string {
  * segment and renders as a synthetic-closed code block until its real ``` lands,
  * at which point it flips to a diagram — no streaming flags needed.
  */
-export function StreamingMarkdown({ source }: { source: string }) {
+export function StreamingMarkdown({
+  source,
+  api = null,
+  worktreeId = null,
+  scope = "worktree",
+}: {
+  source: string;
+  /** When provided, repo-relative image paths resolve via `getFileBlob`. */
+  api?: ApiInstance | null;
+  worktreeId?: string | null;
+  scope?: FileScope;
+}) {
   const { theme } = useTheme();
   const segments = useMemo(() => segmentMarkdownWithMermaid(source), [source]);
   return (
     <div className="chat-md-segments">
       {segments.map((seg, i) =>
         seg.type === "markdown" ? (
-          <MarkdownView key={i} source={closeUnterminatedFences(seg.content)} />
+          <MarkdownView key={i} source={closeUnterminatedFences(seg.content)} api={api} worktreeId={worktreeId} scope={scope} />
         ) : (
           <MermaidView key={i} chart={seg.content} theme={theme} />
         ),

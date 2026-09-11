@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { StreamingMarkdown } from "./StreamingMarkdown";
+import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 
 interface ThinkingBlockProps {
   text: string;
@@ -15,6 +17,10 @@ interface ThinkingBlockProps {
   /** True when a tool call ran while this thinking group was open — the
    *  completed label reads "Worked for Xs" instead of "Thought for Xs". */
   hadToolCall?: boolean;
+  /** Optional repo-image resolution context, forwarded to markdown. */
+  api?: ApiInstance | null;
+  worktreeId?: string | null;
+  scope?: FileScope;
 }
 
 /** "Thought for Xs" once `endedTs` is set, else the live "Thinking" label —
@@ -44,7 +50,7 @@ function thinkingLabel(startedTs: string, endedTs: string | undefined, hadToolCa
  *  extended by Decision 4). Signature-only / redacted thinking events carry no
  *  text — those render as a plain label with no chevron, since there's
  *  nothing to expand. */
-export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, hadToolCall }: ThinkingBlockProps) {
+export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, hadToolCall, api, worktreeId, scope }: ThinkingBlockProps) {
   const [open, setOpen] = useState(defaultOpen);
   const hasContent = text.trim().length > 0;
   const label = thinkingLabel(startedTs, endedTs, hadToolCall);
@@ -77,7 +83,7 @@ export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, h
        *  row is redundant, not additive. */}
       {open ? (
         <div className="chat-thinking__body">
-          <StreamingMarkdown source={text} />
+          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} />
         </div>
       ) : null}
     </div>
