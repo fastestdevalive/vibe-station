@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { act } from "@testing-library/react";
+import { act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, it, expect, beforeEach } from "vitest";
 import { WorkspaceCanvas } from "./WorkspaceCanvas";
@@ -8,6 +8,31 @@ import { PaneOutletProvider, ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from 
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type CanvasGeometry } from "@/hooks/useStore";
 
 const W1 = "wt-1";
+
+/**
+ * jsdom has no native `PointerEvent` constructor, so `fireEvent.pointerDown`
+ * falls back to a bare Event without `clientX`/`clientY`. Dispatch a real
+ * `MouseEvent` (jsdom supports its `clientX`/`clientY`) under the pointer
+ * type instead — React's delegation matches on `event.type`, so this reaches
+ * the same `onPointerDown`/`onPointerUp` handlers a real PointerEvent would.
+ */
+function firePointer(
+  type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+  node: Element | Window,
+  opts: { clientX?: number; clientY?: number; pointerType?: string },
+) {
+  const event = new MouseEvent(type, {
+    clientX: opts.clientX ?? 0,
+    clientY: opts.clientY ?? 0,
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(event, "pointerType", {
+    value: opts.pointerType ?? "touch",
+    configurable: true,
+  });
+  fireEvent(node, event);
+}
 
 // WorkspaceCanvas calls useNavigate() (saveAsWorkspace navigates to the new
 // doc's /workspaces/:id route) — needs a Router ancestor even when a test
@@ -481,8 +506,8 @@ describe("WorkspaceCanvas - fullscreen reconciliation", () => {
     // tile (tile-b) hides via `display:none` while a tile is fullscreen.
     const headers = screen.getAllByTitle("Click to fullscreen · drag to move");
     act(() => {
-      headers[0]!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: 0, clientY: 0 }));
-      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      firePointer("pointerdown", headers[0]!, { clientX: 0, clientY: 0 });
+      firePointer("pointerup", window, {});
     });
     expect(screen.getByTitle("Click to exit fullscreen")).toBeInTheDocument();
     const tileB = screen.getByText("agent").closest(".workspace-canvas__tile") as HTMLElement;
