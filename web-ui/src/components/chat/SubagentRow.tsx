@@ -140,12 +140,19 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
             </button>
           </span>
         ) : (
-          <button
-            type="button"
+          <div
             className="chat-subagent-row__item chat-subagent-row__item--parent"
             onClick={() => parent.worktreeId === session.worktreeId && onOpen(parent)}
-            disabled={parent.worktreeId !== session.worktreeId}
-            title={parent.worktreeId === session.worktreeId ? undefined : "This parent is in a different worktree"}
+            style={
+              parent.worktreeId !== session.worktreeId
+                ? { opacity: 0.5, cursor: "default" }
+                : undefined
+            }
+            title={
+              parent.worktreeId === session.worktreeId
+                ? undefined
+                : "This parent is in a different worktree"
+            }
           >
             <span className="chat-subagent-row__arrow" aria-hidden="true">
               ↑
@@ -164,7 +171,7 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
                 <Unlink size={11} />
               </button>
             ) : null}
-          </button>
+          </div>
         )
       ) : null}
       {visibleChildren.length > 0 ? (
@@ -211,7 +218,7 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           >
             <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>
-            {api && sameWorktree ? (
+            {api ? (
               <button
                 type="button"
                 className="chat-subagent-row__delink"
