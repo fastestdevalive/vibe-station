@@ -5,7 +5,7 @@ import { useAttachmentDrafts } from "@/hooks/useAttachmentDrafts";
 import { loadDraft, useComposerDraft } from "@/hooks/useComposerDraft";
 import { migrateV1Draft } from "@/lib/skillInvocation";
 import { AttachmentChip } from "./AttachmentChip";
-import { SkillEditor, type SkillEditorHandle } from "./SkillEditor";
+import { SkillEditor, useSoftKeyboardVisible, type SkillEditorHandle } from "./SkillEditor";
 
 /** How long the Send button is held (disabled) at its position after OUR OWN
  *  send emptied the box while a turn is still running — see `justSent`. */
@@ -61,6 +61,7 @@ export function Composer({
   const draft = useComposerDraft(sessionId);
 
   const [argFocused, setArgFocused] = useState(false);
+  const softKeyboardVisible = useSoftKeyboardVisible();
 
   const { drafts, readyAttachments, error, uploadFiles, removeDraft, reset } = useAttachmentDrafts(
     api,
@@ -220,8 +221,10 @@ export function Composer({
           <>Enter or → exits to the message · Backspace removes an argument, then the skill · Ctrl+Enter sends</>
         ) : (
           <>
-            <span aria-hidden>⤓</span> Drop files here · Enter / Ctrl+Enter to send · Shift+Enter or Alt+Enter for
-            newline
+            <span aria-hidden>⤓</span> Drop files here ·{" "}
+            {softKeyboardVisible
+              ? "Enter for newline · Ctrl/Cmd+Enter to send"
+              : "Enter / Ctrl+Enter to send · Shift+Enter or Alt+Enter for newline"}
           </>
         )}
       </div>
