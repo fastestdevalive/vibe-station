@@ -122,6 +122,7 @@ export function ChangedFileList({ entries, loading, error, controlled }: Changed
   );
   const { cursorPath, setCursorPath, handleKeyDown, isTabbable } = useRovingListNav(rovingRows, {
     onOpen: selectFile,
+    openOnArrow: true,
   });
 
   if (error) {

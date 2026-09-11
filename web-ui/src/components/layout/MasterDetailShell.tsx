@@ -1,11 +1,14 @@
-import type { ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { FolderTree } from "lucide-react";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { Columns2, FolderTree, Rows2 } from "lucide-react";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 
 interface MasterDetailShellProps {
   /** Uniquely identifies this shell's persisted split size (`autoSaveId`). */
   storageKey: string;
+  /** Worktree id used to persist the split orientation in the store. When
+   *  omitted the toggle still works but orientation resets on remount. */
+  worktreeId?: string | null;
   /** Whether to render the file-tree-visibility toggle button. Default true. */
   treeToggle?: boolean;
   /** The master (left) pane — a file tree or a changed-file list. */
@@ -30,9 +33,14 @@ interface MasterDetailShellProps {
  * preference, not per-content state, unlike the `controlled` overrides
  * `FilePreviewPane`/`ChangedFileList` need (Decision 6).
  */
-export function MasterDetailShell({ storageKey, treeToggle = true, leftPane, rightPane, topbarExtra }: MasterDetailShellProps) {
+export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, leftPane, rightPane, topbarExtra }: MasterDetailShellProps) {
   const treeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const toggleFileTree = useWorkspaceStore((s) => s.toggleFileTree);
+  const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
+  const setMasterDetailVertical = useWorkspaceStore((s) => s.setMasterDetailVertical);
+  const vertical = worktreeId
+    ? !!(layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical
+    : false;
 
   return (
     <div className="files-panel">
@@ -49,16 +57,32 @@ export function MasterDetailShell({ storageKey, treeToggle = true, leftPane, rig
             <FolderTree size={15} />
           </button>
         ) : null}
+        {treeVisible && worktreeId ? (
+          <button
+            type="button"
+            className={`files-topbar__tree-toggle${vertical ? " files-topbar__tree-toggle--on" : ""}`}
+            aria-label={vertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
+            aria-pressed={vertical}
+            title={vertical ? "Side-by-side layout" : "Stacked layout"}
+            onClick={() => setMasterDetailVertical(worktreeId, !vertical)}
+          >
+            {vertical ? <Columns2 size={15} /> : <Rows2 size={15} />}
+          </button>
+        ) : null}
         {topbarExtra}
       </div>
 
       {treeVisible ? (
-        <PanelGroup direction="horizontal" autoSaveId={`vs-files-${storageKey}`} style={{ width: "100%", flex: 1, minHeight: 0 }}>
-          <Panel defaultSize={34} minSize={16} maxSize={60}>
+        <PanelGroup
+          direction={vertical ? "vertical" : "horizontal"}
+          autoSaveId={`vs-files-${storageKey}-${vertical ? "v" : "h"}`}
+          style={{ width: "100%", flex: 1, minHeight: 0 }}
+        >
+          <Panel defaultSize={vertical ? 40 : 34} minSize={16} maxSize={60}>
             <div className="pane-fill-host">{leftPane}</div>
           </Panel>
-          <PanelResizeHandle className="resize-handle resize-handle--col" />
-          <Panel defaultSize={66} minSize={30}>
+          <PanelResizeHandle className={vertical ? "resize-handle resize-handle--row" : "resize-handle resize-handle--col"} />
+          <Panel defaultSize={vertical ? 60 : 66} minSize={30}>
             {rightPane}
           </Panel>
         </PanelGroup>

@@ -1270,8 +1270,7 @@
  * navigation (useRovingListNav), distinct from `--selected` (the currently
  * open file, which can differ from where the cursor currently sits). */
 .changed-file-list-file--cursor {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  background: var(--bg-active);
 }
 
 .changed-file-list-file-icon {
@@ -1439,19 +1438,18 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  font-size: 11px;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: 10px;
+  color: var(--fg-muted);
+  border-bottom: var(--border-width) solid var(--border-default);
+  margin-bottom: var(--space-1);
   user-select: text;
   cursor: default;
 }
 
 .wt-menu__info-label {
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .wt-menu__info-value {
@@ -1515,10 +1513,10 @@
   right: 0;
   z-index: 200;
   min-width: 200px;
-  background: var(--bg-overlay);
+  background: var(--bg-card);
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg, 0 4px 12px rgba(0,0,0,0.15));
+  box-shadow: var(--shadow-md);
   padding: var(--space-1) 0;
 }
 
@@ -1527,10 +1525,10 @@
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
   font-size: var(--font-size-sm);
   font-family: inherit;
-  color: var(--fg-secondary);
+  color: var(--fg-primary);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -1541,7 +1539,6 @@
 
 .top-bar__overflow-item:hover {
   background: var(--bg-hover);
-  color: var(--fg-primary);
 }
 
 .top-bar__overflow-item--active {
@@ -1555,7 +1552,14 @@
 
 .top-bar__overflow-item:disabled:hover {
   background: transparent;
-  color: var(--fg-secondary);
+}
+
+.top-bar__overflow-kbd {
+  margin-left: auto;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  padding-left: var(--space-2);
 }
 
 /* Hover = a NEUTRAL, transient highlight (grey bg, mid opacity). Deliberately a
@@ -1716,8 +1720,7 @@
  * navigation (useRovingListNav), distinct from `data-active` (the currently
  * OPEN file, which can differ from where the cursor currently sits). */
 .tree-row--cursor {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  background: var(--bg-active);
 }
 
 .tree-row[data-active="true"] .wt-row__label {
@@ -4537,9 +4540,8 @@ a.dashboard-card.dashboard-card--session {
   list-style: none;
   margin: 0;
   padding: 0;
-  width: 44%;
-  max-width: 280px;
-  min-width: 150px;
+  width: 100%;
+  height: 100%;
   overflow: auto;
   border-right: var(--border-width) solid var(--border-default);
 }
@@ -4842,6 +4844,36 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-muted);
   padding: 0 var(--space-1) 0 var(--space-2);
   user-select: none;
+}
+
+/* Font size overlay — top-right corner of the file/diff preview pane. */
+.preview-font-overlay {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.preview-font-overlay__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  opacity: 0.85;
+}
+.preview-font-overlay__btn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-secondary);
+  opacity: 1;
 }
 
 /* Slim, content-scoped diff info strip at the top of the preview body. */

@@ -379,7 +379,7 @@ export function TopBar({
                     aria-checked={effectiveSplitOrientation === "vertical"}
                     disabled={paneLayoutMode === "workspace"}
                     onClick={() => {
-                      toggleToolSplitOrientation();
+                      toggleToolSplitOrientation(effectiveSplitOrientation);
                       setOverflowOpen(false);
                     }}
                   >
@@ -402,10 +402,8 @@ export function TopBar({
                     }}
                   >
                     <SquareTerminal size={14} />
-                    <span>
-                      Terminal
-                      {paneLayoutMode !== "workspace" ? ` (${hints.terminal})` : ""}
-                    </span>
+                    <span>Terminal</span>
+                    {paneLayoutMode !== "workspace" ? <span className="top-bar__overflow-kbd">{hints.terminal}</span> : null}
                   </button>
                   <button
                     type="button"
@@ -446,7 +444,7 @@ export function TopBar({
               }
               onClick={paneLayoutMode === "workspace" ? toggleWorktreeToolsTile : toggleToolPanel}
             >
-              {toolSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
+              {effectiveSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
             </button>
           </>
         ) : null}

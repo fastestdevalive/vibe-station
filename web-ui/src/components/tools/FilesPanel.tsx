@@ -1,4 +1,4 @@
-import { FileText, Minus, Plus, X } from "lucide-react";
+import { FileText, Plus, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -31,7 +31,6 @@ export function FilesPanel({ api, worktreeId, scope = "worktree" }: FilesPanelPr
 
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
-  const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
 
   const topbarExtra = (
     <>
@@ -65,21 +64,13 @@ export function FilesPanel({ api, worktreeId, scope = "worktree" }: FilesPanelPr
           <Plus size={13} />
         </button>
       </div>
-      <div className="files-topbar__controls">
-        <span className="files-topbar__zoom-label" aria-hidden>Aa</span>
-        <button type="button" className="tab tab--icon" aria-label="Decrease preview font" onClick={() => bumpPreviewFont(-0.05)}>
-          <Minus size={11} />
-        </button>
-        <button type="button" className="tab tab--icon" aria-label="Increase preview font" onClick={() => bumpPreviewFont(0.05)}>
-          <Plus size={11} />
-        </button>
-      </div>
     </>
   );
 
   return (
     <MasterDetailShell
       storageKey={wt}
+      worktreeId={worktreeId}
       topbarExtra={topbarExtra}
       leftPane={<FileTreeSidebar api={api} contextId={worktreeId} scope={scope} />}
       rightPane={<FilePreviewPane api={api} worktreeId={worktreeId} scope={scope} />}

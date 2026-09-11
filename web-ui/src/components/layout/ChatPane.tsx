@@ -1,3 +1,4 @@
+import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Session } from "@/api/types";
@@ -47,6 +48,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const enabled = visible && isJson && !!sessionId;
 
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+  const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
   const insertTileIntoWorkspaceDoc = useWorkspaceStore((s) => s.insertTileIntoWorkspaceDoc);
@@ -321,6 +323,16 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
           api={api}
           {...(sessionId ? { sessionId } : {})}
           noticeSlot={noticeSlot}
+          fontControls={
+            <div className="chat-font-overlay__btns">
+              <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease chat font" onClick={() => bumpTerminalFont(-0.05)}>
+                <Minus size={11} />
+              </button>
+              <button type="button" className="terminal-font-overlay__btn" aria-label="Increase chat font" onClick={() => bumpTerminalFont(0.05)}>
+                <Plus size={11} />
+              </button>
+            </div>
+          }
         />
         {session ? (
           <SubagentRow

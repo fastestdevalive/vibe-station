@@ -54,6 +54,10 @@ export interface WorktreeLayout {
    * `/workspaces/:id` view always shows its toolbar regardless of this flag.
    */
   canvasToolbarVisible: boolean;
+  /** Whether the master-detail split in the tools pane (Files/VCS/Artifacts) is
+   *  vertical (tree on top, preview below) vs horizontal (side by side). Shared
+   *  across all three tool tabs for a given worktree. */
+  masterDetailVertical?: boolean;
 }
 
 export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
@@ -65,6 +69,7 @@ export const DEFAULT_WORKTREE_LAYOUT: WorktreeLayout = {
   activeWorkspaceId: null,
   scratchCanvas: null,
   canvasToolbarVisible: true,
+  masterDetailVertical: false,
 };
 
 export type TileKind = "agent" | "terminal" | "tools";
@@ -186,6 +191,9 @@ export interface WorkspaceState {
    *  mode is controlled exclusively by the "Diff view" (GitCompare) button. */
   treeScopeByWorktree: Record<string, "local" | "branch">;
   previewFontScale: number;
+  /** Per-worktree preview font scale for the tools pane (Files/VCS/Artifacts).
+   *  Falls back to the global `previewFontScale` when a worktree has no entry. */
+  previewFontScaleByWorktree: Record<string, number>;
   /** Whether the Files tool shows its file-tree column (persisted, view pref). */
   fileTreeVisible: boolean;
   terminalFontScale: number;
@@ -212,8 +220,10 @@ export interface WorkspaceState {
   setToolPanelTab: (tab: ToolTab) => void;
   /** Toggle the bottom terminal dock. */
   toggleTerminalDock: () => void;
-  /** Flip the agent pane ↔ tool panel split between horizontal and vertical. */
-  toggleToolSplitOrientation: () => void;
+  /** Flip the agent pane ↔ tool panel split between horizontal and vertical.
+   *  Pass the current *effective* orientation so mobile's implicit override is
+   *  respected — without it the first press on mobile is a no-op. */
+  toggleToolSplitOrientation: (effectiveOrientation?: ToolSplitOrientation) => void;
   /** Show/hide the workspace-canvas toolbar's disclosure under the crumb (classic per-worktree canvas placement only). */
   toggleCanvasToolbar: () => void;
   /**
@@ -235,6 +245,10 @@ export interface WorkspaceState {
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   bumpPreviewFont: (delta: number) => void;
+  /** Bump the preview font scale for a specific worktree's tools pane. */
+  bumpPreviewFontForWorktree: (worktreeId: string, delta: number) => void;
+  /** Toggle the master-detail split orientation for a specific worktree's tools pane. */
+  setMasterDetailVertical: (worktreeId: string, vertical: boolean) => void;
   /** Show/hide the Files tool's file-tree column. */
   toggleFileTree: () => void;
   bumpTerminalFont: (delta: number) => void;
@@ -582,6 +596,7 @@ const initial = {
   diffScopeByWorktree: {} as Record<string, DiffScope>,
   treeScopeByWorktree: {} as Record<string, "local" | "branch">,
   previewFontScale: 1,
+  previewFontScaleByWorktree: {} as Record<string, number>,
   fileTreeVisible: true,
   terminalFontScale: 1,
   leftSidebarCollapsed: false,
@@ -649,13 +664,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
             return next;
           }),
-        toggleToolSplitOrientation: () =>
+        toggleToolSplitOrientation: (effectiveOrientation) =>
           set((s) => {
             const key = layoutKey(s);
             const cur = key
               ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
               : DEFAULT_WORKTREE_LAYOUT;
-            const next = cur.toolSplitOrientation === "horizontal" ? "vertical" : "horizontal";
+            const from = effectiveOrientation ?? cur.toolSplitOrientation;
+            const next = from === "horizontal" ? "vertical" : "horizontal";
             return patchLayout(s, { toolSplitOrientation: next, toolSplitOrientationUserSet: true });
           }),
         toggleCanvasToolbar: () =>
@@ -802,6 +818,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             previewFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.previewFontScale + delta) * 100) / 100)),
           })),
+        bumpPreviewFontForWorktree: (worktreeId, delta) =>
+          set((s) => {
+            const cur = s.previewFontScaleByWorktree[worktreeId] ?? s.previewFontScale;
+            return {
+              previewFontScaleByWorktree: {
+                ...s.previewFontScaleByWorktree,
+                [worktreeId]: Math.min(1.5, Math.max(0.75, Math.round((cur + delta) * 100) / 100)),
+              },
+            };
+          }),
+        setMasterDetailVertical: (worktreeId, vertical) =>
+          set((s) => {
+            const cur = s.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
+            return {
+              layoutByWorktree: {
+                ...s.layoutByWorktree,
+                [worktreeId]: { ...cur, masterDetailVertical: vertical },
+              },
+            };
+          }),
         toggleFileTree: () => set((s) => ({ fileTreeVisible: !s.fileTreeVisible })),
         bumpTerminalFont: (delta) =>
           set((s) => ({
@@ -1364,6 +1400,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         diffScopeByWorktree: s.diffScopeByWorktree,
         treeScopeByWorktree: s.treeScopeByWorktree,
         previewFontScale: s.previewFontScale,
+        previewFontScaleByWorktree: s.previewFontScaleByWorktree,
         fileTreeVisible: s.fileTreeVisible,
         terminalFontScale: s.terminalFontScale,
         leftSidebarCollapsed: s.leftSidebarCollapsed,

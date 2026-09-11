@@ -1,3 +1,4 @@
+import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope, FileScope } from "@/api/types";
@@ -46,7 +47,11 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       ? "none"
       : (scopeFromStore ?? "none");
   const commitSha = controlled?.commitSha;
-  const previewFontScale = useWorkspaceStore((s) => s.previewFontScale);
+  const previewFontScaleGlobal = useWorkspaceStore((s) => s.previewFontScale);
+  const previewFontScaleByWorktree = useWorkspaceStore((s) => s.previewFontScaleByWorktree);
+  const previewFontScale = (worktreeId ? previewFontScaleByWorktree[worktreeId] : undefined) ?? previewFontScaleGlobal;
+  const bumpPreviewFontForWorktree = useWorkspaceStore((s) => s.bumpPreviewFontForWorktree);
+  const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
 
   const { theme } = useTheme();
   const themeMode = theme;
@@ -321,9 +326,25 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && scope === "none");
 
+  const bump = (delta: number) => {
+    if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
+    else bumpPreviewFont(delta);
+  };
+  const fontOverlay = (
+    <div className="preview-font-overlay">
+      <button type="button" className="preview-font-overlay__btn" aria-label="Decrease preview font" onClick={() => bump(-0.05)}>
+        <Minus size={11} />
+      </button>
+      <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
+        <Plus size={11} />
+      </button>
+    </div>
+  );
+
   return (
-    <div className="pane pane-stack">
+    <div className="pane pane-stack" style={{ position: "relative" }}>
       {diffInfo}
+      {fontOverlay}
       <div
         ref={setBodyRef}
         onScroll={handleScroll}

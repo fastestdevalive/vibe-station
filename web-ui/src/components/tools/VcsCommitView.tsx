@@ -67,6 +67,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
   return (
     <MasterDetailShell
       storageKey={`commit-${worktreeId}`}
+      worktreeId={worktreeId}
       topbarExtra={topbarExtra}
       leftPane={
         <ChangedFileList
