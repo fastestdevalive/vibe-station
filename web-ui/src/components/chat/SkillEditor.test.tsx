@@ -317,25 +317,31 @@ describe("§10 three mount sites — key table (Composer: Enter sends)", () => {
 });
 
 describe("§10b soft-keyboard Enter behaviour (vs hardware touch capability)", () => {
-  function withVirtualKeyboard(height: number) {
+  // Mock window.visualViewport with a controllable height and resize listeners.
+  // baseHeight = 800 (full screen); shrinking below 650 (i.e. >150px drop) signals
+  // that a keyboard is showing.
+  const BASE_HEIGHT = 800;
+  function withVisualViewport(initialHeight: number) {
     const listeners: Array<() => void> = [];
-    const vk = {
-      overlaysContent: false,
-      overlayContentRect: { height },
+    const vp = {
+      height: initialHeight,
       addEventListener: (_type: string, cb: () => void) => listeners.push(cb),
       removeEventListener: () => {},
     };
-    Object.defineProperty(navigator, "virtualKeyboard", {
+    Object.defineProperty(window, "visualViewport", {
       configurable: true,
-      value: vk,
+      value: vp,
     });
     return {
       setHeight(h: number) {
-        vk.overlayContentRect.height = h;
+        vp.height = h;
         listeners.forEach((cb) => cb());
       },
       restore() {
-        delete (navigator as { virtualKeyboard?: unknown }).virtualKeyboard;
+        Object.defineProperty(window, "visualViewport", {
+          configurable: true,
+          value: undefined,
+        });
       },
     };
   }
@@ -348,20 +354,25 @@ describe("§10b soft-keyboard Enter behaviour (vs hardware touch capability)", (
   });
 
   it("plain Enter inserts a newline when the virtual keyboard is showing", async () => {
-    const vk = withVirtualKeyboard(300);
+    // Start at full height so the hook captures the no-keyboard baseline, then
+    // shrink by 350px (> 150px threshold) to simulate the keyboard appearing.
+    const vp = withVisualViewport(BASE_HEIGHT);
     try {
       const { onSend, ref } = renderComposer("hello");
-      await act(async () => ref.current?.focus());
+      await act(async () => {
+        ref.current?.focus();
+        vp.setHeight(BASE_HEIGHT - 350);
+      });
       await key(editorEl(), "Enter");
       expect(onSend).not.toHaveBeenCalled();
       expect(ref.current?.getText()).toContain("\n");
     } finally {
-      vk.restore();
+      vp.restore();
     }
   });
 
-  it("plain Enter switches to newline when the keyboard appears mid-session (virtualkeyboardchange)", async () => {
-    const vk = withVirtualKeyboard(0);
+  it("plain Enter switches to newline when the keyboard appears mid-session (visualViewport resize)", async () => {
+    const vp = withVisualViewport(BASE_HEIGHT);
     try {
       const { onSend, ref } = renderComposer("hello there");
       await act(async () => ref.current?.focus());
@@ -370,40 +381,43 @@ describe("§10b soft-keyboard Enter behaviour (vs hardware touch capability)", (
       onSend.mockClear();
 
       // Keyboard appears while the editor is already mounted.
-      await act(async () => vk.setHeight(300));
+      await act(async () => vp.setHeight(BASE_HEIGHT - 350));
       await key(editorEl(), "Enter");
       expect(onSend).not.toHaveBeenCalled();
       expect(ref.current?.getText()).toContain("\n");
     } finally {
-      vk.restore();
+      vp.restore();
     }
   });
 
   it("Ctrl+Enter still sends while the virtual keyboard is showing", async () => {
-    const vk = withVirtualKeyboard(300);
+    const vp = withVisualViewport(BASE_HEIGHT);
     try {
       const { onSend, ref } = renderComposer("hello");
-      await act(async () => ref.current?.focus());
+      await act(async () => {
+        ref.current?.focus();
+        vp.setHeight(BASE_HEIGHT - 350);
+      });
       await key(editorEl(), "Enter", { ctrlKey: true });
       await waitFor(() => expect(onSend).toHaveBeenCalled());
     } finally {
-      vk.restore();
+      vp.restore();
     }
   });
 
-  it("plain Enter sends when the virtual keyboard is hidden (height 0)", async () => {
-    const vk = withVirtualKeyboard(0);
+  it("plain Enter sends when the virtual keyboard is hidden (height at baseline)", async () => {
+    const vp = withVisualViewport(BASE_HEIGHT);
     try {
       const { onSend, ref } = renderComposer("hello there");
       await act(async () => ref.current?.focus());
       await key(editorEl(), "Enter");
       await waitFor(() => expect(onSend).toHaveBeenCalled());
     } finally {
-      vk.restore();
+      vp.restore();
     }
   });
 
-  it("coarse-pointer fallback (no VirtualKeyboard API): plain Enter inserts a newline", async () => {
+  it("coarse-pointer fallback (no visualViewport): plain Enter inserts a newline", async () => {
     const originalMatchMedia = window.matchMedia;
     window.matchMedia = ((query: string) => ({
       matches: query.includes("any-pointer: coarse") && query.includes("any-hover: none"),
