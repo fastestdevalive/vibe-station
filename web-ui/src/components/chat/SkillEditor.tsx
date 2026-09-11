@@ -329,33 +329,35 @@ export function useSoftKeyboardVisible(): boolean {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    interface VirtualKeyboardLike {
-      overlaysContent: boolean;
-      overlayContentRect: { height: number };
-      addEventListener: (type: string, cb: () => void) => void;
-      removeEventListener: (type: string, cb: () => void) => void;
-    }
-    const nav =
-      typeof navigator !== "undefined"
-        ? (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
-        : undefined;
-    const vk = nav?.virtualKeyboard;
+    if (typeof window === "undefined") return undefined;
 
-    if (vk) {
-      // Required opt-in: without `overlaysContent = true`, `overlayContentRect`
-      // is never populated and `virtualkeyboardchange` may never fire, so the
-      // height-based detection is a silent no-op. Overlay mode (rather than the
-      // default resize) also keeps the app layout from squishing on keyboard
-      // show — this app doesn't rely on the visual viewport shrinking.
-      vk.overlaysContent = true;
-      const update = () => setVisible((vk.overlayContentRect?.height ?? 0) > 0);
-      update();
-      vk.addEventListener("virtualkeyboardchange", update);
-      return () => vk.removeEventListener("virtualkeyboardchange", update);
+    // Use visualViewport resize events to detect keyboard visibility. This
+    // cooperates with `interactive-widget=resizes-content` (index.html) which
+    // shrinks the layout viewport — and therefore shifts the chat bar up —
+    // when the soft keyboard opens. The VirtualKeyboard API's overlaysContent
+    // opt-in was previously used here but it cancels that resize behaviour,
+    // breaking the "bar shifts up" UX on mobile.
+    const vp = window.visualViewport;
+    if (vp) {
+      // Track the maximum observed height as the no-keyboard baseline so that
+      // detecting "keyboard visible" works even when the hook mounts while the
+      // keyboard is already open (e.g. autofocus). Each time the height grows
+      // (keyboard hid, split-view expanded, etc.) we raise the baseline too.
+      // Keyboards are typically 250-400 px; 150 px guards against minor browser
+      // chrome changes (e.g. URL bar) being misread as a keyboard.
+      const KEYBOARD_THRESHOLD_PX = 150;
+      let maxHeight = vp.height;
+      const update = () => {
+        if (vp.height > maxHeight) maxHeight = vp.height;
+        setVisible(maxHeight - vp.height > KEYBOARD_THRESHOLD_PX);
+      };
+      vp.addEventListener("resize", update);
+      return () => vp.removeEventListener("resize", update);
     }
 
+    // Fallback for browsers without visualViewport (rare): coarse-pointer
+    // heuristic — true for touch-primary devices regardless of keyboard state.
     const coarse =
-      typeof window !== "undefined" &&
       typeof window.matchMedia === "function" &&
       window.matchMedia("(any-pointer: coarse) and (any-hover: none)").matches;
     setVisible(coarse);
