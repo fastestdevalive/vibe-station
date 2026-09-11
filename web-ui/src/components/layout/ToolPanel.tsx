@@ -100,15 +100,6 @@ export function ToolPanel({
         {!hidePanelControls ? (
           <div className="tool-panel__tabs-actions">
             <ToolFullscreenButton />
-            <button
-              type="button"
-              className="tab tab--icon tool-bar-btn"
-              aria-label="Close tool panel"
-              title="Close tool panel"
-              onClick={() => toggleToolPanel()}
-            >
-              <X size={13} />
-            </button>
           </div>
         ) : onClose ? (
           <div className="tool-panel__tabs-actions">
@@ -135,7 +126,7 @@ export function ToolPanel({
               <FilesPanel api={api} worktreeId={worktreeId} scope={scope} />
             ) : null}
             {toolPanelTab === "devices" ? <DevicesPanel /> : null}
-            {toolPanelTab === "artifacts" ? <ArtifactsPanel /> : null}
+            {toolPanelTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
             {toolPanelTab === "vcs" ? (
               <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} />
             ) : null}

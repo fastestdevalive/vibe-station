@@ -1,3 +1,4 @@
+import { Minus, Plus } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { PrStatus, Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
@@ -45,14 +46,26 @@ interface AgentPaneSlotProps {
  */
 export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
+  const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   // The channel toggle is handed to `TerminalPane` so a single owner decides its
   // placement: a top-right overlay while the terminal is live, but rendered
   // in-flow BELOW the "Session exited / Resume" banner once the session exits
   // (json-mode-followups item 4). Driving that off `TerminalPane`'s own banner
   // state — instead of second-guessing it here — is why the toggle can no longer
   // land on top of the banner and swallow clicks meant for Resume.
+  // Font size buttons are co-located with the toggle for discoverability.
   const channelToggle =
-    !isJson && session ? <TerminalChannelToggle api={api} session={session} /> : null;
+    !isJson && session ? (
+      <div className="terminal-font-overlay">
+        <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease agent font" onClick={() => bumpTerminalFont(-0.05)}>
+          <Minus size={11} />
+        </button>
+        <button type="button" className="terminal-font-overlay__btn" aria-label="Increase agent font" onClick={() => bumpTerminalFont(0.05)}>
+          <Plus size={11} />
+        </button>
+        <TerminalChannelToggle api={api} session={session} />
+      </div>
+    ) : null;
   // The attachment-upload overlay is still a plain top-corner overlay that only
   // makes sense on a live terminal, so keep gating it out once the pane exits.
   // `done` releases the pane exactly like `exited` does (the daemon kills the

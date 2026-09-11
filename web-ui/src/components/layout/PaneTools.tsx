@@ -1,4 +1,4 @@
-import { Maximize2, Minimize2, Minus, Plus, X } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 
 interface PaneToolsProps {
@@ -22,32 +22,12 @@ interface PaneToolsProps {
  * whichever agent view (tmux terminal or Rich Chat) is currently visible.
  */
 export function PaneTools({ fsTarget, onCloseDock }: PaneToolsProps) {
-  const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   const workspacePaneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
   const setWorkspacePaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
   const fsActive = workspacePaneFullscreen === fsTarget;
 
   return (
     <div className="tabs-strip__tools">
-      <div className="tabs-strip__zoom" aria-label="Agent font zoom">
-        <span className="tabs-strip__zoom-label">Aa</span>
-        <button
-          type="button"
-          className="tab tab--icon"
-          aria-label="Decrease agent font"
-          onClick={() => bumpTerminalFont(-0.05)}
-        >
-          <Minus size={11} />
-        </button>
-        <button
-          type="button"
-          className="tab tab--icon"
-          aria-label="Increase agent font"
-          onClick={() => bumpTerminalFont(0.05)}
-        >
-          <Plus size={11} />
-        </button>
-      </div>
       <div className="tabs-strip__fs">
         <button
           type="button"

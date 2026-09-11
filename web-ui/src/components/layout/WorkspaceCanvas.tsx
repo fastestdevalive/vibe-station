@@ -1212,7 +1212,7 @@ export function WorkspaceCanvas({
                   title="Save this arrangement as a named workspace"
                   onClick={() => setSavePromptOpen(true)}
                 >
-                  <Save size={14} /> Save as workspace
+                  <Save size={14} />
                 </button>
               )}
             </div>
