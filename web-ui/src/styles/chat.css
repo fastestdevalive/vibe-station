@@ -489,6 +489,11 @@
   height: auto;
 }
 
+/* Mermaid diagrams are click-to-fullscreen (TODO 3) — zoom-in affordance. */
+.mermaid-view--clickable {
+  cursor: zoom-in;
+}
+
 /* ── Thinking block ───────────────────────────────────────────────────────── */
 
 .chat-thinking {

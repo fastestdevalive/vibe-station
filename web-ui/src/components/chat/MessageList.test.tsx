@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NormalizedEvent } from "@/api/types";
 import { createMockApi } from "@/api/mock";
@@ -1049,6 +1049,27 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
     const userItems = items.filter((i) => i.type === "user");
     expect(userItems).toHaveLength(1);
     expect((userItems[0] as { text: string }).text).toBe("hi");
+  });
+});
+
+describe("MessageList repo-image prop forwarding (2.T2)", () => {
+  it("forwards api/worktreeId/scope so markdown images resolve via getFileBlob", async () => {
+    const getFileBlob = vi.fn().mockResolvedValue(new Blob(["x"], { type: "image/png" }));
+    const api = { getFileBlob } as never;
+    const events = [textEvent("a1", "t1", "![logo](./assets/logo.png)")];
+    const { container } = render(
+      <MessageList events={events} pending={[]} api={api} worktreeId="wt-1" scope="worktree" />,
+    );
+    await waitFor(() => expect(container.querySelector("img.markdown-img")).toBeTruthy());
+    expect(getFileBlob).toHaveBeenCalledWith("wt-1", "assets/logo.png", "worktree");
+  });
+
+  it("does not resolve repo images without context props", () => {
+    const getFileBlob = vi.fn();
+    const events = [textEvent("a1", "t1", "![logo](./assets/logo.png)")];
+    const { container } = render(<MessageList events={events} pending={[]} />);
+    expect(getFileBlob).not.toHaveBeenCalled();
+    expect(container.querySelector("img.markdown-img")).toBeNull();
   });
 });
 

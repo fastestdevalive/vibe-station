@@ -1,4 +1,6 @@
 import type { Attachment } from "@/api/types";
+import type { ApiInstance } from "@/api";
+import type { FileScope } from "@/api/types";
 import { parseSkillSegments } from "@/lib/skillInvocation";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { AttachmentChip } from "./AttachmentChip";
@@ -9,6 +11,10 @@ interface TextMessageProps {
   attachments?: Attachment[];
   /** Greyed-out pending (optimistic/queued) styling for user bubbles. */
   pending?: boolean;
+  /** Optional repo-image resolution context, forwarded to markdown. */
+  api?: ApiInstance | null;
+  worktreeId?: string | null;
+  scope?: FileScope;
 }
 
 /**
@@ -16,7 +22,7 @@ interface TextMessageProps {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export function TextMessage({ role, text, attachments, pending }: TextMessageProps) {
+export function TextMessage({ role, text, attachments, pending, api, worktreeId, scope }: TextMessageProps) {
   const isUser = role === "user";
   return (
     <div
@@ -52,7 +58,7 @@ export function TextMessage({ role, text, attachments, pending }: TextMessagePro
             )}
           </div>
         ) : (
-          <StreamingMarkdown source={text} />
+          <StreamingMarkdown source={text} api={api} worktreeId={worktreeId} scope={scope} />
         )}
         {attachments && attachments.length > 0 ? (
           <div className="chat-bubble__attachments">

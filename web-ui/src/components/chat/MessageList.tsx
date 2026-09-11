@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Command, NormalizedEvent } from "@/api/types";
+import type { Attachment, Command, FileScope, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
 import { TextMessage } from "./TextMessage";
 import { QueuedTurnEditor } from "./QueuedTurnEditor";
@@ -464,6 +464,10 @@ interface MessageListProps {
   /** API + session for the inline fork editor (edit an answered message). */
   api?: ApiInstance;
   sessionId?: string;
+  /** Repo-image resolution context — forwarded to markdown in messages so
+   *  relative/root-relative image paths resolve via `getFileBlob`. */
+  worktreeId?: string | null;
+  scope?: FileScope;
   /** Edit an already-answered user turn → fork (R3.1). When provided, answered
    *  user bubbles show an Edit affordance; only enabled while the session is idle. */
   onForkTurn?: (turnId: string, message: string, attachmentIds: string[]) => Promise<void> | void;
@@ -493,6 +497,8 @@ export function MessageList({
   onRetry,
   api,
   sessionId,
+  worktreeId,
+  scope,
   onForkTurn,
   onAtBottomChange,
   cwd,
@@ -814,7 +820,7 @@ export function MessageList({
             if (item.cancelled) {
               node = (
                 <div key={key} className="chat-user-turn chat-user-turn--cancelled" data-role="user">
-                  <TextMessage role="user" text={item.text} attachments={item.attachments} />
+                  <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
                   <span className="chat-user-turn__cancelled" title="This message was cancelled before the agent processed it.">
                     Canceled · not sent to agent
                   </span>
@@ -844,7 +850,7 @@ export function MessageList({
             } else if (forkable) {
               node = (
                 <div key={key} className="chat-user-turn">
-                  <TextMessage role="user" text={item.text} attachments={item.attachments} />
+                  <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
                   <button
                     type="button"
                     className="chat-user-turn__edit"
@@ -857,12 +863,12 @@ export function MessageList({
                 </div>
               );
             } else {
-              node = <TextMessage key={key} role="user" text={item.text} attachments={item.attachments} />;
+              node = <TextMessage key={key} role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />;
             }
             break;
           }
           case "assistant":
-            node = <TextMessage key={key} role="assistant" text={item.text} />;
+            node = <TextMessage key={key} role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} />;
             break;
           case "thinking":
             // A still-open thinking group renders NOTHING while the turn is
@@ -895,6 +901,9 @@ export function MessageList({
                 startedTs={item.startedTs}
                 endedTs={item.endedTs}
                 hadToolCall={item.hadToolCall}
+                api={api}
+                worktreeId={worktreeId}
+                scope={scope}
               />
             ) : null;
             break;
@@ -931,7 +940,7 @@ export function MessageList({
 
       {pending.map((p) => (
         <div key={p.turnId} className="chat-pending">
-          <TextMessage role="user" text={p.message} attachments={p.attachments} pending />
+          <TextMessage role="user" text={p.message} attachments={p.attachments} pending api={api} worktreeId={worktreeId} scope={scope} />
         </div>
       ))}
 

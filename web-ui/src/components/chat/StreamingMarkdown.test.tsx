@@ -75,4 +75,21 @@ describe("StreamingMarkdown (4.T3)", () => {
     expect(container.querySelector(".workspace-md-code-block")).toBeTruthy();
     expect(container.textContent).toContain("graph TD; A-->B");
   });
+
+  it("resolves a repo image via getFileBlob when context props are passed (2.T1)", async () => {
+    const getFileBlob = vi.fn().mockResolvedValue(new Blob(["x"], { type: "image/png" }));
+    const api = { getFileBlob } as never;
+    const { container } = render(
+      <StreamingMarkdown source="![logo](./assets/logo.png)" api={api} worktreeId="wt-1" scope="worktree" />,
+    );
+    await waitFor(() => expect(container.querySelector("img.markdown-img")).toBeTruthy());
+    expect(getFileBlob).toHaveBeenCalledWith("wt-1", "assets/logo.png", "worktree");
+  });
+
+  it("does not call getFileBlob without context props (no broken fetch) (2.T1)", () => {
+    const getFileBlob = vi.fn();
+    const { container } = render(<StreamingMarkdown source="![logo](./assets/logo.png)" />);
+    expect(getFileBlob).not.toHaveBeenCalled();
+    expect(container.querySelector("img.markdown-img")).toBeNull();
+  });
 });

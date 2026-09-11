@@ -1,7 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { Attachment, Session } from "@/api/types";
+import type { Attachment, FileScope, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { MessageList } from "@/components/chat/MessageList";
@@ -46,6 +46,11 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const isJson = session?.channel === "json";
   const sessionId = session?.id ?? null;
   const enabled = visible && isJson && !!sessionId;
+  // Repo-image resolution context for markdown in chat: a worktree session
+  // resolves images against the worktree; a direct session (no worktreeId)
+  // against the project scope (its project id serves as the context id).
+  const contextId = session?.worktreeId ?? session?.projectId ?? null;
+  const scope: FileScope = session?.worktreeId ? "worktree" : "project";
 
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
@@ -286,6 +291,8 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
               onLoadAll={() => void loadAll()}
               onRetry={handleRetry}
               api={api}
+              worktreeId={contextId}
+              scope={scope}
               {...(sessionId ? { sessionId } : {})}
               onForkTurn={(turnId, message, attachmentIds) => forkTurn(turnId, message, attachmentIds)}
               onAtBottomChange={setAtBottom}
