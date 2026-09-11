@@ -316,6 +316,117 @@ describe("§10 three mount sites — key table (Composer: Enter sends)", () => {
   });
 });
 
+describe("§10b soft-keyboard Enter behaviour (vs hardware touch capability)", () => {
+  function withVirtualKeyboard(height: number) {
+    const listeners: Array<() => void> = [];
+    const vk = {
+      overlaysContent: false,
+      overlayContentRect: { height },
+      addEventListener: (_type: string, cb: () => void) => listeners.push(cb),
+      removeEventListener: () => {},
+    };
+    Object.defineProperty(navigator, "virtualKeyboard", {
+      configurable: true,
+      value: vk,
+    });
+    return {
+      setHeight(h: number) {
+        vk.overlayContentRect.height = h;
+        listeners.forEach((cb) => cb());
+      },
+      restore() {
+        delete (navigator as { virtualKeyboard?: unknown }).virtualKeyboard;
+      },
+    };
+  }
+
+  it("plain Enter sends when no soft keyboard is present (normal keyboard path)", async () => {
+    const { onSend, ref } = renderComposer("hello there");
+    await act(async () => ref.current?.focus());
+    await key(editorEl(), "Enter");
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+  });
+
+  it("plain Enter inserts a newline when the virtual keyboard is showing", async () => {
+    const vk = withVirtualKeyboard(300);
+    try {
+      const { onSend, ref } = renderComposer("hello");
+      await act(async () => ref.current?.focus());
+      await key(editorEl(), "Enter");
+      expect(onSend).not.toHaveBeenCalled();
+      expect(ref.current?.getText()).toContain("\n");
+    } finally {
+      vk.restore();
+    }
+  });
+
+  it("plain Enter switches to newline when the keyboard appears mid-session (virtualkeyboardchange)", async () => {
+    const vk = withVirtualKeyboard(0);
+    try {
+      const { onSend, ref } = renderComposer("hello there");
+      await act(async () => ref.current?.focus());
+      await key(editorEl(), "Enter");
+      await waitFor(() => expect(onSend).toHaveBeenCalled());
+      onSend.mockClear();
+
+      // Keyboard appears while the editor is already mounted.
+      await act(async () => vk.setHeight(300));
+      await key(editorEl(), "Enter");
+      expect(onSend).not.toHaveBeenCalled();
+      expect(ref.current?.getText()).toContain("\n");
+    } finally {
+      vk.restore();
+    }
+  });
+
+  it("Ctrl+Enter still sends while the virtual keyboard is showing", async () => {
+    const vk = withVirtualKeyboard(300);
+    try {
+      const { onSend, ref } = renderComposer("hello");
+      await act(async () => ref.current?.focus());
+      await key(editorEl(), "Enter", { ctrlKey: true });
+      await waitFor(() => expect(onSend).toHaveBeenCalled());
+    } finally {
+      vk.restore();
+    }
+  });
+
+  it("plain Enter sends when the virtual keyboard is hidden (height 0)", async () => {
+    const vk = withVirtualKeyboard(0);
+    try {
+      const { onSend, ref } = renderComposer("hello there");
+      await act(async () => ref.current?.focus());
+      await key(editorEl(), "Enter");
+      await waitFor(() => expect(onSend).toHaveBeenCalled());
+    } finally {
+      vk.restore();
+    }
+  });
+
+  it("coarse-pointer fallback (no VirtualKeyboard API): plain Enter inserts a newline", async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("any-pointer: coarse") && query.includes("any-hover: none"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    try {
+      const { onSend, ref } = renderComposer("hello");
+      await act(async () => ref.current?.focus());
+      await key(editorEl(), "Enter");
+      expect(onSend).not.toHaveBeenCalled();
+      expect(ref.current?.getText()).toContain("\n");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+});
+
 describe("Popover selection materializes a chip", () => {
   it("clicking a popover option inserts a chip with empty args, caret after it", async () => {
     const { ref } = renderComposer("/cod");

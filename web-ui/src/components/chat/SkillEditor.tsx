@@ -317,6 +317,54 @@ function segmentsToNodes(segments: ReturnType<typeof parseSkillSegments>): Lexic
   return nodes;
 }
 
+/** Whether a soft (on-screen) keyboard is currently shown. Drives the
+ *  plain-Enter = newline decision: a physical keyboard (even on a
+ *  touch-capable device) should send on plain Enter; a soft keyboard should
+ *  insert a newline so the user can still multi-line (Ctrl/Cmd+Enter sends).
+ *  Uses the VirtualKeyboard API where available (Chromium 94+), which reports
+ *  the *current* state; falls back to a coarse capability heuristic
+ *  (`any-pointer: coarse` + `any-hover: none`, i.e. a primary touch input
+ *  with no hover) where the API is absent (Firefox/Safari). */
+export function useSoftKeyboardVisible(): boolean {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    interface VirtualKeyboardLike {
+      overlaysContent: boolean;
+      overlayContentRect: { height: number };
+      addEventListener: (type: string, cb: () => void) => void;
+      removeEventListener: (type: string, cb: () => void) => void;
+    }
+    const nav =
+      typeof navigator !== "undefined"
+        ? (navigator as Navigator & { virtualKeyboard?: VirtualKeyboardLike })
+        : undefined;
+    const vk = nav?.virtualKeyboard;
+
+    if (vk) {
+      // Required opt-in: without `overlaysContent = true`, `overlayContentRect`
+      // is never populated and `virtualkeyboardchange` may never fire, so the
+      // height-based detection is a silent no-op. Overlay mode (rather than the
+      // default resize) also keeps the app layout from squishing on keyboard
+      // show — this app doesn't rely on the visual viewport shrinking.
+      vk.overlaysContent = true;
+      const update = () => setVisible((vk.overlayContentRect?.height ?? 0) > 0);
+      update();
+      vk.addEventListener("virtualkeyboardchange", update);
+      return () => vk.removeEventListener("virtualkeyboardchange", update);
+    }
+
+    const coarse =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(any-pointer: coarse) and (any-hover: none)").matches;
+    setVisible(coarse);
+    return undefined;
+  }, []);
+
+  return visible;
+}
+
 /** Adjacency + keymap + clipboard plugin: everything that needs the editor
  *  instance and Lexical command registration (caret contract, Enter/Escape/
  *  newline, popover keyboard nav, copy/cut/paste). Rendered as a child of
@@ -345,6 +393,9 @@ function SkillEditorPlugin({
   pasteSuppressRef: React.MutableRefObject<boolean>;
 }) {
   const [editor] = useLexicalComposerContext();
+  const softKeyboardVisible = useSoftKeyboardVisible();
+  const softKeyboardRef = useRef(softKeyboardVisible);
+  softKeyboardRef.current = softKeyboardVisible;
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
   const onEscapeRef = useRef(onEscape);
@@ -477,11 +528,11 @@ function SkillEditorPlugin({
             selectActivePopoverItem();
             return true;
           }
-          const isTouchDevice = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
           const isModifiedEnter = !!event && (event.ctrlKey || event.metaKey);
           const isNewlineCombo = !!event && (event.shiftKey || event.altKey);
-          // On touch phones, plain Enter adds a newline; Ctrl/Cmd+Enter still sends.
-          if (isNewlineCombo || (isTouchDevice && !isModifiedEnter)) {
+          // On a showing soft keyboard, plain Enter adds a newline (there's no
+          // Shift+Enter combo on most touch keyboards); Ctrl/Cmd+Enter still sends.
+          if (isNewlineCombo || (softKeyboardRef.current && !isModifiedEnter)) {
             event?.preventDefault();
             editor.dispatchCommand(INSERT_LINE_BREAK_COMMAND, false);
             return true;
