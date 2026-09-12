@@ -16,7 +16,7 @@
  * (`~/.claude/skills`) avoids this, but the Skills settings UI does not block
  * the repo root either.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
 
@@ -130,8 +130,13 @@ export async function scanSkillDirectory(
   }
 
   for (const dirent of dirents) {
-    if (!dirent.isDirectory()) continue;
+    if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue;
     const skillDir = join(dir, dirent.name);
+    // stat() follows the symlink; skip entries that aren't actually directories.
+    if (dirent.isSymbolicLink()) {
+      const resolved = await stat(skillDir).catch(() => null);
+      if (!resolved?.isDirectory()) continue;
+    }
     const skillFile = join(skillDir, SKILL_FILE);
     let content: string;
     try {
