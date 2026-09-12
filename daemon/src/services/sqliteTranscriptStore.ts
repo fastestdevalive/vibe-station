@@ -19,12 +19,24 @@ import type { NormalizedEvent, UsageInfo } from "../types.js";
 import type {
   ImportOutcome,
   NativeWatermark,
+  SincePage,
   TranscriptMeta,
   TranscriptPage,
   TranscriptStore,
 } from "./transcriptStore.js";
 import { migrateJsonlIntoDb } from "./transcriptMigration.js";
 import { capToolResultContent, TOOL_RESULT_MAX_BYTES } from "./toolResultCap.js";
+
+/**
+ * Default page size for the bounded forward `since()` replay (socket-cycling
+ * fix). `since()` previously returned EVERY event newer than the cursor in one
+ * array, so a reconnect over a long-lived session replayed the whole tail in a
+ * single `chat:replay` frame that blew past the WS write-buffer limit and
+ * killed the socket — forever, since the client re-requested the same delta on
+ * every reconnect. A bounded page keeps each frame small; the client pages
+ * toward the head via `nextSeq`/`hasMore`.
+ */
+export const SINCE_PAGE_SIZE = 200;
 
 /** A usage event reflects a real model call only when it billed tokens. */
 function hasRealUsage(usage: UsageInfo | undefined): usage is UsageInfo {
@@ -379,13 +391,28 @@ export class SqliteTranscriptStore implements TranscriptStore {
     };
   }
 
-  since(seq: number): NormalizedEvent[] {
+  /**
+   * Bounded forward page of events strictly newer than `seq`, with a
+   * `nextSeq`/`hasMore` cursor (socket-cycling fix). Previously this returned
+   * the ENTIRE delta in one array — an unbounded `chat:replay` frame. Now it
+   * returns at most `limit` rows (default `SINCE_PAGE_SIZE`) so the client can
+   * page toward the head instead of pulling the whole backlog at once.
+   */
+  since(seq: number, limit?: number): SincePage {
+    const lim = Math.max(1, Math.floor(limit ?? SINCE_PAGE_SIZE));
     const rows = this.db
       .prepare(
-        "SELECT seq, payload FROM message WHERE session_id = ? AND superseded = 0 AND seq > ? ORDER BY seq ASC",
+        "SELECT seq, payload FROM message WHERE session_id = ? AND superseded = 0 AND seq > ? ORDER BY seq ASC LIMIT ?",
       )
-      .all(this.sessionId, seq) as { seq: number; payload: string }[];
-    return rows.map((r) => this.parseRow(r.seq, r.payload));
+      .all(this.sessionId, seq, lim) as { seq: number; payload: string }[];
+    if (rows.length === 0) return { events: [], hasMore: false };
+    const events = rows.map((r) => this.parseRow(r.seq, r.payload));
+    const lastSeq = rows[rows.length - 1]!.seq;
+    return {
+      events,
+      nextSeq: lastSeq,
+      hasMore: this.existsAfter(lastSeq),
+    };
   }
 
   /** Every row with `seq >= fromSeq`, asc, as a page with `hasMore` before it. */
@@ -422,6 +449,14 @@ export class SqliteTranscriptStore implements TranscriptStore {
   private existsBefore(seq: number): boolean {
     const row = this.db
       .prepare("SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ? AND superseded = 0 AND seq < ?) AS e")
+      .get(this.sessionId, seq) as { e: number };
+    return row.e === 1;
+  }
+
+  /** True when any live row exists strictly after `seq` (bounded EXISTS). */
+  private existsAfter(seq: number): boolean {
+    const row = this.db
+      .prepare("SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ? AND superseded = 0 AND seq > ?) AS e")
       .get(this.sessionId, seq) as { e: number };
     return row.e === 1;
   }

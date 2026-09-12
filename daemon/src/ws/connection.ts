@@ -5,6 +5,39 @@ import type { JsonAgentStream } from "./streams/jsonAgentStream.js";
 import type { NormalizedEvent, SessionMeta, TokenScope } from "../types.js";
 
 /**
+ * REGRESSION — remote socket cycling (see branch `fix/ws-socket-cycling`).
+ *
+ * `send()` used to hard-close the socket with code 1009 once `bufferedAmount`
+ * exceeded 1MB. On loopback that never fired, but over any real network (LAN /
+ * Tailscale / tunnel) the reconnect replay burst queues past 1MB instantly.
+ * The client then reconnected, `onopen` replayed the SAME oversized
+ * `chat:replay` + terminal scrollback burst, and the socket was killed again
+ * at the same byte count — a deterministic connect/disconnect cycle with no
+ * escape (the daemon log shows millions of identical
+ * "[WS] Write buffer exceeded 1MB, closing connection" lines in unbroken runs).
+ *
+ * The fix (three cooperating changes):
+ *  1. `send()` never closes on ordinary pressure. It coalesces lossy
+ *     `session:output` frames (terminal scrollback, which tmux redraws anyway)
+ *     when the buffer is high, and only hard-closes at the real shared
+ *     `HARD_LIMIT` (50MB) — see `WS_HARD_LIMIT` and `ws/server.ts`.
+ *  2. `chat:replay` deltas are bounded + paginated (LIMIT in
+ *     `sqliteTranscriptStore.since()`) so a single frame can never exceed the
+ *     limit in the first place.
+ *  3. The client advances its `sinceSeq` cursor on `chat:replay` (not just live
+ *     `session:message`) so a partially-delivered replay is never re-requested
+ *     identically, and resets its reconnect backoff only after the connection
+ *     has been stable.
+ */
+
+/** Soft backpressure threshold: above this we begin coalescing lossy
+ *  `session:output` frames rather than queueing an unbounded scrollback. */
+export const WS_SOFT_LIMIT = 1_000_000;
+/** Hard limit: above this the connection is beyond hope — close it. Shared
+ *  with `ws/server.ts`'s periodic backpressure check so the two agree. */
+export const WS_HARD_LIMIT = 50 * 1024 * 1024;
+
+/**
  * A live JSON chat subscription: listeners attached to a session's
  * `JsonAgentStream` for `chat:open`, so `chat:close`/cleanup can detach them
  * without leaking (mirrors the tmux/direct `OpenStreamEntry` pattern).
@@ -84,29 +117,89 @@ export class WSConnection {
     return this.ws;
   }
 
+  /** Pending coalesced terminal output per session (session:output only), sent
+   *  as a single chunk on the next send once the buffer has drained. */
+  private coalescedOutput = new Map<string, string>();
+  private coalesceFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
-   * Send a message to the client. Handles backpressure: if write buffer
-   * exceeds ~1MB, close with code 1009.
+   * Send a message to the client, handling backpressure WITHOUT killing the
+   * socket on ordinary write-buffer pressure (see the file-header regression
+   * note — this is the primary fix for the remote socket-cycling bug).
+   *
+   * Behaviour:
+   *  - Under `WS_SOFT_LIMIT` (1MB): send normally.
+   *  - Over `WS_SOFT_LIMIT` but under `WS_HARD_LIMIT` (50MB): coalesce lossy
+   *    `session:output` frames into a single chunk per session, and flush once
+   *    the buffer drains. Terminal scrollback is lossy-tolerant — tmux redraws
+   *    on resize/input — so dropping/merging it loses nothing the user can't
+   *    recover. All other (small, must-deliver) frames pass through.
+   *  - Over `WS_HARD_LIMIT`: the connection is beyond hope; only then close
+   *    with 1009. This mirrors the periodic check in `ws/server.ts`.
    */
   send(msg: ServerMessage): void {
     if (this.ws.readyState !== 1) { // 1 is WebSocket.OPEN
       return;
     }
-    const json = JSON.stringify(msg);
     const bufferSize = this.ws.bufferedAmount || 0;
 
-    // If write buffer is already large, reject to avoid pileup
-    if (bufferSize > 1_000_000) {
-      console.warn(`[WS] Write buffer exceeded 1MB (${bufferSize} bytes), closing connection`);
+    // Only close at the true hard limit — never on ordinary backpressure.
+    if (bufferSize > WS_HARD_LIMIT) {
+      console.warn(`[WS] Write buffer exceeded ${WS_HARD_LIMIT} bytes (${bufferSize}), closing connection`);
       this.ws.close(1009, "Message Too Big");
       return;
     }
 
-    this.ws.send(json, (err: Error | undefined) => {
+    // Backlog is high but not fatal: coalesce lossy terminal output so we
+    // don't queue an unbounded scrollback.
+    if (bufferSize > WS_SOFT_LIMIT && msg.type === "session:output") {
+      this.coalesceOutput(msg);
+      return;
+    }
+
+    this.flushCoalesced();
+    this.ws.send(JSON.stringify(msg), (err: Error | undefined) => {
       if (err) {
         console.error(`[WS] Send error:`, err);
       }
     });
+  }
+
+  /** Accumulate a `session:output` chunk into the coalesced buffer and
+   *  schedule a flush so a stall in new sends can't starve the terminal. */
+  private coalesceOutput(msg: Extract<ServerMessage, { type: "session:output" }>): void {
+    const existing = this.coalescedOutput.get(msg.sessionId) ?? "";
+    this.coalescedOutput.set(msg.sessionId, existing + msg.chunk);
+    // Bound the coalesced buffer itself so a runaway producer can't grow it
+    // without bound; flush it immediately rather than coalescing forever.
+    if (this.coalescedOutput.get(msg.sessionId)!.length > WS_SOFT_LIMIT) {
+      this.flushCoalesced();
+      return;
+    }
+    if (!this.coalesceFlushTimer) {
+      this.coalesceFlushTimer = setTimeout(() => {
+        this.coalesceFlushTimer = null;
+        this.flushCoalesced();
+      }, 100);
+    }
+  }
+
+  /** Send accumulated coalesced output as one frame per session, but only
+   *  once the socket has drained enough that we aren't immediately
+   *  re-backpressuring. */
+  private flushCoalesced(): void {
+    if (this.coalescedOutput.size === 0 || this.ws.readyState !== 1) return;
+    const bufferSize = this.ws.bufferedAmount || 0;
+    if (bufferSize > WS_SOFT_LIMIT) return; // still backed up — wait for the timer
+    for (const [sessionId, chunk] of this.coalescedOutput) {
+      this.ws.send(
+        JSON.stringify({ type: "session:output", sessionId, chunk }),
+        (err: Error | undefined) => {
+          if (err) console.error(`[WS] Send error:`, err);
+        },
+      );
+    }
+    this.coalescedOutput.clear();
   }
 
   /**
@@ -396,5 +489,13 @@ export class WSConnection {
     }
     this.treeWatches.clear();
     this.treeWatchDebt.clear();
+
+    // Drop any pending coalesced output — the socket is gone, there's nothing
+    // to flush to.
+    if (this.coalesceFlushTimer) {
+      clearTimeout(this.coalesceFlushTimer);
+      this.coalesceFlushTimer = null;
+    }
+    this.coalescedOutput.clear();
   }
 }

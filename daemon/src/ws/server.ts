@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import fastifyWebsocket from "@fastify/websocket";
 import { ClientMessage } from "./protocol.js";
-import { WSConnection } from "./connection.js";
+import { WSConnection, WS_HARD_LIMIT } from "./connection.js";
 import { handleSubscribe, handleUnsubscribe } from "./handlers/subscribe.js";
 import { handlePing } from "./handlers/ping.js";
 import { handleSessionOpen } from "./handlers/sessionOpen.js";
@@ -15,7 +15,7 @@ import { handleTreeWatch } from "./handlers/treeWatch.js";
 import { handleTreeUnwatch } from "./handlers/treeUnwatch.js";
 import { handleDebugLog } from "./handlers/debugLog.js";
 import { handleChatOpen, handleChatClose } from "./handlers/chatOpen.js";
-import { registerConnection, unregisterConnection } from "../broadcaster.js";
+import { registerConnection, unregisterConnection, forEachConnection } from "../broadcaster.js";
 import { replayNavigateToConnection } from "../routes/open.js";
 import { COOKIE_NAME, verifyToken } from "../auth.js";
 import type { AuthState } from "../state/auth-state.js";
@@ -108,6 +108,41 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
   // Ensure the websocket plugin is registered
   await app.register(fastifyWebsocket);
 
+  // Heartbeat (socket-cycling fix, Fix 5). Previously nothing ever sent a ping
+  // frame and `lastSeenAt` was never swept, so an idle socket could be silently
+  // dropped by a NAT / Tailscale / cloudflared tunnel middlebox and the client
+  // would reconnect — starting the cycling loop. Now:
+  //   - We send WS-level ping frames each tick so the `ws` library can detect
+  //     dead peers and the outbound traffic keeps tunnel mappings alive.
+  //   - We close connections whose `lastSeenAt` is stale (no app-level message,
+  //     including the client's 25s `{type:"ping"}`, for a long time). The client
+  //     heartbeat guarantees a healthy connection always has a fresh `lastSeenAt`,
+  //     so this only reaps genuinely dead sockets.
+  // The interval is `.unref()`d so it never holds the process (or a test) open,
+  // and cleared when the Fastify app closes.
+  const STALE_CONNECTION_MS = 120_000;
+  const HEARTBEAT_INTERVAL_MS = 30_000;
+  const heartbeatTimer = setInterval(() => {
+    forEachConnection((conn) => {
+      try {
+        conn.socket.ping();
+      } catch {
+        /* socket already closing */
+      }
+      if (Date.now() - conn.lastSeenAt > STALE_CONNECTION_MS) {
+        try {
+          conn.socket.close(1001, "Heartbeat timeout");
+        } catch {
+          /* already closed */
+        }
+      }
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+  app.addHook("onClose", async () => {
+    clearInterval(heartbeatTimer);
+  });
+
   app.get("/ws", { websocket: true }, (socket: WebSocket, req) => {
     // Auth gate — reject before registering the connection
     const authResult = authenticateWS(req, authState);
@@ -129,12 +164,14 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
     replayNavigateToConnection(conn);
 
     // Monitor buffered amount for backpressure. The hard close threshold is
-    // intentionally very generous (50MB) — terminal scrollback replay across
-    // many subscribed sessions can briefly buffer multiple MB at once and we
-    // don't want to kill the connection over transient pressure. We also poll
-    // periodically instead of only on the next session:input, so a truly
-    // runaway producer is bounded even if the user isn't typing.
-    const HARD_LIMIT = 50 * 1024 * 1024;
+    // intentionally very generous (50MB, shared with `connection.send()`) —
+    // terminal scrollback replay across many subscribed sessions can briefly
+    // buffer multiple MB at once and we don't want to kill the connection over
+    // transient pressure. `connection.send()` now coalesces `session:output`
+    // past `WS_SOFT_LIMIT` instead of closing, so this periodic check is the
+    // backstop that bounds a truly runaway producer even if the user isn't
+    // typing (previously the 1MB check in `send()` ran first and killed the
+    // socket on every real-network burst — the socket-cycling regression).
     let lastWarnAt = 0;
     const checkBackpressure = () => {
       const buffered = socket.bufferedAmount || 0;
@@ -142,8 +179,8 @@ export async function registerWSEndpoint(app: FastifyInstance, authState?: AuthS
         console.warn(`[WS] Write buffer at ${(buffered / 1_048_576).toFixed(1)}MB`);
         lastWarnAt = Date.now();
       }
-      if (buffered > HARD_LIMIT) {
-        console.warn(`[WS] Write buffer exceeded ${HARD_LIMIT} bytes (${buffered}), closing connection`);
+      if (buffered > WS_HARD_LIMIT) {
+        console.warn(`[WS] Write buffer exceeded ${WS_HARD_LIMIT} bytes (${buffered}), closing connection`);
         socket.close(1009, "Message Too Big");
       }
     };

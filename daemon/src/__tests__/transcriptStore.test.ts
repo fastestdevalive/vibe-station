@@ -135,8 +135,26 @@ describe("P1.T1 — tail / pageBefore keyset (turn-aligned, never split)", () =>
     const store = openSqliteTranscriptStore(dataDir, SESSION_ID);
     for (let i = 1; i <= 3; i++) appendTurn(store, `t${i}`);
     // seq 0..8; since(5) → seq 6,7,8.
-    const delta = store.since(5);
-    expect(delta.map((e) => e.logSeq)).toEqual([6, 7, 8]);
+    const page = store.since(5);
+    expect(page.events.map((e) => e.logSeq)).toEqual([6, 7, 8]);
+    expect(page.nextSeq).toBe(8);
+    expect(page.hasMore).toBe(false);
+    store.close();
+  });
+
+  it("since(seq) is bounded by LIMIT and returns a pagination cursor when more rows exist", () => {
+    const store = openSqliteTranscriptStore(dataDir, SESSION_ID);
+    for (let i = 1; i <= 5; i++) appendTurn(store, `t${i}`); // seq 0..14
+    // Limit 3: returns seq 1,2,3 and reports more after nextSeq=3.
+    const page = store.since(0, 3);
+    expect(page.events.map((e) => e.logSeq)).toEqual([1, 2, 3]);
+    expect(page.nextSeq).toBe(3);
+    expect(page.hasMore).toBe(true);
+    // Next page from the cursor continues where the last left off.
+    const page2 = store.since(page.nextSeq!, 3);
+    expect(page2.events.map((e) => e.logSeq)).toEqual([4, 5, 6]);
+    expect(page2.nextSeq).toBe(6);
+    expect(page2.hasMore).toBe(true);
     store.close();
   });
 
@@ -193,7 +211,7 @@ describe("P4.T1 — markSupersededFrom (fork truncation, R3.4)", () => {
     expect(tail.events.every((e) => e.turnId === "t1")).toBe(true);
     expect(tail.hasMore).toBe(false);
     // `since` also excludes superseded — a reconnect never replays a forked branch.
-    expect(store.since(s1).some((e) => e.turnId === "t2" || e.turnId === "t3")).toBe(false);
+    expect(store.since(s1).events.some((e) => e.turnId === "t2" || e.turnId === "t3")).toBe(false);
     store.close();
   });
 

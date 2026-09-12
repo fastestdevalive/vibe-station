@@ -104,6 +104,13 @@ export async function handleChatOpen(
 /**
  * Send the bounded `chat:replay`: a `sinceSeq` delta (reconnect) or the tail-N
  * window + `{ oldestSeq, hasMore }` cursor (fresh open). Reads live-or-disk.
+ *
+ * Socket-cycling fix: the `sinceSeq` delta is now a BOUNDED page (LIMIT in
+ * `sqliteTranscriptStore.since()`) carrying a `nextSeq`/`hasMore` cursor. It
+ * used to be the entire delta in one frame — over a real network a long-lived
+ * session's backlog blew past the WS hard limit and killed the socket, forever
+ * (see `connection.ts` header). The client pages toward the head by re-sending
+ * `chat:open` with the advanced `sinceSeq` while `hasMore` is true.
  */
 function sendSnapshot(
   conn: WSConnection,
@@ -112,7 +119,14 @@ function sendSnapshot(
   sinceSeq: number | undefined,
 ): void {
   if (sinceSeq !== undefined) {
-    conn.send({ type: "chat:replay", sessionId, events: readSessionSince(ctx, sinceSeq) });
+    const page = readSessionSince(ctx, sinceSeq);
+    conn.send({
+      type: "chat:replay",
+      sessionId,
+      events: page.events,
+      ...(page.nextSeq !== undefined ? { nextSeq: page.nextSeq } : {}),
+      hasMore: page.hasMore,
+    });
     return;
   }
   const page = readSessionTail(ctx, TAIL_TURNS);

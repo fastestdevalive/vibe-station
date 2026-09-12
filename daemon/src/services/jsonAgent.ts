@@ -17,7 +17,7 @@ import { mkdirSync, existsSync, readFileSync, readdirSync, writeFileSync, unlink
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgentPlugin, TurnInput, TurnContext } from "./spawn.js";
-import type { TranscriptMeta, TranscriptPage, TranscriptStore, ImportOutcome } from "./transcriptStore.js";
+import type { SincePage, TranscriptMeta, TranscriptPage, TranscriptStore, ImportOutcome } from "./transcriptStore.js";
 import { openSqliteTranscriptStore, transcriptDbPath } from "./sqliteTranscriptStore.js";
 import { getNativeHistoryImporter } from "./nativeHistoryImporter.js";
 import { capToolResultContent } from "./toolResultCap.js";
@@ -1034,9 +1034,10 @@ export class JsonAgentSession {
     return this.store.pageBefore(beforeSeq, limit);
   }
 
-  /** Reconnect delta — events strictly newer than `sinceSeq` (R2.3). */
-  since(sinceSeq: number): NormalizedEvent[] {
-    return this.store.since(sinceSeq);
+  /** Reconnect delta — bounded forward page of events strictly newer than
+   *  `sinceSeq` (R2.3 + socket-cycling fix). */
+  since(sinceSeq: number, limit?: number): SincePage {
+    return this.store.since(sinceSeq, limit);
   }
 
   /**
@@ -1968,9 +1969,9 @@ export function readPageBeforeFromDataDir(
   });
 }
 
-/** Reconnect delta from disk (no live session). */
-export function readSinceFromDataDir(dataDir: string, sessionId: string, sinceSeq: number): NormalizedEvent[] {
-  return withDiskStore(dataDir, sessionId, (store) => store.since(sinceSeq), []);
+/** Reconnect delta from disk (no live session) — bounded forward page. */
+export function readSinceFromDataDir(dataDir: string, sessionId: string, sinceSeq: number): SincePage {
+  return withDiskStore(dataDir, sessionId, (store) => store.since(sinceSeq), { events: [], hasMore: false });
 }
 
 /** Bounded last model + last real usage from disk (R2.6 — no full read). */

@@ -73,6 +73,14 @@ export function unregisterConnection(conn: WSConnection): void {
 }
 
 /**
+ * Invoke `fn` for every live WS connection. Used by `ws/server.ts`'s heartbeat
+ * sweep to ping connections and reap stale ones (socket-cycling fix, Fix 5).
+ */
+export function forEachConnection(fn: (conn: WSConnection) => void): void {
+  for (const conn of connections) fn(conn);
+}
+
+/**
  * Return a snapshot of token-level remote sessions.
  *
  * Minted browser tokens (from auth-state) are the source of truth — a device

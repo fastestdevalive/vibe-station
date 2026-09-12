@@ -2440,7 +2440,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (q.since !== undefined) {
       const sinceSeq = Number(q.since);
       if (!Number.isFinite(sinceSeq)) return reply.status(400).send({ error: "invalid since" });
-      return reply.send({ events: readSessionSince(ctx, sinceSeq) });
+      // Bounded forward page + cursor (socket-cycling fix) — never the whole
+      // delta in one response.
+      return reply.send(readSessionSince(ctx, sinceSeq));
     }
 
     if (q.beforeSeq !== undefined) {
