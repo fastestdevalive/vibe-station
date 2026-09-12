@@ -123,22 +123,23 @@ export function ChangedFileList({ entries, loading, error, controlled }: Changed
   const { cursorPath, setCursorPath, handleKeyDown, isTabbable } = useRovingListNav(rovingRows, {
     onOpen: selectFile,
     openOnArrow: true,
+    initialCursor: activePath,
   });
 
-  if (error) {
-    return <div className="changed-file-list-empty">Error: {error}</div>;
-  }
-
-  if (loading && flatFiles.length === 0) {
-    return <div className="changed-file-list-empty">Loading changes…</div>;
-  }
-
-  if (flatFiles.length === 0) {
-    return <div className="changed-file-list-empty">No changed files</div>;
-  }
-
   return (
-    <div className="changed-file-list" role="tree" aria-label="Changed files">
+    <div
+      className="changed-file-list"
+      role="tree"
+      aria-label="Changed files"
+      tabIndex={-1}
+    >
+      {error ? (
+        <div className="changed-file-list-empty">Error: {error}</div>
+      ) : loading && flatFiles.length === 0 ? (
+        <div className="changed-file-list-empty">Loading changes…</div>
+      ) : flatFiles.length === 0 ? (
+        <div className="changed-file-list-empty">No changed files</div>
+      ) : null}
       {groups.map((group) => {
         const isCollapsed = collapsedDirs.has(group.dir);
         const dirLabel = group.dir || "(root)";

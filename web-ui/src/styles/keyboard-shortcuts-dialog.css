@@ -1,0 +1,95 @@
+/* Keyboard Shortcuts reference dialog — reuses the shared .dialog-card chrome
+   (workspace.css §dialog-overlay/.dialog-card) and layers a fixed-size, grouped
+   shortcut table on top. */
+
+.dialog-card--shortcuts {
+  width: min(90vw, 560px);
+  max-height: 80vh;
+  overflow: auto;
+}
+
+.dialog-card--shortcuts .dialog-card__body {
+  padding: var(--space-3) var(--space-4);
+}
+
+.shortcut-dialog__groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.shortcut-dialog__group-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: var(--space-1);
+}
+
+.shortcut-dialog__group-title:first-child {
+  margin-top: 0;
+}
+
+.shortcut-dialog__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.shortcut-dialog__table td {
+  padding: var(--space-1) 0;
+  vertical-align: middle;
+}
+
+.shortcut-dialog__keys {
+  width: 1%;
+  white-space: nowrap;
+  padding-left: var(--space-3);
+}
+
+.shortcut-dialog__combo-list {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shortcut-dialog__combo-parts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.shortcut-dialog__combo-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.shortcut-dialog__combo-sep {
+  font-size: var(--font-size-xs, 0.7em);
+  color: var(--fg-muted);
+  padding: 0 1px;
+}
+
+.shortcut-dialog__kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 0 0.4em;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  text-align: center;
+  color: var(--fg-primary);
+  background: var(--bg-elevated, var(--bg-card));
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 0 var(--border-default);
+}
+
+.shortcut-dialog__action {
+  color: var(--fg-primary);
+  max-width: 60%;
+  white-space: normal;
+  word-wrap: break-word;
+  padding-right: var(--space-3);
+}

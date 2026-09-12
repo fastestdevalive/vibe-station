@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 
 /** One flat, navigable row. Trees flatten to this shape too — `expandable`
  *  is what lets a single hook serve both a tree (FileTreeSidebar) and an
@@ -17,6 +17,10 @@ export interface UseRovingListNavOptions {
   /** When true, ArrowUp/ArrowDown also call `onOpen` for non-expandable rows,
    *  giving instant preview-as-you-navigate behaviour (like VSCode's explorer). */
   openOnArrow?: boolean;
+  /** Seeds the cursor on mount (when the path exists in `rows`), so the
+   *  tabbable row and the already-selected row are the same item instead of
+   *  rows[0] falling back to tabbable while something else is selected. */
+  initialCursor?: string | null;
 }
 
 export interface UseRovingListNavResult {
@@ -43,7 +47,38 @@ export function useRovingListNav(
   rows: RovingRow[],
   opts: UseRovingListNavOptions,
 ): UseRovingListNavResult {
-  const [cursorPath, setCursorPath] = useState<string | null>(null);
+  // Initializer runs once, at mount — later changes to `opts`/`rows` are
+  // intentionally ignored so the cursor stays user-controlled after that.
+  const [cursorPath, setCursorPath] = useState<string | null>(() => {
+    if (opts.initialCursor != null && rows.some((r) => r.path === opts.initialCursor)) {
+      return opts.initialCursor;
+    }
+    return null;
+  });
+
+  // Re-seed the cursor once `initialCursor` shows up in `rows` after an async
+  // load — the useState lazy initializer runs at mount when `rows` may still
+  // be empty (e.g. ChangedFileList mounts with entries=[]), so the seed there
+  // is always rejected. Only fire while `cursorPath === null` to stay
+  // user-controlled after the user has interacted.
+  useEffect(() => {
+    if (cursorPath !== null || opts.initialCursor == null) return;
+    if (rows.some((r) => r.path === opts.initialCursor)) {
+      setCursorPath(opts.initialCursor);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, opts.initialCursor]);
+
+  // Reset cursor when rows replace entirely (e.g. sha change in VcsCommitView)
+  // — the stale path would make isTabbable return false for every row.
+  // Guard on rows.length > 0 so loading flickers don't clear a valid cursor.
+  useEffect(() => {
+    if (cursorPath === null || rows.length === 0) return;
+    if (!rows.some((r) => r.path === cursorPath)) {
+      setCursorPath(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   function handleKeyDown(e: ReactKeyboardEvent) {
     const idx = rows.findIndex((r) => r.path === cursorPath);

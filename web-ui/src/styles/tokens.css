@@ -71,7 +71,7 @@
 }
 
 [data-theme="dark"] {
-  --accent: #6e78c7;
+  --accent: #e5e5e5;
   /* Quiet, chat-scoped accent (user bubble border, spinners, throttle badge).
      Contained here so the global purple --accent stays on primary buttons etc. */
   --chat-accent: #8a8a8a;
@@ -124,7 +124,7 @@
 }
 
 [data-theme="light"] {
-  --accent: #5c64b5;
+  --accent: #1a1a1a;
   --chat-accent: #737373;
   --bg-primary: #fafafa;
   --bg-secondary: #f5f5f5;
