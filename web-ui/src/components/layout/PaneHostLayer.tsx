@@ -1,5 +1,6 @@
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import { usePaneOutletElement } from "./paneOutlets";
 
 /**
@@ -52,14 +53,28 @@ export function PaneHostLayer({ paneKeys, renderPane }: PaneHostLayerProps) {
 
 function PaneHostSlot({ paneKey, children }: { paneKey: PaneKey; children: ReactNode }) {
   const outlet = usePaneOutletElement(paneKey);
+  // `holder` is null for the very first render; the callback ref fires during
+  // commit and React batches the state update, so children appear before paint.
+  const [holder, setHolder] = useState<HTMLDivElement | null>(null);
 
-  // This div's position as a child of PaneHostLayer never changes shape
-  // based on paneKey content — only whether `outlet` is null flips between
-  // the offscreen class and portaling. React never remounts `children`
-  // (the actual pane) because of this; only the portal target changes.
+  // ALWAYS portal children — never switch between portaled and inline rendering.
+  //
+  // The old pattern `{outlet ? createPortal(children, outlet) : children}` looks
+  // like it preserves the pane, but it doesn't: React reconciles position-0 and
+  // sees either a Portal node ($$typeof: REACT_PORTAL_TYPE) or an AgentPaneSlot
+  // element ($$typeof: REACT_ELEMENT_TYPE) — different types → unmount + remount
+  // on every tab switch. That remounts ChatPane/useChat and wipes in-memory chat
+  // history, forcing "load earlier messages" after every tab toggle.
+  //
+  // By always calling createPortal we only change the *target* DOM node, never
+  // the React element type. React moves the portal's DOM without touching the
+  // React subtree, so useChat state survives tab switches intact.
   return (
-    <div className={outlet ? undefined : "pane-holder--offscreen"}>
-      {outlet ? createPortal(children, outlet) : children}
-    </div>
+    <>
+      {/* Offscreen holder: portal target when no outlet claims this pane.
+          Always hidden (display:none via the CSS class) so it never affects layout. */}
+      <div className="pane-holder--offscreen" ref={setHolder} />
+      {holder && createPortal(children, outlet ?? holder)}
+    </>
   );
 }
