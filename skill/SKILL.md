@@ -1,3 +1,4 @@
+<!-- vst-skill-version: 0.0.0 -->
 ---
 name: vst
 description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vst daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
@@ -7,9 +8,11 @@ description: Spawn isolated git-worktree coding sessions (claude, cursor, openco
 
 ## 1. What vst is
 
-`vst` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes. The daemon exposes a REST API and a WebSocket endpoint for real-time pane streaming.
+`vst` is a local daemon that manages isolated git-worktree coding sessions on a developer's machine. Each worktree gets its own git branch and one or more agent sessions (claude, cursor, opencode) running in tmux panes.
 
-This skill is used by agents that interact with vst — both agents running **inside** vst sessions and **external** integrations (OpenClaw, GitHub Actions, CI bots). If you are an agent spawned BY vst, your primary instructions come from `daemon/src/assets/agent-system-prompt.md`; this skill supplements that with rename, teardown, and integration patterns not covered there.
+This skill is used by agents that interact with vst — both agents running **inside** vst sessions and **external** integrations (OpenClaw, GitHub Actions, CI bots). Agents spawned by vst receive their primary task instructions directly from the daemon at launch; this skill covers the CLI-driven integration patterns (spawn, inspect, message, rename, tear down) that are relevant to both external callers and agents coordinating with siblings.
+
+**All interactions with vst use the `vst` CLI exclusively.** Do not use curl or the HTTP API.
 
 ---
 
@@ -24,80 +27,93 @@ vst daemon start
 
 # Start headless (no UI, for CI / GitHub Actions)
 vst daemon start --headless
-
-# Read daemon config (port is here)
-cat ~/.vibe-station/config.json
-# → { "port": 7421 }
 ```
-
-All HTTP API calls use `http://127.0.0.1:<port>` (port from `~/.vibe-station/config.json`, default 7421).
 
 ---
 
-## 3. List projects and worktrees
+## 3. List and inspect projects, worktrees, and sessions
 
 ```bash
+# Register a directory as a project (required before any worktree can be created for it).
+# Safe to call on an already-registered project — it is idempotent.
+vst project add <path>
+
 # List all registered projects
 vst project ls --json
 
 # List worktrees in a project
 vst worktree ls --project=<projectId> --json
 
-# Or via HTTP:
-curl http://127.0.0.1:7421/projects
-# → [{ "id": "my-app", "name": "my-app", "path": "/home/user/my-app",
-#       "prefix": "myap", "defaultBranch": "main", "createdAt": "…" }]
+# Get details on a specific worktree (branch, baseBranch, sessions)
+vst worktree info <worktreeId> --json
 
-curl "http://127.0.0.1:7421/worktrees?project=my-app"
-# → [{ "id": "myap-1", "projectId": "my-app", "branch": "feat/fix-auth",
-#       "baseBranch": "main", "baseSha": "abc123…", "createdAt": "…" }]
+# List sessions in a worktree
+vst session ls --worktree=<worktreeId> --json
+
+# Get details on a specific session (id, state, type, modeId, isMain, …)
+vst session info <sessionId> --json
+
+# List available modes (each mode binds a CLI + system-prompt context)
+vst mode ls --json
 ```
+
+`session.state` is one of `not_started` | `working` | `idle` | `waiting_for_human` | `exited`.
+
+> **`waiting_for_human`** — the agent is blocked and expects a message before it can continue. Polling loops that only break on `idle`/`exited` will spin forever; always include this state as a break condition and surface it to a human or your integration layer.
 
 ---
 
 ## 4. Spawn a worktree + agent session
 
 ```bash
-# CLI — creates worktree + main agent session in one shot
-vst worktree create <projectId> \
+# Creates worktree + main agent session in one shot.
+# Output is always plain text: two lines — a label, then the worktree id.
+# Capture the id with tail -1; get the session id separately via session ls.
+WORKTREE_ID=$(vst worktree create <projectId> \
   --branch=feat/my-task \
   --base=main \
-  --agent=claude \
   --mode=<modeId> \
-  --prompt="Implement the login flow described in SPEC.md"
-
-# HTTP — POST /worktrees
-curl -X POST http://127.0.0.1:7421/worktrees \
-  -H "Content-Type: application/json" \
-  -d '{
-    "projectId": "my-app",
-    "branch": "feat/my-task",
-    "baseBranch": "main",
-    "modeId": "<modeId>",
-    "prompt": "Implement the login flow described in SPEC.md"
-  }'
-# → 201 { "id": "myap-1", "projectId": "my-app", "branch": "feat/my-task",
-#          "baseBranch": "main", "baseSha": "abc123…", "createdAt": "…" }
+  --prompt="Implement the login flow described in SPEC.md" | tail -1)
+SESSION_ID=$(vst session ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 ```
 
-**Schema for POST /worktrees body:**
-```json
-{
-  "projectId": "string (required)",
-  "modeId":    "string (required) — mode determines which agent CLI to use",
-  "branch":    "string (required) — new branch name",
-  "baseBranch":"string (optional) — defaults to project's defaultBranch",
-  "prompt":    "string (optional) — task prompt sent to the agent at launch"
-}
-```
+**Agent sessions default to Rich Chat (json channel).** Pass `--channel=tmux` or `--channel=pty` explicitly only if you need a raw terminal session instead.
 
-**Modes** (`GET /modes` returns the list) bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. Use `vst mode ls --json` to discover available modes.
+**Modes** bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. The mode determines which CLI is used — do not pass `--agent` separately. Use `vst mode ls --json` to discover available modes.
+
+**The main session is created automatically.** Do NOT follow `vst worktree create` with `vst session create` — that would add a redundant second session.
 
 **Session identity** — each session has an opaque `id` (returned by `vst worktree create`/`vst session create`, or looked up via `vst session ls`) and an `isMain` flag marking the worktree's single main agent session. Session ids are not something to construct yourself — always look them up.
 
 ---
 
-## 5. Send a message and wait
+## 5. Add a session to an existing worktree
+
+Use this when you need extra parallelism inside an already-created worktree (same branch, same checkout):
+
+```bash
+# Add a sibling agent session
+vst session create <worktreeId> --type=agent --mode=<modeId> --prompt="your sub-task"
+
+# Add a plain terminal tab
+vst session create <worktreeId> --type=terminal
+```
+
+Output is always plain text — two lines: a label then the session id. Capture it with `tail -1`. Agent sessions default to Rich Chat; terminal sessions default to tmux. Do not use this after `vst worktree create` for the same worktree — the main session already exists.
+
+---
+
+## 6. Restore an exited session
+
+```bash
+vst session restore <sessionId>
+```
+
+The agent re-launches in the same worktree checkout on the same branch.
+
+---
+
+## 7. Send a message and wait
 
 If you only have a session's UI-set display name (not its id), resolve it first:
 
@@ -112,181 +128,33 @@ doesn't exist. Names aren't guaranteed unique — `.[0]` picks an arbitrary
 match among duplicates.
 
 ```bash
-# CLI — send message and wait for agent to go idle (also prints the reply)
+# Send message and wait for agent to go idle (also prints the reply)
 vst session send <sessionId> "Add tests for the login handler" --wait
 
 # Send from a file
 vst session send <sessionId> --file=./instructions.md --wait
-
-
-# HTTP — POST /sessions/:id/send
-curl -X POST "http://127.0.0.1:7421/sessions/<sessionId>/send" \
-  -H "Content-Type: application/json" \
-  -d '{ "data": "Add tests for the login handler\n", "sendEnter": false }'
-# → 200 { "ok": true }
 ```
-
-**Schema for POST /sessions/:id/send body:**
-```json
-{
-  "data":          "string (required, min 1) — message text (tmux/pty: pasted into the pane; json: chat turn)",
-  "sendEnter":      "boolean (optional) — tmux/pty only: append a newline",
-  "attachmentIds": "string[] (optional) — json (Rich Chat) sessions only, from POST /sessions/:id/attachments",
-  "queue":          "boolean (optional) — json only: skip mid-turn steering and always enqueue FIFO"
-}
-```
-
-- On a **json** (Rich Chat) session, a running turn is **steered** by default (injected into the live turn); `queue: true` opts out.
-- `attachmentIds` on a non-json session → `400`, not silently dropped.
 
 ---
 
-## 6. Read session output
+## 8. Read session output
 
 ```bash
-# CLI — capture last N lines of pane output (tmux/pty) or assistant prose (json)
+# Capture last N lines of pane output (tmux/pty) or assistant prose (json)
 vst session output <sessionId> --lines=200
-
-# HTTP — GET /sessions/:id/output?lines=<n>
-curl "http://127.0.0.1:7421/sessions/<sessionId>/output?lines=200"
-# → 200 { "id": "<sessionId>", "output": "..." }
 ```
 
-This is prose/pane text, not an event log — for a json session's raw events (roles, tool calls, turn ids), use `vst session transcript` / `GET /sessions/:id/transcript` instead, which 404s on a tmux/pty session (it has no event log to read).
+This is prose/pane text, not an event log. For a json (Rich Chat) session's structured events — roles, tool calls, turn ids — use:
 
----
-
-## 7. HTTP API reference
-
-Base URL: `http://127.0.0.1:<port>` (port from `~/.vibe-station/config.json`).
-
-### GET /projects
-Returns all registered projects.
-```
-→ 200 Array of { id, name, path, prefix, defaultBranch, createdAt }
+```bash
+vst session transcript <sessionId> --json
 ```
 
-### GET /worktrees?project=\<id\>
-Returns worktrees for a project (omit query to return all).
-```
-→ 200 Array of { id, projectId, branch, baseBranch, baseSha, createdAt }
-```
-
-### POST /worktrees
-Create a worktree and spawn the main agent session.
-Body: `{ projectId, modeId, branch, baseBranch?, prompt? }` (see §4).
-```
-→ 201 { id, projectId, branch, baseBranch, baseSha, createdAt }
-→ 400 { error: "Validation error", details: [...] }
-→ 409 { error: "Branch '…' already exists", conflictWith: "…" }
-→ 500 { error: "Failed to create worktree: …", reason: "…" }
-```
-
-### DELETE /worktrees/:id?purge=true
-Terminate all sessions and remove the worktree from the manifest.
-With `?purge=true`, also deletes the git worktree checkout from disk.
-```
-→ 200 { ok: true }
-→ 404 { error: "Worktree '…' not found" }
-```
-
-### GET /sessions?worktree=\<id\>
-Returns sessions for a worktree (omit query to return all).
-```
-→ 200 Array of session objects (see GET /sessions/:id)
-```
-
-### GET /sessions/:id
-```
-→ 200 {
-    id, worktreeId, isMain, sortOrder, type, modeId,
-    name, nameSource, channel, tmuxName, state, lifecycleState,
-    createdAt, pinnedAt, archivedAt, handoffSummary, parentSessionId,
-    supersededBy, pr
-  }
-→ 404 { error: "Session '…' not found" }
-```
-
-`state` / `lifecycleState`: one of `not_started` | `working` | `idle` | `exited`.
-
-### POST /sessions
-Create an additional agent or terminal session inside an existing worktree.
-```json
-{
-  "worktreeId": "string (required)",
-  "type":       "agent | terminal",
-  "modeId":     "string (required when type=agent)",
-  "prompt":     "string (optional)"
-}
-```
-```
-→ 201 session object
-→ 400 { error: "…" }
-→ 404 { error: "Worktree '…' not found" }
-→ 500 { error: "Failed to spawn agent session: …" }
-```
-
-### DELETE /sessions/:id
-Terminate a session. A worktree's main session is terminated by promoting an eligible
-sibling agent session to main (its own name is preserved); rejected only when it is the
-worktree's sole session.
-```
-→ 200 { ok: true }
-→ 400 { error: "Cannot delete the main session: no other agent session exists in this
-                 worktree to promote to main. Use DELETE /worktrees/:id to remove the
-                 whole worktree." }
-→ 404 { error: "Session '…' not found" }
-```
-
-### POST /sessions/:id/resume
-Resume an exited session (agent re-launches; terminal gets a new pane).
-```
-→ 200 session object
-→ 404 { error: "Session '…' not found" }
-→ 500 { error: "Failed to resume session: …" }
-```
-
-### POST /sessions/:id/send
-Channel-agnostic message send (§5): pastes text into a tmux/pty pane, or enqueues/steers a Rich Chat (json) turn.
-```
-→ 200 { ok: true }
-→ 400 { error: "…" }  (validation, archived session, attachmentIds on non-json)
-→ 404 { error: "Session '…' not found" }
-→ 409 { error: "Session not running" }  (direct-pty session with no live process)
-→ 500 { error: "Failed to send input: …" }
-```
-
-### GET /sessions/:id/output?lines=\<n\>
-Recent output (§6): pane text (tmux/pty) or assistant prose (json). Default `lines=100`.
-```
-→ 200 { id, output: string }
-→ 404 { error: "Session '…' not found" }
-```
-
-### WS /ws
-Single multiplexed WebSocket endpoint. Connect once, send/receive JSON frames.
-
-**Client → server message types** (from `ws/protocol.ts`):
-
-| type | fields | purpose |
-|------|--------|---------|
-| `subscribe` | `sessionIds: string[]` | receive events for listed sessions |
-| `unsubscribe` | `sessionIds: string[]` | stop receiving events |
-| `session:open` | `sessionId, cols, rows` | open a live pane stream (pty) |
-| `session:input` | `sessionId, data: string` | send keystroke data |
-| `session:resize` | `sessionId, cols, rows` | resize pty |
-| `session:close` | `sessionId` | close the pane stream |
-| `file:watch` | `worktreeId, path` | watch a file for changes |
-| `file:unwatch` | `worktreeId, path` | stop watching a file |
-| `tree:watch` | `worktreeId, path?` | watch a directory tree |
-| `tree:unwatch` | `worktreeId, path?` | stop watching a tree |
-| `ping` | — | keepalive |
-
-**Server → client event types** include `session:state`, `session:exited`, `session:created`, `session:deleted`, `session:resumed`, `worktree:created`, `worktree:deleted`, `pane:output` (when `session:open` is active), and `pong`.
+This returns an array of turn events. It errors on a tmux/pty session (those have no event log).
 
 ---
 
-## 8. OpenClaw integration recipe
+## 9. OpenClaw integration recipe
 
 **Scenario:** an OpenClaw webhook receives "review this PR" and wants to spawn a claude session, wait for it to finish, then post results back.
 
@@ -295,45 +163,41 @@ Single multiplexed WebSocket endpoint. Connect once, send/receive JSON frames.
 vst daemon status || vst daemon start
 
 # 2. Get the project ID
-PROJECT_ID=$(curl -s http://127.0.0.1:7421/projects | jq -r '.[0].id')
+PROJECT_ID=$(vst project ls --json | jq -r '.[0].id')
 
 # 3. Spawn a worktree+session with the diff as the task prompt
-# (POST /worktrees creates the worktree and the main agent session atomically)
-WORKTREE=$(curl -s -X POST http://127.0.0.1:7421/worktrees \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"projectId\": \"$PROJECT_ID\",
-    \"branch\":    \"review/pr-$(date +%s)\",
-    \"baseBranch\":\"main\",
-    \"modeId\":    \"<your-claude-modeId>\",
-    \"prompt\":    \"Review the diff at /tmp/pr.diff and summarise findings.\"
-  }")
-SESSION_ID=$(echo "$WORKTREE" | jq -r '.mainSessionId')
+# vst worktree create always outputs plain text: label line then the worktree id
+WORKTREE_ID=$(vst worktree create "$PROJECT_ID" \
+  --branch "review/pr-$(date +%s)" \
+  --base main \
+  --mode <your-claude-modeId> \
+  --prompt "Review the diff at /tmp/pr.diff and summarise findings." | tail -1)
+# Session id is fetched separately — create output does not include it
+SESSION_ID=$(vst session ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 
-# 4. Poll until session is idle or exited
-while true; do
-  STATE=$(curl -s "http://127.0.0.1:7421/sessions/$SESSION_ID" | jq -r '.state')
-  [ "$STATE" = "idle" ] || [ "$STATE" = "exited" ] && break
+# 4. Poll until session is idle, exited, or waiting_for_human
+# waiting_for_human means the agent is blocked — surface this to a human rather than looping forever
+until STATE=$(vst session info "$SESSION_ID" --json | jq -r '.state'); \
+      [ "$STATE" = "idle" ] || [ "$STATE" = "exited" ] || [ "$STATE" = "waiting_for_human" ]; do
   sleep 5
 done
+[ "$STATE" = "waiting_for_human" ] && { echo "Agent blocked — needs human input"; exit 1; }
 
-# 5. Capture output via CLI
+# 5. Capture output
 OUTPUT=$(vst session output "$SESSION_ID" --lines=500)
 
 # 6. Post output back via OpenClaw notifier
 # TODO(openclaw): exact notifier-callback shape depends on your OpenClaw version.
 # Typical pattern: POST to your webhook reply URL with { "text": "$OUTPUT" }.
-curl -X POST "$OPENCLAW_REPLY_URL" \
-  -H "Content-Type: application/json" \
-  -d "{\"text\": $(echo "$OUTPUT" | jq -Rs .)}"
 
 # 7. Tear down the worktree
-curl -s -X DELETE "http://127.0.0.1:7421/worktrees/$(echo $WORKTREE | jq -r '.id')?purge=true"
+# --purge also deletes the git checkout from disk; omit if the branch should persist
+vst worktree rm "$WORKTREE_ID" --purge
 ```
 
 ---
 
-## 9. GitHub Actions / CI integration recipe
+## 10. GitHub Actions / CI integration recipe
 
 ```yaml
 # .github/workflows/agent-review.yml
@@ -356,16 +220,19 @@ jobs:
       - name: Spawn agent session
         id: spawn
         run: |
-          SESSION=$(vst worktree create my-project \
+          # vst worktree create outputs plain text — grab the worktree id from the last line
+          WORKTREE_ID=$(vst worktree create my-project \
             --branch ci-review-${{ github.run_id }} \
             --mode <modeId> \
-            --prompt "Review PR #${{ github.event.number }}" \
-            --json)
-          echo "session=$(echo $SESSION | jq -r '.sessions[0].id')" >> $GITHUB_OUTPUT
+            --prompt "Review PR #${{ github.event.number }}" | tail -1)
+          SESSION_ID=$(vst session ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
+          echo "worktree=$WORKTREE_ID" >> $GITHUB_OUTPUT
+          echo "session=$SESSION_ID" >> $GITHUB_OUTPUT
 
       - name: Wait for agent to finish
         run: |
-          until [ "$(vst session info ${{ steps.spawn.outputs.session }} --json | jq -r '.state')" = "exited" ]; do
+          until STATE=$(vst session info ${{ steps.spawn.outputs.session }} --json | jq -r '.state'); \
+                [ "$STATE" = "idle" ] || [ "$STATE" = "exited" ] || [ "$STATE" = "waiting_for_human" ]; do
             sleep 10
           done
 
@@ -374,12 +241,13 @@ jobs:
 
       - name: Teardown
         if: always()
-        run: vst worktree rm ${{ steps.spawn.outputs.session }} --purge
+        # --purge also deletes the git checkout from disk; omit if the branch should persist
+        run: vst worktree rm ${{ steps.spawn.outputs.worktree }} --purge
 ```
 
 ---
 
-## 10. Rename a worktree or session
+## 11. Rename a worktree or session
 
 ```bash
 vst worktree rename <id> <newName>   # rename a worktree
@@ -417,53 +285,41 @@ vst session rename vs-19-a-3f9c2b7a my-session      # rename a session by its id
   independently per session, not from a slot/position — don't construct one by hand;
   look it up via `vst session ls` or `vst session info $VST_SESSION`)
 
-**Via HTTP:**
-```bash
-# Rename worktree
-curl -X PATCH http://127.0.0.1:7421/worktrees/<id>/rename \
-  -H "Content-Type: application/json" \
-  -d '{ "name": "new-name" }'
-
-# Rename session
-curl -X PATCH http://127.0.0.1:7421/sessions/<id>/rename \
-  -H "Content-Type: application/json" \
-  -d '{ "name": "new-name" }'
-```
-
 ---
 
-## 11. Tear down
+## 12. Tear down
 
 ```bash
-# Terminate a specific session (non-main only; omit the id to terminate the caller's own session via $VST_SESSION)
-curl -X DELETE "http://127.0.0.1:7421/sessions/<sessionId>"
+# Terminate a specific session by id
+vst session terminate <sessionId>
 
-# Remove a worktree (terminates all sessions, removes from manifest)
-curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>"
+# Inside a vst session only: omit the id to self-terminate using $VST_SESSION.
+# External integrations must always pass an explicit id — never rely on $VST_SESSION
+# being set correctly in a CI/bot environment.
+vst session terminate  # only safe when $VST_SESSION is YOUR own session id
 
-# Also delete the git worktree checkout from disk
-curl -X DELETE "http://127.0.0.1:7421/worktrees/<worktreeId>?purge=true"
-
-# CLI equivalents
-vst session terminate [sessionId]
+# Remove a worktree (terminates all sessions, removes from manifest; branch preserved on disk)
 vst worktree rm <worktreeId>
+
+# Also permanently delete the git worktree checkout from disk — irreversible
 vst worktree rm <worktreeId> --purge
 ```
 
 When to use each:
-- `DELETE /sessions/:id` — stop an individual non-main agent or terminal tab while keeping the worktree alive.
-- `DELETE /worktrees/:id` — tear down the whole worktree (all sessions terminated, branch preserved on disk unless `purge=true`).
+- `vst session terminate <id>` — stop an individual non-main agent or terminal tab while keeping the worktree alive.
+- `vst worktree rm <id>` — tear down the whole worktree (all sessions terminated, branch preserved).
+- `vst worktree rm <id> --purge` — same, plus **permanently deletes the git checkout from disk**. Only use this if the branch has been pushed or the work is intentionally discarded.
 
 ---
 
-## 12. Conventions to honour
+## 13. Conventions to honour
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
 - **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
-- **Sessions are co-tenants** — only terminate sessions or worktrees that your integration created. Never call `DELETE /worktrees/:id` on worktrees owned by the developer's interactive session.
+- **Sessions are co-tenants** — only terminate sessions or worktrees that your integration created. There is no server-side ownership field; record the worktree id returned by `vst worktree create` at spawn time and operate only on that id. Never call `vst worktree rm` on worktrees owned by the developer's interactive session.
 - **Set a meaningful `prompt`** when spawning sessions. The clearer the task description, the better the agent's output.
-- **Poll `state`, don't spin.** Check `GET /sessions/:id` every 5–10 s rather than hammering the endpoint.
+- **Poll `state`, don't spin.** Check `vst session info` every 5–10 s rather than hammering repeatedly.
 
 ---
 
-*Cross-reference: the agent-side system prompt that vst injects into spawned workers lives at `daemon/src/assets/agent-system-prompt.md`. That file is the primary instruction set for vst's own workers; this skill supplements it with rename, teardown, and external integration patterns.*
+*This skill covers external and cross-session integration patterns. Agents spawned by vst receive their full task context from the daemon at launch — this file supplements that with spawn, inspect, message, rename, and teardown patterns.*
