@@ -509,6 +509,12 @@ const ChatReplayEvent = z.object({
    *  event and whether older rows exist. Omitted on a `sinceSeq` delta replay. */
   oldestSeq: z.number().optional(),
   hasMore: z.boolean().optional(),
+  /** Forward-pagination cursor (socket-cycling fix): the `logSeq` of the LAST
+   *  event in `events`, set on a bounded `sinceSeq` delta replay. The client
+   *  passes it back as the next `sinceSeq` while `hasMore` is true, so a large
+   *  backlog is delivered in bounded frames instead of one oversized frame.
+   *  Omitted on a fresh tail snapshot. */
+  nextSeq: z.number().optional(),
 });
 
 const SessionMessageEvent = z.object({

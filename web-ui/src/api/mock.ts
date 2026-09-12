@@ -1274,7 +1274,16 @@ export function createMockApi() {
       const events = chatTranscripts.get(sessionId) ?? [];
       if (sinceSeq !== undefined) {
         const delta = events.filter((e) => (e.logSeq ?? -1) > sinceSeq);
-        emit({ type: "chat:replay", sessionId, events: structuredClone(delta) });
+        // Mirror the bounded forward page + cursor (socket-cycling fix): the
+        // mock replays the whole delta but reports no more pages.
+        const nextSeq = delta.length ? delta[delta.length - 1]!.logSeq : undefined;
+        emit({
+          type: "chat:replay",
+          sessionId,
+          events: structuredClone(delta),
+          ...(nextSeq !== undefined ? { nextSeq } : {}),
+          hasMore: false,
+        });
         return;
       }
       // Bounded tail cursor mirror: the mock has no turn indexing, so replay all

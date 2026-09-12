@@ -501,6 +501,10 @@ export type WSEvent =
       oldestSeq?: number;
       /** True when older rows exist before `oldestSeq`. */
       hasMore?: boolean;
+      /** Forward-pagination cursor (socket-cycling fix): `logSeq` of the LAST
+       *  event in `events`, set on a bounded `sinceSeq` delta replay. The client
+       *  passes it back as the next `sinceSeq` while `hasMore` is true. */
+      nextSeq?: number;
     }
   | {
       /** JSON agent chat: one live normalized event. */

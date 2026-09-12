@@ -27,7 +27,7 @@ import {
 } from "./jsonAgent.js";
 import { sessionChannel } from "./channel.js";
 import { sessionDataDir, directSessionDataDir, worktreePath } from "./paths.js";
-import type { TranscriptPage } from "./transcriptStore.js";
+import type { SincePage, TranscriptPage } from "./transcriptStore.js";
 import type {
   ProjectRecord,
   WorktreeRecord,
@@ -308,8 +308,9 @@ export function readSessionPageBefore(
   return readPageBeforeFromDataDir(sessionDataDirFor(ctx), ctx.session.id, beforeSeq, limit);
 }
 
-/** Reconnect delta — events strictly newer than `sinceSeq` (R2.3). */
-export function readSessionSince(ctx: JsonSessionContext, sinceSeq: number): NormalizedEvent[] {
+/** Reconnect delta — bounded forward page of events strictly newer than
+ *  `sinceSeq` (R2.3 + socket-cycling fix). */
+export function readSessionSince(ctx: JsonSessionContext, sinceSeq: number): SincePage {
   const live = jsonAgentRegistry.get(ctx.session.id);
   if (live) return live.since(sinceSeq);
   return readSinceFromDataDir(sessionDataDirFor(ctx), ctx.session.id, sinceSeq);

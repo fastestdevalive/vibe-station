@@ -919,10 +919,14 @@ describe("JSON chat REST + WS", () => {
     expect(pageBody.oldestSeq).toBe(5);
     expect(pageBody.hasMore).toBe(true);
 
-    // `since` delta → only events strictly newer than the cursor.
+    // `since` delta → only events strictly newer than the cursor, plus a
+    // bounded forward page with a `nextSeq`/`hasMore` cursor (socket-cycling
+    // fix — a reconnect delta is never one unbounded frame).
     const since = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript?since=9` });
-    const sinceBody = since.json<{ events: NormalizedEvent[] }>();
+    const sinceBody = since.json<{ events: NormalizedEvent[]; nextSeq?: number; hasMore?: boolean }>();
     expect(sinceBody.events.map((e) => e.logSeq)).toEqual([10, 11, 12, 13, 14]);
+    expect(sinceBody.nextSeq).toBe(14);
+    expect(sinceBody.hasMore).toBe(false);
   });
 
   it("P1.T3 — chat:open replay→live loses no event and does not duplicate the tail", async () => {
@@ -984,9 +988,12 @@ describe("JSON chat REST + WS", () => {
 
     // Only events strictly newer than seq 1 — not the whole turn.
     expect(replay.events.map((e: NormalizedEvent) => e.logSeq)).toEqual([2, 3, 4]);
-    // A `since` delta carries no keyset cursor (it's not a window top).
+    // A `since` delta carries the FORWARD cursor (nextSeq/hasMore) so the client
+    // can page a large backlog in bounded frames (socket-cycling fix). It does
+    // NOT carry the backward `oldestSeq` keyset cursor.
     expect(replay.oldestSeq).toBeUndefined();
-    expect(replay.hasMore).toBeUndefined();
+    expect(replay.nextSeq).toBe(4);
+    expect(replay.hasMore).toBe(false);
   });
 
   it("1.T5 — message_generated event persisted while no chat:open stream open appears in chat:replay", async () => {

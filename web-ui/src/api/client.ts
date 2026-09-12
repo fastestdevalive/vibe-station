@@ -125,10 +125,16 @@ export type AuthEvent = { type: "auth:expired" };
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 15000;
+/** How long a connection must stay up (no reconnect) before the reconnect
+ *  backoff is reset to `INITIAL_BACKOFF_MS` (socket-cycling fix). */
+const STABLE_BACKOFF_RESET_MS = 10_000;
 
 export function createClientApi() {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set when a socket opens; resets `backoffMs` once the connection has been
+   *  stable for `STABLE_BACKOFF_RESET_MS` (see `onopen`). Cleared on close. */
+  let stableTimer: ReturnType<typeof setTimeout> | null = null;
   let backoffMs = INITIAL_BACKOFF_MS;
   /** Ref-counted subs: multiple components can sub to the same sessionId without
    *  one cleanup tearing down the others. */
@@ -173,6 +179,59 @@ export function createClientApi() {
     if (typed) for (const h of typed) h(ev);
   }
 
+  /**
+   * Advance a chat subscription's stored `sinceSeq` cursor so a WS reconnect
+   * replays only the delta since the last event actually seen, and page a
+   * bounded `chat:replay` toward the head.
+   *
+   * REGRESSION — remote socket cycling (see the daemon's `connection.ts`
+   * header). The old code only advanced from a live `session:message` — and
+   * even then read the wrong field (`sm.logSeq` instead of `sm.event.logSeq`),
+   * so the cursor never moved. A reconnect therefore re-requested the SAME
+   * oversized delta forever; the daemon answered with an unbounded
+   * `chat:replay`, the write buffer passed 1MB, and the socket was closed 1009
+   * → reconnect → same replay. Two changes:
+   *   1. Advance from live `session:message.event.logSeq` (the correct field).
+   *   2. Advance from `chat:replay` too (max `logSeq` / `nextSeq`), and when the
+   *      daemon reports `hasMore`, request the next page with the advanced
+   *      cursor so a large backlog arrives in bounded frames.
+   */
+  function advanceSinceSeq(msg: WSEvent): void {
+    let sid: string | undefined;
+    let maxSeq = 0;
+    let more = false;
+
+    if (msg.type === "session:message" && msg.sessionId != null) {
+      sid = msg.sessionId;
+      const logSeq = (msg.event as { logSeq?: number } | undefined)?.logSeq;
+      if (typeof logSeq === "number") maxSeq = logSeq;
+    } else if (msg.type === "chat:replay" && msg.sessionId != null) {
+      sid = msg.sessionId;
+      for (const e of msg.events) {
+        if (typeof e.logSeq === "number" && e.logSeq > maxSeq) maxSeq = e.logSeq;
+      }
+      if (typeof msg.nextSeq === "number" && msg.nextSeq > maxSeq) maxSeq = msg.nextSeq;
+      more = msg.hasMore === true;
+    }
+
+    if (sid == null) return;
+
+    const entry = chatSubs.get(sid);
+    if (entry) {
+      const current = entry.sinceSeq ?? 0;
+      if (maxSeq > current) {
+        chatSubs.set(sid, { ...entry, sinceSeq: maxSeq });
+      }
+    }
+
+    // A bounded page still has more events beyond `nextSeq` — fetch the next
+    // page with the advanced cursor (paced by the network, so a huge backlog
+    // can never arrive as one oversized frame).
+    if (more && maxSeq > 0 && ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "chat:open", sessionId: sid, sinceSeq: maxSeq }));
+    }
+  }
+
   function ensureWs(): Promise<void> {
     if (ws?.readyState === WebSocket.OPEN) return Promise.resolve();
     if (wsReadyPromise) return wsReadyPromise;
@@ -198,29 +257,39 @@ export function createClientApi() {
           const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
           if (msg.type) {
             emit(msg as WSEvent);
-            // Fix 3: advance the stored sinceSeq cursor as live session:message
-            // events arrive so WS-reconnect uses the delta from the latest seen
-            // event rather than replaying everything since mount (unbounded replay
-            // regression introduced by snapshot-cache feature).
-            if (msg.type === "session:message") {
-              const sm = msg as unknown as { sessionId?: string; logSeq?: number };
-              if (sm.sessionId != null && sm.logSeq != null) {
-                const entry = chatSubs.get(sm.sessionId);
-                if (entry) {
-                  const current = entry.sinceSeq ?? 0;
-                  if (sm.logSeq > current) {
-                    chatSubs.set(sm.sessionId, { ...entry, sinceSeq: sm.logSeq });
-                  }
-                }
-              }
-            }
+            // REGRESSION — remote socket cycling (see daemon/src/ws/connection.ts
+            // header). The stored `sinceSeq` cursor must advance from BOTH live
+            // `session:message` events AND `chat:replay` frames, otherwise a
+            // reconnect re-requests the same oversized delta forever:
+            //
+            //  - The old code read `sm.logSeq` straight off the message, but a
+            //    `session:message` carries its cursor as `event.logSeq` — so live
+            //    advancement never fired either. Read `event.logSeq`.
+            //  - `chat:replay` was never consumed for cursor advancement, so a
+            //    failed/partial replay was re-requested identically on every
+            //    reconnect (the 1MB close → reconnect → same replay loop).
+            //  - `chat:replay` is now a bounded page carrying `nextSeq`/`hasMore`;
+            //    the client pages toward the head while `hasMore` is true instead
+            //    of asking for the whole backlog in one frame.
+            advanceSinceSeq(msg);
           }
         } catch {
           /* ignore */
         }
       };
       socket.onopen = () => {
-        backoffMs = INITIAL_BACKOFF_MS;
+        // REGRESSION — socket cycling: the backoff was reset to INITIAL_BACKOFF_MS
+        // here, so a connection that dropped and reconnected every ~1s never grew
+        // its backoff — it stayed a 1s strobe forever (handshake always succeeds,
+        // then the oversized chat:replay kills it again). Only reset the backoff
+        // after the connection has been stable for STABLE_BACKOFF_RESET_MS, so a
+        // genuinely failing connection backs off properly instead of hammering.
+        if (stableTimer) clearTimeout(stableTimer);
+        stableTimer = setTimeout(() => {
+          stableTimer = null;
+          // Only reset if this socket is still the live one (no reconnect since).
+          if (ws === socket) backoffMs = INITIAL_BACKOFF_MS;
+        }, STABLE_BACKOFF_RESET_MS);
         setConnState("online");
         if (subRefs.size > 0) {
           socket.send(JSON.stringify({ type: "subscribe", sessionIds: [...subRefs.keys()] }));
@@ -258,6 +327,10 @@ export function createClientApi() {
       };
       socket.onclose = (ev) => {
         if (ws === socket) ws = null;
+        if (stableTimer) {
+          clearTimeout(stableTimer);
+          stableTimer = null;
+        }
         wsReadyPromise = null;
         setConnState("offline");
         // Code 4401 = daemon rejected the WS connection due to expired/missing
@@ -1257,6 +1330,19 @@ export function createClientApi() {
       };
     },
   };
+
+  // Heartbeat (socket-cycling fix, Fix 5): send an app-level `{type:"ping"}`
+  // every ~25s. The daemon replies `pong` and, more importantly, refreshes this
+  // connection's `lastSeenAt` so its stale-connection sweep doesn't kill an
+  // otherwise-healthy socket. Regular outbound traffic also keeps NAT /
+  // Tailscale / cloudflared tunnel mappings alive, preventing the idle drops
+  // that used to start the whole cycling loop.
+  const PING_INTERVAL_MS = 25_000;
+  setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "ping" }));
+    }
+  }, PING_INTERVAL_MS);
 
   return api;
 }
