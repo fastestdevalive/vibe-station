@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
 import type { ApiInstance } from "@/api";
-import type { AuthSession, TunnelState, MobileQrResponse, LocalQrResponse } from "@/api/types";
+import type {
+  AuthSession,
+  TunnelState,
+  MobileQrResponse,
+  LocalQrResponse,
+  TailscaleStatus,
+  TailscaleQrResponse,
+  TailscaleUpResponse,
+} from "@/api/types";
 import { ApiError } from "@/api/errors";
+import { ShellBlock } from "@/components/preview/ShellBlock";
 
 interface RemoteAccessSettingProps {
   api: ApiInstance;
@@ -36,12 +45,12 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 type ActiveQrType = {
-  type: "local" | "tunnel";
-  qr: MobileQrResponse | LocalQrResponse;
+  type: "local" | "tunnel" | "tailscale";
+  qr: MobileQrResponse | LocalQrResponse | TailscaleQrResponse;
   svg: string;
 };
 
-function CopyLinkButton({ url }: { url: string }) {
+function CopyLinkButton({ url, label = "Copy link" }: { url: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -87,8 +96,65 @@ function CopyLinkButton({ url }: { url: string }) {
       onClick={handleCopy}
       style={{ width: "100%", justifyContent: "center" }}
     >
-      {copied ? "Copied!" : failed ? "Copy failed" : "Copy link"}
+      {copied ? "Copied!" : failed ? "Copy failed" : label}
     </button>
+  );
+}
+
+type Sentiment = "info" | "warn" | "error" | "busy" | "ok";
+
+const SENTIMENT_GLYPH: Record<Sentiment, string> = {
+  info: "ℹ",
+  warn: "⚠",
+  error: "✕",
+  ok: "●",
+  busy: "",
+};
+
+const SENTIMENT_COLOR: Record<Sentiment, string> = {
+  info: "var(--fg-muted)",
+  warn: "var(--fg-warning)",
+  error: "var(--fg-danger)",
+  ok: "var(--fg-success)",
+  busy: "var(--fg-muted)",
+};
+
+function StatusBox({ sentiment, children }: { sentiment: Sentiment; children: ReactNode }) {
+  const isBusy = sentiment === "busy";
+  return (
+    <div
+      role={sentiment === "busy" || sentiment === "info" ? "status" : sentiment === "error" ? "alert" : undefined}
+      style={{
+        display: "flex",
+        gap: "var(--space-2)",
+        alignItems: "flex-start",
+        padding: "var(--space-2) var(--space-3)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: "var(--font-size-xs)",
+        background: "var(--bg-input)",
+        border: "var(--border-width) solid var(--border-default)",
+        color: SENTIMENT_COLOR[sentiment],
+      }}
+    >
+      <span style={{ width: "1em", flex: "0 0 auto", lineHeight: 1.4 }}>
+        {isBusy ? (
+          <span
+            style={{
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: "50%",
+              border: "1.5px solid var(--border-default)",
+              borderTopColor: "var(--fg-muted)",
+              animation: "vst-spin 0.8s linear infinite",
+            }}
+          />
+        ) : (
+          SENTIMENT_GLYPH[sentiment]
+        )}
+      </span>
+      <span style={{ color: "var(--fg-primary)" }}>{children}</span>
+    </div>
   );
 }
 
@@ -103,6 +169,346 @@ const CARD_STYLE: React.CSSProperties = {
   minWidth: 220,
   flex: 1,
 };
+
+function SameNetworkCard({
+  qrLoading,
+  onShowQr,
+}: {
+  qrLoading: boolean;
+  onShowQr: () => void;
+}) {
+  return (
+    <div style={CARD_STYLE}>
+      <div
+        style={{
+          fontWeight: "var(--font-weight-medium)",
+          fontSize: "var(--font-size-sm)",
+        }}
+      >
+        Same network
+      </div>
+      <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+        Works on same WiFi or LAN. No setup.
+      </div>
+      <button
+        type="button"
+        className="btn btn--primary"
+        style={{ alignSelf: "flex-start" }}
+        disabled={qrLoading}
+        onClick={onShowQr}
+      >
+        {qrLoading ? "Generating…" : "Show QR"}
+      </button>
+    </div>
+  );
+}
+
+function TunnelCard({
+  enabled,
+  tunnelUrl,
+  truncatedUrl,
+  qrLoading,
+  toggling,
+  onShowQr,
+  onToggle,
+}: {
+  enabled: boolean;
+  tunnelUrl: string | null;
+  truncatedUrl: string | null;
+  qrLoading: boolean;
+  toggling: boolean;
+  onShowQr: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div style={CARD_STYLE}>
+      <div
+        style={{
+          fontWeight: "var(--font-weight-medium)",
+          fontSize: "var(--font-size-sm)",
+        }}
+      >
+        Cloudflare
+      </div>
+      <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+        Public URL, reachable from anywhere.
+      </div>
+
+      {enabled && tunnelUrl ? (
+        <>
+          <StatusBox sentiment="ok">
+            tunnel active · {truncatedUrl}
+          </StatusBox>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={qrLoading}
+              onClick={onShowQr}
+            >
+              {qrLoading ? "Generating…" : "Show QR"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={toggling}
+              onClick={onToggle}
+              style={{ fontWeight: "normal" }}
+            >
+              {toggling ? "…" : "Disable"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="btn btn--primary"
+          style={{ alignSelf: "flex-start" }}
+          disabled={toggling}
+          onClick={onToggle}
+        >
+          {toggling ? "…" : "Enable tunnel"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function UpResultBlock({ result }: { result: TailscaleUpResponse }) {
+  if (result.exitCode === 0) return null;
+  if (result.loginUrl) {
+    return (
+      <StatusBox sentiment="info">
+        Finish signing in to Tailscale:{" "}
+        <a
+          href={result.loginUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "var(--accent)" }}
+        >
+          {result.loginUrl}
+        </a>
+      </StatusBox>
+    );
+  }
+  const text = result.stderr.trim() || result.stdout.trim() || `tailscale up exited with code ${result.exitCode}`;
+  return (
+    <StatusBox sentiment="error">
+      <pre
+        style={{
+          margin: 0,
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          maxHeight: 120,
+          overflow: "auto",
+          fontFamily: "var(--font-mono)",
+          fontSize: "var(--font-size-xs)",
+        }}
+      >
+        {text}
+      </pre>
+    </StatusBox>
+  );
+}
+
+function TailscaleCard({
+  status,
+  loading,
+  refreshing,
+  busy,
+  error,
+  qrLoading,
+  upBusy,
+  upResult,
+  onRefresh,
+  onEnable,
+  onDisable,
+  onShowQr,
+  onRunUp,
+}: {
+  status: TailscaleStatus | null;
+  loading: boolean;
+  refreshing: boolean;
+  busy: "enable" | "disable" | null;
+  error: string | null;
+  qrLoading: boolean;
+  upBusy: boolean;
+  upResult: TailscaleUpResponse | null;
+  onRefresh: () => void;
+  onEnable: () => void;
+  onDisable: () => void;
+  onShowQr: () => void;
+  onRunUp: () => void;
+}) {
+  return (
+    <div style={CARD_STYLE}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "var(--space-2)",
+        }}
+      >
+        <div
+          style={{
+            fontWeight: "var(--font-weight-medium)",
+            fontSize: "var(--font-size-sm)",
+          }}
+        >
+          Tailscale
+        </div>
+        <button
+          type="button"
+          className="btn btn--secondary"
+          onClick={onRefresh}
+          disabled={loading || refreshing}
+          aria-label="Refresh Tailscale status"
+          style={{ fontSize: "var(--font-size-xs)", padding: "2px 8px", fontWeight: "normal" }}
+        >
+          {loading || refreshing ? "↺ …" : "↺ Refresh"}
+        </button>
+      </div>
+
+      <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+        Reachable by tailnet members over HTTPS.
+      </div>
+
+      {loading ? (
+        <StatusBox sentiment="busy">Checking Tailscale…</StatusBox>
+      ) : !status ? (
+        <StatusBox sentiment="error">Could not read Tailscale status.</StatusBox>
+      ) : status.state === "not_installed" ? (
+        <>
+          <StatusBox sentiment="info">Tailscale isn't installed on this machine.</StatusBox>
+          <ShellBlock command="curl -fsSL https://tailscale.com/install.sh | sh" lang="bash" />
+          <a
+            href="https://tailscale.com/download"
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: "var(--font-size-xs)", color: "var(--accent)" }}
+          >
+            Other install options →
+          </a>
+        </>
+      ) : status.state === "starting" ? (
+        <StatusBox sentiment="busy">Connecting to Tailscale…</StatusBox>
+      ) : status.state === "not_connected" ? (
+        <>
+          <StatusBox sentiment="warn">Tailscale is installed but not connected.</StatusBox>
+          <ShellBlock
+            command="tailscale up"
+            lang="bash"
+            actions={
+              <button
+                type="button"
+                className="btn btn--secondary"
+                disabled={upBusy}
+                onClick={onRunUp}
+                style={{ fontSize: "var(--font-size-xs)", padding: "3px 8px", fontWeight: "normal" }}
+              >
+                {upBusy ? "Running…" : "Run"}
+              </button>
+            }
+          />
+          {upResult && <UpResultBlock result={upResult} />}
+        </>
+      ) : status.state === "needs_operator" ? (
+        <>
+          <StatusBox sentiment="warn">
+            Tailscale needs operator permission for this user before it can serve.
+          </StatusBox>
+          <ShellBlock command={status.fixCommand} lang="bash" />
+        </>
+      ) : status.state === "certs_not_enabled" ? (
+        <>
+          <StatusBox sentiment="warn">
+            HTTPS certificates must be enabled for your tailnet in the Tailscale admin console (DNS tab).
+          </StatusBox>
+          {status.dnsName && (
+            <div
+              style={{
+                fontSize: "var(--font-size-xs)",
+                color: "var(--fg-muted)",
+                wordBreak: "break-all",
+              }}
+            >
+              This machine: <code style={{ fontFamily: "var(--font-mono)" }}>{status.dnsName}</code>
+            </div>
+          )}
+          <a
+            href="https://login.tailscale.com/admin/dns"
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn--secondary"
+            style={{
+              alignSelf: "flex-start",
+              textDecoration: "none",
+              textAlign: "center",
+            }}
+          >
+            Open admin console
+          </a>
+        </>
+      ) : status.state === "connected_no_serve" ? (
+        <>
+          <StatusBox sentiment="info">Connected. Serve is not enabled yet.</StatusBox>
+          <button
+            type="button"
+            className="btn btn--primary"
+            style={{ alignSelf: "flex-start" }}
+            disabled={busy !== null}
+            onClick={onEnable}
+          >
+            {busy === "enable" ? "Enabling…" : "Enable"}
+          </button>
+        </>
+      ) : status.state === "serve_active" ? (
+        <>
+          <StatusBox sentiment="ok">{status.httpsUrl}</StatusBox>
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={qrLoading}
+              onClick={onShowQr}
+            >
+              {qrLoading ? "Generating…" : "Show QR"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={busy !== null}
+              onClick={onDisable}
+              style={{ fontWeight: "normal" }}
+            >
+              {busy === "disable" ? "…" : "Disable"}
+            </button>
+          </div>
+        </>
+      ) : status.state === "port_mismatch" ? (
+        <>
+          <StatusBox sentiment="warn">
+            Serve points to port {status.actualPort}, daemon is on {status.expectedPort}.
+          </StatusBox>
+          <button
+            type="button"
+            className="btn btn--primary"
+            style={{ alignSelf: "flex-start" }}
+            disabled={busy !== null}
+            onClick={onEnable}
+          >
+            {busy === "enable" ? "Fixing…" : "Fix"}
+          </button>
+        </>
+      ) : (
+        <StatusBox sentiment="error">{status.message}</StatusBox>
+      )}
+
+      {error && <StatusBox sentiment="error">{error}</StatusBox>}
+    </div>
+  );
+}
 
 export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── Tunnel state ────────────────────────────────────────────────────────────
@@ -125,10 +531,19 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
 
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
-  const [qrLoading, setQrLoading] = useState<"local" | "tunnel" | null>(null);
+  const [qrLoading, setQrLoading] = useState<"local" | "tunnel" | "tailscale" | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Tailscale state ─────────────────────────────────────────────────────────
+  const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
+  const [tailscaleLoading, setTailscaleLoading] = useState(true);
+  const [tailscaleAction, setTailscaleAction] = useState<"enable" | "disable" | null>(null);
+  const [tailscaleError, setTailscaleError] = useState<string | null>(null);
+  const [tailscaleRefreshing, setTailscaleRefreshing] = useState(false);
+  const [tailscaleUpBusy, setTailscaleUpBusy] = useState(false);
+  const [tailscaleUpResult, setTailscaleUpResult] = useState<TailscaleUpResponse | null>(null);
 
   // ── Revoke state ────────────────────────────────────────────────────────────
   const [revokingAll, setRevokingAll] = useState(false);
@@ -230,11 +645,16 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   }, [activeQr]);
 
   // ── Open QR overlay ─────────────────────────────────────────────────────────
-  async function openQr(type: "local" | "tunnel") {
+  async function openQr(type: "local" | "tunnel" | "tailscale") {
     setQrLoading(type);
     setQrError(null);
     try {
-      const result = type === "local" ? await api.getLocalQr() : await api.getMobileQr();
+      const result =
+        type === "local"
+          ? await api.getLocalQr()
+          : type === "tunnel"
+            ? await api.getMobileQr()
+            : await api.getTailscaleQr();
       const svg = await QRCode.toString(result.qrUrl, { type: "svg", margin: 1 });
       setActiveQr({ type, qr: result, svg });
     } catch (err) {
@@ -296,6 +716,115 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }
 
+  // ── Fetch Tailscale status (independent of the tunnel loading gate) ────────
+  const fetchTailscale = useCallback(async () => {
+    setTailscaleRefreshing(true);
+    try {
+      const status = await api.getTailscaleStatus();
+      setTailscale(status);
+      setTailscaleError(null);
+      if (status.state !== "not_connected") {
+        setTailscaleUpResult(null);
+      }
+    } catch {
+      setTailscaleError("Could not reach daemon.");
+    } finally {
+      setTailscaleLoading(false);
+      setTailscaleRefreshing(false);
+    }
+  }, [api]);
+
+  useEffect(() => {
+    void fetchTailscale();
+  }, [fetchTailscale]);
+
+  // Auto-refetch while `starting` — otherwise the spinner is decorative and the
+  // user must manually click Refresh to see the connection complete.
+  useEffect(() => {
+    if (tailscale?.state !== "starting") return;
+    const id = setTimeout(() => void fetchTailscale(), 3000);
+    return () => clearTimeout(id);
+  }, [tailscale?.state, fetchTailscale]);
+
+  // ── Run tailscale up ────────────────────────────────────────────────────────
+  async function handleTailscaleUp() {
+    setTailscaleUpBusy(true);
+    setTailscaleUpResult(null);
+    setTailscaleError(null);
+    try {
+      const res = await api.runTailscaleUp();
+      if (res.exitCode === 0) {
+        setTailscaleUpResult(null);
+        await fetchTailscale();
+      } else {
+        setTailscaleUpResult(res);
+      }
+    } catch (err) {
+      let message = errMessage(err, "Failed to run tailscale up.");
+      if (err instanceof ApiError) {
+        try {
+          const body = JSON.parse(err.message) as { error?: string };
+          if (body.error === "DESKTOP_ONLY") message = "Run this from the desktop app.";
+        } catch {
+          // not JSON
+        }
+      }
+      setTailscaleError(message);
+    } finally {
+      setTailscaleUpBusy(false);
+    }
+  }
+
+  // ── Enable / fix Tailscale serve ────────────────────────────────────────────
+  async function handleTailscaleEnable() {
+    setTailscaleAction("enable");
+    setTailscaleError(null);
+    try {
+      await api.enableTailscaleServe();
+      void fetchTailscale();
+    } catch (err) {
+      // The enable route returns 409 CERT_NEEDS_ENABLEMENT with an `enableUrl`
+      // when the HTTPS certs gate fires mid-enable — surface it as a link.
+      let enableUrl: string | undefined;
+      if (err instanceof ApiError) {
+        try {
+          const body = JSON.parse(err.message) as { enableUrl?: string };
+          if (body.enableUrl) enableUrl = body.enableUrl;
+        } catch {
+          // not JSON
+        }
+      }
+      void fetchTailscale();
+      setTailscaleError(
+        enableUrl
+          ? `Enable HTTPS in Tailscale admin: ${enableUrl}`
+          : errMessage(err, "Failed to enable Tailscale serve."),
+      );
+    } finally {
+      setTailscaleAction(null);
+    }
+  }
+
+  // ── Disable Tailscale serve ─────────────────────────────────────────────────
+  async function handleTailscaleDisable() {
+    setTailscaleAction("disable");
+    setTailscaleError(null);
+    try {
+      await api.disableTailscaleServe();
+      setTailscale((prev) =>
+        prev && prev.state === "serve_active"
+          ? { state: "connected_no_serve", httpsUrl: prev.httpsUrl, setupCommand: "" }
+          : prev,
+      );
+      // Close QR overlay if it was a tailscale QR
+      setActiveQr((prev) => (prev?.type === "tailscale" ? null : prev));
+    } catch (err) {
+      setTailscaleError(errMessage(err, "Failed to disable Tailscale serve."));
+    } finally {
+      setTailscaleAction(null);
+    }
+  }
+
   // ── QR overlay render ───────────────────────────────────────────────────────
   function renderQrOverlay() {
     if (!activeQr) return null;
@@ -310,9 +839,16 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       label =
         activeQr.type === "local"
           ? `Same network · ${u.hostname}`
-          : `Remote · ${u.hostname}`;
+          : activeQr.type === "tailscale"
+            ? `Tailscale · ${u.hostname}`
+            : `Cloudflare · ${u.hostname}`;
     } catch {
-      label = activeQr.type === "local" ? "Same network" : "Remote";
+      label =
+        activeQr.type === "local"
+          ? "Same network"
+          : activeQr.type === "tailscale"
+            ? "Tailscale"
+            : "Cloudflare";
     }
 
     return createPortal(
@@ -458,94 +994,36 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
 
       {/* Two cards side by side */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
-        {/* Same network card */}
-        <div style={CARD_STYLE}>
-          <div
-            style={{
-              fontWeight: "var(--font-weight-medium)",
-              fontSize: "var(--font-size-sm)",
-            }}
-          >
-            Same network
-          </div>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            Works on same WiFi or Tailscale. No setup.
-          </div>
-          <button
-            type="button"
-            className="btn btn--primary"
-            style={{ alignSelf: "flex-start" }}
-            disabled={qrLoading === "local"}
-            onClick={() => void openQr("local")}
-          >
-            {qrLoading === "local" ? "Generating…" : "Show QR"}
-          </button>
-        </div>
+        <SameNetworkCard
+          qrLoading={qrLoading === "local"}
+          onShowQr={() => void openQr("local")}
+        />
 
-        {/* Remote (tunnel) card */}
-        <div style={CARD_STYLE}>
-          <div
-            style={{
-              fontWeight: "var(--font-weight-medium)",
-              fontSize: "var(--font-size-sm)",
-            }}
-          >
-            Remote
-          </div>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            Cloudflare tunnel creates a public URL.
-          </div>
+        <TunnelCard
+          enabled={tunnel.enabled}
+          tunnelUrl={tunnel.tunnelUrl}
+          truncatedUrl={truncatedUrl}
+          qrLoading={qrLoading === "tunnel"}
+          toggling={toggling}
+          onShowQr={() => void openQr("tunnel")}
+          onToggle={() => void handleToggleTunnel()}
+        />
 
-          {tunnel.enabled && tunnel.tunnelUrl ? (
-            <>
-              <div
-                style={{
-                  fontSize: "var(--font-size-xs)",
-                  color: "var(--fg-muted)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "var(--space-2)",
-                }}
-              >
-                <span
-                  style={{ color: "var(--accent-color, var(--fg-primary))", fontWeight: 600 }}
-                >
-                  ●
-                </span>
-                tunnel active · {truncatedUrl}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={qrLoading === "tunnel"}
-                  onClick={() => void openQr("tunnel")}
-                >
-                  {qrLoading === "tunnel" ? "Generating…" : "Show QR"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  disabled={toggling}
-                  onClick={() => void handleToggleTunnel()}
-                  style={{ fontWeight: "normal" }}
-                >
-                  {toggling ? "…" : "Disable"}
-                </button>
-              </div>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--primary"
-              style={{ alignSelf: "flex-start" }}
-              disabled={toggling}
-              onClick={() => void handleToggleTunnel()}
-            >
-              {toggling ? "…" : "Enable tunnel"}
-            </button>
-          )}
-        </div>
+        <TailscaleCard
+          status={tailscale}
+          loading={tailscaleLoading}
+          refreshing={tailscaleRefreshing}
+          busy={tailscaleAction}
+          error={tailscaleError}
+          qrLoading={qrLoading === "tailscale"}
+          upBusy={tailscaleUpBusy}
+          upResult={tailscaleUpResult}
+          onRefresh={() => void fetchTailscale()}
+          onEnable={() => void handleTailscaleEnable()}
+          onDisable={() => void handleTailscaleDisable()}
+          onShowQr={() => void openQr("tailscale")}
+          onRunUp={() => void handleTailscaleUp()}
+        />
       </div>
 
       {(error || qrError) && (

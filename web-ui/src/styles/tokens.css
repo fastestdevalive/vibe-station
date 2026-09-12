@@ -89,6 +89,9 @@
   --fg-muted: #6b6b6b;
   --fg-faint: #404040;
   --fg-inverse: #0a0a0a;
+  --fg-danger: #f85149;
+  --fg-success: #16a34a;
+  --fg-warning: #d29922;
 
   --border-default: #262626;
   --border-subtle: #1e1e1e;
@@ -140,6 +143,9 @@
   --fg-muted: #737373;
   --fg-faint: #d4d4d4;
   --fg-inverse: #fafafa;
+  --fg-danger: #dc2626;
+  --fg-success: #15803d;
+  --fg-warning: #a16207;
 
   --border-default: #e5e5e5;
   --border-subtle: #f0f0f0;
