@@ -215,3 +215,77 @@ describe("WSConnection.cleanup closes watchers regardless of refCount", () => {
     expect(conn.fileWatches.size).toBe(0);
   });
 });
+
+/**
+ * REGRESSION — remote socket cycling (see `connection.ts` header). `send()`
+ * used to close the socket with 1009 once `bufferedAmount` passed 1MB; over
+ * any real network the reconnect replay burst crosses 1MB instantly, so every
+ * fresh connection was killed again at the same byte count — a deterministic
+ * connect/disconnect cycle. These tests pin the replacement behaviour: never
+ * close on ordinary pressure; coalesce lossy `session:output`; only close at
+ * the shared HARD_LIMIT.
+ */
+describe("WSConnection.send backpressure (socket-cycling fix)", () => {
+  function makeBackpressuredConn(bufferedAmount: number) {
+    const fakeWs = {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+      bufferedAmount,
+    } as unknown as ConstructorParameters<typeof WSConnection>[0];
+    return { conn: new WSConnection(fakeWs), ws: fakeWs };
+  }
+
+  it("does NOT close the socket when the write buffer exceeds the soft limit (was 1009 at 1MB)", () => {
+    const { conn, ws } = makeBackpressuredConn(2_000_000);
+    conn.send({ type: "session:output", sessionId: "s1", chunk: "hello" });
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+
+  it("coalesces session:output frames instead of sending them when backed up", () => {
+    const { conn, ws } = makeBackpressuredConn(2_000_000);
+    conn.send({ type: "session:output", sessionId: "s1", chunk: "a" });
+    conn.send({ type: "session:output", sessionId: "s1", chunk: "b" });
+    // Both frames coalesced (not sent individually) and the socket stays open.
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(ws.close).not.toHaveBeenCalled();
+    // Cleanup cancels the coalesce flush timer so no handle lingers.
+    void conn.cleanup();
+  });
+
+  it("still delivers small must-deliver frames under backpressure", () => {
+    const { conn, ws } = makeBackpressuredConn(2_000_000);
+    conn.send({ type: "pong" });
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(ws.close).not.toHaveBeenCalled();
+  });
+
+  it("closes the socket only at the shared HARD_LIMIT (50MB)", () => {
+    const { conn, ws } = makeBackpressuredConn(51 * 1024 * 1024);
+    conn.send({ type: "pong" });
+    expect(ws.close).toHaveBeenCalledWith(1009, "Message Too Big");
+  });
+
+  it("flushes coalesced output once the buffer drains", async () => {
+    const fakeWs = {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+      bufferedAmount: 2_000_000,
+    } as unknown as ConstructorParameters<typeof WSConnection>[0];
+    const conn = new WSConnection(fakeWs);
+    conn.send({ type: "session:output", sessionId: "s1", chunk: "abc" });
+    expect(fakeWs.send).not.toHaveBeenCalled();
+    // Buffer drains; a later (non-output) send must flush the coalesced chunk
+    // FIRST, then deliver the new message.
+    fakeWs.bufferedAmount = 0;
+    conn.send({ type: "pong" });
+    expect(fakeWs.send).toHaveBeenCalledTimes(2);
+    const flushed = JSON.parse(String(fakeWs.send.mock.calls[0]![0])) as { type: string };
+    expect(flushed.type).toBe("session:output");
+    expect(flushed).toMatchObject({ sessionId: "s1", chunk: "abc" });
+    const after = JSON.parse(String(fakeWs.send.mock.calls[1]![0])) as { type: string };
+    expect(after.type).toBe("pong");
+    void conn.cleanup();
+  });
+});

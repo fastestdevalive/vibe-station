@@ -29,6 +29,24 @@ export interface TranscriptPage {
   hasMore: boolean;
 }
 
+/**
+ * A bounded FORWARD window of transcript events newer than a cursor, for the
+ * reconnect delta replay (socket-cycling fix).
+ *
+ * Unlike `TranscriptPage` (which pages backward toward the transcript's start),
+ * this pages forward toward its head: `nextSeq` is the `logSeq` of the LAST
+ * event in `events` (absent when the window is empty) — the cursor the client
+ * passes back as the next `sinceSeq`. `hasMore` is true when live rows exist
+ * beyond `nextSeq`. Pagination is what keeps a single `chat:replay` frame
+ * bounded, so an arbitrarily large backlog can never exceed the WS hard limit
+ * and kill the socket (the original socket-cycling root cause).
+ */
+export interface SincePage {
+  events: NormalizedEvent[];
+  nextSeq?: number;
+  hasMore: boolean;
+}
+
 /** The native cursor watermark persisted for a session (R0.5). */
 export interface NativeWatermark {
   cli: string;
@@ -59,8 +77,13 @@ export interface TranscriptStore {
   tail(nTurns: number): TranscriptPage;
   /** Keyset page of events strictly before `seq`, turn-aligned + a cursor (P1). */
   pageBefore(seq: number, limit: number): TranscriptPage;
-  /** Events strictly newer than `seq` — the reconnect delta (P1). */
-  since(seq: number): NormalizedEvent[];
+  /**
+   * Bounded FORWARD page of events strictly newer than `seq` — the reconnect
+   * delta (P1). Returns at most `limit` events (default `SINCE_PAGE_SIZE`) plus
+   * a `nextSeq`/`hasMore` cursor so the caller can page toward the head instead
+   * of pulling the whole tail in one frame (socket-cycling fix).
+   */
+  since(seq: number, limit?: number): SincePage;
   /**
    * Mark every row at/after `seq` superseded (edit-a-sent-message fork, R3.4).
    * Append-only: the old branch is kept but hidden from all reads. Returns the
