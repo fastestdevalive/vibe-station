@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { copyText } from "@/lib/copyText";
 
 interface CodeElementProps {
   className?: string;
@@ -49,21 +50,11 @@ export function CodeBlock({ children }: { children?: ReactNode }) {
 
   const handleCopy = useCallback(async () => {
     const text = rawText.replace(/\n$/, "");
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.cssText = "position:fixed;opacity:0";
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand("copy"); } finally { document.body.removeChild(ta); }
-      }
-      setCopied(true);
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-      timerRef.current = window.setTimeout(() => setCopied(false), 1500);
-    } catch { /* swallow */ }
+    const ok = await copyText(text);
+    if (!ok) return;
+    setCopied(true);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => setCopied(false), 1500);
   }, [rawText]);
 
   return (

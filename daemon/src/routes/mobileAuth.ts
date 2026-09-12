@@ -20,6 +20,18 @@ interface OneTimeCode {
 
 const oneTimeCodes = new Map<string, OneTimeCode>();
 
+/**
+ * Mint a one-time auth code (30 s TTL) into the shared map so `/mobile-auth`
+ * can redeem it. Exported so the Tailscale serve QR endpoint (`/tailscale/qr`)
+ * can mint a code redeemable through the same transport gate.
+ */
+export function mintOneTimeCode(origin: OneTimeCode["origin"]): { code: string; expiresAt: number } {
+  const code = randomBytes(32).toString("hex");
+  const now = Date.now();
+  oneTimeCodes.set(code, { createdAt: now, consumed: false, origin });
+  return { code, expiresAt: now + 30_000 };
+}
+
 /** Extract a short human-readable device label from a User-Agent string. */
 function parseDeviceName(ua: string): string {
   if (/iPhone/.test(ua)) return "iPhone";
@@ -44,8 +56,30 @@ setInterval(() => {
   }
 }, 60_000).unref();
 
-function isTunnelRequest(req: { headers: Record<string, string | string[] | undefined> }): boolean {
-  return !!req.headers["cf-connecting-ip"];
+/**
+ * Detect a request that arrived from "remote" (off-machine) rather than the
+ * local desktop. Currently that's any Cloudflare tunnel request
+ * (`cf-connecting-ip`, set by the CF edge and unstrippable by the remote
+ * client) OR a request forwarded with `x-forwarded-proto: https` whose
+ * resolved peer IP is not loopback — the Tailscale serve path sets
+ * `X-Forwarded-For: <tailnet-IP>`, so `req.ip` resolves to the tailnet IP and
+ * this guard treats it as remote. This prevents a tailnet peer from calling
+ * `/auth/tunnel/enable` and standing up a public Cloudflare tunnel.
+ */
+function isTunnelRequest(req: { headers: Record<string, string | string[] | undefined>; ip?: string }): boolean {
+  if (req.headers["cf-connecting-ip"]) return true;
+  const proto = req.headers["x-forwarded-proto"];
+  const protoStr = Array.isArray(proto) ? proto[0] : proto;
+  if (
+    protoStr === "https" &&
+    req.ip &&
+    req.ip !== "127.0.0.1" &&
+    req.ip !== "::1" &&
+    req.ip !== "::ffff:127.0.0.1"
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export interface MobileAuthOpts {
@@ -146,10 +180,7 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
       return reply.status(503).send({ error: "No network interface found" });
     }
 
-    const code = randomBytes(32).toString("hex");
-    const now = Date.now();
-    oneTimeCodes.set(code, { createdAt: now, consumed: false, origin: "local" });
-    const expiresAt = now + 30_000;
+    const { code, expiresAt } = mintOneTimeCode("local");
 
     return reply.send({
       qrUrl: `http://${selectedIp}:${port}/mobile-auth?code=${code}`,
@@ -167,10 +198,7 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
     if (!enabled || !tunnelUrl) {
       return reply.status(409).send({ error: "Tunnel not enabled" });
     }
-    const code = randomBytes(32).toString("hex");
-    const now = Date.now();
-    oneTimeCodes.set(code, { createdAt: now, consumed: false, origin: "tunnel" });
-    const expiresAt = now + 30_000;
+    const { code, expiresAt } = mintOneTimeCode("tunnel");
     return reply.send({ qrUrl: `${tunnelUrl}/mobile-auth?code=${code}`, expiresAt });
   });
 
@@ -270,7 +298,12 @@ export function registerMobileAuthRoutes(app: FastifyInstance, opts: MobileAuthO
     // Tailscale QR is plain http://<ip>:<port> — browsers silently DROP a
     // Secure cookie on an insecure origin, which would make local QR login
     // appear to succeed and then bounce the phone back to the login screen.
-    const cookieAttrs = viaTunnel
+    // The Tailscale serve path IS HTTPS (via `x-forwarded-proto: https`), so it
+    // sets Secure too, without breaking the plain LAN path.
+    const proto = req.headers["x-forwarded-proto"];
+    const protoStr = Array.isArray(proto) ? proto[0] : proto;
+    const secure = viaTunnel || protoStr === "https";
+    const cookieAttrs = secure
       ? `HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${BROWSER_MAX_AGE_SECONDS}`
       : `HttpOnly; SameSite=Lax; Path=/; Max-Age=${BROWSER_MAX_AGE_SECONDS}`;
     void reply.header("Set-Cookie", `${COOKIE_NAME}=${cookieValue}; ${cookieAttrs}`);
