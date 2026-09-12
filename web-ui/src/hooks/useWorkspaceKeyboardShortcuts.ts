@@ -2,12 +2,14 @@ import { useEffect } from "react";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 /**
- * ⌘/Ctrl+Shift+F/P → Files/Preview tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
+ * ⌘/Ctrl+Shift+F → Files tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
  * ⌘/Ctrl+P quick-open files; ⌘/Ctrl+\ or ⌘/Ctrl+B → toggle tool pane;
  * ⌘/Ctrl+Shift+G → new agent in current worktree;
  * ⌘/Ctrl+Shift+M → new worktree in the current project;
  * Alt+N → new agent in the current worktree;
- * Alt+Shift+N → new worktree in the current project.
+ * Alt+Shift+N → new worktree in the current project;
+ * ⌘/Ctrl+E → toggle file tree;
+ * ⌘/Ctrl+/ → toggle tool split orientation;
  *
  * The new-agent/new-worktree shortcuts deliberately use bare Alt (no ⌘/Ctrl)
  * combos, not Ctrl+N/Ctrl+Shift+N — those are reserved by the OS/browser
@@ -34,15 +36,24 @@ export function useWorkspaceKeyboardShortcuts(
     const setToolPanelTab = useWorkspaceStore.getState().setToolPanelTab;
     const toggleTerminalDock = useWorkspaceStore.getState().toggleTerminalDock;
     const toggleToolPanel = useWorkspaceStore.getState().toggleToolPanel;
+    const toggleFileTree = useWorkspaceStore.getState().toggleFileTree;
+    const toggleToolSplitOrientation = useWorkspaceStore.getState().toggleToolSplitOrientation;
 
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       const inEditable =
         t &&
         (t.tagName === "INPUT" ||
-          t.tagName === "TEXTAREA" ||
+          // Exclude xterm's hidden helper textarea — it is the keyboard target
+          // whenever the terminal has focus, but UI shortcuts (Ctrl+B, Ctrl+Shift+Z,
+          // etc.) must still fire from the terminal. The xterm customKeyEventHandler
+          // in TerminalPane.tsx handles which keys xterm forwards to the PTY vs.
+          // lets through; this guard must not re-block them at the app level.
+          (t.tagName === "TEXTAREA" && !t.classList.contains("xterm-helper-textarea")) ||
           t.tagName === "SELECT" ||
           t.isContentEditable);
+
+      const mod = e.metaKey || e.ctrlKey;
 
       // Alt+N / Alt+Shift+N — independent of ⌘/Ctrl, and of the `mod` gate
       // below. `e.code` (physical key), not `e.key`: Option+N is a dead key
@@ -66,7 +77,6 @@ export function useWorkspaceKeyboardShortcuts(
         return;
       }
 
-      const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
 
       if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "p") {
@@ -76,6 +86,15 @@ export function useWorkspaceKeyboardShortcuts(
       }
 
       if (inEditable) return;
+
+      // ⌘/Ctrl+E — toggle file tree (VS Code-style). Same placement as Ctrl+P:
+      // handled before the `inEditable` guard so it fires even from the terminal
+      // (the xterm passthrough in TerminalPane.tsx lets Ctrl+E through to us).
+      if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        toggleFileTree();
+        return;
+      }
 
       // ⌘/Ctrl+\ — toggle tool pane (layout-agnostic: `e.key === "\\"` matches
       // the backslash on US and similar layouts; Ctrl+Shift+\ produces
@@ -93,12 +112,18 @@ export function useWorkspaceKeyboardShortcuts(
         return;
       }
 
+      // ⌘/Ctrl+/ — toggle tool split orientation (no args; falls back to the
+      // current `toolSplitOrientation` from state). Guarded against the Shift
+      // modifier so Ctrl+Shift+/ (i.e. `?` with Ctrl) is not misread here.
+      if (!e.shiftKey && !e.altKey && e.key === "/") {
+        e.preventDefault();
+        toggleToolSplitOrientation();
+        return;
+      }
+
       if (e.shiftKey) {
         const k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
         if (k === "F") {
-          e.preventDefault();
-          setToolPanelTab("files");
-        } else if (k === "P") {
           e.preventDefault();
           setToolPanelTab("files");
         } else if (k === "Z") {

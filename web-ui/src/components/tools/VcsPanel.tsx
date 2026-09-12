@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ExternalLink, GitCommit, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { CommitLogEntry, PrInfo, SubmoduleInfo } from "@/api/types";
 import { VcsCommitView } from "@/components/tools/VcsCommitView";
+import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface VcsPanelProps {
   api: ApiInstance;
@@ -261,9 +262,23 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
   // ON by default — the branch's own commits are the point of this view;
   // flipping it OFF reveals the full unfiltered log inline (Requirement 1a-1c).
   const [diffFromMain, setDiffFromMain] = useState(true);
-  // Item 9 — set when a commit's diff-stat button is clicked; renders
-  // `VcsCommitView` in place of the commit graph until "Commits" is clicked.
-  const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
+
+  // Item 9 — which commit's `VcsCommitView` is open, if any. Held in the
+  // Zustand store (non-persisted) rather than local state so it survives the
+  // tool panel unmounting when toggled off.
+  const vcsSelectedCommitByWorktree = useWorkspaceStore((s) => s.vcsSelectedCommitByWorktree);
+  const setVcsSelectedCommitStore = useWorkspaceStore((s) => s.setVcsSelectedCommit);
+  const selectedCommitSha = vcsSelectedCommitByWorktree[worktreeId] ?? null;
+  const setSelectedCommitSha = useCallback(
+    (sha: string | null) => setVcsSelectedCommitStore(worktreeId, sha),
+    [setVcsSelectedCommitStore, worktreeId],
+  );
+
+  useEffect(() => {
+    if (selectedCommitSha && !useWorkspaceStore.getState().fileTreeVisible) {
+      useWorkspaceStore.getState().toggleFileTree();
+    }
+  }, [selectedCommitSha]);
 
   const toggleExpanded = (sha: string) => {
     setExpanded((prev) => {

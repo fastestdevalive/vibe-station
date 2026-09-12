@@ -1691,6 +1691,10 @@
   border-radius: var(--radius-sm);
 }
 
+[role="tree"] .tree-row:focus {
+  outline: none;
+}
+
 /* Worktrees only: shorter row than default `.tree-row` (project font bumped below),
  * indented under the project row. Collapsed rail overrides this back to 0 so
  * the centered abbreviation chip stays centered. */
@@ -3369,13 +3373,13 @@
 }
 
 .btn--primary {
-  background: var(--accent, #6e78c7);
-  border-color: var(--accent, #6e78c7);
-  color: #ffffff;
+  background: var(--accent, #e5e5e5);
+  border-color: var(--accent, #e5e5e5);
+  color: var(--bg-primary);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent, #6e78c7) 88%, #ffffff);
+  background: color-mix(in srgb, var(--accent, #e5e5e5) 88%, var(--bg-primary));
 }
 
 .btn--secondary {

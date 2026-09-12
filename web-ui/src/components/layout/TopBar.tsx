@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Columns2,
+  Keyboard,
   LayoutGrid,
   MoreHorizontal,
   PanelLeft,
@@ -20,22 +21,35 @@ import type { Project, Session, Worktree } from "@/api/types";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { Logo } from "@/components/shared/Logo";
+import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
-    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P", toolPane: "⌘\\" };
+    return {
+      terminal: "⌘⇧Z",
+      quickOpen: "⌘P",
+      toolPane: "⌘\\",
+      fileTreeToggle: "⌘E",
+      splitToggle: "⌘/",
+    };
   }
   const mac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform ?? navigator.userAgent);
   if (mac) {
-    return { fileTree: "⌘⇧F", preview: "⌘⇧P", terminal: "⌘⇧Z", quickOpen: "⌘P", toolPane: "⌘\\" };
+    return {
+      terminal: "⌘⇧Z",
+      quickOpen: "⌘P",
+      toolPane: "⌘\\",
+      fileTreeToggle: "⌘E",
+      splitToggle: "⌘/",
+    };
   }
   return {
-    fileTree: "Ctrl+Shift+F",
-    preview: "Ctrl+Shift+P",
     terminal: "Ctrl+Shift+Z",
     quickOpen: "Ctrl+P",
     toolPane: "Ctrl+\\",
+    fileTreeToggle: "Ctrl+E",
+    splitToggle: "Ctrl+/",
   };
 }
 
@@ -65,6 +79,10 @@ interface TopBarProps {
   settingsSectionLabel?: string;
   /** Mobile settings drill-in: back to section list */
   onSettingsBack?: () => void;
+  /** Keyboard-shortcuts reference dialog — controlled by the parent. */
+  shortcutsOpen?: boolean;
+  onOpenShortcuts?: () => void;
+  onCloseShortcuts?: () => void;
 }
 
 export function TopBar({
@@ -81,6 +99,9 @@ export function TopBar({
   onOpenQuickOpen,
   settingsSectionLabel,
   onSettingsBack,
+  shortcutsOpen = false,
+  onOpenShortcuts,
+  onCloseShortcuts,
 }: TopBarProps) {
   const {
     activeProjectId,
@@ -299,16 +320,29 @@ export function TopBar({
         ) : null}
         <ConnectionStatus />
         {layoutMode !== "workspace" && layoutMode !== "direct-session" ? (
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Settings"
-            title="Settings"
-            aria-current={layoutMode === "settings" ? "page" : undefined}
-            onClick={() => navigate("/settings")}
-          >
-            <Settings size={18} />
-          </button>
+          <>
+            {onOpenShortcuts ? (
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Keyboard shortcuts"
+                title="Keyboard shortcuts"
+                onClick={onOpenShortcuts}
+              >
+                <Keyboard size={18} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Settings"
+              title="Settings"
+              aria-current={layoutMode === "settings" ? "page" : undefined}
+              onClick={() => navigate("/settings")}
+            >
+              <Settings size={18} />
+            </button>
+          </>
         ) : null}
         {layoutMode === "workspace" || layoutMode === "direct-session" ? (
           <>
@@ -411,6 +445,18 @@ export function TopBar({
                     role="menuitem"
                     onClick={() => {
                       setOverflowOpen(false);
+                      onOpenShortcuts?.();
+                    }}
+                  >
+                    <Keyboard size={14} />
+                    <span>Keyboard shortcuts</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="top-bar__overflow-item"
+                    role="menuitem"
+                    onClick={() => {
+                      setOverflowOpen(false);
                       navigate("/settings");
                     }}
                   >
@@ -449,6 +495,10 @@ export function TopBar({
           </>
         ) : null}
       </div>
+      <KeyboardShortcutsDialog
+        open={shortcutsOpen}
+        onClose={() => onCloseShortcuts?.()}
+      />
       </div>
     </header>
   );

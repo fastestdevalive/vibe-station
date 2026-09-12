@@ -172,6 +172,8 @@ export interface WorkspaceState {
    * keydown.
    */
   focusedPane: string | null;
+  /** Non-persisted: which commit is open in the VCS panel, keyed by worktreeId. */
+  vcsSelectedCommitByWorktree: Record<string, string | null>;
   /** Last opened file path per worktree (persisted). */
   lastFileByWorktree: Record<string, string>;
   /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted). */
@@ -241,6 +243,8 @@ export interface WorkspaceState {
   setActiveFile: (path: string | null) => void;
   /** Set (or clear with null) which flat/tree list owns arrow-key focus. */
   setFocusedPane: (id: string | null) => void;
+  /** Set (or clear with null) which commit is open in the VCS panel for a worktree. */
+  setVcsSelectedCommit: (worktreeId: string, sha: string | null) => void;
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
@@ -587,6 +591,7 @@ const initial = {
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
   focusedPane: null as string | null,
+  vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
   lastFileByWorktree: {} as Record<string, string>,
   fileScrollByKey: {} as Record<string, number>,
   showDotFiles: true,
@@ -802,6 +807,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return { activeFilePath: path, lastFileByWorktree: nextLastFile };
           }),
         setFocusedPane: (id) => set({ focusedPane: id }),
+        setVcsSelectedCommit: (worktreeId, sha) =>
+          set((s) => ({
+            vcsSelectedCommitByWorktree: { ...s.vcsSelectedCommitByWorktree, [worktreeId]: sha },
+          })),
         setFileScroll: (worktreeId, filePath, scrollTop) =>
           set((s) => ({
             fileScrollByKey: { ...s.fileScrollByKey, [`${worktreeId}:${filePath}`]: scrollTop },

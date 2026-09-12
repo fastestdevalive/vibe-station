@@ -45,6 +45,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
         if (!cancelled) {
           setEntries(list);
           setLoading(false);
+          if (list.length > 0) setSelectedPath(list[0]!.path);
         }
       } catch (e) {
         if (!cancelled) {
@@ -68,6 +69,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
     <MasterDetailShell
       storageKey={`commit-${worktreeId}`}
       worktreeId={worktreeId}
+      autoFocusTree
       topbarExtra={topbarExtra}
       leftPane={
         <ChangedFileList

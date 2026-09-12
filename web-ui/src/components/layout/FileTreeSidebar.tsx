@@ -140,6 +140,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   const [branchError, setBranchError] = useState<string | null>(null);
   const { lastChanged } = useTreeWatch(api, activeWorktreeId, fileScope);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const treeHasFocusRef = useRef(false);
 
   const diffMode = scope !== "none";
   // Which local/branch scope currently drives the PLAIN tree's per-file
@@ -398,8 +399,22 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   // Keep DOM focus following the roving cursor so subsequent key events land
   // on the cursored row without the caller needing to manage focus itself.
   useEffect(() => {
-    if (cursorPath) rowRefs.current.get(cursorPath)?.focus();
+    if (cursorPath && treeHasFocusRef.current) {
+      rowRefs.current.get(cursorPath)?.focus();
+    }
   }, [cursorPath]);
+
+  // Seed the roving cursor to the active file once the tree data loads,
+  // so arrow keys resume from the open file rather than row 0.
+  // Must not call .focus() here — focus stealing is handled conditionally
+  // in the effect above and in onFocusCapture.
+  useEffect(() => {
+    if (cursorPath !== null || !activeFilePath) return;
+    if (visibleRows.some((r) => r.path === activeFilePath)) {
+      setCursorPath(activeFilePath);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleRows, activeFilePath]);
 
   function setScope(next: DiffScope) {
     if (activeWorktreeId) setDiffScopeForWorktree(activeWorktreeId, next);
@@ -484,7 +499,24 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
         }
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        onFocusCapture={() => setFocusedPane("file-tree")}
+        onFocusCapture={() => {
+          setFocusedPane("file-tree");
+          treeHasFocusRef.current = true;
+          // If the cursor was pre-seeded while the tree was out of focus
+          // (rows loaded after focus left), move DOM focus there now.
+          if (cursorPath) {
+            const el = rowRefs.current.get(cursorPath);
+            if (el && el !== document.activeElement) {
+              el.focus({ preventScroll: true });
+            }
+          }
+        }}
+        onBlurCapture={(e) => {
+          // Clear focus flag only when focus leaves the tree entirely.
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            treeHasFocusRef.current = false;
+          }
+        }}
       >
         <div style={{ minWidth: "max-content" }}>
           {!diffMode && (effectiveTreeScope === "branch" ? branchLoading : localLoading) ? (

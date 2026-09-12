@@ -190,6 +190,7 @@ export function WorkspaceCanvas({
    *  be seeded into any "expanded" set first. */
   const [collapsedPickerProjects, setCollapsedPickerProjects] = useState<Set<string>>(new Set());
   const [newAgentOpen, setNewAgentOpen] = useState(false);
+  const [tileNewAgentWorktreeId, setTileNewAgentWorktreeId] = useState<string | null>(null);
   // Agent tile "⋯" popup — same actions as the agent tab bar's right-click
   // menu (Reset / Reset with handoff) plus Terminate (mirrors the tab bar's
   // "×" close). Only one tile's menu can be open at a time, mirroring
@@ -457,8 +458,11 @@ export function WorkspaceCanvas({
     return !pickerQuery || label.toLowerCase().includes(pickerQuery);
   }
 
-  const availableAgents = agentSessions.filter((s) => matchesSearch(sessionLabel(s)));
-  const availableTerminals = terminalSessions.filter((s) => matchesSearch(sessionLabel(s)));
+  const contextKeyWorktree = worktrees.find((w) => w.id === worktreeId);
+  const contextKeyLabel = contextKeyWorktree ? (contextKeyWorktree.name || contextKeyWorktree.branch) : "";
+  const contextKeyNameMatches = matchesSearch(contextKeyLabel);
+  const availableAgents = agentSessions.filter((s) => contextKeyNameMatches || matchesSearch(sessionLabel(s)));
+  const availableTerminals = terminalSessions.filter((s) => contextKeyNameMatches || matchesSearch(sessionLabel(s)));
 
   /**
    * A worktree counts as "done" the same way the dashboard's "Finished"
@@ -1037,6 +1041,20 @@ export function WorkspaceCanvas({
               <MoreVertical size={13} />
             </button>
           ) : null}
+          {tile.kind === "agent" && session ? (
+            <button
+              type="button"
+              className="workspace-canvas__tile-newagent"
+              title="New agent in same worktree"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setTileNewAgentWorktreeId(session.worktreeId ?? worktreeId);
+              }}
+            >
+              <Plus size={13} />
+            </button>
+          ) : null}
           {/* Fullscreen: swap "remove tile" for "exit fullscreen" — clicking
               the header already exits fullscreen too (same toggle), this is
               just a second, more discoverable affordance for it. Removing a
@@ -1478,15 +1496,19 @@ export function WorkspaceCanvas({
           ? createPortal(toolbarNode, toolbarPortalEl)
           : toolbarNode
         : null}
-      {!isDetachedView ? (
-        <NewAgentTabDialog
-          open={newAgentOpen}
-          api={api}
-          worktreeId={worktreeId}
-          onClose={() => setNewAgentOpen(false)}
-          onCreated={(sessionId) => addTile("agent", sessionId)}
-        />
-      ) : null}
+      <NewAgentTabDialog
+        open={newAgentOpen || tileNewAgentWorktreeId != null}
+        api={api}
+        worktreeId={tileNewAgentWorktreeId ?? worktreeId}
+        onClose={() => {
+          setNewAgentOpen(false);
+          setTileNewAgentWorktreeId(null);
+        }}
+        onCreated={(sessionId) => {
+          addTile("agent", sessionId, tileNewAgentWorktreeId ?? undefined);
+          setTileNewAgentWorktreeId(null);
+        }}
+      />
       {tileMenu && tileMenuSession
         ? createPortal(
             <div

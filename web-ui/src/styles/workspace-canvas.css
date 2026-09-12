@@ -516,7 +516,8 @@
 }
 
 .workspace-canvas__tile-close,
-.workspace-canvas__tile-menu-trigger {
+.workspace-canvas__tile-menu-trigger,
+.workspace-canvas__tile-newagent {
   appearance: none;
   border: none;
   background: transparent;
@@ -531,7 +532,8 @@
 
 .workspace-canvas__tile-close:hover,
 .workspace-canvas__tile-menu-trigger:hover,
-.workspace-canvas__tile-menu-trigger[aria-expanded="true"] {
+.workspace-canvas__tile-menu-trigger[aria-expanded="true"],
+.workspace-canvas__tile-newagent:hover {
   background: var(--bg-active);
   color: var(--fg-primary);
 }
