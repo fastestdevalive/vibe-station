@@ -18,6 +18,7 @@ import { registerOrderedListsRoutes } from "./routes/orderedLists.js";
 import { registerFsRoutes } from "./routes/fs.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerMobileAuthRoutes } from "./routes/mobileAuth.js";
+import { registerTailscaleRoutes } from "./routes/tailscale.js";
 import { registerWSEndpoint } from "./ws/server.js";
 import { COOKIE_NAME, verifyToken } from "./auth.js";
 import { setDaemonPort } from "./services/daemonPort.js";
@@ -95,6 +96,13 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     // untrusted hop, so a forged leading entry relayed through Vite is ignored
     // as well. cloudflared connections are identified by CF-Connecting-IP and
     // the loopback bypass is skipped for them before the IP is consulted.
+    //
+    // FRAGILE DEPENDENCY (Tailscale serve): Tailscale serve terminates TLS and
+    // sets `X-Forwarded-For: <tailnet-IP>`, so `req.ip` correctly resolves to
+    // the tailnet peer and the loopback auth bypass does NOT fire for it — the
+    // isTunnelRequest() guard in mobileAuth.ts relies on this. If trustProxy is
+    // ever loosened/reworked, re-verify that a tailnet peer cannot reach the
+    // loopback bypass (or forge a loopback IP).
     trustProxy: "loopback",
     // Mirrors the Vite dev proxy rewrite so /api/auth/login and /auth/login both
     // reach the same route handler regardless of caller (browser, CLI, curl).
@@ -222,6 +230,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
     registerAuthRoutes(app, persistEpoch ?? (() => Promise.resolve()));
   }
   registerMobileAuthRoutes(app, { authState, noAuth, port: opts.port });
+  registerTailscaleRoutes(app, { port: opts.port });
   registerOpenRoute(app);
   registerProjectRoutes(app);
   registerWorktreeRoutes(app);

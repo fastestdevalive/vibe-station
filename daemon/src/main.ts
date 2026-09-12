@@ -15,6 +15,7 @@ import { readConfig } from "./services/config.js";
 import { loadAuthState, getAuthState } from "./state/auth-state.js";
 import { mintToken } from "./auth.js";
 import * as cloudflared from "./services/cloudflared.js";
+import { getServeStatus } from "./services/tailscaleServe.js";
 import { resolveTunnelPort } from "./services/tunnelPort.js";
 import { loadAll } from "./state/project-store.js";
 import { recoverNotStartedSessions, sweepDirectPtySessionsOnBoot } from "./services/recover.js";
@@ -173,7 +174,11 @@ async function main() {
   await recoverNotStartedSessions();
   await sweepDirectPtySessionsOnBoot();
 
-  const port = await findFreePort(DEFAULT_PORT);
+  const envPort = process.env.VST_PORT ? Number.parseInt(process.env.VST_PORT, 10) : NaN;
+  const port =
+    Number.isFinite(envPort) && envPort > 0 && envPort < 65536
+      ? envPort
+      : await findFreePort(DEFAULT_PORT);
 
   // Read persisted browserEpoch from config (daemonToken is never read/written).
   const existingConfig = await readConfig();
@@ -239,6 +244,22 @@ async function main() {
   // open, subagent notifications, timers) read it from here instead of passing
   // a placeholder 0.
   setDaemonPort(port);
+
+  // Startup port-drift check: if a `tailscale serve` rule exists but points at
+  // a different port than this boot, log a warning so the operator notices.
+  // The UI surfaces the same condition as `port_mismatch`. Does NOT auto-fix.
+  try {
+    const serve = await getServeStatus();
+    if (serve && serve.port !== port) {
+      console.warn(
+        `[vst] Tailscale serve rule points at port ${serve.port}, but this daemon is on ${port} ` +
+          `(${serve.httpsUrl}). Enable will repair it, or set VST_PORT=${serve.port} to match.`,
+      );
+    }
+  } catch (err) {
+    console.warn("[vst] Tailscale serve status unavailable at boot (non-fatal):", (err as Error).message);
+  }
+
   // Detect tmux pane death + drive session:exited / state transitions
   startLifecyclePoller();
   // Poll for PR outcome (open/merged/closed) on the orthogonal `session.pr`

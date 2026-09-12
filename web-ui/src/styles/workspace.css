@@ -2615,6 +2615,21 @@
   color: var(--accent, #6e78c7);
 }
 
+.workspace-md-code-block--inline {
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+
+.workspace-md-code-block--inline > pre {
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@keyframes vst-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Markdown — aligned with ao-142 workspace preview */
 .workspace-markdown-preview {
   padding: 24px 32px;

@@ -20,6 +20,7 @@ import type {
   CreateWorktreeBody,
   DiffStat,
   DiskUsageResponse,
+  EnableTailscaleResponse,
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
@@ -37,6 +38,9 @@ import type {
   TranscriptResponse,
   TranscriptPage,
   TreeEntry,
+  TailscaleQrResponse,
+  TailscaleStatus,
+  TailscaleUpResponse,
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
@@ -1551,6 +1555,13 @@ export function createMockApi() {
     async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> { return { ok: true, browserEpoch: 0 }; },
     async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string; currentTokenId?: string }> { return { sessions: [], isDesktop: true, currentScope: "tauri", currentTokenId: undefined }; },
     async revokeAuthSession(_tokenId: string): Promise<void> {},
+
+    // Tailscale serve — stubs for mock mode
+    async getTailscaleStatus(): Promise<TailscaleStatus> { return { state: "connected_no_serve", httpsUrl: "https://machine.mock.ts.net", setupCommand: "tailscale serve --bg --yes --https=443 http://127.0.0.1:7421" }; },
+    async enableTailscaleServe(): Promise<EnableTailscaleResponse> { return { httpsUrl: "https://machine.mock.ts.net", enabled: true }; },
+    async disableTailscaleServe(): Promise<{ enabled: false }> { return { enabled: false }; },
+    async getTailscaleQr(): Promise<TailscaleQrResponse> { return { qrUrl: "https://machine.mock.ts.net/mobile-auth?code=mock-tailscale", expiresAt: Date.now() + 30_000 }; },
+    async runTailscaleUp(): Promise<TailscaleUpResponse> { return { stdout: "", stderr: "", exitCode: 0, timedOut: false, loginUrl: null }; },
   };
 
   return api;

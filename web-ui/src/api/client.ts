@@ -19,6 +19,7 @@ import type {
   CreateWorktreeBody,
   DiffStat,
   DiskUsageResponse,
+  EnableTailscaleResponse,
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
@@ -36,6 +37,9 @@ import type {
   TranscriptResponse,
   TranscriptPage,
   TreeEntry,
+  TailscaleQrResponse,
+  TailscaleStatus,
+  TailscaleUpResponse,
   TunnelState,
   UpdateModeBody,
   UploadAttachmentsResponse,
@@ -1314,6 +1318,33 @@ export function createClientApi() {
       const res = await apiFetch(`${baseUrl()}/auth/revoke-browser`, { method: "POST" });
       if (!res.ok) throw new Error("Failed to revoke browser sessions");
       return res.json() as Promise<{ ok: boolean; browserEpoch: number }>;
+    },
+
+    // ── Tailscale serve ───────────────────────────────────────────────────────
+
+    async getTailscaleStatus(): Promise<TailscaleStatus> {
+      const res = await apiFetch(`${baseUrl()}/tailscale/status`);
+      return parseJson<TailscaleStatus>(res);
+    },
+
+    async enableTailscaleServe(): Promise<EnableTailscaleResponse> {
+      const res = await apiFetch(`${baseUrl()}/tailscale/serve/enable`, { method: "POST" });
+      return parseJson<EnableTailscaleResponse>(res);
+    },
+
+    async disableTailscaleServe(): Promise<{ enabled: false }> {
+      const res = await apiFetch(`${baseUrl()}/tailscale/serve/disable`, { method: "POST" });
+      return parseJson<{ enabled: false }>(res);
+    },
+
+    async getTailscaleQr(): Promise<TailscaleQrResponse> {
+      const res = await apiFetch(`${baseUrl()}/tailscale/qr`);
+      return parseJson<TailscaleQrResponse>(res);
+    },
+
+    async runTailscaleUp(): Promise<TailscaleUpResponse> {
+      const res = await apiFetch(`${baseUrl()}/tailscale/up`, { method: "POST" });
+      return parseJson<TailscaleUpResponse>(res);
     },
 
     getConnectionState(): ConnectionState {

@@ -18,6 +18,39 @@ export interface LocalQrResponse {
   connectionType: "tailscale" | "lan";
 }
 
+/** Mirrors daemon `TailscaleStatus` (services/tailscaleServe.ts). */
+export type TailscaleStatus =
+  | { state: "not_installed" }
+  | { state: "starting" }
+  | { state: "not_connected" }
+  | { state: "needs_operator"; fixCommand: string }
+  | { state: "certs_not_enabled"; dnsName: string }
+  | { state: "connected_no_serve"; httpsUrl: string; setupCommand: string }
+  | { state: "serve_active"; httpsUrl: string }
+  | { state: "port_mismatch"; expectedPort: number; actualPort: number; fixCommand: string }
+  | { state: "error"; message: string };
+
+/** Response from GET /tailscale/qr — same shape as local/tunnel QR responses. */
+export interface TailscaleQrResponse {
+  qrUrl: string;
+  expiresAt: number;
+}
+
+/** Response from POST /tailscale/serve/enable. */
+export interface EnableTailscaleResponse {
+  httpsUrl: string;
+  enabled: boolean;
+}
+
+/** Response from POST /tailscale/up (tailscaleServe.runUp). */
+export interface TailscaleUpResponse {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  timedOut: boolean;
+  loginUrl: string | null;
+}
+
 export interface HealthResponse {
   ok: boolean;
   version: string;
