@@ -81,6 +81,7 @@ export function Workspace() {
   // "current project"/"current worktree" are already resolved.
   const [shortcutNewWorktreeOpen, setShortcutNewWorktreeOpen] = useState(false);
   const [shortcutNewAgentOpen, setShortcutNewAgentOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
 
@@ -306,6 +307,14 @@ export function Workspace() {
     () => sessions.filter((s) => s.worktreeId === activeWorktreeId && s.type === "terminal"),
     [sessions, activeWorktreeId],
   );
+  const contextKeyAgentSessions = useMemo(
+    () => sessions.filter((s) => s.worktreeId === viewedWorkspace?.contextKey && s.type === "agent"),
+    [sessions, viewedWorkspace],
+  );
+  const contextKeyTerminalSessions = useMemo(
+    () => sessions.filter((s) => s.worktreeId === viewedWorkspace?.contextKey && s.type === "terminal"),
+    [sessions, viewedWorkspace],
+  );
   // A worktree's classic per-worktree canvas placement is ALWAYS its own
   // transient scratch canvas (it never binds to a saved WorkspaceDoc — see
   // WorkspaceCanvas.tsx's module doc), so the base of its pane-key set is its
@@ -469,8 +478,8 @@ export function Workspace() {
   const detachedWorkspaceCanvas = viewedWorkspace ? (
     <WorkspaceCanvas
       worktreeId={viewedWorkspace.contextKey}
-      agentSessions={[]}
-      terminalSessions={[]}
+      agentSessions={contextKeyAgentSessions}
+      terminalSessions={contextKeyTerminalSessions}
       hasTools
       toolPanelVisible
       terminalDockVisible
@@ -629,6 +638,9 @@ export function Workspace() {
             leftSidebarCollapsed={leftSidebarCollapsed}
             mobileSidebarOpen={mobileSidebarOpen}
             onOpenQuickOpen={() => setQuickOpen(true)}
+            shortcutsOpen={shortcutsOpen}
+            onOpenShortcuts={() => setShortcutsOpen(true)}
+            onCloseShortcuts={() => setShortcutsOpen(false)}
             settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
             // replace, not push: a plain push would leave the section entry in
             // history, so the phone's Back gesture right after tapping Back

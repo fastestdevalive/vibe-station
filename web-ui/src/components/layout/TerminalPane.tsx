@@ -206,12 +206,17 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     term.focus();
     term.attachCustomKeyEventHandler((domEvent) => {
       const mod = domEvent.ctrlKey || domEvent.metaKey;
-      if (mod && !domEvent.shiftKey && domEvent.key.toLowerCase() === "p") {
-        return false;
+      if (mod && !domEvent.shiftKey) {
+        const k = domEvent.key.toLowerCase();
+        // Let app-level shortcuts (useWorkspaceKeyboardShortcuts) handle these
+        // instead of forwarding them to the PTY.
+        if (k === "p" || k === "b" || k === "e" || domEvent.key === "\\" || domEvent.key === "/") {
+          return false;
+        }
       }
       if (mod && domEvent.shiftKey) {
         const k = domEvent.key.length === 1 ? domEvent.key.toUpperCase() : domEvent.key;
-        if (k === "F" || k === "P" || k === "Z") {
+        if (k === "F" || k === "P" || k === "Z" || k === "G" || k === "M") {
           return false;
         }
       }
