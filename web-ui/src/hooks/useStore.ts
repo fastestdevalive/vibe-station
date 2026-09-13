@@ -163,6 +163,10 @@ export interface WorkspaceState {
   /** Active *terminal* session shown in the bottom terminal dock. */
   activeTerminalSessionId: string | null;
   activeFilePath: string | null;
+  /** Open file tabs per worktree/direct-context (keyed by layout key). */
+  openFileTabsByWorktree: Record<string, string[]>;
+  /** Active tab index per worktree/direct-context; -1 means none active. */
+  activeFileTabIdxByWorktree: Record<string, number>;
   /**
    * Which flat/tree list currently owns arrow-key focus (e.g. "file-tree",
    * "changed-file-list"). Not persisted — transient UI focus. Set on
@@ -241,6 +245,14 @@ export interface WorkspaceState {
   setActiveSession: (sessionId: string) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null) => void;
+  /** Replace the active tab with path (tree navigation intent). Updates lastFileByWorktree. */
+  openFileTab: (worktreeId: string, path: string) => void;
+  /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
+  openFileTabNew: (worktreeId: string, path: string) => void;
+  /** Close the tab at index idx; adjacent tab becomes active. Updates lastFileByWorktree. */
+  closeFileTab: (worktreeId: string, idx: number) => void;
+  /** Switch to existing tab at index idx. Updates lastFileByWorktree. */
+  setActiveFileTabIdx: (worktreeId: string, idx: number) => void;
   /** Set (or clear with null) which flat/tree list owns arrow-key focus. */
   setFocusedPane: (id: string | null) => void;
   /** Set (or clear with null) which commit is open in the VCS panel for a worktree. */
@@ -590,6 +602,8 @@ const initial = {
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
+  openFileTabsByWorktree: {} as Record<string, string[]>,
+  activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
   vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
   lastFileByWorktree: {} as Record<string, string>,
@@ -756,12 +770,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               defaultTerminalId = terminals[0]?.id ?? null;
             }
 
+            // Restore active file from the per-worktree tab array (D9).
+            const wtTabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            const wtIdx = s.activeFileTabIdxByWorktree[worktreeId] ?? -1;
+            const restoredFile = wtIdx >= 0 ? (wtTabs[wtIdx] ?? null) : null;
+
             return {
               activeProjectId: projectId,
               activeWorktreeId: worktreeId,
               activeSessionId: defaultSessionId,
               activeTerminalSessionId: defaultTerminalId,
-              activeFilePath: s.lastFileByWorktree[worktreeId] ?? null,
+              activeFilePath: restoredFile,
             };
           }),
         // Restore the last file for this project context, mirroring what
@@ -770,9 +789,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setActiveDirectContext: (projectId) =>
           set((s) => {
             if (projectId == null) return { activeDirectContextId: null };
+            // Restore from tab array, same as setActiveWorktree (D11).
+            const dcTabs = s.openFileTabsByWorktree[projectId] ?? [];
+            const dcIdx = s.activeFileTabIdxByWorktree[projectId] ?? -1;
+            const restoredFile = dcIdx >= 0 ? (dcTabs[dcIdx] ?? null) : null;
             return {
               activeDirectContextId: projectId,
-              activeFilePath: s.lastFileByWorktree[projectId] ?? null,
+              activeFilePath: restoredFile,
             };
           }),
         setActiveSession: (sessionId) =>
@@ -800,11 +823,115 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setActiveFile: (path) =>
           set((s) => {
             const key = layoutKey(s);
-            const nextLastFile =
-              path && key != null
-                ? { ...s.lastFileByWorktree, [key]: path }
-                : s.lastFileByWorktree;
-            return { activeFilePath: path, lastFileByWorktree: nextLastFile };
+            if (!key) return { activeFilePath: path };
+            if (path === null) {
+              // Close active tab (D2)
+              const idx = s.activeFileTabIdxByWorktree[key] ?? -1;
+              if (idx < 0) return { activeFilePath: null };
+              const tabs = s.openFileTabsByWorktree[key] ?? [];
+              const nextTabs = tabs.filter((_, i) => i !== idx);
+              const nextIdx = nextTabs.length === 0 ? -1 : Math.min(idx, nextTabs.length - 1);
+              const newPath = nextIdx >= 0 ? (nextTabs[nextIdx] ?? null) : null;
+              return {
+                activeFilePath: newPath,
+                openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
+                activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
+                lastFileByWorktree: newPath != null ? { ...s.lastFileByWorktree, [key]: newPath } : s.lastFileByWorktree,
+              };
+            }
+            // Replace active tab (tree-navigation intent)
+            const tabs = s.openFileTabsByWorktree[key] ?? [];
+            const idx = s.activeFileTabIdxByWorktree[key] ?? -1;
+            let nextTabs: string[];
+            let nextIdx: number;
+            if (idx >= 0 && idx < tabs.length) {
+              nextTabs = tabs.map((t, i) => (i === idx ? path : t));
+              nextIdx = idx;
+            } else {
+              nextTabs = [...tabs, path];
+              nextIdx = nextTabs.length - 1;
+            }
+            return {
+              activeFilePath: path,
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
+              lastFileByWorktree: { ...s.lastFileByWorktree, [key]: path },
+            };
+          }),
+        openFileTab: (worktreeId, path) =>
+          set((s) => {
+            const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            const idx = s.activeFileTabIdxByWorktree[worktreeId] ?? -1;
+            let nextTabs: string[];
+            let nextIdx: number;
+            if (idx >= 0 && idx < tabs.length) {
+              nextTabs = tabs.map((t, i) => (i === idx ? path : t));
+              nextIdx = idx;
+            } else {
+              nextTabs = [...tabs, path];
+              nextIdx = nextTabs.length - 1;
+            }
+            return {
+              activeFilePath: path,
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
+              lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+            };
+          }),
+        openFileTabNew: (worktreeId, path) =>
+          set((s) => {
+            const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            const existingIdx = tabs.indexOf(path);
+            if (existingIdx >= 0) {
+              return {
+                activeFilePath: path,
+                activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
+                lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+              };
+            }
+            const nextTabs = [...tabs, path];
+            const nextIdx = nextTabs.length - 1;
+            return {
+              activeFilePath: path,
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
+              lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+            };
+          }),
+        closeFileTab: (worktreeId, idx) =>
+          set((s) => {
+            const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            if (idx < 0 || idx >= tabs.length) return s;
+            const nextTabs = tabs.filter((_, i) => i !== idx);
+            const curIdx = s.activeFileTabIdxByWorktree[worktreeId] ?? -1;
+            let nextIdx: number;
+            if (nextTabs.length === 0) {
+              nextIdx = -1;
+            } else if (idx < curIdx) {
+              nextIdx = curIdx - 1;
+            } else if (idx === curIdx) {
+              nextIdx = Math.min(curIdx, nextTabs.length - 1);
+            } else {
+              nextIdx = curIdx;
+            }
+            const newPath = nextIdx >= 0 ? (nextTabs[nextIdx] ?? null) : null;
+            return {
+              activeFilePath: newPath,
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
+              lastFileByWorktree: newPath != null ? { ...s.lastFileByWorktree, [worktreeId]: newPath } : s.lastFileByWorktree,
+            };
+          }),
+        setActiveFileTabIdx: (worktreeId, idx) =>
+          set((s) => {
+            const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            if (idx < 0 || idx >= tabs.length) return s;
+            const path = tabs[idx]!;
+            return {
+              activeFilePath: path,
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: idx },
+              lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+            };
           }),
         setFocusedPane: (id) => set({ focusedPane: id }),
         setVcsSelectedCommit: (worktreeId, sha) =>
@@ -862,14 +989,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({ showAgentStatusBorders: !s.showAgentStatusBorders })),
         setWorkspacePaneFullscreen: (next) => set({ workspacePaneFullscreen: next }),
         clearWorkspaceSelection: () =>
-          set({
-            activeProjectId: null,
-            activeWorktreeId: null,
-            activeDirectContextId: null,
-            activeSessionId: null,
-            activeTerminalSessionId: null,
-            activeFilePath: null,
-            workspacePaneFullscreen: null,
+          set((s) => {
+            // Deactivate the current tab without clearing the tab list (D10).
+            const key = layoutKey(s);
+            const nextIdxMap = key != null
+              ? { ...s.activeFileTabIdxByWorktree, [key]: -1 }
+              : s.activeFileTabIdxByWorktree;
+            return {
+              activeProjectId: null,
+              activeWorktreeId: null,
+              activeDirectContextId: null,
+              activeSessionId: null,
+              activeTerminalSessionId: null,
+              activeFilePath: null,
+              workspacePaneFullscreen: null,
+              activeFileTabIdxByWorktree: nextIdxMap,
+            };
           }),
         toggleDotFiles: () => set((s) => ({ showDotFiles: !s.showDotFiles })),
         patchSessionState: (sessionId, state) =>
@@ -1158,7 +1293,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
     },
     {
       name: "vibestation:workspace",
-      version: 16,
+      version: 17,
       migrate: (persisted, version) => {
         const p = persisted as Record<string, unknown> | null;
         if (!p || typeof p !== "object") return persisted;
@@ -1391,6 +1526,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }
           p.layoutByWorktree = next;
         }
+        // v16 → v17: introduce per-worktree tab arrays. Seed from old
+        // activeFilePath + activeWorktreeId if both present (D12).
+        if (version < 17) {
+          const oldPath = p.activeFilePath as string | null | undefined;
+          const oldWt = p.activeWorktreeId as string | null | undefined;
+          if (oldPath && oldWt) {
+            const tabs = (p.openFileTabsByWorktree as Record<string, string[]> | undefined) ?? {};
+            const idxMap = (p.activeFileTabIdxByWorktree as Record<string, number> | undefined) ?? {};
+            if (!tabs[oldWt]) {
+              tabs[oldWt] = [oldPath];
+              idxMap[oldWt] = 0;
+            }
+            p.openFileTabsByWorktree = tabs;
+            p.activeFileTabIdxByWorktree = idxMap;
+          }
+        }
         return p;
       },
       partialize: (s) => ({
@@ -1400,6 +1551,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         activeSessionId: s.activeSessionId,
         activeTerminalSessionId: s.activeTerminalSessionId,
         activeFilePath: s.activeFilePath,
+        openFileTabsByWorktree: s.openFileTabsByWorktree,
+        activeFileTabIdxByWorktree: s.activeFileTabIdxByWorktree,
         lastFileByWorktree: s.lastFileByWorktree,
         fileScrollByKey: s.fileScrollByKey,
         showDotFiles: s.showDotFiles,

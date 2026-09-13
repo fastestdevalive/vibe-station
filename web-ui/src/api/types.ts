@@ -559,6 +559,11 @@ export type WSEvent =
       supersededTurnIds: string[];
     }
   | {
+      type: "file:open";
+      worktreeId: string;
+      path: string;
+    }
+  | {
       type: "file:changed";
       worktreeId: string;
       path: string;

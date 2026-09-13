@@ -439,6 +439,14 @@ export function createMockApi() {
       return { ok: true };
     },
 
+    async getPendingFileOpens(_worktreeId: string): Promise<{ paths: string[] }> {
+      return { paths: [] };
+    },
+
+    async clearPendingFileOpens(_worktreeId: string): Promise<{ ok: true }> {
+      return { ok: true };
+    },
+
     async getDiskUsage(): Promise<DiskUsageResponse> {
       const TOTAL = 100 * 1024 * 1024 * 1024; // 100 GB
       const USED = 52 * 1024 * 1024 * 1024;   // 52 GB
