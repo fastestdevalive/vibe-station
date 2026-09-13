@@ -155,7 +155,7 @@ async function pollSession(
   // both, and the idle/working hash branch requires `working`/`idle`). Bailing
   // here is behaviour-neutral and skips the majority of the work — on a real
   // install 175 of 237 sessions are in one of these two states.
-  if (session.lifecycle.state === "done" || session.lifecycle.state === "exited") return;
+  if (session.lifecycle.state === "done" || session.lifecycle.state === "exited" || session.lifecycle.state === "drafting") return;
 
   // JSON channel (Decision 11): turn/queue state is authoritative — there is no
   // tmux pane or direct-pty stream to poll. `JsonAgentSession` drives lifecycle,

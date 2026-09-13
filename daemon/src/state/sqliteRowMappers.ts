@@ -5,7 +5,7 @@
  * `true`/`false` — `rowToBool` is the single coercion point so this isn't
  * reimplemented ad hoc (and inevitably forgotten) at each call site.
  */
-import type { ProjectRecord, SessionRecord, WorktreeRecord, TranscriptRef, PrStatus } from "../types.js";
+import type { ProjectRecord, SessionRecord, WorktreeRecord, TranscriptRef, PrStatus, DraftConfig } from "../types.js";
 import { resolveUseTmux } from "../services/resolveUseTmux.js";
 
 export function rowToBool(v: number): boolean {
@@ -40,6 +40,8 @@ export interface SessionRow {
   initialPrompt: string | null;
   archivedAt: string | null;
   handoffSummary: string | null;
+  draftPrompt: string | null;
+  draftConfig: string | null;
   spawnedFrom: string | null;
   supersededBy: string | null;
   prState: string | null;
@@ -100,6 +102,8 @@ export function rowToSession(row: SessionRow): SessionRecord {
     ...(row.initialPrompt != null ? { initialPrompt: row.initialPrompt } : {}),
     ...(row.archivedAt != null ? { archivedAt: row.archivedAt } : {}),
     ...(row.handoffSummary != null ? { handoffSummary: row.handoffSummary } : {}),
+    ...(row.draftPrompt != null ? { draftPrompt: row.draftPrompt } : {}),
+    ...(row.draftConfig != null ? { draftConfig: JSON.parse(row.draftConfig) as DraftConfig } : {}),
     ...(row.spawnedFrom != null ? { parentSessionId: row.spawnedFrom } : {}),
     ...(row.supersededBy != null ? { supersededBy: row.supersededBy } : {}),
     ...(legacyPr ? { pr: legacyPr } : {}),
@@ -147,6 +151,8 @@ export function sessionToRow(session: SessionRecord, projectId: string, worktree
     initialPrompt: session.initialPrompt ?? null,
     archivedAt: session.archivedAt ?? null,
     handoffSummary: session.handoffSummary ?? null,
+    draftPrompt: session.draftPrompt ?? null,
+    draftConfig: session.draftConfig ? JSON.stringify(session.draftConfig) : null,
     spawnedFrom: session.parentSessionId ?? null,
     supersededBy: session.supersededBy ?? null,
     prState: session.pr?.state ?? null,

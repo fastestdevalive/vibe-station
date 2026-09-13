@@ -42,7 +42,8 @@ import {
 import { resolveCliModels } from "./modes.js";
 import { getAttachment } from "../state/attachmentRegistry.js";
 import { releaseSessionRuntime } from "../services/sessionRuntime.js";
-import type { SessionRecord, WorktreeRecord, ProjectRecord, Channel, Attachment, SessionMeta } from "../types.js";
+import type { SessionRecord, WorktreeRecord, ProjectRecord, Channel, Attachment, SessionMeta, DraftConfig } from "../types.js";
+import { createWorktreeRecord } from "../services/worktreeService.js";
 
 /**
  * Session creation supports two targets:
@@ -86,6 +87,25 @@ const DirectSessionBody = z.object({
 });
 
 const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
+
+// Body for POST /sessions with state:"drafting" — minimal payload, no modeId
+// required. Deliberately ONE object (not a union): a union of two object
+// schemas silently strips keys that only the non-matching arm declares, which
+// is how `projectId` used to vanish and 400 the request. `target` is accepted
+// but advisory — the project is derived from worktreeId/projectId below.
+const CreateDraftSessionBody = z
+  .object({
+    target: z.enum(["worktree", "direct"]).optional(),
+    projectId: z.string().min(1).optional(),
+    worktreeId: z.string().min(1).optional(),
+    type: z.enum(["agent", "terminal"]),
+    state: z.literal("drafting"),
+    draftPrompt: z.string().optional(),
+    draftConfig: z.any().optional(),
+  })
+  .refine((b) => b.projectId != null || b.worktreeId != null, {
+    message: "projectId or worktreeId is required for draft sessions",
+  });
 
 const ResetBody = z.object({
   handoff: z.boolean().optional(),
@@ -405,6 +425,8 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
     parentSessionId: s.parentSessionId ?? null,
     supersededBy: s.supersededBy ?? null,
     pr: s.pr ?? null,
+    draftPrompt: s.draftPrompt ?? null,
+    draftConfig: s.draftConfig ?? null,
   };
 }
 
@@ -525,6 +547,89 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
   // POST /sessions — create in worktree or directly in project
   app.post("/sessions", async (req, reply) => {
+    // Check for drafting branch first (state:"drafting" bypasses normal session creation)
+    const bodyAny = req.body as Record<string, unknown>;
+    if (bodyAny?.state === "drafting") {
+      const draftResult = CreateDraftSessionBody.safeParse(req.body);
+      if (!draftResult.success) {
+        return reply.status(400).send({ error: "Validation error", details: draftResult.error.issues });
+      }
+      const draftData = draftResult.data;
+
+      // Derive projectId from request
+      let derivedProjectId: string | undefined;
+      let derivedWorktreeId: string | undefined;
+      if ("worktreeId" in draftData && draftData.worktreeId) {
+        const ctx = findWorktreeContext(draftData.worktreeId);
+        if (!ctx) return reply.status(404).send({ error: `Worktree '${draftData.worktreeId}' not found` });
+        derivedProjectId = ctx.project.id;
+        derivedWorktreeId = draftData.worktreeId;
+      } else if ("projectId" in draftData && draftData.projectId) {
+        derivedProjectId = draftData.projectId;
+      }
+
+      if (!derivedProjectId) {
+        return reply.status(400).send({ error: "projectId or worktreeId is required for draft sessions" });
+      }
+
+      const project = getProject(derivedProjectId);
+      if (!project) {
+        return reply.status(404).send({ error: `Project '${derivedProjectId}' not found` });
+      }
+
+      // Create a drafting session record (no spawn)
+      const sessionId = generateSessionId(derivedProjectId, draftData.type);
+      const tmuxName = `__draft__-${sessionId}`;
+      const draftConfig = draftData.draftConfig as DraftConfig | undefined;
+      const draftSessionRecord: SessionRecord = {
+        id: sessionId,
+        projectId: derivedProjectId,
+        ...(derivedWorktreeId ? { worktreeId: derivedWorktreeId } : {}),
+        isMain: false,
+        sortOrder: Date.now(),
+        type: draftData.type,
+        tmuxName,
+        useTmux: false,
+        channel: "json",
+        lifecycle: {
+          state: "drafting",
+          lastTransitionAt: new Date().toISOString(),
+        },
+        ...(draftData.draftPrompt ? { draftPrompt: draftData.draftPrompt } : {}),
+        ...(draftConfig ? { draftConfig } : {}),
+        parentSessionId: null,
+      };
+
+      // Persist as a worktree session (tab draft) or a direct session (no worktree yet)
+      if (derivedWorktreeId) {
+        await mutateProject(derivedProjectId, (p) => ({
+          ...p,
+          worktrees: p.worktrees.map((w) =>
+            w.id === derivedWorktreeId ? { ...w, sessions: [...w.sessions, draftSessionRecord] } : w,
+          ),
+        }));
+      } else {
+        await mutateProject(derivedProjectId, (p) => ({
+          ...p,
+          directSessions: [...p.directSessions, draftSessionRecord],
+        }));
+      }
+
+      // Broadcast session:created
+      broadcastAll({
+        type: "session:created",
+        sessionId,
+        projectId: derivedProjectId,
+        worktreeId: derivedWorktreeId ?? null,
+        sessionType: draftData.type,
+        mode: undefined,
+        parentSessionId: null,
+        snapshot: serializeSession(derivedWorktreeId ?? null, derivedProjectId, draftSessionRecord),
+      });
+
+      return reply.status(201).send(serializeSession(derivedWorktreeId ?? null, derivedProjectId, draftSessionRecord));
+    }
+
     const result = CreateSessionBody.safeParse(req.body);
     if (!result.success) {
       return reply.status(400).send({ error: "Validation error", details: result.error.issues });
@@ -922,7 +1027,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // never skips the real check) — see the unified in-lock logic for why.
     if (session.isMain) {
       const hasAnyEligibleSibling = ctx.worktree.sessions.some(
-        (s) => s.id !== session.id && s.type === "agent" && s.archivedAt == null,
+        (s) => s.id !== session.id && s.type === "agent" && s.archivedAt == null && s.lifecycle.state !== "drafting",
       );
       if (!hasAnyEligibleSibling) {
         return reply.status(400).send({ error: NO_SIBLING_ERROR });
@@ -963,7 +1068,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           };
         }
         const siblings = w.sessions
-          .filter((s) => s.id !== id && s.type === "agent" && s.archivedAt == null)
+          .filter((s) => s.id !== id && s.type === "agent" && s.archivedAt == null && s.lifecycle.state !== "drafting")
           .sort((a, b) => a.sortOrder - b.sortOrder);
         const promoted = siblings[0];
         if (!promoted) throw new NoEligibleSiblingAtCommit();
@@ -1017,6 +1122,277 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     forgetSubagentNotify(id);
     broadcastAll({ type: "session:deleted", sessionId: id });
     return reply.send({ ok: true });
+  });
+
+  // PATCH /sessions/:id/draft — update draftPrompt/draftConfig on a drafting session
+  app.patch("/sessions/:id/draft", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({ draftPrompt: z.string().optional(), draftConfig: z.any().optional() })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.session.lifecycle.state !== "drafting") {
+      return reply.status(403).send({ error: "Session is not in drafting state" });
+    }
+
+    const { draftPrompt, draftConfig } = parsed.data;
+
+    // Derive name from draftPrompt via slugifyPrompt (hyphen-joined)
+    let derivedName: string | null = null;
+    if (draftPrompt && draftPrompt.trim()) {
+      const slug = slugifyPrompt(draftPrompt, 5);
+      derivedName = slug || null;
+    }
+
+    const shouldRename = !!derivedName && ctx.session.nameSource !== "user";
+
+    const project = getProject(ctx.project.id);
+    if (!project) return reply.status(404).send({ error: "Project not found" });
+
+    if (ctx.kind === "worktree") {
+      const worktreeId = ctx.worktree.id;
+      await mutateProject(ctx.project.id, (p) => ({
+        ...p,
+        worktrees: p.worktrees.map((w) =>
+          w.id === worktreeId
+            ? {
+                ...w,
+                sessions: w.sessions.map((s) =>
+                  s.id === id
+                    ? {
+                        ...s,
+                        ...(draftPrompt !== undefined ? { draftPrompt } : {}),
+                        ...(draftConfig !== undefined ? { draftConfig: draftConfig as DraftConfig } : {}),
+                        ...(shouldRename ? { name: derivedName!, nameSource: "auto" as const } : {}),
+                      }
+                    : s,
+                ),
+              }
+            : w,
+        ),
+      }));
+    } else {
+      await mutateProject(ctx.project.id, (p) => ({
+        ...p,
+        directSessions: p.directSessions.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                ...(draftPrompt !== undefined ? { draftPrompt } : {}),
+                ...(draftConfig !== undefined ? { draftConfig: draftConfig as DraftConfig } : {}),
+                ...(shouldRename ? { name: derivedName!, nameSource: "auto" as const } : {}),
+              }
+            : s,
+        ),
+      }));
+    }
+
+    // Broadcast name update
+    broadcastAll({
+      type: "session:updated",
+      sessionId: id,
+      ...(shouldRename ? { name: derivedName } : {}),
+      draftPrompt: draftPrompt !== undefined ? draftPrompt : undefined,
+      draftConfig: draftConfig !== undefined ? draftConfig : undefined,
+    });
+    return reply.send({ ok: true, ...(shouldRename ? { name: derivedName } : {}) });
+  });
+
+  // POST /sessions/:id/start — promote a drafting session to not_started and spawn
+  app.post("/sessions/:id/start", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const parsed = z
+      .object({
+        draftPrompt: z.string(),
+        draftConfig: z.any(),
+        skipAutoTurn: z.boolean().optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
+    }
+
+    const ctx = findSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.session.lifecycle.state !== "drafting") {
+      return reply.status(403).send({ error: "Session is not in drafting state" });
+    }
+
+    const trimmedPrompt = parsed.data.draftPrompt.trim();
+    if (!trimmedPrompt) {
+      return reply.status(400).send({ error: "draftPrompt cannot be empty" });
+    }
+
+    const draftConfig = parsed.data.draftConfig as DraftConfig;
+    const skipAutoTurn = parsed.data.skipAutoTurn ?? false;
+    const { project } = ctx;
+    const session = ctx.session;
+    const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
+
+    const modeId = draftConfig.modeId;
+    if (!modeId) {
+      return reply.status(400).send({ error: "draftConfig.modeId is required to start a session" });
+    }
+
+    const entryPoint = draftConfig.entryPoint;
+    const isWorktreeNew =
+      (entryPoint === "worktree" && draftConfig.worktreeChoice === "new") ||
+      (entryPoint === "global" && draftConfig.useWorktree === true);
+    const isDirect = entryPoint === "direct" || entryPoint === "tab" ||
+      (entryPoint === "worktree" && draftConfig.worktreeChoice === "existing") ||
+      (entryPoint === "global" && draftConfig.useWorktree === false);
+
+    if (isWorktreeNew) {
+      // Create a new worktree and promote the session into it
+      let newWorktree: WorktreeRecord;
+      try {
+        const baseBranch = draftConfig.baseBranch ?? "main";
+        newWorktree = await createWorktreeRecord({
+          project,
+          branch: draftConfig.branch,
+          baseBranch,
+          prompt: trimmedPrompt,
+          buildSessions: () => [],
+        });
+      } catch (err) {
+        return reply.status(500).send({ error: `Failed to create worktree: ${String(err)}` });
+      }
+
+      const wtId = newWorktree.id;
+      const channel: Channel = (draftConfig.channel as Channel | undefined) ?? "json";
+      const useTmux = channel === "tmux";
+      const isJson = channel === "json";
+      const newTmuxName = useTmux ? tmuxNameForSession(session.id) : `__direct__-${session.id}`;
+
+      // Build the updated session record with worktreeId, isMain, and not_started
+      const updatedSession: SessionRecord = {
+        ...session,
+        worktreeId: wtId,
+        isMain: true,
+        useTmux,
+        channel,
+        tmuxName: newTmuxName,
+        lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+        initialPrompt: trimmedPrompt,
+        draftPrompt: undefined,
+        draftConfig: undefined,
+        modeId,
+        ...(isJson
+          ? {
+              transcriptRef: {
+                kind: "vst-json" as const,
+                path: join(sessionDataDir(project.id, wtId, session.id), "messages.jsonl"),
+              },
+            }
+          : {}),
+      };
+
+      // Move the session from directSessions into the new worktree atomically
+      await mutateProject(project.id, (p) => ({
+        ...p,
+        directSessions: p.directSessions.filter((s) => s.id !== id),
+        worktrees: p.worktrees.map((w) =>
+          w.id === wtId ? { ...w, sessions: [updatedSession] } : w,
+        ),
+      }));
+
+      broadcastAll({ type: "worktree:created", worktree: newWorktree as unknown as Record<string, unknown> });
+      broadcastAll({ type: "session:updated", sessionId: id, worktreeId: wtId, isMain: true });
+      broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
+
+      void spawnNewSessionForChannel({
+        project,
+        worktree: newWorktree,
+        session: updatedSession,
+        modeId,
+        prompt: trimmedPrompt,
+        daemonPort,
+        skipAutoTurn,
+      });
+
+      return reply.send({ ok: true, worktreeId: wtId });
+    }
+
+    if (isDirect) {
+      // Determine worktree if entryPoint is "worktree" with existing choice
+      let existingWorktree: WorktreeRecord | undefined;
+      if (entryPoint === "worktree" && draftConfig.worktreeChoice === "existing" && draftConfig.existingWorktreeId) {
+        const wtCtx = findWorktreeContext(draftConfig.existingWorktreeId);
+        if (!wtCtx) return reply.status(404).send({ error: "Existing worktree not found" });
+        existingWorktree = wtCtx.worktree;
+      }
+      // A tab draft already lives inside a worktree's sessions list — promote
+      // it back into that same worktree instead of leaving it as a direct session.
+      if (entryPoint === "tab" && session.worktreeId) {
+        const wtCtx = findWorktreeContext(session.worktreeId);
+        if (wtCtx) existingWorktree = wtCtx.worktree;
+      }
+
+      const channel: Channel = (draftConfig.channel as Channel | undefined) ?? "json";
+      const useTmux = channel === "tmux";
+      const isJson = channel === "json";
+      const newTmuxName = useTmux ? tmuxNameForSession(session.id) : `__direct__-${session.id}`;
+
+      const updatedSession: SessionRecord = {
+        ...session,
+        ...(existingWorktree ? { worktreeId: existingWorktree.id } : {}),
+        useTmux,
+        channel,
+        tmuxName: newTmuxName,
+        lifecycle: { state: "not_started", lastTransitionAt: new Date().toISOString() },
+        initialPrompt: trimmedPrompt,
+        draftPrompt: undefined,
+        draftConfig: undefined,
+        modeId,
+        ...(isJson
+          ? {
+              transcriptRef: {
+                kind: "vst-json" as const,
+                path: existingWorktree
+                  ? join(sessionDataDir(project.id, existingWorktree.id, session.id), "messages.jsonl")
+                  : join(directSessionDataDir(project.id, session.id), "messages.jsonl"),
+              },
+            }
+          : {}),
+      };
+
+      if (existingWorktree) {
+        const wtId = existingWorktree.id;
+        await mutateProject(project.id, (p) => ({
+          ...p,
+          directSessions: p.directSessions.filter((s) => s.id !== id),
+          worktrees: p.worktrees.map((w) =>
+            w.id === wtId ? { ...w, sessions: [...w.sessions, updatedSession] } : w,
+          ),
+        }));
+      } else {
+        await mutateProject(project.id, (p) => ({
+          ...p,
+          directSessions: p.directSessions.map((s) => (s.id === id ? updatedSession : s)),
+        }));
+      }
+
+      broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
+
+      void spawnNewSessionForChannel({
+        project,
+        worktree: existingWorktree,
+        session: updatedSession,
+        modeId,
+        prompt: trimmedPrompt,
+        daemonPort,
+        skipAutoTurn,
+      });
+
+      return reply.send({ ok: true });
+    }
+
+    return reply.status(400).send({ error: `Unknown entryPoint: ${entryPoint}` });
   });
 
   // PATCH /sessions/:id/pin   { pinned: boolean }
