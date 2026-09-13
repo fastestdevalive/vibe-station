@@ -71,8 +71,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const bodyKey =
     worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}` : null;
   const [loaded, setLoaded] = useState<{ key: string; fileBody: string | null; diffBody: string | null } | null>(null);
-  const fileBody = loaded && loaded.key === bodyKey ? loaded.fileBody : null;
-  const diffBody = loaded && loaded.key === bodyKey ? loaded.diffBody : null;
+  // Cache the last 10 file bodies so switching back to a tab shows content
+  // immediately without a loading flash. Without this, bodyKey mismatches
+  // loaded.key while the refetch is in flight, fileBody becomes null, the
+  // body div shows "Loading…" (tiny scrollHeight), and any scrollTop restore
+  // gets clamped to 0 before the real content arrives.
+  const contentCacheRef = useRef<Map<string, { fileBody: string | null; diffBody: string | null }>>(new Map());
+  const cached = bodyKey ? contentCacheRef.current.get(bodyKey) : undefined;
+  const fileBody = loaded?.key === bodyKey ? loaded.fileBody : (cached?.fileBody ?? null);
+  const diffBody = loaded?.key === bodyKey ? loaded.diffBody : (cached?.diffBody ?? null);
   // Blob URL for binary image files — fetched separately since images aren't
   // text; rendered via ZoomableMedia instead of CodeView. Stored together with
   // the key it was fetched for (mirrors `bodyKey` above) so a watcher-triggered
@@ -156,6 +163,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       cancelled = true;
     };
   }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha]);
+
+  // Populate the content cache whenever a fresh load completes.
+  useEffect(() => {
+    if (!loaded || !bodyKey || loaded.key !== bodyKey) return;
+    const cache = contentCacheRef.current;
+    // Delete before re-inserting so Map insertion order stays LRU (most-recently
+    // used at the end) rather than always FIFO from first-seen.
+    cache.delete(bodyKey);
+    cache.set(bodyKey, { fileBody: loaded.fileBody, diffBody: loaded.diffBody });
+    if (cache.size > 10) {
+      const oldest = cache.keys().next().value;
+      if (oldest != null) cache.delete(oldest);
+    }
+  }, [loaded, bodyKey]);
 
   // Binary image files: fetch as a blob (not text) for ZoomableMedia. Gated on
   // the path being an image + a context id existing. The blob is keyed by

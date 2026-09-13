@@ -41,7 +41,12 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
 
   it("opening a file shows the open-file tab with its name; closing it clears activeFilePath", async () => {
     const user = userEvent.setup();
-    useWorkspaceStore.setState({ activeWorktreeId: "wt-1", activeFilePath: "src/App.tsx" });
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      openFileTabsByWorktree: { "wt-1": ["src/App.tsx"] },
+      activeFileTabIdxByWorktree: { "wt-1": 0 },
+    });
     render(<FilesPanel api={api} worktreeId="wt-1" />);
     expect(await screen.findByText("App.tsx")).toBeInTheDocument();
 

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { spawnSync } from "node:child_process";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { join, normalize, sep } from "node:path";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { getProject, getAllProjects, mutateProject } from "../state/project-store.js";
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
@@ -29,7 +29,8 @@ import { resolveDaemonPort } from "../services/daemonPort.js";
 import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir, vstHome, projectDir } from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
 import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
-import { broadcastAll } from "../broadcaster.js";
+import { broadcastAll, broadcastWorktree } from "../broadcaster.js";
+import * as pendingFileOpens from "../services/pendingFileOpens.js";
 import { persistLifecycleState } from "../services/lifecycle.js";
 import { serializeSession } from "./sessions.js";
 import { resolvePlugin } from "../agent-plugins/registry.js";
@@ -70,7 +71,10 @@ const IMAGE_MIME: Record<string, string> = {
  * the tree.
  */
 function resolveInsideWorktree(wtPath: string, filePath: string): string {
-  const abs = normalize(join(wtPath, filePath));
+  // Absolute paths are used as-is; relative paths are resolved against wtPath.
+  // Using join() for absolute filePath would silently append rather than
+  // replace the base (path.join('/a', '/b') === '/a/b', not '/b').
+  const abs = normalize(isAbsolute(filePath) ? filePath : join(wtPath, filePath));
   const root = normalize(wtPath);
   if (abs !== root && !abs.startsWith(root + sep)) {
     const err = new Error("Path traversal attempt") as Error & { code: string };
@@ -1578,5 +1582,51 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
         .send({ kind: "error", reason: result.reason, message: result.message });
     }
     return reply.send(result);
+  });
+
+  // POST /worktrees/:id/open-file
+  // Enqueues a file path for the UI to open, and broadcasts a file:open WS event
+  // to all connections watching this worktree (D3, D4, D8).
+  app.post("/worktrees/:id/open-file", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const parsed = z.object({ path: z.string().min(1) }).safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "path required" });
+    }
+
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: "worktree not found" });
+
+    const wtPath = getWorktreePath(project.id, wtId);
+
+    let absPath: string;
+    try {
+      absPath = resolveInsideWorktree(wtPath, parsed.data.path);
+    } catch {
+      return reply.status(422).send({ error: "path outside worktree root" });
+    }
+
+    const relPath = relative(wtPath, absPath);
+    pendingFileOpens.append(wtId, relPath);
+    broadcastWorktree(wtId, { type: "file:open", worktreeId: wtId, path: relPath });
+
+    return reply.send({ ok: true });
+  });
+
+  // GET /worktrees/:id/pending-file-opens
+  app.get("/worktrees/:id/pending-file-opens", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: "worktree not found" });
+    return reply.send({ paths: pendingFileOpens.get(wtId) });
+  });
+
+  // DELETE /worktrees/:id/pending-file-opens
+  app.delete("/worktrees/:id/pending-file-opens", async (req, reply) => {
+    const { id: wtId } = req.params as { id: string };
+    const project = getAllProjects().find((p) => p.worktrees.some((w) => w.id === wtId));
+    if (!project) return reply.status(404).send({ error: "worktree not found" });
+    pendingFileOpens.clear(wtId);
+    return reply.send({ ok: true });
   });
 }
