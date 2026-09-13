@@ -6,10 +6,9 @@ import { join, normalize, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { getProject, getAllProjects, mutateProject } from "../state/project-store.js";
 import { validateBranch, branchExistsInRepo } from "../services/branchValidator.js";
-import { reserveNextWorktreeNum, generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
+import { generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
 import { slugifyPrompt } from "../services/naming.js";
 import {
-  worktreeAdd,
   worktreeRemove,
   revParse,
   fetchOrigin,
@@ -24,9 +23,16 @@ import {
 } from "../services/git.js";
 import { getRemoteUrl, resolveGithubRemote, fetchPrForBranch } from "../services/github.js";
 import { rollbackWorktreeCreate } from "../services/rollback.js";
+import { createWorktreeRecord } from "../services/worktreeService.js";
 import { spawnSession } from "../services/spawn.js";
 import { resolveDaemonPort } from "../services/daemonPort.js";
-import { worktreePath as getWorktreePath, cleanupSessionDataDir, sessionDataDir, vstHome, projectDir } from "../services/paths.js";
+import {
+  worktreePath as getWorktreePath,
+  cleanupSessionDataDir,
+  sessionDataDir,
+  vstHome,
+  projectDir,
+} from "../services/paths.js";
 import { listFiles } from "../services/fileList.js";
 import { buildIgnoreMatcher } from "../services/ignoreFilter.js";
 import { broadcastAll } from "../broadcaster.js";
@@ -344,54 +350,10 @@ async function runMainSpawnJob(opts: {
 
 /**
  * Resolve the branch name for a worktree whose creation request omitted an
- * explicit `branch` (branch-name-optional). Called only after `wtId` has
- * been reserved, since the placeholder fallback is keyed off it.
- *
- * Order:
- * 1. Prompt given → try the `slugifyPrompt` slug, then numbered variants
- *    (`slug-2`, `slug-3`, ...) if it collides with an existing branch.
- * 2. No prompt, or the slug came back empty / every numbered variant also
- *    collided → auto-generate a `wip/<wtId>` placeholder, numbered on
- *    collision the same way. `wtId` is already unique per project, so this
- *    is only defensive (e.g. a branch literally named `wip/proj-3` already
- *    existing from a prior manual `git branch`).
- *
- * Never throws — always returns a usable branch name (falls all the way
- * back to a timestamp-suffixed placeholder in the pathological case where
- * 1000 numbered placeholders are all taken).
+ * explicit `branch` (branch-name-optional). Moved to `services/worktreeService.ts`
+ * so the draft-promotion route (`POST /sessions/:id/start`) reuses the exact
+ * same derivation. See `resolveBranchForCreate` there for the ordering rules.
  */
-async function resolveBranchForCreate(opts: {
-  repoPath: string;
-  prompt?: string;
-  wtId: string;
-}): Promise<{ branch: string; isPlaceholder: boolean }> {
-  const { repoPath, prompt, wtId } = opts;
-
-  if (prompt) {
-    const slug = slugifyPrompt(prompt);
-    if (slug) {
-      const candidates = [slug, ...Array.from({ length: 20 }, (_, i) => `${slug}-${i + 2}`)];
-      for (const candidate of candidates) {
-        if (!validateBranch(candidate).ok) continue;
-        if (!(await branchExistsInRepo(repoPath, candidate))) {
-          return { branch: candidate, isPlaceholder: false };
-        }
-      }
-    }
-  }
-
-  const placeholder = `wip/${wtId}`;
-  if (!(await branchExistsInRepo(repoPath, placeholder))) {
-    return { branch: placeholder, isPlaceholder: true };
-  }
-  for (let n = 2; n < 1000; n++) {
-    const candidate = `${placeholder}-${n}`;
-    if (!(await branchExistsInRepo(repoPath, candidate))) {
-      return { branch: candidate, isPlaceholder: true };
-    }
-  }
-  return { branch: `${placeholder}-${Date.now()}`, isPlaceholder: true };
-}
 
 export function registerWorktreeRoutes(app: FastifyInstance): void {
   // GET /worktrees?project=:id
@@ -493,91 +455,68 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
 
     // Perform creation under project mutex
     let createdWorktree: WorktreeRecord | undefined;
-    let worktreeAdded = false;
 
     try {
-      // 3. Reserve worktree id: reserve + bump `nextWorktreeNum` atomically inside
-      // a single mutateProject call, so the reservation is race-safe and the
-      // counter is persisted even if worktree creation fails below (burn-on-failure
-      // is intentional — a burned number is never reused).
-      let wtNum!: number;
-      const freshProject = await mutateProject(projectId, (p) => {
-        wtNum = reserveNextWorktreeNum(p);
-        return { ...p, nextWorktreeNum: wtNum + 1 };
-      });
-      const wtId = `${freshProject.prefix}-${wtNum}`;
-      const wtPath = getWorktreePath(projectId, wtId);
-
-      // Resolve the branch name now that `wtId` exists (branch-name-optional):
-      // explicit input always wins (already validated above); otherwise derive
-      // from the prompt or fall back to a `wip/<wtId>` placeholder.
-      const { branch, isPlaceholder: branchIsPlaceholder } = branchInput
-        ? { branch: branchInput, isPlaceholder: false }
-        : await resolveBranchForCreate({ repoPath: project.absolutePath, prompt: result.data.prompt, wtId });
-
-      // Capture baseSha before creating worktree
-      const baseSha = await revParse(project.absolutePath, baseBranch);
-
-      // 4. git worktree add
-      await worktreeAdd(project.absolutePath, wtPath, branch, baseBranch);
-      worktreeAdded = true;
-
-      // Build the main session record. Id is independently generated
-      // (Decision 1) — no longer slot-derived.
-      const mainSessionId = generateSessionId(wtId, "agent");
-      const mainTmuxName = useTmux ? tmuxNameForSession(mainSessionId) : `__direct__-${mainSessionId}`;
       // Naming (F1): explicit `name` wins; else the heuristic slug from the
       // creation prompt; else no name at all (falls back to the default label
       // forever — no later revisit).
       const explicitName = result.data.name;
       const heuristicName = !explicitName && result.data.prompt ? slugifyPrompt(result.data.prompt) : "";
       const wtName = explicitName || heuristicName || undefined;
-      const mainSession: SessionRecord = {
-        id: mainSessionId,
-        worktreeId: wtId,
-        projectId,
-        isMain: true,
-        sortOrder: 0,
-        type: "agent",
-        modeId,
-        ...(wtName ? { name: wtName, nameSource: explicitName ? "user" : "auto" } : {}),
-        tmuxName: mainTmuxName,
-        useTmux,
-        channel,
-        ...(isJson
-          ? {
-              transcriptRef: {
-                kind: "vst-json" as const,
-                path: join(sessionDataDir(projectId, wtId, mainSessionId), "messages.jsonl"),
-              },
-            }
-          : {}),
-        lifecycle: {
-          state: "not_started",
-          lastTransitionAt: new Date().toISOString(),
-        },
-        ...(result.data.prompt ? { initialPrompt: result.data.prompt } : {}),
-        parentSessionId: result.data.sourceAgentId ?? null,
-      };
 
-      const worktreeRecord: WorktreeRecord = {
-        id: wtId,
-        ...(wtName ? { name: wtName } : {}),
-        branch,
-        ...(branchIsPlaceholder ? { branchIsPlaceholder: true } : {}),
+      // Worktree git-dir + WorktreeRecord creation (shared with the draft-
+      // promotion route via services/worktreeService.ts, Decision 2). The main
+      // session's id depends on the reserved wtId, so it's built inside
+      // `buildSessions`.
+      createdWorktree = await createWorktreeRecord({
+        project,
+        branch: branchInput,
         baseBranch,
-        baseSha,
-        createdAt: new Date().toISOString(),
-        sortOrder: Date.now(),
-        sessions: [mainSession],
-      };
+        prompt: result.data.prompt,
+        name: wtName,
+        buildSessions: (wtId) => {
+          const mainSessionId = generateSessionId(wtId, "agent");
+          const mainTmuxName = useTmux ? tmuxNameForSession(mainSessionId) : `__direct__-${mainSessionId}`;
+          const mainSession: SessionRecord = {
+            id: mainSessionId,
+            worktreeId: wtId,
+            projectId,
+            isMain: true,
+            sortOrder: 0,
+            type: "agent",
+            modeId,
+            ...(wtName ? { name: wtName, nameSource: explicitName ? "user" : "auto" } : {}),
+            tmuxName: mainTmuxName,
+            useTmux,
+            channel,
+            ...(isJson
+              ? {
+                  transcriptRef: {
+                    kind: "vst-json" as const,
+                    path: join(sessionDataDir(projectId, wtId, mainSessionId), "messages.jsonl"),
+                  },
+                }
+              : {}),
+            lifecycle: {
+              state: "not_started",
+              lastTransitionAt: new Date().toISOString(),
+            },
+            ...(result.data.prompt ? { initialPrompt: result.data.prompt } : {}),
+            parentSessionId: result.data.sourceAgentId ?? null,
+          };
+          return [mainSession];
+        },
+      });
 
-      // 5. Persist to manifest (structural change — immediate write)
-      await mutateProject(projectId, (p) => ({
-        ...p,
-        worktrees: [...p.worktrees, worktreeRecord],
-      }));
-      createdWorktree = worktreeRecord;
+      // Re-fetch the project so downstream code (spawn job) sees the freshly
+      // created worktree + bumped counter (the original inline body captured
+      // `freshProject` at reservation time; getProject now returns the project
+      // including the new worktree).
+      const freshProject = getProject(projectId)!;
+      const wtId = createdWorktree.id;
+      // buildSessions always returns exactly one (the main) session.
+      const mainSession = createdWorktree.sessions[0]!;
+      const worktreeRecord = createdWorktree;
 
       const modes = await (await import("../routes/modes.js")).loadModes();
       const mode = modes.find((m) => m.id === modeId);
@@ -638,8 +577,11 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       }
 
     } catch (err) {
-      // Rollback if we got past git worktree add
-      if (worktreeAdded && createdWorktree) {
+      // Rollback if we got past git worktree add. `createdWorktree` is only
+      // set once createWorktreeRecord fully succeeded (git dir created AND
+      // record persisted), which is exactly the original `worktreeAdded &&
+      // createdWorktree` condition.
+      if (createdWorktree) {
         const rollbackErrors = await rollbackWorktreeCreate(project, createdWorktree);
         // Remove from manifest if it was written
         try {

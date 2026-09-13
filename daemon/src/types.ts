@@ -11,7 +11,8 @@ export type LifecycleState =
   | "idle"
   | "waiting_for_human"
   | "done"
-  | "exited";
+  | "exited"
+  | "drafting";
 
 export interface SessionLifecycle {
   state: LifecycleState;
@@ -286,6 +287,28 @@ export interface SessionMeta {
   noticeSlot?: { children: Record<string, string>; running: boolean };
 }
 
+/**
+ * Client-authored configuration for a `"drafting"` session, captured by the
+ * Instant Draft Agent UI before the session is started. Consumed only by
+ * `POST /sessions/:id/start`, which branches on `entryPoint` to decide how the
+ * draft promotes into a real session. Cleared (set to NULL) on start.
+ *
+ * `projectId` and `worktreeId` deliberately live on `SessionRecord`, not here.
+ */
+export interface DraftConfig {
+  entryPoint: "worktree" | "direct" | "tab" | "global";
+  modeId?: string;
+  channel?: "tmux" | "pty" | "json";
+  // worktree / global-with-worktree
+  worktreeChoice?: "new" | "existing";
+  existingWorktreeId?: string;
+  branch?: string;
+  baseBranch?: string;
+  useTmux?: boolean;
+  // global entry point
+  useWorktree?: boolean;
+}
+
 export interface SessionRecord {
   id: string;
   /**
@@ -365,6 +388,19 @@ export interface SessionRecord {
    * done, so a session that DID run never silently replays its first prompt.
    */
   initialPrompt?: string;
+  /**
+   * Raw draft prompt while this session is in `"drafting"` state (Instant
+   * Draft Agent). Distinct from `initialPrompt` so a draft can hold a
+   * half-written prompt without the done-state clearing semantics that apply
+   * to `initialPrompt`. Feeds `initialPrompt` at start time, then is cleared
+   * (set to NULL in the DB). Absent for non-draft sessions.
+   */
+  draftPrompt?: string;
+  /**
+   * JSON-encoded `DraftConfig` while this session is in `"drafting"` state.
+   * Cleared on start. Absent for non-draft sessions.
+   */
+  draftConfig?: DraftConfig;
   /**
    * Set when this session was retired by `POST /sessions/:id/reset` (Decision
    * 2/9). An archived session is read-only history — its runtime is released

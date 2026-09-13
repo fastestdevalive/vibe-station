@@ -285,6 +285,7 @@ const SessionCreatedSnapshot = z.object({
     "needs_review",
     "done",
     "exited",
+    "drafting",
   ]),
   // See `needs_review` comment above — accepted input, never emitted.
   lifecycleState: z.enum([
@@ -295,6 +296,7 @@ const SessionCreatedSnapshot = z.object({
     "needs_review",
     "done",
     "exited",
+    "drafting",
   ]),
   createdAt: z.string(),
   pinnedAt: z.string().nullable().optional(),
@@ -332,6 +334,7 @@ const SessionStateEvent = z.object({
     "needs_review",
     "done",
     "exited",
+    "drafting",
   ]),
   reason: z.string().optional(),
 });
@@ -393,6 +396,13 @@ const SessionUpdatedEvent = z.object({
   isMain: z.boolean().optional(),
   /** Cleared to null by PATCH /sessions/:id/delink; absent means unchanged. */
   parentSessionId: z.string().nullable().optional(),
+  /** Set on draft-promotion (draft → real worktree session) — the worktree the
+   *  promoted session now belongs to (instant-draft-agent). */
+  worktreeId: z.string().optional(),
+  /** Set by PATCH /sessions/:id/draft — the updated draft prompt (instant-draft-agent). */
+  draftPrompt: z.string().nullable().optional(),
+  /** Set by PATCH /sessions/:id/draft — the updated draft config (instant-draft-agent). */
+  draftConfig: z.any().optional(),
 });
 
 /**

@@ -165,6 +165,12 @@ export function ensureSchema(db: Database): void {
   // resume id (agentChatId keeps meaning "native id" unconditionally). NULL
   // for every plugin on Option A and for every session created before ACP.
   addColumnIfMissing(db, "sessions", "acpSessionId", "TEXT");
+  // draftPrompt / draftConfig (instant-draft-agent) — the raw prompt and JSON
+  // DraftConfig held while a session is in "drafting" state. NULL for every
+  // session created before this column existed and for every non-draft
+  // session; cleared (set to NULL) when a draft is started.
+  addColumnIfMissing(db, "sessions", "draftPrompt", "TEXT");
+  addColumnIfMissing(db, "sessions", "draftConfig", "TEXT");
 }
 
 /** Add `column` to `table` via `ALTER TABLE` if `PRAGMA table_info` shows it's absent. */

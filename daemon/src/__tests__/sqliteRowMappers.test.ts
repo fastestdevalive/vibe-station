@@ -38,6 +38,8 @@ const baseRow: SessionRow = {
   initialPrompt: null,
   archivedAt: null,
   handoffSummary: null,
+  draftPrompt: null,
+  draftConfig: null,
   spawnedFrom: null,
   prState: null,
   prNumber: null,

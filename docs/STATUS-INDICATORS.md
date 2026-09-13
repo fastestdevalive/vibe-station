@@ -13,7 +13,7 @@ Background/rationale: `.vibekit/reports/2026-08-16-pr-detection-broken-root-caus
 
 | Axis | Field | Values | Written by |
 |------|-------|--------|-----------|
-| **Lifecycle** — is the agent busy? | `session.lifecycle.state` (`LifecycleState`) | `not_started, working, idle, waiting_for_human, done, exited` | `daemon/src/services/lifecycle.ts` poller, 1s |
+| **Lifecycle** — is the agent busy? | `session.lifecycle.state` (`LifecycleState`) | `not_started, working, idle, waiting_for_human, done, exited, drafting` | `daemon/src/services/lifecycle.ts` poller, 1s |
 | **PR** — what happened to the branch? | `session.pr` (`PrStatus`) | `none, draft, open, merged, closed` | `daemon/src/services/prPoller.ts`, 30s |
 
 - **Invariant:** each poller writes **only** its own field. Neither ever touches the other's.
@@ -42,6 +42,12 @@ Bucket resolved by `bucketForRollup()` — `web-ui/src/components/layout/Dashboa
 | `exited` | `open` | 🟢 green | `×` | **Finished** |
 | `exited` | `merged` | 🟣 purple | `×` | **Finished** |
 | `exited` | `draft` / `closed` / `none` / unset | neutral, dimmed | `×` | **Finished** |
+| `drafting` | any | none | — | *(not shown — configured in DraftComposer)* |
+
+> **`drafting`** — the agent is being configured in the DraftComposer and has not
+> started yet (Instant Draft Agent). No dot, no active status, no PR colour. It is
+> deliberately absent from the dashboard (both axes): a draft is not open work.
+> The lifecycle poller and PR poller skip `drafting` sessions entirely.
 
 **Home bucket union (Phase 6, 6.6):** `"working" | "needs-you" | "idle" | "pr" | "finished"`.
 The former single **Waiting** column is split into **Needs you** (`waiting_for_human`, red `!`) and
