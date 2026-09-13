@@ -15,6 +15,8 @@ interface FilesPanelProps {
   onOpenQuickOpen?: () => void;
 }
 
+const NO_TABS: string[] = [];
+
 /** Last path segment — the file name shown on the tab. */
 function baseName(path: string): string {
   const parts = path.split("/").filter(Boolean);
@@ -31,7 +33,7 @@ function baseName(path: string): string {
 export function FilesPanel({ api, worktreeId, scope = "worktree", onOpenQuickOpen }: FilesPanelProps) {
   const wt = worktreeId ?? "__none__";
 
-  const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? []);
+  const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
   const activeIdx = useWorkspaceStore((s) => s.activeFileTabIdxByWorktree[wt] ?? -1);
   const closeFileTab = useWorkspaceStore((s) => s.closeFileTab);
   const setActiveFileTabIdx = useWorkspaceStore((s) => s.setActiveFileTabIdx);

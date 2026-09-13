@@ -18,9 +18,11 @@ function basename(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
+const NO_TABS: string[] = [];
+
 export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }: QuickOpenProps) {
   const wt = worktreeId ?? "";
-  const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? []);
+  const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
   const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
   const setActiveFileTabIdx = useWorkspaceStore((s) => s.setActiveFileTabIdx);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
