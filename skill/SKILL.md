@@ -137,7 +137,30 @@ vst session send <sessionId> --file=./instructions.md --wait
 
 ---
 
-## 8. Read session output
+## 8. Open a file in the UI
+
+When you want the user to see a specific file in the vibe-station web UI, open it in the Files panel with:
+
+```bash
+vst file open <worktreeId> <path>
+```
+
+- `<worktreeId>` — the worktree whose UI should open the file (use `$VST_WORKTREE` when running inside a session).
+- `<path>` — absolute or relative path to the file. Relative paths are resolved against the current working directory before the request is sent. The path must be inside the worktree root.
+
+```bash
+# From inside a vst session — open a file in this worktree's Files panel
+vst file open "$VST_WORKTREE" ./src/main.ts
+
+# From an external integration — pass an absolute path
+vst file open proj-3 /home/user/project/src/main.ts
+```
+
+If the user's browser is already connected, the file tab opens immediately via a WebSocket event. If they connect later, the file is queued and opens automatically when they navigate to this worktree.
+
+---
+
+## 10. Read session output
 
 ```bash
 # Capture last N lines of pane output (tmux/pty) or assistant prose (json)
@@ -154,7 +177,7 @@ This returns an array of turn events. It errors on a tmux/pty session (those hav
 
 ---
 
-## 9. OpenClaw integration recipe
+## 11. OpenClaw integration recipe
 
 **Scenario:** an OpenClaw webhook receives "review this PR" and wants to spawn a claude session, wait for it to finish, then post results back.
 
@@ -197,7 +220,7 @@ vst worktree rm "$WORKTREE_ID" --purge
 
 ---
 
-## 10. GitHub Actions / CI integration recipe
+## 12. GitHub Actions / CI integration recipe
 
 ```yaml
 # .github/workflows/agent-review.yml
@@ -247,7 +270,7 @@ jobs:
 
 ---
 
-## 11. Rename a worktree or session
+## 13. Rename a worktree or session
 
 ```bash
 vst worktree rename <id> <newName>   # rename a worktree
@@ -287,7 +310,7 @@ vst session rename vs-19-a-3f9c2b7a my-session      # rename a session by its id
 
 ---
 
-## 12. Tear down
+## 14. Tear down
 
 ```bash
 # Terminate a specific session by id
@@ -312,7 +335,7 @@ When to use each:
 
 ---
 
-## 13. Conventions to honour
+## 15. Conventions to honour
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
 - **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.

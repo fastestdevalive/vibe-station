@@ -455,6 +455,20 @@ export function createClientApi() {
       return parseJson<{ ok: true }>(res);
     },
 
+    async getPendingFileOpens(worktreeId: string): Promise<{ paths: string[] }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/pending-file-opens`);
+      return parseJson<{ paths: string[] }>(res);
+    },
+
+    async clearPendingFileOpens(worktreeId: string): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/pending-file-opens`, {
+        method: "DELETE",
+      });
+      return parseJson<{ ok: true }>(res);
+    },
+
     async getDiskUsage(): Promise<DiskUsageResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees/disk-usage`);
