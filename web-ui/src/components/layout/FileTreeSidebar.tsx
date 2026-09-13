@@ -105,6 +105,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   const isProject = fileScope === "project";
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
+  const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const setFocusedPane = useWorkspaceStore((s) => s.setFocusedPane);
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
@@ -373,9 +374,13 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     });
   }
 
-  function openFile(path: string) {
+  function openFile(path: string, inNewTab = false) {
     if (!activeWorktreeId) return;
-    setActiveFile(path);
+    if (inNewTab) {
+      openFileTabNew(activeWorktreeId, path);
+    } else {
+      setActiveFile(path);
+    }
     setToolPanelTab("files");
   }
 
@@ -415,6 +420,13 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleRows, activeFilePath]);
+
+  // Scroll the active file into view when the active tab changes (7.1).
+  useEffect(() => {
+    if (!activeFilePath) return;
+    const el = rowRefs.current.get(activeFilePath);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [activeFilePath]);
 
   function setScope(next: DiffScope) {
     if (activeWorktreeId) setDiffScopeForWorktree(activeWorktreeId, next);
@@ -555,7 +567,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
                   data-active={activeFilePath === row.path}
                   data-git-status={badgeStatus ?? undefined}
                   style={{ paddingLeft: `calc(${row.level} * var(--space-4) + var(--space-2))` }}
-                  onClick={() => (isDir ? toggle(row.path) : openFile(row.path))}
+                  onClick={(e) => (isDir ? toggle(row.path) : openFile(row.path, e.ctrlKey || e.metaKey))}
                   onFocus={() => setCursorPath(row.path)}
                 >
                   <span className="tree-row__kind-icon" aria-hidden>

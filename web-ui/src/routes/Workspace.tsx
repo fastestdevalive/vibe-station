@@ -437,6 +437,7 @@ export function Workspace() {
           baseBranch={worktrees.find((w) => w.id === wtId)?.baseBranch}
           branch={worktrees.find((w) => w.id === wtId)?.branch}
           hidePanelControls={inWorkspaceCanvas}
+          onOpenQuickOpen={() => setQuickOpen(true)}
           onClose={onCloseToolsTile}
         />
       );
@@ -565,7 +566,7 @@ export function Workspace() {
   ) : null;
 
   const directToolPanel = directSessionProject ? (
-    <ToolPanel api={api} worktreeId={directSessionProject.id} scope="project" />
+    <ToolPanel api={api} worktreeId={directSessionProject.id} scope="project" onOpenQuickOpen={() => setQuickOpen(true)} />
   ) : null;
 
   const directTerminalDock = directSessionProject ? (

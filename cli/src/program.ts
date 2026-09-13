@@ -30,6 +30,7 @@ import { registerSessionStop } from "./commands/session/stop.js";
 import { registerModeLs } from "./commands/mode/ls.js";
 import { registerModeAdd } from "./commands/mode/add.js";
 import { registerModeRm } from "./commands/mode/rm.js";
+import { registerFileOpen } from "./commands/file/open.js";
 import { registerOpen } from "./commands/open.js";
 import { registerStatus } from "./commands/status.js";
 import { registerSummary } from "./commands/summary.js";
@@ -110,6 +111,12 @@ export function buildProgram(): Command {
   registerModeLs(mode);
   registerModeAdd(mode);
   registerModeRm(mode);
+
+  // File commands
+  const file = program
+    .command("file")
+    .description("File operations");
+  registerFileOpen(file);
 
   // Utility commands
   registerOpen(program);

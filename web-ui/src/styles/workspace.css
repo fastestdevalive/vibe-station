@@ -1198,6 +1198,10 @@
 
 .changed-file-list {
   font-size: var(--font-size-sm);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .changed-file-list-dir-header {
@@ -4880,11 +4884,21 @@ a.dashboard-card.dashboard-card--session {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
 }
 
 .files-topbar__tabs::-webkit-scrollbar {
-  display: none;
+  height: 3px;
+}
+
+.files-topbar__tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.files-topbar__tabs::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 2px;
 }
 
 .files-topbar__tab {
@@ -4899,6 +4913,7 @@ a.dashboard-card.dashboard-card--session {
   white-space: nowrap;
   flex-shrink: 0;
   max-width: 220px;
+  cursor: pointer;
 }
 
 .files-topbar__tab[data-active] {

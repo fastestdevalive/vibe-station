@@ -35,6 +35,8 @@ interface ToolPanelProps {
    * ToolPanel can determine on its own.
    */
   hidePanelControls?: boolean;
+  /** Called when the user clicks the "+" tab or presses Ctrl+P to open the file quick-open dialog. */
+  onOpenQuickOpen?: () => void;
   /**
    * Called when the user wants to remove this ToolPanel from the workspace
    * canvas tile it is currently inside. When present alongside
@@ -67,6 +69,7 @@ export function ToolPanel({
   baseBranch,
   branch,
   hidePanelControls = false,
+  onOpenQuickOpen,
   onClose,
 }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, toggleToolPanel } = useLayout();
@@ -123,7 +126,7 @@ export function ToolPanel({
         ) : (
           <>
             {toolPanelTab === "files" ? (
-              <FilesPanel api={api} worktreeId={worktreeId} scope={scope} />
+              <FilesPanel api={api} worktreeId={worktreeId} scope={scope} onOpenQuickOpen={onOpenQuickOpen} />
             ) : null}
             {toolPanelTab === "devices" ? <DevicesPanel /> : null}
             {toolPanelTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}

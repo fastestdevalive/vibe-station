@@ -412,6 +412,13 @@ const SessionErrorEvent = z.object({
   reason: z.enum(["gone", "transient"]).optional(),
 });
 
+// Agent-initiated file open (S→C, D4)
+const FileOpenEvent = z.object({
+  type: z.literal("file:open"),
+  worktreeId: z.string(),
+  path: z.string(),
+});
+
 // File/tree watcher events
 const FileChangedEvent = z.object({
   type: z.literal("file:changed"),
@@ -565,6 +572,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   SessionUpdatedEvent,
   SessionErrorEvent,
   // File/tree events
+  FileOpenEvent,
   FileChangedEvent,
   FileDeletedEvent,
   TreeChangedEvent,

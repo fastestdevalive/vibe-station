@@ -18,8 +18,13 @@ function basename(path: string): string {
   return i >= 0 ? path.slice(i + 1) : path;
 }
 
+const NO_TABS: string[] = [];
+
 export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }: QuickOpenProps) {
-  const setActiveFile = useWorkspaceStore((s) => s.setActiveFile);
+  const wt = worktreeId ?? "";
+  const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
+  const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
+  const setActiveFileTabIdx = useWorkspaceStore((s) => s.setActiveFileTabIdx);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
 
   const [query, setQuery] = useState("");
@@ -73,11 +78,17 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
 
   const selectFile = useCallback(
     (path: string) => {
-      setActiveFile(path);
+      if (!wt) return;
+      const existingIdx = openTabs.indexOf(path);
+      if (existingIdx >= 0) {
+        setActiveFileTabIdx(wt, existingIdx);
+      } else {
+        openFileTabNew(wt, path);
+      }
       setToolPanelTab("files");
       onClose();
     },
-    [setActiveFile, setToolPanelTab, onClose],
+    [wt, openTabs, openFileTabNew, setActiveFileTabIdx, setToolPanelTab, onClose],
   );
 
   const handleKeyDown = useCallback(
@@ -159,6 +170,7 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
           {filtered.map((file, i) => {
             const isSelected = i === selectedIndex;
             const dirPath = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "";
+            const isOpen = openTabs.includes(file.path);
             return (
               <button
                 key={file.path}
@@ -174,6 +186,11 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
                 {dirPath ? (
                   <span className="quick-open-file-dir" title={dirPath}>
                     {dirPath}
+                  </span>
+                ) : null}
+                {isOpen ? (
+                  <span className="quick-open-file-open-badge" aria-label="already open">
+                    open
                   </span>
                 ) : null}
               </button>

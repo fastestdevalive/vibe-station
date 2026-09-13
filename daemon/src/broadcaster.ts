@@ -142,6 +142,23 @@ export function broadcastAll(msg: ServerMessage): void {
 }
 
 /**
+ * Broadcast an event to all connections watching a specific worktree.
+ * A connection is considered a watcher when it has any treeWatches key
+ * prefixed `tree:${worktreeId}:` (D4).
+ */
+export function broadcastWorktree(worktreeId: string, msg: ServerMessage): void {
+  const prefix = `tree:${worktreeId}:`;
+  for (const conn of connections) {
+    for (const key of conn.treeWatches.keys()) {
+      if (key.startsWith(prefix)) {
+        conn.send(msg);
+        break;
+      }
+    }
+  }
+}
+
+/**
  * Send an event to subscribers of a specific session.
  * Used for per-session state/lifecycle events.
  */
