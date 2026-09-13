@@ -102,6 +102,10 @@ interface SkillEditorProps {
   /** Plain Enter (no popover open, no modifiers) or Ctrl/Cmd+Enter anywhere
    *  (including inside a chip's arg input) — the mount site's send/save. */
   onSubmit: () => void;
+  /** Ctrl/Cmd+Enter anywhere (including inside a chip's arg input). Defaults to
+   *  `onSubmit` when omitted. The Composer overrides this to queue instead of
+   *  steer. */
+  onCtrlEnter?: () => void;
   /** Escape with no popover open — QueuedTurnEditor's discard; Composer
    *  passes nothing. */
   onEscape?: () => void;
@@ -374,6 +378,7 @@ export function useSoftKeyboardVisible(): boolean {
 function SkillEditorPlugin({
   inputRefs,
   onSubmit,
+  onCtrlEnter,
   onEscape,
   popoverStateRef,
   selectActivePopoverItem,
@@ -385,6 +390,7 @@ function SkillEditorPlugin({
 }: {
   inputRefs: Map<NodeKey, HTMLInputElement>;
   onSubmit: () => void;
+  onCtrlEnter?: () => void;
   onEscape?: () => void;
   popoverStateRef: React.MutableRefObject<boolean>;
   selectActivePopoverItem: () => void;
@@ -400,6 +406,8 @@ function SkillEditorPlugin({
   softKeyboardRef.current = softKeyboardVisible;
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
+  const onCtrlEnterRef = useRef(onCtrlEnter ?? onSubmit);
+  onCtrlEnterRef.current = onCtrlEnter ?? onSubmit;
   const onEscapeRef = useRef(onEscape);
   onEscapeRef.current = onEscape;
 
@@ -540,7 +548,10 @@ function SkillEditorPlugin({
             return true;
           }
           event?.preventDefault();
-          onSubmitRef.current();
+          // Ctrl/Cmd+Enter is the mount site's distinct "queue" action (Composer
+          // overrides it); plain Enter is the default submit. Fall back to submit
+          // when the caller didn't supply a separate Ctrl+Enter handler.
+          (isModifiedEnter ? onCtrlEnterRef.current : onSubmitRef.current)();
           return true;
         },
         COMMAND_PRIORITY_CRITICAL,
@@ -621,6 +632,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     className,
     onChangeText,
     onSubmit,
+    onCtrlEnter,
     onEscape,
     onArgFocusChange,
   },
@@ -723,9 +735,9 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     () => ({
       commands: commands ?? [],
       inputRefs,
-      onCtrlEnter: onSubmit,
+      onCtrlEnter: onCtrlEnter ?? onSubmit,
     }),
-    [commands, inputRefs, onSubmit],
+    [commands, inputRefs, onSubmit, onCtrlEnter],
   );
 
   const initialConfig = useMemo(
@@ -849,6 +861,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
             <SkillEditorPlugin
               inputRefs={inputRefs}
               onSubmit={onSubmit}
+              onCtrlEnter={onCtrlEnter}
               onEscape={onEscape}
               popoverStateRef={popoverOpenRef}
               selectActivePopoverItem={selectActivePopoverItem}

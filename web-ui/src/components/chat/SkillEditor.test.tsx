@@ -280,12 +280,14 @@ describe("§10 three mount sites — key table (Composer: Enter sends)", () => {
     expect(document.activeElement).not.toBe(input);
   });
 
-  it("Ctrl+Enter in the arg input delegates to send", async () => {
+  it("Ctrl+Enter in the arg input delegates to a queueing send (Ctrl/Cmd+Enter = queue)", async () => {
     const { onSend } = renderComposer("{/code-review high}");
     const input = argInput();
     fireEvent.focus(input);
     await key(input, "Enter", { ctrlKey: true });
-    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith(expect.any(String), expect.any(Array), true),
+    );
   });
 
   it("Escape in the arg input does not bubble to a window-level listener", async () => {
@@ -302,10 +304,12 @@ describe("§10 three mount sites — key table (Composer: Enter sends)", () => {
     }
   });
 
-  it("plain Enter in prose still sends", async () => {
+  it("plain Enter in prose still sends (not queued — no Ctrl/Cmd modifier)", async () => {
     const { onSend } = renderComposer("hello there");
     await key(editorEl(), "Enter");
     await waitFor(() => expect(onSend).toHaveBeenCalled());
+    // Plain Enter must NOT pass the queue flag — it steers when possible.
+    expect(onSend).not.toHaveBeenCalledWith(expect.any(String), expect.any(Array), true);
   });
 
   it("Shift+Enter in prose inserts a newline, does not send", async () => {
@@ -399,7 +403,9 @@ describe("§10b soft-keyboard Enter behaviour (vs hardware touch capability)", (
         vp.setHeight(BASE_HEIGHT - 350);
       });
       await key(editorEl(), "Enter", { ctrlKey: true });
-      await waitFor(() => expect(onSend).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith(expect.any(String), expect.any(Array), true),
+      );
     } finally {
       vp.restore();
     }

@@ -103,6 +103,17 @@ describe("Composer draft persistence (RA1)", () => {
     await waitFor(() => expect(localStorage.getItem("vst-chat-draft-s1")).toBeNull());
   });
 
+  it("Send button does NOT pass the queue flag (steers when possible; 2-arg call)", async () => {
+    const api = createMockApi();
+    const onSend = vi.fn<(message: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
+    render(<Composer api={api} sessionId="s-send-nq" onSend={onSend} initialText="steer me" />);
+    fireEvent.click(screen.getByLabelText("Send message"));
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("steer me", []));
+    // The button's plain send must never pass the `true` queue flag — only
+    // Ctrl/Cmd+Enter does. Guards against a regression in handleSend's branch.
+    expect(onSend).not.toHaveBeenCalledWith("steer me", [], true);
+  });
+
   it("keeps drafts isolated per session", () => {
     localStorage.setItem("vst-chat-draft-s2", "session two draft");
     const api = createMockApi();

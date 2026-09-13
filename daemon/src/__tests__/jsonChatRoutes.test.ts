@@ -384,6 +384,36 @@ describe("JSON chat REST + WS", () => {
     submitSpy.mockRestore();
   });
 
+  it("D8 — POST /chat with queue:true forces enqueue (never submit/steer)", async () => {
+    await app.inject({ method: "POST", url: `/sessions/${SESSION_ID}/chat`, payload: { message: "seed" } });
+    const { jsonAgentRegistry } = await import("../state/jsonAgentRegistry.js");
+    await jsonAgentRegistry.get(SESSION_ID)?.settled();
+
+    const agent = jsonAgentRegistry.get(SESSION_ID)!;
+    const submitSpy = vi.spyOn(agent, "submit");
+    const enqueueSpy = vi.spyOn(agent, "enqueue");
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${SESSION_ID}/chat`,
+      payload: { message: "queued via ctrl+enter", queue: true },
+    });
+    expect(res.statusCode).toBe(202);
+    expect(enqueueSpy).toHaveBeenCalledTimes(1);
+    expect(submitSpy).not.toHaveBeenCalled();
+
+    await agent.settled();
+    const tr = await app.inject({ method: "GET", url: `/sessions/${SESSION_ID}/transcript` });
+    const texts = tr
+      .json<{ events: NormalizedEvent[] }>()
+      .events.filter((e) => e.kind === "user")
+      .map((e) => (e as { text?: string }).text);
+    expect(texts).toContain("queued via ctrl+enter");
+
+    submitSpy.mockRestore();
+    enqueueSpy.mockRestore();
+  });
+
   it("D5 — POST /send resolves attachmentIds on a json session (same as POST /chat)", async () => {
     const boundary = "----vsttest2";
     const body =

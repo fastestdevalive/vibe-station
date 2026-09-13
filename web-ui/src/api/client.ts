@@ -1031,17 +1031,24 @@ export function createClientApi() {
       }
     },
 
-    /** Enqueue a user turn. Always accepted (202) — queued behind a running turn. */
+    /** Enqueue a user turn. Always accepted (202) — queued behind a running turn.
+     *  `queue: true` forces a FIFO enqueue (never steers); the default steers a
+     *  running turn when the agent supports it. */
     async sendChat(
       sessionId: string,
       message: string,
       attachmentIds?: string[],
+      queue?: boolean,
     ): Promise<SendChatResponse> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, ...(attachmentIds?.length ? { attachmentIds } : {}) }),
+        body: JSON.stringify({
+          message,
+          ...(attachmentIds?.length ? { attachmentIds } : {}),
+          ...(queue ? { queue: true } : {}),
+        }),
       });
       return parseJson<SendChatResponse>(res);
     },

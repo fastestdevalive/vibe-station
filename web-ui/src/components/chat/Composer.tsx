@@ -14,8 +14,9 @@ const SEND_SETTLE_MS = 700;
 interface ComposerProps {
   api: ApiInstance;
   sessionId: string;
-  /** Enqueue a turn (message + resolved attachment ids). */
-  onSend: (message: string, attachmentIds: string[]) => Promise<void> | void;
+  /** Enqueue a turn (message + resolved attachment ids). `queue: true` forces
+   *  a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. */
+  onSend: (message: string, attachmentIds: string[], queue?: boolean) => Promise<void> | void;
   /** A turn is active — show Stop instead of disabling. */
   busy?: boolean;
   onStop?: () => void;
@@ -95,13 +96,16 @@ export function Composer({
     return () => window.clearTimeout(id);
   }, [justSent]);
 
-  async function handleSend() {
+  async function handleSend(queue: boolean) {
     if (!canSend) return;
     const message = internalEditorRef.current?.getText().trim() ?? text.trim();
     const ids = readyAttachments.map((a) => a.id);
     setSending(true);
     try {
-      await onSend(message, ids);
+      // `queue` is passed only for the Ctrl/Cmd+Enter path, keeping the plain
+      // Enter/button call identical (2 args) for existing callers/tests.
+      if (queue) await onSend(message, ids, true);
+      else await onSend(message, ids);
       internalEditorRef.current?.clear();
       setText("");
       setHasContent(false);
@@ -159,7 +163,8 @@ export function Composer({
               draft.save(next);
               setHasContent(content);
             }}
-            onSubmit={() => void handleSend()}
+            onSubmit={() => void handleSend(false)}
+            onCtrlEnter={() => void handleSend(true)}
             onArgFocusChange={setArgFocused}
           />
         </div>
@@ -209,7 +214,7 @@ export function Composer({
                     : undefined
               }
               disabled={!canSend}
-              onClick={() => void handleSend()}
+              onClick={() => void handleSend(false)}
             >
               ▶
             </button>
@@ -218,13 +223,13 @@ export function Composer({
       </div>
       <div className="chat-composer__hint">
         {argFocused ? (
-          <>Enter or → exits to the message · Backspace removes an argument, then the skill · Ctrl+Enter sends</>
+          <>Enter or → exits to the message · Backspace removes an argument, then the skill · Ctrl/Cmd+Enter queues</>
         ) : (
           <>
             <span aria-hidden>⤓</span> Drop files here ·{" "}
             {softKeyboardVisible
-              ? "Enter for newline · Ctrl/Cmd+Enter to send"
-              : "Enter / Ctrl+Enter to send · Shift+Enter or Alt+Enter for newline"}
+              ? "Enter for newline · Ctrl/Cmd+Enter to queue & send"
+              : "Enter to send · Ctrl/Cmd+Enter to queue · Shift+Enter or Alt+Enter for newline"}
           </>
         )}
       </div>
