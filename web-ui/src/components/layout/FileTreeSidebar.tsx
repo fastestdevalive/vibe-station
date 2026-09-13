@@ -416,6 +416,13 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleRows, activeFilePath]);
 
+  // Scroll the active file into view when the active tab changes (7.1).
+  useEffect(() => {
+    if (!activeFilePath) return;
+    const el = rowRefs.current.get(activeFilePath);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [activeFilePath]);
+
   function setScope(next: DiffScope) {
     if (activeWorktreeId) setDiffScopeForWorktree(activeWorktreeId, next);
   }

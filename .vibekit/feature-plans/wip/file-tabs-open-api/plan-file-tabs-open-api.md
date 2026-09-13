@@ -227,15 +227,15 @@ clear(worktreeId: string): void
 
 ## Phase 4 — UI: per-worktree tab state in store
 
-- [ ] 4.1 Add `openFileTabsByWorktree: Record<string, string[]>` and `activeFileTabIdxByWorktree: Record<string, number>` to `WorkspaceState` in `useStore.ts:150`; initialise both to `{}`
-- [ ] 4.2 Add actions `openFileTab(worktreeId, path)`, `openFileTabNew(worktreeId, path)`, `closeFileTab(worktreeId, idx)`, `setActiveFileTabIdx(worktreeId, idx)` — see D6; each action also writes `lastFileByWorktree[wt] = newActivePath` as a side-effect (see D9)
-- [ ] 4.3 Update `setActiveFile(path)` at `useStore.ts:800`: null → `closeFileTab(wt, activeFileTabIdxByWorktree[wt])` if a tab is active, else no-op; non-null → `openFileTab(wt, path)` — see D2
-- [ ] 4.4 Update `setActiveWorktree` at `useStore.ts:764` — restore from `openFileTabsByWorktree[worktreeId]` (array + active index) instead of `activeFilePath`; keep `activeFilePath` as a derived selector (see 4.5) — see D9
-- [ ] 4.5 Keep `activeFilePath` in the store as a synced derived field: every action that mutates the active tab also updates `activeFilePath = openFileTabsByWorktree[wt][newIdx] ?? null` within the same `set()` call (avoids selector complexity with persist middleware)
-- [ ] 4.6 Update `clearWorkspaceSelection` at `useStore.ts:866` — drop the direct `activeFilePath: null` write; instead set `activeFileTabIdxByWorktree[wt] = -1` (deactivate without clearing tabs) — see D10
-- [ ] 4.7 Update `setActiveDirectContext` at `useStore.ts:771` — restore from `openFileTabsByWorktree[projectId]` instead of `activeFilePath` — see D11
-- [ ] 4.8 Bump persist `version` to 17 in `useStore.ts`; add `migrate` entry for v16→v17: read `old.activeFilePath` + `old.activeWorktreeId`, seed `openFileTabsByWorktree[activeWorktreeId] = [activeFilePath]` and `activeFileTabIdxByWorktree[activeWorktreeId] = 0` if both present — see D12
-- [ ] 4.9 Add `openFileTabsByWorktree` and `activeFileTabIdxByWorktree` to the `partialize` whitelist; keep `activeFilePath` in partialize as a derived field (it will be re-derived from the arrays on load)
+- [x] 4.1 Add `openFileTabsByWorktree: Record<string, string[]>` and `activeFileTabIdxByWorktree: Record<string, number>` to `WorkspaceState` in `useStore.ts:150`; initialise both to `{}`
+- [x] 4.2 Add actions `openFileTab(worktreeId, path)`, `openFileTabNew(worktreeId, path)`, `closeFileTab(worktreeId, idx)`, `setActiveFileTabIdx(worktreeId, idx)` — see D6; each action also writes `lastFileByWorktree[wt] = newActivePath` as a side-effect (see D9)
+- [x] 4.3 Update `setActiveFile(path)` at `useStore.ts:800`: null → `closeFileTab(wt, activeFileTabIdxByWorktree[wt])` if a tab is active, else no-op; non-null → `openFileTab(wt, path)` — see D2
+- [x] 4.4 Update `setActiveWorktree` at `useStore.ts:764` — restore from `openFileTabsByWorktree[worktreeId]` (array + active index) instead of `activeFilePath`; keep `activeFilePath` as a derived selector (see 4.5) — see D9
+- [x] 4.5 Keep `activeFilePath` in the store as a synced derived field: every action that mutates the active tab also updates `activeFilePath = openFileTabsByWorktree[wt][newIdx] ?? null` within the same `set()` call (avoids selector complexity with persist middleware)
+- [x] 4.6 Update `clearWorkspaceSelection` at `useStore.ts:866` — drop the direct `activeFilePath: null` write; instead set `activeFileTabIdxByWorktree[wt] = -1` (deactivate without clearing tabs) — see D10
+- [x] 4.7 Update `setActiveDirectContext` at `useStore.ts:771` — restore from `openFileTabsByWorktree[projectId]` instead of `activeFilePath` — see D11
+- [x] 4.8 Bump persist `version` to 17 in `useStore.ts`; add `migrate` entry for v16→v17: read `old.activeFilePath` + `old.activeWorktreeId`, seed `openFileTabsByWorktree[activeWorktreeId] = [activeFilePath]` and `activeFileTabIdxByWorktree[activeWorktreeId] = 0` if both present — see D12
+- [x] 4.9 Add `openFileTabsByWorktree` and `activeFileTabIdxByWorktree` to the `partialize` whitelist; keep `activeFilePath` in partialize as a derived field (it will be re-derived from the arrays on load)
 
 **Verify phase 4:**
 - V4.1 TypeScript compiles with no errors: `cd web-ui && npm run typecheck`
@@ -247,10 +247,10 @@ clear(worktreeId: string): void
 
 ## Phase 5 — UI: multi-tab strip in FilesPanel
 
-- [ ] 5.1 In `FilesPanel.tsx`: replace the single-chip render with a `map` over `openFileTabsByWorktree[wt] ?? []`; each chip shows `baseName(path)`, close ×, `data-active` on the active index
-- [ ] 5.2 Enable the "+" button — clicking opens Ctrl+P (emit a `openQuickOpen` callback prop or reuse existing pattern)
-- [ ] 5.3 Wire chip click to `setActiveFileTabIdx(wt, idx)` and × to `closeFileTab(wt, idx)`
-- [ ] 5.4 Add `role="tablist"` / `role="tab"` ARIA attributes to the strip
+- [x] 5.1 In `FilesPanel.tsx`: replace the single-chip render with a `map` over `openFileTabsByWorktree[wt] ?? []`; each chip shows `baseName(path)`, close ×, `data-active` on the active index
+- [x] 5.2 Enable the "+" button — clicking opens Ctrl+P (emit a `openQuickOpen` callback prop or reuse existing pattern)
+- [x] 5.3 Wire chip click to `setActiveFileTabIdx(wt, idx)` and × to `closeFileTab(wt, idx)`
+- [x] 5.4 Add `role="tablist"` / `role="tab"` ARIA attributes to the strip
 
 **Verify phase 5:**
 - V5.1 Three files open: correct basenames shown, active one has `data-active`
@@ -261,9 +261,9 @@ clear(worktreeId: string): void
 
 ## Phase 6 — UI: Ctrl+P uses new-tab logic
 
-- [ ] 6.1 In `QuickOpen.tsx:74`, read `openFileTabsByWorktree[worktreeId ?? ""] ?? []` from store
-- [ ] 6.2 Replace `setActiveFile(path)` call with: if path already in open tabs → `setActiveFileTabIdx(wt, existingIdx)`, else → `openFileTabNew(wt, path)`
-- [ ] 6.3 Optionally show "(already open)" badge on results that are already in an open tab
+- [x] 6.1 In `QuickOpen.tsx:74`, read `openFileTabsByWorktree[worktreeId ?? ""] ?? []` from store
+- [x] 6.2 Replace `setActiveFile(path)` call with: if path already in open tabs → `setActiveFileTabIdx(wt, existingIdx)`, else → `openFileTabNew(wt, path)`
+- [x] 6.3 Optionally show "(already open)" badge on results that are already in an open tab
 
 **Verify phase 6:**
 - V6.1 Ctrl+P select a file not open → new tab added
@@ -273,10 +273,10 @@ clear(worktreeId: string): void
 
 ## Phase 7 — UI: tree scroll-to-active-tab + WS file:open handler
 
-- [ ] 7.1 In `FileTreeSidebar.tsx`: add a `useEffect` watching `activeFilePath` (derived from active tab) — expand ancestors and scroll-to the matching node when it changes
-- [ ] 7.2 Add `file:open` to `web-ui/src/api/types.ts` S→C message union
-- [ ] 7.3 In `web-ui/src/api/client.ts`: handle `file:open` message — call `openFileTabNew(msg.worktreeId, msg.path)` and `setToolPanelTab("files")` when `msg.worktreeId === activeWorktreeId`
-- [ ] 7.4 Confirm existing reconnect logic in `client.ts` re-registers `tree:watch` subscriptions after reconnect (already the case per `useSubscription.ts`); no additional replay logic needed — Phase 8's HTTP fetch handles the late-join/missed-event path
+- [x] 7.1 In `FileTreeSidebar.tsx`: add a `useEffect` watching `activeFilePath` (derived from active tab) — expand ancestors and scroll-to the matching node when it changes
+- [x] 7.2 Add `file:open` to `web-ui/src/api/types.ts` S→C message union
+- [x] 7.3 In `web-ui/src/api/client.ts`: handle `file:open` message — call `openFileTabNew(msg.worktreeId, msg.path)` and `setToolPanelTab("files")` when `msg.worktreeId === activeWorktreeId` (handled in usePendingFileOpens.ts via api.on)
+- [x] 7.4 Confirm existing reconnect logic in `client.ts` re-registers `tree:watch` subscriptions after reconnect (already the case per `useSubscription.ts`); no additional replay logic needed — Phase 8's HTTP fetch handles the late-join/missed-event path
 
 **Verify phase 7:**
 - V7.1 Navigate to a file via tab switch → tree scrolls to and highlights that file
@@ -286,8 +286,8 @@ clear(worktreeId: string): void
 
 ## Phase 8 — UI: pending queue fetch on worktree mount
 
-- [ ] 8.1 Create `web-ui/src/hooks/usePendingFileOpens.ts` — takes `(api, worktreeId: string | null)`: on mount (when `worktreeId` is set), calls `GET /worktrees/:id/pending-file-opens`; for each path calls `openFileTabNew(worktreeId, path)` + `setToolPanelTab("files")`; then calls `DELETE /worktrees/:id/pending-file-opens`
-- [ ] 8.2 Call `usePendingFileOpens(api, worktreeId)` in `FilesPanel.tsx` (or the worktree route component)
+- [x] 8.1 Create `web-ui/src/hooks/usePendingFileOpens.ts` — takes `(api, worktreeId: string | null)`: on mount (when `worktreeId` is set), calls `GET /worktrees/:id/pending-file-opens`; for each path calls `openFileTabNew(worktreeId, path)` + `setToolPanelTab("files")`; then calls `DELETE /worktrees/:id/pending-file-opens`
+- [x] 8.2 Call `usePendingFileOpens(api, worktreeId)` in `FilesPanel.tsx` (or the worktree route component)
 
 **Verify phase 8:**
 - V8.1 `vst file open <wt> <path>` fired while user is on a different page → navigate to that worktree → file tab opens automatically
