@@ -182,14 +182,14 @@ clear(worktreeId: string): void
 
 ## Phase 1 — Daemon: pending queue + REST API + WS event
 
-- [ ] 1.1 Create `daemon/src/services/pendingFileOpens.ts` — module-level `Map<string, string[]>`; export `append`, `get`, `clear`
-- [ ] 1.2 Add `broadcastWorktree(worktreeId: string, msg: ServerMessage): void` to `daemon/src/broadcaster.ts` — iterates `forEachConnection`, sends to connections whose `treeWatches` has any key starting with `tree:${worktreeId}:`
-- [ ] 1.3 Add `FileOpenMessage` to `daemon/src/ws/protocol.ts` S→C Zod schema: `{ type: "file:open", worktreeId: string, path: string }`; add to `ServerMessage` union
-- [ ] 1.4 Add `POST /worktrees/:id/open-file` in `daemon/src/routes/worktrees.ts`:
+- [x] 1.1 Create `daemon/src/services/pendingFileOpens.ts` — module-level `Map<string, string[]>`; export `append`, `get`, `clear`
+- [x] 1.2 Add `broadcastWorktree(worktreeId: string, msg: ServerMessage): void` to `daemon/src/broadcaster.ts` — iterates `forEachConnection`, sends to connections whose `treeWatches` has any key starting with `tree:${worktreeId}:`
+- [x] 1.3 Add `FileOpenMessage` to `daemon/src/ws/protocol.ts` S→C Zod schema: `{ type: "file:open", worktreeId: string, path: string }`; add to `ServerMessage` union
+- [x] 1.4 Add `POST /worktrees/:id/open-file` in `daemon/src/routes/worktrees.ts`:
   - Resolve path relative to worktree root; reject with 422 if outside
   - Call `pendingFileOpens.append(id, absPath)` and `broadcastWorktree(id, { type:"file:open", ... })`
-- [ ] 1.5 Add `GET /worktrees/:id/pending-file-opens` — returns `{ paths: pendingFileOpens.get(id) }`
-- [ ] 1.6 Add `DELETE /worktrees/:id/pending-file-opens` — calls `pendingFileOpens.clear(id)`, returns `{ ok: true }`
+- [x] 1.5 Add `GET /worktrees/:id/pending-file-opens` — returns `{ paths: pendingFileOpens.get(id) }`
+- [x] 1.6 Add `DELETE /worktrees/:id/pending-file-opens` — calls `pendingFileOpens.clear(id)`, returns `{ ok: true }`
 
 **Verify phase 1:**
 - V1.1 `curl -X POST .../worktrees/<wt>/open-file -d '{"path":"./README.md"}'` → 200 `{ ok: true }` and subsequent GET returns the absolute path
@@ -201,9 +201,9 @@ clear(worktreeId: string): void
 
 ## Phase 2 — CLI: `vst file open`
 
-- [ ] 2.1 Create `cli/src/commands/file/` directory
-- [ ] 2.2 Create `cli/src/commands/file/open.ts` — Commander subcommand `file open <worktreeId> <path>`; resolves relative path to absolute before POST; exits 0 on success, non-zero with message on error
-- [ ] 2.3 Register `file` command in `cli/src/program.ts` — follow the `registerWorktree*`, `registerSession*`, etc. import pattern at the top of that file (see D13; `cli/src/index.ts` does not exist)
+- [x] 2.1 Create `cli/src/commands/file/` directory
+- [x] 2.2 Create `cli/src/commands/file/open.ts` — Commander subcommand `file open <worktreeId> <path>`; resolves relative path to absolute before POST; exits 0 on success, non-zero with message on error
+- [x] 2.3 Register `file` command in `cli/src/program.ts` — follow the `registerWorktree*`, `registerSession*`, etc. import pattern at the top of that file (see D13; `cli/src/index.ts` does not exist)
 
 **Verify phase 2:**
 - V2.1 `vst file open <wt-id> ./README.md` exits 0 and shows `{ ok: true }`
@@ -214,8 +214,8 @@ clear(worktreeId: string): void
 
 ## Phase 3 — Skill & agent system prompt docs
 
-- [ ] 3.1 Add `vst file open` to `skill/SKILL.md` under the CLI reference section (pattern: follow how `vst session send` is documented)
-- [ ] 3.2 Add `vst file open` to `daemon/src/assets/agent-system-prompt.md` with example using `$VST_WORKTREE` and `$VST_DAEMON_URL`
+- [x] 3.1 Add `vst file open` to `skill/SKILL.md` under the CLI reference section (pattern: follow how `vst session send` is documented)
+- [x] 3.2 Add `vst file open` to `daemon/src/assets/agent-system-prompt.md` with example using `$VST_WORKTREE` and `$VST_DAEMON_URL`
 
 **Verify phase 3:**
 - V3.1 `grep "vst file open" skill/SKILL.md` → matches

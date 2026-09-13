@@ -131,6 +131,22 @@ vst session send <session-id> --file=./instructions.md --wait
 ```
 
 
+### Open a file in the UI
+
+To make a file appear in the user's browser (Files panel), use:
+
+```bash
+# Open a file in this worktree's Files panel
+vst file open "$VST_WORKTREE" ./path/to/file.ts
+
+# Absolute path also accepted
+vst file open "$VST_WORKTREE" /absolute/path/to/file.ts
+```
+
+- Path must be inside the worktree root. Relative paths are resolved against the current working directory.
+- If the user's browser is connected the tab opens immediately; otherwise the file is queued and opens when they next view this worktree.
+- The daemon REST equivalent is `POST $VST_DAEMON_URL/worktrees/$VST_WORKTREE/open-file` with body `{"path": "<absPath>"}`.
+
 ### Daemon / health
 
 ```bash
