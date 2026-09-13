@@ -1308,6 +1308,7 @@ export function createMockApi() {
       sessionId: string,
       message: string,
       attachmentIds?: string[],
+      _queue?: boolean,
     ): Promise<SendChatResponse> {
       const turnId = `turn-${++mockTurnSeq}`;
       const userEvent: NormalizedEvent = {

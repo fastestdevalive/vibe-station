@@ -112,6 +112,10 @@ const ChatBody = z
   .object({
     message: z.string(),
     attachmentIds: z.array(z.string()).optional(),
+    // Ctrl/Cmd+Enter in the UI — always enqueue FIFO, never steer (mirrors the
+    // `/send` route's D8 `queue` flag). Default (undefined/false) steers a
+    // running turn when possible.
+    queue: z.boolean().optional(),
   })
   // A files-only turn is valid: the first turn of a JSON agent may stage files
   // with no prompt (web-ui `firstTurn.ts`). Reject only when BOTH are empty.
@@ -1823,7 +1827,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (!parsed.success) {
       return reply.status(400).send({ error: "Validation error", details: parsed.error.issues });
     }
-    const { message, attachmentIds } = parsed.data;
+    const { message, attachmentIds, queue } = parsed.data;
 
     // Bug 4 fix: an archived session is displayed read-only by the UI — never
     // let a chat turn spawn/run a live agent process against it.
@@ -1846,7 +1850,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const daemonPort = resolveDaemonPort((app.server.address() as { port?: number })?.port);
     let res;
     try {
-      res = await enqueueChatTurn({ sessionId: id, message, attachments, daemonPort });
+      res = await enqueueChatTurn({ sessionId: id, message, attachments, daemonPort, steer: !queue });
     } catch (err) {
       return reply.status(500).send({ error: `Failed to enqueue turn: ${String(err)}` });
     }
