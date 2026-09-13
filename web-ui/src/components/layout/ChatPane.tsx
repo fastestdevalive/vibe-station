@@ -369,9 +369,9 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             api={api}
             sessionId={sessionId}
             textareaRef={composerRef}
-            onSend={(message, ids) => {
+            onSend={(message, ids, queue) => {
               setSalvage(null);
-              return send(message, ids);
+              return send(message, ids, queue);
             }}
             busy={turnActive}
             canSteer={meta?.canSteer ?? false}
