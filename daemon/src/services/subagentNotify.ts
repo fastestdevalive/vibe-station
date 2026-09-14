@@ -122,7 +122,8 @@ export interface NotifyDeps {
   ) => boolean;
   /**
    * Async. Emit the `message_generated` notification pill on the parent's
-   * chat stream. Called ONLY when `populateNoticeSlot` returned true.
+   * chat stream. Called ONLY at cap (when no notice turn fires and the pill
+   * is the sole signal to the user).
    */
   emitPill: (
     parentSessionId: string,
@@ -258,34 +259,19 @@ async function flush(parentId: string, deps: NotifyDeps): Promise<void> {
     return;
   }
 
-  // Under cap — R8 atomicity: populate slot FIRST (sync); only on success emit
-  // pill and charge budget. All children are attempted; at least one must
-  // succeed for the budget to charge.
+  // Under cap — populate slot for each child; charge budget once if any succeeded.
+  // No pill is emitted here: the tray row shows the pending state, and the notice
+  // turn itself produces the "X needs your input" message in the transcript.
   let anySlotted = false;
-  const slottedChildren: Array<[string, { name: string; state: LifecycleState }]> = [];
 
   for (const [childId, c] of entry.children) {
-    const ok = deps.populateNoticeSlot(parentId, childId, c.name);
-    if (ok) {
+    if (deps.populateNoticeSlot(parentId, childId, c.name)) {
       anySlotted = true;
-      slottedChildren.push([childId, c]);
     }
   }
 
   if (anySlotted) {
-    // FIX-E (R8): emit pills BEFORE charging budget (populateSlot → emitPill → noticeCount).
-    for (const [childId, c] of slottedChildren) {
-      await deps.emitPill(parentId, {
-        subagentId: childId,
-        subagentName: c.name,
-        subagentState: c.state,
-        // Empty text: frontend composes "subagent <name> is now waiting..." (FIX-B)
-        text: ``,
-      });
-    }
     // Charge budget ONCE per flush (not per child — KD-1 multi-child coalescing).
     noticeCount.set(parentId, currentCount + 1);
   }
-  // If none slotted (all rejected by session for reasons OTHER than cap),
-  // no pill is emitted — the session knows best why it rejected.
 }

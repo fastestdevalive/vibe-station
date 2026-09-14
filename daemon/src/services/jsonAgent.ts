@@ -1190,10 +1190,11 @@ export class JsonAgentSession {
     this.noticeSlot = null;
 
     // R9 — prune children no longer waiting_for_human at run time.
+    // Also capture each child's dataDir so we can fetch their last message.
     const projects = getAllProjects();
-    const pruned = new Map<string, string>();
+    const pruned = new Map<string, string>(); // childId → name
+    const childDataDirs = new Map<string, string>(); // childId → dataDir
     for (const [childId, childName] of slot.children) {
-      // Find the child's current lifecycle state in the project store.
       let found = false;
       outer: for (const project of projects) {
         for (const wt of project.worktrees ?? []) {
@@ -1201,6 +1202,7 @@ export class JsonAgentSession {
           if (s) {
             if (s.lifecycle.state === "waiting_for_human") {
               pruned.set(childId, childName);
+              childDataDirs.set(childId, sessionDataDir(project.id, wt.id, s.id));
             }
             found = true;
             break outer;
@@ -1210,6 +1212,7 @@ export class JsonAgentSession {
         if (direct) {
           if (direct.lifecycle.state === "waiting_for_human") {
             pruned.set(childId, childName);
+            childDataDirs.set(childId, directSessionDataDir(project.id, direct.id));
           }
           found = true;
           break;
@@ -1227,13 +1230,55 @@ export class JsonAgentSession {
       return;
     }
 
-    // Build the notice text from remaining children.
-    const childNames = [...pruned.values()];
-    const childList = childNames.join(", ");
-    const noticeText =
-      childNames.length === 1
-        ? `${childList} is waiting for your reply`
-        : `${childList} are waiting for your reply`;
+    // Emit a notification pill per child now that the turn is actually firing.
+    // Empty text → frontend renders "[chip] needs your input" (FIX-B).
+    for (const [childId, childName] of pruned) {
+      this.emitSystemEvent({
+        subagentId: childId,
+        subagentName: childName,
+        subagentState: "waiting_for_human",
+        text: "",
+      });
+    }
+
+    // Build a triage prompt that includes each child's last message so the
+    // parent LLM can make an informed decision rather than blindly replying.
+    const childBlocks: string[] = [];
+    for (const [childId, childName] of pruned) {
+      const dir = childDataDirs.get(childId);
+      let lastMsg = "(no messages yet)";
+      if (dir) {
+        const page = readTailFromDataDir(dir, childId, 1);
+        const fullText = page.events
+          .filter((e) => e.kind === "text")
+          .map((e) => e.text ?? "")
+          .join("")
+          .trim();
+        if (fullText) {
+          const truncated = fullText.length > 500 ? fullText.slice(0, 500) + "…" : fullText;
+          lastMsg = truncated.split("\n").map((l) => `> ${l}`).join("\n");
+        }
+      }
+      childBlocks.push(`Session: "${childName}" (id: ${childId})\nLast message:\n${lastMsg}`);
+    }
+
+    const noticeText = [
+      `Subagent update — ${pruned.size === 1 ? "a subagent needs" : "subagents need"} your attention:\n\n`,
+      childBlocks.join("\n\n---\n\n"),
+      `\n\nFor each session decide ONE of:\n`,
+      `A) Terminate — they finished their work with no open question.\n`,
+      `   Run: vst session terminate <id>\n`,
+      `   Optionally summarise what they accomplished for the user.\n`,
+      `B) Answer — they asked a clear, answerable question.\n`,
+      `   Run: vst session send <id> "your answer"\n`,
+      `C) Escalate — they need a human decision (credentials, scope, approval).\n`,
+      `   Tell the user what is needed. Do NOT message the subagent.\n`,
+      `D) No action — unclear state; not ready to terminate, no open question.\n`,
+      `\nRules:\n`,
+      `- Never tell a subagent to stop, exit, or terminate via message — use vst session terminate instead.\n`,
+      `- Never send empty or filler messages ("ok", "got it", "you're done").\n`,
+      `- Prefer A over D when the last message signals completion (committed changes, task done, signed off).`,
+    ].join("");
 
     const turnId = randomUUID();
     // Emit the silent user event (KD-4) — must appear before runOneTurn so
