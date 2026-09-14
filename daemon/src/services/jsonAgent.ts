@@ -494,11 +494,10 @@ export class JsonAgentSession {
    */
   private _abortedSinceLastDrain = false;
   /**
-   * FIX-A: set to true by stopActiveTurn() when a notice turn is running
-   * (activeNotice !== null). runNoticeSlotTurn reads and clears this in its
-   * finally block to detect abort when activeAbort has already been nulled.
+   * Set to true by promoteNoticeSlot() so drain() runs the notice slot
+   * immediately, even after an abort or ahead of queued human turns.
    */
-  private _noticeWasAborted = false;
+  private _promotedNotice = false;
   /**
    * Chat id the ACTIVE turn is forking from (R3.2), or undefined for a normal
    * turn. Set for the duration of a fork turn so `handleEvent` adopts the NEW
@@ -806,6 +805,7 @@ export class JsonAgentSession {
     // R14 — only retire/delete clears the slot; abortAndDrain() must NOT.
     this.noticeSlot = null;
     this.activeNotice = null;
+    this._promotedNotice = false;
     this.abortAndDrain();
     await Promise.race([
       this.settled().catch(() => {}),
@@ -839,9 +839,6 @@ export class JsonAgentSession {
       this.killLivePids();
     }
     this._abortedSinceLastDrain = true; // FIX-G: prevent notice slot from firing immediately
-    if (this.activeNotice !== null) {
-      this._noticeWasAborted = true; // FIX-A: allow runNoticeSlotTurn to detect abort
-    }
     this.activeAbort.abort();
     return true;
   }
@@ -1142,46 +1139,34 @@ export class JsonAgentSession {
   }
 
   /**
-   * Dismiss the pending notice slot: captures + clears the slot, emits an
-   * annotation pill per child ("wake-up for <child> dismissed"), and stops the
-   * active notice turn if one is running. Idempotent — no slot is also OK.
+   * "Send now" on the pending notice slot: interrupt the active turn (if one is
+   * running) and run the notice slot turn immediately (jumping ahead of queued
+   * human turns).
+   */
+  promoteNoticeSlot(): void {
+    if (!this.noticeSlot) return;
+    this._promotedNotice = true;
+    if (this.running) {
+      this.stopActiveTurn();
+    }
+    this.kickDrain();
+  }
+
+  /**
+   * Dismiss the pending notice slot: silently clears the slot (no annotation
+   * pills), and stops the active notice turn if one is running. Idempotent —
+   * no slot is also OK.
    * Called from `POST /sessions/:id/chat/dismiss-notice` (204, always).
    */
   dismissNoticeSlot(): void {
-    // FIX-H4: handle pending slot and active slot separately.
-    // Pending slot — emit "dismissed" annotation and clear immediately.
-    // Active slot — stop the turn; FIX-A's abort path emits "wake-up dropped"
-    // for active-slot children when the abort lands in runNoticeSlotTurn's finally.
-    const pendingSlot = this.noticeSlot;
+    // Silent dismiss: clear the slot with no annotation pills.
+    // Pending slot — clear immediately.
     this.noticeSlot = null;
+    this._promotedNotice = false;
     const wasActive = this.activeNotice !== null;
     if (wasActive) {
-      // Set _noticeWasAborted BEFORE clearing activeNotice. stopActiveTurn's own
-      // guard (line ~842) checks `this.activeNotice !== null`; since we are about
-      // to null it here, that check would fail and the flag would never be set,
-      // causing runNoticeSlotTurn's finally to emit no "wake-up dropped" pill.
-      // Setting the flag here guarantees the finally always emits on dismiss-
-      // while-running, regardless of the order in which activeNotice is cleared.
-      this._noticeWasAborted = true;
-    }
-    // Clear activeNotice so getMeta() reports no running notice slot after dismiss.
-    // runNoticeSlotTurn's finally block is a no-op if it also clears (already null).
-    this.activeNotice = null;
-    if (!pendingSlot && !wasActive) return;
-    // Emit an annotation pill per child in the PENDING slot (KD-9).
-    // The active slot's children get their annotation from the abort path (FIX-A).
-    if (pendingSlot) {
-      for (const [, childName] of pendingSlot.children) {
-        this.emitSystemEvent({
-          subagentId: "",
-          subagentName: childName,
-          subagentState: "waiting_for_human",
-          text: `wake-up for ${childName} dismissed`,
-        });
-      }
-    }
-    // Stop the active notice turn if one was running.
-    if (wasActive) {
+      // Active slot — stop the running notice turn.
+      // runNoticeSlotTurn's finally block will clear activeNotice and emitMeta.
       this.stopActiveTurn();
     }
     this.emitMeta();
@@ -1197,7 +1182,6 @@ export class JsonAgentSession {
    *  3. If empty after prune → discard (no LLM turn).
    *  4. Build notice text; synthesize turnId; emit silent user event.
    *  5. Set `activeNotice`; run one turn; clear `activeNotice` in finally.
-   *  6. On abort: emit annotation pill ("wake-up dropped; <child> is still waiting").
    */
   private async runNoticeSlotTurn(): Promise<void> {
     const slot = this.noticeSlot;
@@ -1271,31 +1255,13 @@ export class JsonAgentSession {
       attachments: [],
     };
 
-    // FIX-A: _noticeWasAborted is set by stopActiveTurn() when activeNotice is
-    // non-null (i.e. while we're running). We clear it first so stale state
-    // from a prior aborted turn cannot bleed through. After runOneTurn resolves,
-    // activeAbort is already null (runOneTurn clears it in its own finally), so
-    // we cannot check the signal directly — the flag is the only reliable path.
-    this._noticeWasAborted = false;
+    // Run the notice turn. A dismiss while running aborts it via stopActiveTurn;
+    // runOneTurn suppresses its own "Turn stopped" marker for notice turns.
     try {
       await this.runOneTurn(syntheticTurn);
     } finally {
-      const wasAborted = this._noticeWasAborted;
-      this._noticeWasAborted = false;
       this.activeNotice = null;
       this.emitMeta();
-      if (wasAborted) {
-        // KD-8 — emit annotation pill unconditionally on abort (not just when
-        // !sawResult — a notice turn stopped after result still warrants a note).
-        for (const [, name] of activeSlot.children) {
-          this.emitSystemEvent({
-            subagentId: "",
-            subagentName: name,
-            subagentState: "waiting_for_human",
-            text: `wake-up dropped; ${name} is still waiting`,
-          });
-        }
-      }
     }
   }
 
@@ -1359,11 +1325,26 @@ export class JsonAgentSession {
       // outer loop re-checks both, so a notice slot that arrives while the
       // human queue is draining will still be consumed before we exit.
       while (this.queue.length > 0 || this.noticeSlot) {
+        if (this._promotedNotice && this.noticeSlot) {
+          this._promotedNotice = false;
+          this._abortedSinceLastDrain = false;
+          await this.runNoticeSlotTurn();
+          continue;
+        }
         // Drain the human queue entirely before consuming the notice slot
         // (human turns always take priority — R5b).
         while (this.queue.length > 0) {
+          if (this._promotedNotice && this.noticeSlot) {
+            break;
+          }
           const turn = this.queue.shift()!;
           await this.runOneTurn(turn);
+        }
+        if (this._promotedNotice && this.noticeSlot) {
+          this._promotedNotice = false;
+          this._abortedSinceLastDrain = false;
+          await this.runNoticeSlotTurn();
+          continue;
         }
         // FIX-G: if a user-initiated abort happened during the human queue,
         // skip the notice slot for now — it survives (R14) and fires on the
@@ -1545,7 +1526,8 @@ export class JsonAgentSession {
       // A turn stopped BEFORE it produced its own `result` would otherwise end the
       // transcript with no outcome (e.g. mid-`tool_use`) and replay as truncated.
       // Append a terminal `status` marker so a stopped turn reads as terminal.
-      if (abort.signal.aborted && !sawResult) this.emitStopped(turn.turnId);
+      if (abort.signal.aborted && !sawResult && this.activeNotice === null)
+        this.emitStopped(turn.turnId);
       this.activeAbort = null;
       this.activeForkFromChatId = undefined;
       this.clearTurnPids();

@@ -1884,6 +1884,19 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     return reply.status(204).send();
   });
 
+  // POST /sessions/:id/chat/promote-notice — run pending notice slot immediately
+  // (subagent-ux-v2). Idempotent: 204 whether or not a slot exists. 404 if the
+  // session is not found or is not a JSON session.
+  app.post("/sessions/:id/chat/promote-notice", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const ctx = findJsonSessionContext(id);
+    if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    const agent = jsonAgentRegistry.get(id);
+    if (!agent) return reply.status(204).send();
+    agent.promoteNoticeSlot();
+    return reply.status(204).send();
+  });
+
   // POST /sessions/:id/chat/stop — abort the ACTIVE turn, keep queued turns
   // (Decision 8/13). No-op (200) when only queued turns exist; 409 when no JSON
   // agent has ever run for this session.

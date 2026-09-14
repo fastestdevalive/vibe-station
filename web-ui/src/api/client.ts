@@ -1049,6 +1049,14 @@ export function createClientApi() {
       });
     },
 
+    /** "Send now" on notice slot — preempt: run notice turn immediately and interrupt current active turn. */
+    async promoteNotice(sessionId: string): Promise<void> {
+      const root = baseUrl();
+      await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/promote-notice`, {
+        method: "POST",
+      });
+    },
+
     /** Cancel a single not-yet-started queued turn. */
     async cancelQueuedTurn(sessionId: string, turnId: string): Promise<{ ok: true }> {
       const root = baseUrl();

@@ -42,6 +42,8 @@ export interface QueuedTrayProps {
   noticeSlot?: NoticeSlotInfo;
   /** Called when the user clicks Dismiss on the notice slot row. */
   onDismissNotice?: () => void;
+  /** Called when the user clicks Send now on the notice slot row. */
+  onSendNoticeNow?: () => void;
 }
 
 /**
@@ -66,6 +68,7 @@ export function QueuedTray({
   commands,
   noticeSlot,
   onDismissNotice,
+  onSendNoticeNow,
 }: QueuedTrayProps) {
   const [focusedIndex, setFocusedIndex] = useState(0);
   const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -104,22 +107,32 @@ export function QueuedTray({
         }
       }}
     >
-      {noticeSlot ? (() => {
+      {noticeSlot && !noticeSlot.running ? (() => {
         const names = Object.values(noticeSlot.children);
         const label = names.length === 0
           ? "Checking on subagent…"
           : names.length === 1
-          ? `Waking parent — ${names[0]} waiting for agent`
-          : `Waking parent — ${names.join(", ")} waiting for agent`;
+          ? `Will wake parent when idle — ${names[0]}`
+          : `Will wake parent when idle — ${names.join(", ")}`;
         return (
           <div
             key="__notice__"
             className="chat-queued-tray__row chat-queued-tray__row--notice"
+            style={{ opacity: 0.7 }}
             role="listitem"
             aria-label={label}
           >
             <div className="chat-queued-tray__text">{label}</div>
             <div className="chat-queued-tray__actions">
+              <button
+                type="button"
+                className="chat-queued-tray__action"
+                aria-label="Send now"
+                title="Send now (interrupts the current turn)"
+                onClick={() => onSendNoticeNow?.()}
+              >
+                ⏭
+              </button>
               <button
                 type="button"
                 className="chat-queued-tray__action"

@@ -320,6 +320,9 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             onDismissNotice={() => {
               if (sessionId) void api.dismissNotice(sessionId);
             }}
+            onSendNoticeNow={() => {
+              if (sessionId) void api.promoteNotice(sessionId);
+            }}
           />
         ) : null}
         <StatusBar

@@ -142,12 +142,20 @@ describe("QueuedTray", () => {
     expect(listItems[0]!.textContent).toContain("Worker");
   });
 
-  it("V3c — notice row has no Edit / Send-now; only Dismiss is present", () => {
+  it("notice row has Send now and Dismiss, but no Edit", () => {
     const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
     renderTray([], { noticeSlot });
     expect(screen.queryByLabelText("Edit queued message")).toBeNull();
-    expect(screen.queryByLabelText("Send now")).toBeNull();
+    expect(screen.getByLabelText("Send now")).toBeTruthy();
     expect(screen.getByLabelText("Dismiss wake-up")).toBeTruthy();
+  });
+
+  it("clicking Send now on the notice row calls onSendNoticeNow", () => {
+    const onSendNoticeNow = vi.fn();
+    const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
+    renderTray([], { noticeSlot, onSendNoticeNow });
+    fireEvent.click(screen.getByLabelText("Send now"));
+    expect(onSendNoticeNow).toHaveBeenCalledOnce();
   });
 
   it("V3d — clicking Dismiss on the notice row calls onDismissNotice", () => {
@@ -156,5 +164,22 @@ describe("QueuedTray", () => {
     renderTray([], { noticeSlot, onDismissNotice });
     fireEvent.click(screen.getByLabelText("Dismiss wake-up"));
     expect(onDismissNotice).toHaveBeenCalledOnce();
+  });
+
+  it("hides the notice row when noticeSlot.running === true", () => {
+    const noticeSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: true };
+    renderTray([], { noticeSlot });
+    expect(screen.queryByRole("listitem")).toBeNull();
+  });
+
+  it("renders label 'Will wake parent when idle — <names>' correctly for single and plural", () => {
+    const singleSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
+    const { unmount } = renderTray([], { noticeSlot: singleSlot });
+    expect(screen.getByText("Will wake parent when idle — Worker")).toBeTruthy();
+    unmount();
+
+    const pluralSlot: NoticeSlotInfo = { children: { "c1": "Worker", "c2": "Reviewer" }, running: false };
+    renderTray([], { noticeSlot: pluralSlot });
+    expect(screen.getByText("Will wake parent when idle — Worker, Reviewer")).toBeTruthy();
   });
 });

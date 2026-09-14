@@ -1058,7 +1058,7 @@ describe("dismiss-notice — agent-level (V2a/V2b)", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("V2a — dismiss with slot: clears slot + emits annotation pill per child", async () => {
+  it("V2a — dismiss with slot: clears slot silently without annotation pills", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { getProject } = await import("../state/project-store.js");
     const { plugin } = makeGatePlugin();
@@ -1074,13 +1074,37 @@ describe("dismiss-notice — agent-level (V2a/V2b)", () => {
     // Slot must be cleared.
     expect(agent.getMeta().noticeSlot).toBeUndefined();
 
-    // Annotation pill emitted (transcript append-only, KD-9).
+    // No annotation pill emitted.
     const transcript = agent.readTranscript();
     const dismissPill = transcript.find(
       (e) => e.kind === "message_generated" && typeof e.text === "string" && e.text.includes("dismissed"),
     );
-    expect(dismissPill).toBeDefined();
-    expect(dismissPill?.subagentName).toBe("WorkerV2a");
+    expect(dismissPill).toBeUndefined();
+
+    await agent.release();
+  });
+
+  it("promoteNoticeSlot immediately runs the notice slot turn", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const { plugin, release: releaseTurn } = makeGatePlugin();
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+    const agent = new JsonAgentSession({ project, worktree: null, session, plugin, daemonPort: 0, cli: "claude" });
+
+    agent.populateNoticeSlot("child-promote", "WorkerPromote");
+    expect(agent.getMeta().noticeSlot).toBeDefined();
+
+    agent.promoteNoticeSlot();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Notice turn should now be running!
+    expect(agent.getMeta().noticeSlot?.running).toBe(true);
+
+    releaseTurn(0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    // Notice turn should complete and clear the slot
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
 
     await agent.release();
   });

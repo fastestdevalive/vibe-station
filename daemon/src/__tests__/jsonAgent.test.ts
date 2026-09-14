@@ -1495,7 +1495,7 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     await agent.release();
   });
 
-  it("V1: dismissNoticeSlot emits annotation pill and clears slot", async () => {
+  it("V1: dismissNoticeSlot clears slot silently without annotation pills", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { getProject } = await import("../state/project-store.js");
     const session = getProject(PROJECT_ID)!.directSessions[0]!;
@@ -1516,20 +1516,16 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     agent.dismissNoticeSlot();
 
     expect(agent.getMeta().noticeSlot).toBeUndefined();
-    // Annotation pill should have been emitted.
+    // No annotation pill should have been emitted.
     const pills = (broadcast as Array<Record<string, unknown>>).filter(
       (e) => e.kind === "message_generated",
     );
-    expect(pills.length).toBeGreaterThan(0);
-    const pill = pills[0]!;
-    expect(pill.text as string).toContain("dismissed");
+    expect(pills.length).toBe(0);
 
     await agent.release();
   });
 
-  it("FIX-A: aborting the notice slot turn emits 'wake-up dropped' annotation pill", async () => {
-    // FIX-A verifies that snapshot of AbortController before runOneTurn correctly
-    // detects the abort in runNoticeSlotTurn's finally block.
+  it("aborting the notice slot turn suppresses 'wake-up dropped' pill and emitStopped", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { getProject } = await import("../state/project-store.js");
     const session = getProject(PROJECT_ID)!.directSessions[0]!;
@@ -1581,18 +1577,81 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     // Wait for the turn to unwind.
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
-    // FIX-A: the abort annotation pill ("wake-up dropped") must have been emitted.
+    // No abort annotation pill should have been emitted.
     const pills = (broadcast as Array<Record<string, unknown>>).filter(
       (e) => e.kind === "message_generated",
     );
-    const droppedPill = pills.find((p) => (p.text as string)?.includes("wake-up dropped"));
-    expect(droppedPill).toBeDefined();
-    expect(droppedPill?.subagentName).toBe("TestWorker");
+    expect(pills.length).toBe(0);
+
+    // Turn stopped marker must be suppressed for notice turns.
+    const stoppedEvents = (broadcast as Array<Record<string, unknown>>).filter(
+      (e) => e.kind === "status" && e.status === "stopped",
+    );
+    expect(stoppedEvents.length).toBe(0);
 
     // Slot must be cleared after the turn unwinds.
     expect(agent.getMeta().noticeSlot).toBeUndefined();
 
     resolveAbort?.(); // unblock in case it's still running
+    await agent.release();
+  });
+
+  it("dismissNoticeSlot while notice turn is running stops turn and suppresses emitStopped", async () => {
+    const { JsonAgentSession } = await import("../services/jsonAgent.js");
+    const { getProject } = await import("../state/project-store.js");
+    const session = getProject(PROJECT_ID)!.directSessions[0]!;
+
+    let resolveAbort!: () => void;
+    const blockingPlugin: AgentPlugin = {
+      name: "claude",
+      defaultModel: "sonnet",
+      promptDelivery: "inline",
+      async listModels() { return { models: [] }; },
+      getLaunchCommand() { return ["claude"]; },
+      getEnvironment() { return {}; },
+      getReadySignal() { return { fallbackMs: 0 }; },
+      composeLaunchPrompt() { return {}; },
+      supportsJson() { return true; },
+      async *runTurn(_input, _ctx, signal) {
+        await new Promise<void>((resolve) => {
+          resolveAbort = resolve;
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    } as unknown as AgentPlugin;
+
+    const agent = new JsonAgentSession({
+      project,
+      worktree: null,
+      session,
+      plugin: blockingPlugin,
+      daemonPort: 0,
+      cli: "claude",
+    });
+
+    const broadcast: unknown[] = [];
+    agent.stream.on("message", (ev) => broadcast.push(ev));
+
+    agent.populateNoticeSlot("child-dismiss-active", "TestWorker2");
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    expect(agent.getMeta().noticeSlot?.running).toBe(true);
+
+    agent.dismissNoticeSlot();
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    const pills = (broadcast as Array<Record<string, unknown>>).filter(
+      (e) => e.kind === "message_generated",
+    );
+    expect(pills.length).toBe(0);
+
+    const stoppedEvents = (broadcast as Array<Record<string, unknown>>).filter(
+      (e) => e.kind === "status" && e.status === "stopped",
+    );
+    expect(stoppedEvents.length).toBe(0);
+
+    expect(agent.getMeta().noticeSlot).toBeUndefined();
+
+    resolveAbort?.();
     await agent.release();
   });
 
