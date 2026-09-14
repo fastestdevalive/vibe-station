@@ -1,0 +1,13 @@
+feature: instant-draft-agent
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-131
+master:
+  prd: complete
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: ~
+    awaiting_phase: ~
+    awaiting_artifact: ~

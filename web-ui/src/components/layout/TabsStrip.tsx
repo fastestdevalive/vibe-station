@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { ancestorIds } from "@/components/chat/SubagentRow";
 import { motion } from "framer-motion";
 import { createPortal } from "react-dom";
@@ -20,11 +21,10 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
-import { sessionLabel } from "@/lib/sessionLabel";
+import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
-import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
@@ -101,6 +101,7 @@ function SortableTab({ id, children }: SortableTabProps) {
 }
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
+  const navigate = useNavigate();
   const isAgent = kind === "agent";
   const isProject = scope === "project";
   const fsTarget: WorkspacePaneFullscreen = isAgent ? "agent" : "terminal";
@@ -605,7 +606,8 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
               // mirrors the daemon's own eligibility check exactly.
               const closeable =
                 !s.isMain || orderedSessions.filter((x) => x.archivedAt == null).length > 1;
-              const label = sessionLabel(s);
+              const isDraft = s.lifecycleState === "drafting" || s.state === "drafting";
+              const label = isDraft ? (s.name?.trim() || draftLabel(s.draftPrompt)) : sessionLabel(s);
               const isRenaming = renamingId === s.id;
               const archived = s.archivedAt != null;
               return (
@@ -621,6 +623,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       data-active={active}
                       data-closeable={closeable ? "true" : undefined}
                       data-archived={archived ? "true" : undefined}
+                      data-draft={isDraft ? "true" : undefined}
                       className="tab"
                       onClick={() => {
                         if (!isRenaming) setActiveSession(s.id);
@@ -728,7 +731,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                         ) : (
                           label
                         )}
-                        {isAgent ? (
+                        {isAgent && !isDraft ? (
                           <span
                             className="tab__channel-icon"
                             aria-hidden
@@ -737,6 +740,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                             {s.channel === "json" ? "💬" : "⌨"}
                           </span>
                         ) : null}
+                        {isDraft ? <span className="draft-chip">Draft</span> : null}
                         {archived ? (
                           <span className="tab__archived-badge" title="This session has been archived">
                             Archived
@@ -768,22 +772,31 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           type="button"
           className="tab tab--new"
           aria-label={isAgent ? "New agent" : "New terminal"}
-          onClick={() => setNewOpen(true)}
+          onClick={() => {
+            if (isAgent) {
+              if (!worktreeId) return;
+              void api
+                .createDraftSession({
+                  target: "worktree",
+                  worktreeId,
+                  type: "agent",
+                  draftConfig: { entryPoint: "tab" },
+                })
+                .then((s) => setActiveSession(s.id))
+                .catch(() => {
+                  /* surface later */
+                });
+            } else {
+              setNewOpen(true);
+            }
+          }}
         >
           <Plus size={14} />
         </button>
       </div>
       <PaneTools fsTarget={fsTarget} onCloseDock={!isAgent ? () => toggleTerminalDock() : undefined} />
 
-      {isAgent ? (
-        <NewAgentTabDialog
-          open={newOpen}
-          api={api}
-          worktreeId={worktreeId ?? ""}
-          onClose={() => setNewOpen(false)}
-          onCreated={() => {}}
-        />
-      ) : (
+      {isAgent ? null : (
         <NewTerminalDialog
           open={newOpen}
           api={api}
@@ -796,33 +809,49 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
 
       <ConfirmDialog
         open={!!terminateTarget}
-        title={isAgent ? "Terminate agent?" : "Terminate terminal?"}
-        message={
-          // Decision 5 — a cascade would kill work the user can still see and
-          // use, so the dialog says explicitly that subagents survive. This is
-          // APPENDED to (not substituted for) the main-session sentence below,
-          // which the user still needs in order to know what becomes main.
-          (terminateTargetSubagents.length > 0
-            ? `This session has ${terminateTargetSubagents.length === 1 ? "a live subagent" : `${terminateTargetSubagents.length} live subagents`} (${terminateTargetSubagents.map((s) => sessionLabel(s)).join(", ")}). Terminating it will NOT stop them — they'll keep running. `
-            : "") +
-          (isAgent && terminateTarget?.isMain
-              ? // Client-side prediction only (display purposes) — mirrors the
-                // daemon's own eligibility rule (lowest sortOrder, type "agent",
-                // not archived); the daemon's own selection at commit time is
-                // authoritative and may differ in a rare race (Risk 3).
-                (() => {
-                  const candidate = orderedSessions
-                    .filter((s) => s.id !== terminateTarget.id && s.archivedAt == null)
-                    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
-                  return candidate
-                    ? `Terminate this agent session? "${sessionLabel(candidate)}" will become the new main session.`
-                    : "Terminate this agent session?";
-                })()
-              : isAgent
-                ? "Terminate this agent session?"
-                : "Terminate this terminal?")
+        title={
+          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+            ? "Discard draft?"
+            : isAgent
+              ? "Terminate agent?"
+              : "Terminate terminal?"
         }
-        confirmLabel={terminateTargetSubagents.length > 0 ? "Detach subagents & terminate" : "Terminate"}
+        message={
+          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+            ? terminateTarget.name?.trim() || terminateTarget.draftPrompt?.trim()
+              ? `Discard draft “${terminateTarget.name?.trim() || draftLabel(terminateTarget.draftPrompt)}”? The draft prompt and settings will be removed.`
+              : "Discard this draft? The draft prompt and settings will be removed."
+            : // Decision 5 — a cascade would kill work the user can still see and
+              // use, so the dialog says explicitly that subagents survive. This is
+              // APPENDED to (not substituted for) the main-session sentence below,
+              // which the user still needs in order to know what becomes main.
+              (terminateTargetSubagents.length > 0
+                ? `This session has ${terminateTargetSubagents.length === 1 ? "a live subagent" : `${terminateTargetSubagents.length} live subagents`} (${terminateTargetSubagents.map((s) => sessionLabel(s)).join(", ")}). Terminating it will NOT stop them — they'll keep running. `
+                : "") +
+              (isAgent && terminateTarget?.isMain
+                ? // Client-side prediction only (display purposes) — mirrors the
+                  // daemon's own eligibility rule (lowest sortOrder, type "agent",
+                  // not archived); the daemon's own selection at commit time is
+                  // authoritative and may differ in a rare race (Risk 3).
+                  (() => {
+                    const candidate = orderedSessions
+                      .filter((s) => s.id !== terminateTarget.id && s.archivedAt == null)
+                      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0];
+                    return candidate
+                      ? `Terminate this agent session? "${sessionLabel(candidate)}" will become the new main session.`
+                      : "Terminate this agent session?";
+                  })()
+                : isAgent
+                  ? "Terminate this agent session?"
+                  : "Terminate this terminal?")
+        }
+        confirmLabel={
+          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+            ? "Discard"
+            : terminateTargetSubagents.length > 0
+              ? "Detach subagents & terminate"
+              : "Terminate"
+        }
         onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
           if (terminateTarget) {

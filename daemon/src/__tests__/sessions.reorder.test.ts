@@ -169,4 +169,31 @@ describe("PATCH /sessions/:id/reorder", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json<{ sortOrder: number }>().sortOrder).toBe(-3.5);
   });
+
+  it("works for a global draft session", async () => {
+    const draftRes = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: {
+        state: "drafting",
+        target: "global",
+        type: "agent",
+        draftConfig: { modeId: "bug-fix" },
+      },
+    });
+    const draftId = draftRes.json<{ id: string }>().id;
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/sessions/${draftId}/reorder`,
+      payload: { sortOrder: 42.5 },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ ok: boolean; sortOrder: number }>().sortOrder).toBe(42.5);
+
+    const listRes = await app.inject({ method: "GET", url: "/sessions" });
+    const list = listRes.json<Array<{ id: string; sortOrder: number }>>();
+    const updated = list.find((s) => s.id === draftId);
+    expect(updated?.sortOrder).toBe(42.5);
+  });
 });

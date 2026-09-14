@@ -209,7 +209,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const status = sessionStatus(sessionStates[s.id] ?? s.state);
       const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
       const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
-      const proj = projectById[s.projectId];
+      const proj = s.projectId != null ? projectById[s.projectId] : undefined;
       if (!wt) {
         // Direct (worktree-less) session — no worktree context to show, no
         // dismiss affordance (nothing to dismiss).

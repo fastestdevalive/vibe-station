@@ -1,0 +1,224 @@
+.draft-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-primary);
+}
+
+/* Shown while a Tier 1 draft session is still syncing from the daemon after a
+   hard refresh. Rendered in place of the full form so the form (and its
+   SkillEditor) only mounts once the restored draft is available. */
+.draft-composer--loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.draft-composer--loading::after {
+  content: "Loading draft…";
+}
+
+.draft-composer__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-6);
+  padding-bottom: var(--space-12, 48px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 640px;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.draft-composer__spacer {
+  flex: 1;
+  min-height: var(--space-10, 40px);
+}
+
+.draft-composer__discard {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.draft-composer__discard:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.draft-composer__hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-8);
+}
+
+.draft-composer__appname {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+.draft-composer__appversion {
+  opacity: 0.6;
+}
+
+.draft-composer__logo {
+  width: 48px;
+  height: 48px;
+  opacity: 0.85;
+}
+
+.draft-composer__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--fg-primary);
+  text-align: center;
+  margin: 0;
+}
+
+.draft-composer__fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.draft-composer__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.draft-composer__field-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--fg-secondary);
+  margin-bottom: var(--space-1);
+}
+
+.draft-composer__mode-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.draft-composer__mode-row .draft-composer__new-mode {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.draft-composer__radio-row {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.draft-composer__radio-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.draft-composer__checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  user-select: none;
+  margin-top: var(--space-2);
+}
+
+.draft-composer__hint {
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  margin-top: var(--space-1);
+}
+
+.draft-composer__project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  width: fit-content;
+}
+
+.draft-composer__project-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.draft-composer__project-clear:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.draft-composer__detach-worktree {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.draft-composer__detach-worktree:hover {
+  text-decoration: underline;
+}
+
+.draft-composer__bar {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+
+.draft-composer__error {
+  background: var(--destructive-muted);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  color: var(--destructive-soft);
+  font-size: var(--font-size-sm);
+  margin-bottom: var(--space-3);
+}
+

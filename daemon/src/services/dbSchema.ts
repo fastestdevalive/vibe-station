@@ -118,7 +118,24 @@ export function ensureSchema(db: Database): void {
       startedAt  TEXT,
       port       INTEGER
     );
+
+    -- global_drafts: server-persisted drafts with no project assigned yet.
+    -- No FK to projects — that is the whole point (sessions.projectId is NOT NULL
+    -- and FK-enforced; we cannot store project-less rows there).
+    CREATE TABLE IF NOT EXISTS global_drafts (
+      id         TEXT PRIMARY KEY,
+      draftPrompt TEXT,
+      draftConfig TEXT,
+      createdAt  TEXT NOT NULL
+    );
   `);
+
+  // global_drafts: backfill name / nameSource columns onto instances that
+  // already have the table without them (see the worktrees column comment
+  // above — CREATE TABLE IF NOT EXISTS never retrofits columns).
+  addColumnIfMissing(db, "global_drafts", "name", "TEXT");
+  addColumnIfMissing(db, "global_drafts", "nameSource", "TEXT");
+  addColumnIfMissing(db, "global_drafts", "sortOrder", "REAL");
 
   // `CREATE TABLE IF NOT EXISTS` above is a no-op against a `worktrees` table
   // that already exists from before this column was introduced (every

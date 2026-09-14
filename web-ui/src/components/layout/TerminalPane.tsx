@@ -162,8 +162,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
 
     // Make http:// and https:// URLs clickable — opens in system browser (Tauri) or new tab (browser dev)
     term.loadAddon(new WebLinksAddon((_, url) => {
-      if (/^https?:/.test(url) && typeof (window as any).__TAURI_INTERNALS__ !== 'undefined') {
-        (window as any).__TAURI_INTERNALS__.invoke('plugin:shell|open', { path: url, openWith: null }).catch(() => {
+      const tauri = (window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown> } }).__TAURI_INTERNALS__;
+      if (/^https?:/.test(url) && typeof tauri !== 'undefined') {
+        tauri.invoke('plugin:shell|open', { path: url, openWith: null }).catch(() => {
           window.open(url, '_blank', 'noopener,noreferrer');
         });
       } else {

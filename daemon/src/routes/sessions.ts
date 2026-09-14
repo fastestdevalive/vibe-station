@@ -1,6 +1,15 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
-import { getAllProjects, getProject, mutateProject } from "../state/project-store.js";
+import {
+  getAllProjects,
+  getProject,
+  mutateProject,
+  getAllGlobalDrafts,
+  addGlobalDraft,
+  updateGlobalDraft,
+  removeGlobalDraft,
+  type GlobalDraftRow,
+} from "../state/project-store.js";
 import { generateSessionId, tmuxNameForSession } from "../services/sessionId.js";
 import { slugifyPrompt } from "../services/naming.js";
 import { forceCloseSessionStreams } from "../broadcaster.js";
@@ -40,6 +49,7 @@ import {
   resolveJsonAgent,
 } from "../services/jsonAgentChat.js";
 import { resolveCliModels } from "./modes.js";
+import { serializeWorktree } from "./worktrees.js";
 import { getAttachment } from "../state/attachmentRegistry.js";
 import { releaseSessionRuntime } from "../services/sessionRuntime.js";
 import type { SessionRecord, WorktreeRecord, ProjectRecord, Channel, Attachment, SessionMeta, DraftConfig } from "../types.js";
@@ -95,7 +105,7 @@ const CreateSessionBody = z.union([WorktreeSessionBody, DirectSessionBody]);
 // but advisory — the project is derived from worktreeId/projectId below.
 const CreateDraftSessionBody = z
   .object({
-    target: z.enum(["worktree", "direct"]).optional(),
+    target: z.enum(["worktree", "direct", "global"]).optional(),
     projectId: z.string().min(1).optional(),
     worktreeId: z.string().min(1).optional(),
     type: z.enum(["agent", "terminal"]),
@@ -103,8 +113,8 @@ const CreateDraftSessionBody = z
     draftPrompt: z.string().optional(),
     draftConfig: z.any().optional(),
   })
-  .refine((b) => b.projectId != null || b.worktreeId != null, {
-    message: "projectId or worktreeId is required for draft sessions",
+  .refine((b) => b.target === "global" || b.projectId != null || b.worktreeId != null, {
+    message: "projectId or worktreeId is required for non-global draft sessions",
   });
 
 const ResetBody = z.object({
@@ -175,7 +185,8 @@ const ForkBody = z
 
 type SessionContext =
   | { kind: "worktree"; project: ProjectRecord; worktree: WorktreeRecord; session: SessionRecord }
-  | { kind: "direct"; project: ProjectRecord; session: SessionRecord };
+  | { kind: "direct"; project: ProjectRecord; session: SessionRecord }
+  | { kind: "global"; row: GlobalDraftRow };
 
 function findSessionContext(sessionId: string): SessionContext | null {
   for (const project of getAllProjects()) {
@@ -188,6 +199,8 @@ function findSessionContext(sessionId: string): SessionContext | null {
     const directSession = project.directSessions.find((s) => s.id === sessionId);
     if (directSession) return { kind: "direct", project, session: directSession };
   }
+  const globalRow = getAllGlobalDrafts().find((r) => r.id === sessionId);
+  if (globalRow) return { kind: "global", row: globalRow };
   return null;
 }
 
@@ -221,6 +234,9 @@ async function releaseIfRetiredDuringSpawn(sessionId: string): Promise<boolean> 
   // Gone entirely (dismissed mid-spawn) — nothing left to write to, but the
   // spawn may still have produced a pane after DELETE's teardown ran.
   if (!ctx) return true;
+  // A global draft never spawns a runtime, so it can never be "retired during
+  // spawn" — treat it as not-retired (caller proceeds as normal).
+  if (ctx.kind === "global") return false;
   if (ctx.session.lifecycle.state !== "done") return false;
   await releaseSessionRuntime(ctx.session);
   return true;
@@ -430,6 +446,34 @@ export function serializeSession(worktreeId: string | null, projectId: string, s
   };
 }
 
+export function serializeGlobalDraft(row: GlobalDraftRow) {
+  return {
+    id: row.id,
+    worktreeId: null,
+    projectId: null,
+    isMain: false,
+    type: "agent" as const,
+    modeId: null,
+    name: row.name ?? null,
+    nameSource: row.nameSource ?? null,
+    tmuxName: `__draft__-${row.id}`,
+    useTmux: false,
+    channel: "json",
+    state: "drafting" as const,
+    lifecycleState: "drafting" as const,
+    createdAt: row.createdAt,
+    pinnedAt: null,
+    archivedAt: null,
+    sortOrder: row.sortOrder ?? new Date(row.createdAt).getTime(),
+    handoffSummary: null,
+    parentSessionId: null,
+    supersededBy: null,
+    pr: null,
+    draftPrompt: row.draftPrompt ?? null,
+    draftConfig: row.draftConfig ? (JSON.parse(row.draftConfig) as DraftConfig) : null,
+  };
+}
+
 export function registerSessionRoutes(app: FastifyInstance): void {
   // GET /sessions?worktree=:id or GET /sessions?project=:id or GET /sessions (all)
   app.get("/sessions", async (req, reply) => {
@@ -452,12 +496,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       return reply.send([...worktreeSessions, ...directSessions]);
     }
 
-    // Return all sessions (worktree + direct) across all projects
+    // Return all sessions (worktree + direct) across all projects, then global drafts
     const all = getAllProjects().flatMap((p) => [
       ...p.worktrees.flatMap((w) => w.sessions.map((s) => serializeSession(w.id, p.id, s))),
       ...p.directSessions.map((s) => serializeSession(null, p.id, s)),
     ]);
-    return reply.send(all);
+    const globalDrafts = getAllGlobalDrafts().map(serializeGlobalDraft);
+    return reply.send([...all, ...globalDrafts]);
   });
 
   // GET /worktrees/:worktreeId/next-terminal-name — the default name the next
@@ -479,6 +524,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     if (ctx.kind === "worktree") {
       return reply.send(serializeSession(ctx.worktree.id, ctx.project.id, ctx.session));
     }
+    if (ctx.kind === "global") {
+      return reply.send(serializeGlobalDraft(ctx.row));
+    }
     return reply.send(serializeSession(null, ctx.project.id, ctx.session));
   });
 
@@ -488,6 +536,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { lines } = req.query as { lines?: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.send({ id, output: "" });
     const n = Math.min(Math.max(parseInt(lines ?? "100", 10) || 100, 1), 10000);
 
     // A Rich Chat (json) session has NEITHER a tmux pane NOR a direct-PTY
@@ -555,6 +604,39 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         return reply.status(400).send({ error: "Validation error", details: draftResult.error.issues });
       }
       const draftData = draftResult.data;
+
+      // Global draft — no project yet; stored in global_drafts table.
+      if (draftData.target === "global") {
+        const sessionId = generateSessionId("global", draftData.type);
+        const now = new Date().toISOString();
+        const draftConfig = draftData.draftConfig as DraftConfig | undefined;
+        const row: GlobalDraftRow = {
+          id: sessionId,
+          draftPrompt: draftData.draftPrompt ?? null,
+          draftConfig: draftConfig ? JSON.stringify(draftConfig) : null,
+          name: null,
+          nameSource: null,
+          sortOrder: Date.now(),
+          createdAt: now,
+        };
+        addGlobalDraft(row);
+        const serialized = serializeGlobalDraft(row);
+        // The WS `session:created` schema types projectId as `string | undefined`
+        // (it predates project-less drafts), but the web-ui's useServerSync
+        // identifies a global draft by `projectId === null` — so emit null at
+        // runtime and cast past the narrower schema type.
+        broadcastAll({
+          type: "session:created",
+          sessionId,
+          projectId: null as unknown as string | undefined,
+          worktreeId: null,
+          sessionType: draftData.type,
+          mode: undefined,
+          parentSessionId: null,
+          snapshot: serialized as never,
+        });
+        return reply.status(201).send(serialized);
+      }
 
       // Derive projectId from request
       let derivedProjectId: string | undefined;
@@ -645,7 +727,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     let inheritedChannel: Channel | undefined;
     if (data.sourceAgentId) {
       const sourceCtx = findSessionContext(data.sourceAgentId);
-      if (sourceCtx) {
+      if (sourceCtx && sourceCtx.kind !== "global") {
         if (!modeId && sourceCtx.session.modeId) modeId = sourceCtx.session.modeId;
         if (data.channel === undefined && sourceCtx.session.channel) inheritedChannel = sourceCtx.session.channel;
       }
@@ -989,8 +1071,22 @@ export function registerSessionRoutes(app: FastifyInstance): void {
   // DELETE /sessions/:id
   app.delete("/sessions/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
+    // Global draft: no process, no data dir — just remove the row.
+    const maybeGlobal = getAllGlobalDrafts().find((r) => r.id === id);
+    if (maybeGlobal) {
+      const removed = removeGlobalDraft(id);
+      if (!removed) return reply.status(404).send({ error: `Session '${id}' not found` });
+      broadcastAll({ type: "session:deleted", sessionId: id });
+      return reply.send({ ok: true });
+    }
+
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    // Global drafts are handled by the pre-check above — by the time we reach
+    // here the context is always worktree/direct. Guard for the type checker.
+    if (ctx.kind === "global") {
+      return reply.status(404).send({ error: `Session '${id}' not found` });
+    }
 
     const { project, session } = ctx;
 
@@ -1136,6 +1232,28 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") {
+      const { draftPrompt, draftConfig } = parsed.data;
+      let derivedName: string | null = null;
+      if (draftPrompt && draftPrompt.trim()) {
+        const slug = slugifyPrompt(draftPrompt, 5);
+        derivedName = slug || null;
+      }
+      const shouldRename = !!derivedName && ctx.row.nameSource !== "user";
+      const patch: { draftPrompt?: string; draftConfig?: string; name?: string; nameSource?: string } = {};
+      if (draftPrompt !== undefined) patch.draftPrompt = draftPrompt;
+      if (draftConfig !== undefined) patch.draftConfig = JSON.stringify(draftConfig);
+      if (shouldRename) { patch.name = derivedName!; patch.nameSource = "auto"; }
+      updateGlobalDraft(id, patch);
+      broadcastAll({
+        type: "session:updated",
+        sessionId: id,
+        draftPrompt: draftPrompt !== undefined ? draftPrompt : undefined,
+        draftConfig: draftConfig !== undefined ? draftConfig : undefined,
+        ...(shouldRename ? { name: derivedName } : {}),
+      });
+      return reply.send({ ok: true, ...(shouldRename ? { name: derivedName } : {}) });
+    }
     if (ctx.session.lifecycle.state !== "drafting") {
       return reply.status(403).send({ error: "Session is not in drafting state" });
     }
@@ -1219,6 +1337,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") {
+      return reply.status(400).send({ error: "A global draft must have a project selected before it can be started" });
+    }
     if (ctx.session.lifecycle.state !== "drafting") {
       return reply.status(403).send({ error: "Session is not in drafting state" });
     }
@@ -1301,7 +1422,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         ),
       }));
 
-      broadcastAll({ type: "worktree:created", worktree: newWorktree as unknown as Record<string, unknown> });
+      broadcastAll({ type: "worktree:created", worktree: serializeWorktree(project.id, newWorktree) as unknown as Record<string, unknown> });
       broadcastAll({ type: "session:updated", sessionId: id, worktreeId: wtId, isMain: true });
       broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
 
@@ -1409,6 +1530,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
 
     const already = ctx.session.pinnedAt != null;
     if (already === pinned) {
@@ -1458,6 +1580,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
 
     const value = parsed.data.name.trim() === "" ? null : parsed.data.name.trim().slice(0, 60);
     const patchSession = (s: SessionRecord): SessionRecord => {
@@ -1498,6 +1621,11 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") {
+      updateGlobalDraft(id, { sortOrder: parsed.data.sortOrder });
+      broadcastAll({ type: "session:updated", sessionId: id, sortOrder: parsed.data.sortOrder });
+      return reply.send({ ok: true, sortOrder: parsed.data.sortOrder });
+    }
 
     const value = parsed.data.sortOrder;
     const patchSession = (s: SessionRecord): SessionRecord => (s.id !== id ? s : { ...s, sortOrder: value });
@@ -1525,6 +1653,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: "session_not_found" });
+    if (ctx.kind === "global") return reply.status(404).send({ error: "session_not_found" });
     if (ctx.session.archivedAt) return reply.status(400).send({ error: "session_archived" });
 
     await mutateProject(ctx.project.id, (p) => {
@@ -1562,6 +1691,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
     if (ctx.session.type !== "agent") {
       return reply.status(400).send({ error: "Only agent sessions can be marked done." });
     }
@@ -1616,6 +1746,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") {
+      return reply.status(400).send({ error: "Session is not running — start a new session instead" });
+    }
 
     // Bug 4 fix: an archived session is displayed read-only by the UI — never
     // let a live agent process spawn/run against a row that's supposed to be
@@ -1871,6 +2004,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
     const { session, project } = ctx;
     if (session.type !== "agent") {
       return reply.status(400).send({ error: "Reset only applies to agent sessions" });
@@ -2069,6 +2203,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
     if (ctx.session.type !== "agent") {
       return reply.status(400).send({ error: "Handoff only applies to agent sessions" });
     }
@@ -2089,6 +2224,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
 
     const result = InputBody.safeParse(req.body);
     if (!result.success) {
@@ -2209,6 +2345,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // let a chat turn spawn/run a live agent process against it.
     const preChatCtx = findSessionContext(id);
     if (!preChatCtx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (preChatCtx.kind === "global") {
+      return reply.status(404).send({ error: `Session '${id}' not found` });
+    }
     if (preChatCtx.session.archivedAt) {
       return reply.status(400).send({ error: "Session is archived — start a new session instead" });
     }
@@ -2421,7 +2560,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     // moving the session out of `done`. Refuse instead; sending a message is
     // the deliberate way to bring a done session back.
     const modelCtx = findSessionContext(id);
-    if (modelCtx?.session.lifecycle.state === "done") {
+    if (modelCtx && modelCtx.kind !== "global" && modelCtx.session.lifecycle.state === "done") {
       return reply.status(409).send({
         error: "Session is done — send a message to resume it before switching model.",
       });
@@ -2570,6 +2709,7 @@ export function registerSessionRoutes(app: FastifyInstance): void {
 
     const ctx = findSessionContext(id);
     if (!ctx) return reply.status(404).send({ error: `Session '${id}' not found` });
+    if (ctx.kind === "global") return reply.status(404).send({ error: `Session '${id}' not found` });
     const { project, session } = ctx;
 
     if (session.type !== "agent") {

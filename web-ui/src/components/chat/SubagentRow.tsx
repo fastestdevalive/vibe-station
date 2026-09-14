@@ -13,6 +13,7 @@ const MAX_ROWS = 5;
 /** Mirrors `sessionStateToStatus` in LeftSidebar.tsx — StatusDot's prop shape. */
 function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   if (state === "not_started") return "spawning";
+  if (state === "drafting") return "none";
   return state;
 }
 

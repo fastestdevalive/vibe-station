@@ -44,6 +44,8 @@ export function sessionStatus(state: SessionState): WorktreeRolledUpStatus {
       return "done";
     case "exited":
       return "exited";
+    case "drafting":
+      return "none";
     default:
       return "none";
   }

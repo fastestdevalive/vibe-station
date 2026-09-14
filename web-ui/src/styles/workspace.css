@@ -712,6 +712,7 @@
 
 .wt-row__trail {
   position: relative;
+  z-index: 2;
   flex-shrink: 0;
   height: 24px;
   display: flex;
@@ -948,6 +949,97 @@
 
 .tree-row--direct-session[data-active="true"] .direct-session__label {
   font-weight: var(--font-weight-normal);
+}
+
+/* Draft rows in the sidebar — label is non-italic, discard overlays chip on hover. */
+.draft-row__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  font-weight: var(--font-weight-normal);
+}
+
+
+.sidebar-inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: var(--space-1) 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-default);
+}
+
+.draft-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9.5px;
+  line-height: 1;
+  padding: 1.5px 4px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  opacity: 0.65;
+  color: var(--bg-primary);
+  pointer-events: none;
+  flex-shrink: 0;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: opacity var(--transition-fast, 0.1s);
+}
+
+.tab .draft-chip {
+  margin-left: var(--space-1);
+  vertical-align: middle;
+}
+
+/* Trail holds chip + discard button stacked; discard overlays chip on hover. */
+.draft-row__trail {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.draft-row__discard {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast, 0.1s);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  font-size: var(--font-size-base, 14px);
+  line-height: 1;
+}
+
+.tree-row .icon-btn.draft-row__discard {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.draft-row:hover .draft-chip,
+.tab:hover .draft-chip {
+  opacity: 0;
+}
+
+.draft-row:hover .draft-row__discard {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Archived session row (Part 03 Decision 4) — same position, dimmed + badge. */
