@@ -12,6 +12,7 @@ import type {
   PrInfo,
   PrLookupResult,
   CreateDirectSessionBody,
+  CreateDraftSessionBody,
   CreateModeBody,
   CreateProjectBody,
   CreateProjectResponse,
@@ -19,6 +20,7 @@ import type {
   CreateWorktreeBody,
   DiffStat,
   DiskUsageResponse,
+  DraftConfig,
   EnableTailscaleResponse,
   FileScope,
   FsCheckResponse,
@@ -588,6 +590,53 @@ export function createClientApi() {
         body: JSON.stringify(body),
       });
       return parseJson<Session>(res);
+    },
+
+    /**
+     * Create a draft agent session (`state: "drafting"`) — no agent spawned.
+     * Returns the created `Session`, or throws an `ApiError` with status 409
+     * (body carries `{ existingSessionId }`) when this project already has a
+     * draft — the caller navigates to that existing draft.
+     */
+    async createDraftSession(body: CreateDraftSessionBody): Promise<Session> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, state: "drafting" }),
+      });
+      return parseJson<Session>(res);
+    },
+
+    /** Persist a draft's prompt/config (`PATCH /sessions/:id/draft`). Returns
+     *  the derived auto name (first 5 words of the prompt), or null. */
+    async updateDraft(
+      id: string,
+      body: { draftPrompt?: string; draftConfig?: DraftConfig },
+      opts?: { keepalive?: boolean },
+    ): Promise<{ ok: true; name: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/draft`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        keepalive: opts?.keepalive,
+      });
+      return parseJson<{ ok: true; name: string | null }>(res);
+    },
+
+    /** Promote a draft to a live session (`POST /sessions/:id/start`). */
+    async startDraft(
+      id: string,
+      body: { draftPrompt: string; draftConfig: DraftConfig; skipAutoTurn?: boolean },
+    ): Promise<{ ok: true; worktreeId?: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return parseJson<{ ok: true; worktreeId?: string }>(res);
     },
 
     /** Default name the next terminal in this worktree would get ("Terminal N"). */

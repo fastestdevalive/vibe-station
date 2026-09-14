@@ -433,3 +433,49 @@ export function _clearStoreForTest(): void {
 // Re-exported so callers that previously imported types alongside this module
 // keep working without an extra import line.
 export type { ProjectRecord, WorktreeRecord, SessionRecord };
+
+// ── global_drafts helpers ────────────────────────────────────────────────
+
+export interface GlobalDraftRow {
+  id: string;
+  draftPrompt: string | null;
+  draftConfig: string | null;   // JSON string
+  name: string | null;
+  nameSource: string | null;
+  sortOrder: number | null;
+  createdAt: string;
+}
+
+export function getAllGlobalDrafts(): GlobalDraftRow[] {
+  return getDb().prepare("SELECT * FROM global_drafts ORDER BY createdAt ASC").all() as GlobalDraftRow[];
+}
+
+export function addGlobalDraft(row: GlobalDraftRow): void {
+  getDb()
+    .prepare(
+      "INSERT INTO global_drafts (id, draftPrompt, draftConfig, sortOrder, createdAt) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(row.id, row.draftPrompt ?? null, row.draftConfig ?? null, row.sortOrder ?? null, row.createdAt);
+}
+
+export function updateGlobalDraft(
+  id: string,
+  patch: { draftPrompt?: string; draftConfig?: string; name?: string; nameSource?: string; sortOrder?: number },
+): boolean {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  if (patch.draftPrompt !== undefined) { sets.push("draftPrompt = ?"); vals.push(patch.draftPrompt); }
+  if (patch.draftConfig !== undefined) { sets.push("draftConfig = ?"); vals.push(patch.draftConfig); }
+  if (patch.name !== undefined) { sets.push("name = ?"); vals.push(patch.name); }
+  if (patch.nameSource !== undefined) { sets.push("nameSource = ?"); vals.push(patch.nameSource); }
+  if (patch.sortOrder !== undefined) { sets.push("sortOrder = ?"); vals.push(patch.sortOrder); }
+  if (sets.length === 0) return false;
+  vals.push(id);
+  const res = getDb().prepare(`UPDATE global_drafts SET ${sets.join(", ")} WHERE id = ?`).run(...vals);
+  return res.changes > 0;
+}
+
+export function removeGlobalDraft(id: string): boolean {
+  const res = getDb().prepare("DELETE FROM global_drafts WHERE id = ?").run(id);
+  return res.changes > 0;
+}

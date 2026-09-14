@@ -919,18 +919,321 @@ describe("LeftSidebar", () => {
     });
   });
 
-  it("Settings is a link with accessible name", async () => {
-    render(
-      <MemoryRouter>
-        <Harness api={api}>
-          <LeftSidebar api={api} />
-        </Harness>
-      </MemoryRouter>,
-    );
-    await screen.findByText("Proj A");
-    const settings = screen.getByRole("link", { name: /^Settings$/i });
-    expect(settings).toBeInTheDocument();
-    expect(settings).toHaveAttribute("href", "/settings");
+  // ─── Draft agent reordering ───────────────────────────────────────────────
+  describe("draft agent reordering", () => {
+    it("dragging a global draft calls api.reorderSession with computed sortOrder", async () => {
+      const localApi = createMockApi();
+      const reorderSessionSpy = vi.spyOn(localApi, "reorderSession");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "global-d1",
+          projectId: null as unknown as string,
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "global-d1",
+            worktreeId: null,
+            projectId: null,
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Global Draft 1",
+            sortOrder: 100,
+            draftPrompt: "draft prompt 1",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "global-d2",
+          projectId: null as unknown as string,
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "global-d2",
+            worktreeId: null,
+            projectId: null,
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Global Draft 2",
+            sortOrder: 200,
+            draftPrompt: "draft prompt 2",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Global Draft 1");
+      await screen.findByText("Global Draft 2");
+
+      const pair = capturedDndPairs.find((p) => p.items.includes("global-d1") && p.items.includes("global-d2"));
+      expect(pair).toBeDefined();
+
+      act(() => {
+        pair!.onDragEnd({
+          active: { id: "global-d2" },
+          over: { id: "global-d1" },
+        } as unknown as DragEndEvent);
+      });
+
+      expect(reorderSessionSpy).toHaveBeenCalledWith("global-d2", expect.any(Number));
+    });
+
+    it("dragging a project draft calls api.reorderSession with computed sortOrder", async () => {
+      const localApi = createMockApi();
+      const reorderSessionSpy = vi.spyOn(localApi, "reorderSession");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "proj-d1",
+          projectId: "proj-a",
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "proj-d1",
+            worktreeId: null,
+            projectId: "proj-a",
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Proj Draft 1",
+            sortOrder: 10,
+            draftPrompt: "proj prompt 1",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "proj-d2",
+          projectId: "proj-a",
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "proj-d2",
+            worktreeId: null,
+            projectId: "proj-a",
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Proj Draft 2",
+            sortOrder: 20,
+            draftPrompt: "proj prompt 2",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Proj Draft 1");
+      await screen.findByText("Proj Draft 2");
+
+      const pair = capturedDndPairs.find((p) => p.items.includes("proj-d1") && p.items.includes("proj-d2"));
+      expect(pair).toBeDefined();
+
+      act(() => {
+        pair!.onDragEnd({
+          active: { id: "proj-d2" },
+          over: { id: "proj-d1" },
+        } as unknown as DragEndEvent);
+      });
+
+      expect(reorderSessionSpy).toHaveBeenCalledWith("proj-d2", expect.any(Number));
+    });
+
+    // A worktree draft (entryPoint !== "direct") merges into the same project
+    // reorder scope as the real worktrees, so dragging it across a non-draft
+    // worktree must interpolate its server sortOrder against the worktree
+    // neighbours (computeNewSortOrder) and persist via api.reorderSession.
+    it("dragging a worktree draft across non-draft worktrees calls api.reorderSession with the interpolated sortOrder", async () => {
+      const localApi = createMockApi();
+      const reorderSessionSpy = vi.spyOn(localApi, "reorderSession");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "wt-d1",
+          projectId: "proj-a",
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "wt-d1",
+            worktreeId: null,
+            projectId: "proj-a",
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Worktree Draft 1",
+            sortOrder: 3,
+            draftPrompt: "wt draft prompt 1",
+            draftConfig: { entryPoint: "worktree" },
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Worktree Draft 1");
+
+      // The unified worktree+draft scope lists both worktrees and the draft.
+      const pair = capturedDndPairs.find(
+        (p) => p.items.includes("wt-d1") && p.items.includes("wt-1") && p.items.includes("wt-2"),
+      );
+      expect(pair).toBeDefined();
+
+      // orderedItems: [wt-1(1), wt-2(2), wt-d1(3)]. Dropping wt-d1 between
+      // wt-1 and wt-2 → midpoint of 1 and 2.
+      act(() => {
+        pair!.onDragEnd({
+          active: { id: "wt-d1" },
+          over: { id: "wt-2" },
+        } as unknown as DragEndEvent);
+      });
+
+      expect(reorderSessionSpy).toHaveBeenCalledWith("wt-d1", 1.5);
+    });
+
+    // The reverse: dragging a real worktree across a worktree draft dispatches
+    // to api.reorderWorktree, interpolating against the draft neighbour.
+    it("dragging a worktree across a worktree draft calls api.reorderWorktree with the interpolated sortOrder", async () => {
+      const localApi = createMockApi();
+      const reorderWorktreeSpy = vi.spyOn(localApi, "reorderWorktree");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      // Place the draft between the two worktrees so a worktree can cross it.
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "wt-d1",
+          projectId: "proj-a",
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "wt-d1",
+            worktreeId: null,
+            projectId: "proj-a",
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Worktree Draft 1",
+            sortOrder: 1.5,
+            draftPrompt: "wt draft prompt 1",
+            draftConfig: { entryPoint: "worktree" },
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Worktree Draft 1");
+
+      const pair = capturedDndPairs.find(
+        (p) => p.items.includes("wt-d1") && p.items.includes("wt-1") && p.items.includes("wt-2"),
+      );
+      expect(pair).toBeDefined();
+
+      // orderedItems: [wt-1(1), wt-d1(1.5), wt-2(2)]. Dropping wt-2 before
+      // wt-d1 → wt-2's neighbours become wt-1 (1) and wt-d1 (1.5) → 1.25.
+      act(() => {
+        pair!.onDragEnd({
+          active: { id: "wt-2" },
+          over: { id: "wt-d1" },
+        } as unknown as DragEndEvent);
+      });
+
+      expect(reorderWorktreeSpy).toHaveBeenCalledWith("wt-2", 1.25);
+    });
+
+    // At the root level, projects and global drafts share the "projects" reorder
+    // scope. Dragging a global draft across a project persists the draft's new
+    // position into sortOrders["projects"], placing it among the projects.
+    it("dragging a global draft across projects reorders sortOrders[\"projects\"] to place the draft among projects", async () => {
+      useWorkspaceStore.setState({ sortOrders: {} });
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "global-d1",
+          projectId: null as unknown as string,
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "global-d1",
+            worktreeId: null,
+            projectId: null,
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Global Draft 1",
+            sortOrder: 100,
+            draftPrompt: "draft prompt 1",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Global Draft 1");
+
+      // The top-level projects scope mixes the global draft with both projects.
+      const pair = capturedDndPairs.find(
+        (p) => p.items.includes("global-d1") && p.items.includes("proj-a") && p.items.includes("proj-b"),
+      );
+      expect(pair).toBeDefined();
+
+      act(() => {
+        pair!.onDragEnd({
+          active: { id: "global-d1" },
+          over: { id: "proj-a" },
+        } as unknown as DragEndEvent);
+      });
+
+      // The draft is now persisted among the projects in the "projects" scope.
+      expect(useWorkspaceStore.getState().sortOrders["projects"]).toEqual([
+        "proj-a",
+        "global-d1",
+        "proj-b",
+      ]);
+    });
   });
 
   // ─── Direct sessions ───────────────────────────────────────────────────

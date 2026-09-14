@@ -31,7 +31,6 @@ import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
-import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 interface WorkspaceCanvasProps {
@@ -166,6 +165,20 @@ export function WorkspaceCanvas({
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const navigate = useNavigate();
 
+  const startDraftForWorktree = (targetWorktreeId: string) => {
+    void api
+      .createDraftSession({
+        target: "worktree",
+        worktreeId: targetWorktreeId,
+        type: "agent",
+        draftConfig: { entryPoint: "tab" },
+      })
+      .then((s) => navigate(`/draft/${s.id}`))
+      .catch(() => {
+        /* surface later */
+      });
+  };
+
   const isDetachedView = !!detachedWorkspaceId;
   // Classic per-worktree placement NEVER reads a saved doc — see the module
   // doc comment above. `savedDoc`/`isSaved` are only ever true for the
@@ -189,12 +202,6 @@ export function WorkspaceCanvas({
    *  picker is already open renders expanded by default without needing to
    *  be seeded into any "expanded" set first. */
   const [collapsedPickerProjects, setCollapsedPickerProjects] = useState<Set<string>>(new Set());
-  const [newAgentOpen, setNewAgentOpen] = useState(false);
-  const [tileNewAgentWorktreeId, setTileNewAgentWorktreeId] = useState<string | null>(null);
-  // Agent tile "⋯" popup — same actions as the agent tab bar's right-click
-  // menu (Reset / Reset with handoff) plus Terminate (mirrors the tab bar's
-  // "×" close). Only one tile's menu can be open at a time, mirroring
-  // TabsStrip's `resetMenu`.
   const [tileMenu, setTileMenu] = useState<{ tileId: string; x: number; y: number } | null>(null);
   const [resetTarget, setResetTarget] = useState<Session | null>(null);
   const [resetHandoff, setResetHandoff] = useState(false);
@@ -940,7 +947,7 @@ export function WorkspaceCanvas({
       : tile.worktreeId
         ? worktreeById.get(tile.worktreeId)
         : worktreeById.get(worktreeId);
-    const tileProject = session
+    const tileProject = session?.projectId != null
       ? projectById.get(session.projectId)
       : tileWorktree
         ? projectById.get(tileWorktree.projectId)
@@ -1049,7 +1056,7 @@ export function WorkspaceCanvas({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                setTileNewAgentWorktreeId(session.worktreeId ?? worktreeId);
+                startDraftForWorktree(session.worktreeId ?? worktreeId);
               }}
             >
               <Plus size={13} />
@@ -1273,7 +1280,7 @@ export function WorkspaceCanvas({
                     type="button"
                     className="workspace-canvas__picker-item"
                     onClick={() => {
-                      setNewAgentOpen(true);
+                      startDraftForWorktree(worktreeId);
                       setPickerOpen(false);
                     }}
                   >
@@ -1496,19 +1503,6 @@ export function WorkspaceCanvas({
           ? createPortal(toolbarNode, toolbarPortalEl)
           : toolbarNode
         : null}
-      <NewAgentTabDialog
-        open={newAgentOpen || tileNewAgentWorktreeId != null}
-        api={api}
-        worktreeId={tileNewAgentWorktreeId ?? worktreeId}
-        onClose={() => {
-          setNewAgentOpen(false);
-          setTileNewAgentWorktreeId(null);
-        }}
-        onCreated={(sessionId) => {
-          addTile("agent", sessionId, tileNewAgentWorktreeId ?? undefined);
-          setTileNewAgentWorktreeId(null);
-        }}
-      />
       {tileMenu && tileMenuSession
         ? createPortal(
             <div

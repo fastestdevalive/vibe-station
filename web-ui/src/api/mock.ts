@@ -13,6 +13,7 @@ import type {
   NormalizedEvent,
   PrInfo,
   CreateDirectSessionBody,
+  CreateDraftSessionBody,
   CreateModeBody,
   CreateProjectBody,
   CreateProjectResponse,
@@ -20,6 +21,7 @@ import type {
   CreateWorktreeBody,
   DiffStat,
   DiskUsageResponse,
+  DraftConfig,
   EnableTailscaleResponse,
   FileScope,
   FsCheckResponse,
@@ -596,6 +598,69 @@ export function createMockApi() {
         snapshot: sess,
       });
       return structuredClone(sess);
+    },
+
+    async createDraftSession(body: CreateDraftSessionBody): Promise<Session> {
+      const projectId = body.projectId ?? (body.worktreeId ? worktrees.find((w) => w.id === body.worktreeId)?.projectId ?? null : null);
+      const sess: Session = {
+        id: `sess-draft-${Date.now()}`,
+        worktreeId: body.worktreeId ?? null,
+        projectId: projectId ?? null,
+        modeId: body.draftConfig.modeId ?? null,
+        type: body.type,
+        name: null,
+        isMain: false,
+        state: "drafting",
+        lifecycleState: "drafting",
+        tmuxName: "",
+        draftPrompt: "",
+        draftConfig: body.draftConfig,
+        createdAt: nowIso(),
+        sortOrder: Date.now(),
+      };
+      sessions.push(sess);
+      emit({
+        type: "session:created",
+        sessionId: sess.id,
+        worktreeId: sess.worktreeId,
+        projectId: sess.projectId,
+        sessionType: sess.type,
+        mode: typeof sess.modeId === "string" ? sess.modeId : undefined,
+        snapshot: sess,
+      });
+      return structuredClone(sess);
+    },
+
+    async updateDraft(
+      id: string,
+      body: { draftPrompt?: string; draftConfig?: DraftConfig },
+      _opts?: { keepalive?: boolean },
+    ): Promise<{ ok: true; name: string | null }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("Session not found", 404);
+      if (s.lifecycleState !== "drafting") throw new ApiError("Session not in drafting state", 403);
+      if (body.draftPrompt !== undefined) s.draftPrompt = body.draftPrompt;
+      if (body.draftConfig !== undefined) s.draftConfig = body.draftConfig;
+      const trimmed = (s.draftPrompt ?? "").trim();
+      const name = trimmed ? trimmed.split(/\s+/).slice(0, 5).join(" ") || null : null;
+      s.name = name;
+      return { ok: true, name };
+    },
+
+    async startDraft(
+      id: string,
+      body: { draftPrompt: string; draftConfig: DraftConfig },
+    ): Promise<{ ok: true; worktreeId?: string }> {
+      const s = sessions.find((x) => x.id === id);
+      if (!s) throw new ApiError("Session not found", 404);
+      if (!body.draftPrompt.trim()) throw new ApiError("Draft prompt is empty", 400);
+      if (s.lifecycleState !== "drafting") throw new ApiError("Session not in drafting state", 403);
+      s.lifecycleState = "not_started";
+      s.state = "not_started";
+      s.draftPrompt = null;
+      s.draftConfig = null;
+      s.name = body.draftPrompt.trim().split(/\s+/).slice(0, 5).join(" ");
+      return { ok: true };
     },
 
     async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {

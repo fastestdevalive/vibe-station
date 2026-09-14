@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
@@ -24,15 +24,18 @@ import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShort
 import { sessionLabel } from "@/lib/sessionLabel";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
-import { NewAgentSessionDialog } from "@/components/dialogs/NewAgentSessionDialog";
-import { NewAgentTabDialog } from "@/components/dialogs/NewAgentTabDialog";
+import { DraftComposer } from "@/components/draft/DraftComposer";
 
 export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
-  const params = useParams<{ directSessionId?: string; workspaceId?: string }>();
+  const params = useParams<{ directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
   const isDashboard = location.pathname === "/";
   const isSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
+  // Draft route — /draft/new (Tier 2, no server record yet) or /draft/:id
+  // (Tier 1, a server-persisted drafting session).
+  const isDraft = location.pathname.startsWith("/draft/");
+  const draftSessionId = isDraft ? (params.draftSessionId ?? null) : null;
   const settingsSectionId = isSettings ? (location.pathname.split("/")[2] ?? null) : null;
   const SETTINGS_LABELS: Record<string, string> = {
     "modes": "Modes",
@@ -47,7 +50,7 @@ export function Workspace() {
   // Detached-workspace view (agent-interaction-workspaces/04-workspaces Phase 3,
   // Decision 4) — a saved WorkspaceDoc's own route, independent of any worktree.
   const isWorkspaceView = location.pathname.startsWith("/workspaces/");
-  const isFullWidthPane = isDashboard || isSettings;
+  const isFullWidthPane = isDashboard || isSettings || isDraft;
 
   // Server data lives in `useServerStore`, populated and refreshed by
   // `useServerSync` (initial fetch + ws:open + WS patch reducers). Reading
@@ -61,6 +64,8 @@ export function Workspace() {
 
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+  const activeSessionIsDrafting = activeSession?.lifecycleState === "drafting";
   const leftSidebarCollapsed = useWorkspaceStore((s) => s.leftSidebarCollapsed);
   const toggleLeftSidebarCollapsed = useWorkspaceStore((s) => s.toggleLeftSidebarCollapsed);
   const leftSidebarWidthPx = useWorkspaceStore((s) => s.leftSidebarWidthPx);
@@ -75,12 +80,6 @@ export function Workspace() {
   const { layoutMode: paneLayoutMode, canvasToolbarVisible } = useLayout();
 
   const [quickOpen, setQuickOpen] = useState(false);
-  // Keyboard-shortcut-triggered dialogs (Alt+N, Alt+Shift+N below) —
-  // reuse the same dialogs the sidebar's "+" (new worktree) and the tab bar's
-  // "+" (new agent) already open, just driven from here since this is where
-  // "current project"/"current worktree" are already resolved.
-  const [shortcutNewWorktreeOpen, setShortcutNewWorktreeOpen] = useState(false);
-  const [shortcutNewAgentOpen, setShortcutNewAgentOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const isMobile = useMediaQuery("(max-width: 768px)");
@@ -117,20 +116,45 @@ export function Workspace() {
     [activeWorktree, projects],
   );
 
-  // The dialogs these open are scoped to `activeWorktree`/`activeWorktreeProject`
-  // (below) — reset if either goes away (e.g. switching to a direct session)
-  // so a dialog left open doesn't silently reappear scoped to whatever
-  // worktree/project the user lands on next.
-  useEffect(() => {
-    setShortcutNewWorktreeOpen(false);
-    setShortcutNewAgentOpen(false);
-  }, [activeWorktreeId]);
-
   // Stable identities so `useWorkspaceKeyboardShortcuts`'s effect (keyed on
   // these) doesn't tear down and re-add its `keydown` listener on every
-  // unrelated re-render of this route.
-  const openNewWorktreeShortcut = useCallback(() => setShortcutNewWorktreeOpen(true), []);
-  const openNewAgentShortcut = useCallback(() => setShortcutNewAgentOpen(true), []);
+  // unrelated re-render of this route. Both shortcuts now open the instant
+  // draft flow (create a drafting session and navigate to its composer) —
+  // the old modal dialogs are gone.
+  const openNewWorktreeShortcut = useCallback(() => {
+    if (!activeWorktreeProject) return;
+    void api
+      .createDraftSession({
+        target: "direct",
+        projectId: activeWorktreeProject.id,
+        type: "agent",
+        draftConfig: { entryPoint: "worktree", worktreeChoice: "new" },
+      })
+      .then((s) => {
+        useServerStore.getState().applySessionCreated(s);
+        navigate(`/draft/${s.id}`);
+      })
+      .catch(() => {
+        /* surface later */
+      });
+  }, [activeWorktreeProject, navigate]);
+  const openNewAgentShortcut = useCallback(() => {
+    if (!activeWorktree) return;
+    void api
+      .createDraftSession({
+        target: "worktree",
+        worktreeId: activeWorktree.id,
+        type: "agent",
+        draftConfig: { entryPoint: "tab" },
+      })
+      .then((s) => {
+        useServerStore.getState().applySessionCreated(s);
+        navigate(`/draft/${s.id}`);
+      })
+      .catch(() => {
+        /* surface later */
+      });
+  }, [activeWorktree, navigate]);
 
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
   // Quick Open + pane shortcuts work in both worktree and direct-session modes
@@ -201,6 +225,38 @@ export function Workspace() {
       navigate("/", { replace: true });
     }
   }, [isWorkspaceView, params.workspaceId, viewedWorkspace, navigate]);
+
+  // CUJ 7 — stale draft route: navigating (e.g. back button) to /draft/:id
+  // where the session exists but is no longer in the "drafting" state should
+  // redirect to the now-live session (or dashboard if it's gone entirely).
+  const notFoundTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!isDraft || !draftSessionId || !bundleLoaded) {
+      if (notFoundTimerRef.current) { clearTimeout(notFoundTimerRef.current); notFoundTimerRef.current = null; }
+      return;
+    }
+    const s = sessions.find((x) => x.id === draftSessionId);
+    if (!s) {
+      // Give the WS session:created event 600ms to arrive before declaring the session dead.
+      if (!notFoundTimerRef.current) {
+        notFoundTimerRef.current = setTimeout(() => {
+          notFoundTimerRef.current = null;
+          navigate("/", { replace: true });
+        }, 600);
+      }
+      return;
+    }
+    if (notFoundTimerRef.current) { clearTimeout(notFoundTimerRef.current); notFoundTimerRef.current = null; }
+    if (s.lifecycleState === "drafting") return;
+    if (s.worktreeId) navigate(`/worktree/${s.worktreeId}`, { replace: true });
+    else if (s.projectId) navigate(`/session/${s.id}`, { replace: true });
+    else navigate("/", { replace: true });
+  }, [isDraft, draftSessionId, bundleLoaded, sessions, navigate]);
+
+  useEffect(() => {
+    return () => { if (notFoundTimerRef.current) clearTimeout(notFoundTimerRef.current); };
+  }, []);
 
   // Update browser tab title to reflect current context
   useEffect(() => {
@@ -498,7 +554,28 @@ export function Workspace() {
           shared PaneHostLayer above — never rendered directly here — so it
           stays mounted across a classic <-> workspace layoutMode toggle. */}
       {activeSessionId ? (
-        <PaneOutlet paneKey={`agent:${activeSessionId}`} />
+        activeSessionIsDrafting ? (
+          <DraftComposer
+            key={activeSessionId}
+            api={api}
+            draftSessionId={activeSessionId}
+            onStarted={(result) => {
+              useWorkspaceStore.setState({ activeSessionId: null });
+              if (result.worktreeId) navigate(`/worktree/${result.worktreeId}`);
+              else navigate(`/session/${result.sessionId}`);
+            }}
+            onDiscard={async () => {
+              try {
+                await api.terminateSession(activeSessionId);
+              } catch {
+                /* ignore */
+              }
+              useWorkspaceStore.setState({ activeSessionId: null });
+            }}
+          />
+        ) : (
+          <PaneOutlet paneKey={`agent:${activeSessionId}`} />
+        )
       ) : (
         <div className="empty-state">No agent session</div>
       )}
@@ -578,7 +655,7 @@ export function Workspace() {
   // Compute layout mode for TopBar
   const layoutMode = isSettings
     ? "settings"
-    : isDashboard
+    : isDashboard || isDraft
       ? "dashboard"
       : isDirectSession
         ? "direct-session"
@@ -601,25 +678,6 @@ export function Workspace() {
         ) : (
           <QuickOpen api={api} worktreeId={activeWorktreeId} open={quickOpen} onClose={() => setQuickOpen(false)} />
         )
-      ) : null}
-      {activeWorktreeProject ? (
-        <NewAgentSessionDialog
-          open={shortcutNewWorktreeOpen}
-          projectId={activeWorktreeProject.id}
-          projectName={activeWorktreeProject.name}
-          api={api}
-          onClose={() => setShortcutNewWorktreeOpen(false)}
-          onCreated={() => { /* store stays current via worktree:created WS event */ }}
-        />
-      ) : null}
-      {activeWorktree ? (
-        <NewAgentTabDialog
-          open={shortcutNewAgentOpen}
-          api={api}
-          worktreeId={activeWorktree.id}
-          onClose={() => setShortcutNewAgentOpen(false)}
-          onCreated={() => { /* store stays current via session:created WS event */ }}
-        />
       ) : null}
       <Layout
         topBar={
@@ -655,7 +713,7 @@ export function Workspace() {
             isMobile={isMobile}
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard || isSettings || isDirectSession || isWorkspaceView) navigate(`/worktree/${wtId}`);
+              if (isDashboard || isSettings || isDirectSession || isWorkspaceView || isDraft) navigate(`/worktree/${wtId}`);
             }}
           />
         }
@@ -664,6 +722,30 @@ export function Workspace() {
             <DashboardPanel api={api} />
           ) : isSettings ? (
             <SettingsPanel api={api} />
+          ) : isDraft ? (
+            // Full-pane DraftComposer for /draft/* routes — rendered directly
+            // (not via the pane portal system): a draft is a config form with
+            // no live agent stream, so portaling it adds complexity with zero
+            // benefit (Decision 4).
+            <DraftComposer
+              key={draftSessionId ?? `new:${location.key}`}
+              api={api}
+              draftSessionId={draftSessionId}
+              onStarted={(result) => {
+                if (result.worktreeId) navigate(`/worktree/${result.worktreeId}`);
+                else navigate(`/session/${result.sessionId}`);
+              }}
+              onDiscard={async () => {
+                if (draftSessionId) {
+                  try {
+                    await api.terminateSession(draftSessionId);
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                navigate("/", { replace: true });
+              }}
+            />
           ) : isWorkspaceView ? (
             // Rendered via the `dashboardPane` slot (full-bleed, no classic
             // agent/tools/terminal three-pane machinery) since this view has

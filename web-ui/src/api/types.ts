@@ -128,7 +128,8 @@ export type SessionState =
   | "idle"
   | "waiting_for_human"
   | "done"
-  | "exited";
+  | "exited"
+  | "drafting";
 
 /**
  * Execution channel (mirror of daemon `Channel`). `json` = structured JSON
@@ -140,8 +141,8 @@ export interface Session {
   id: string;
   /** Worktree this session belongs to; null for direct sessions. */
   worktreeId: string | null;
-  /** Project this session belongs to. Always present. */
-  projectId: string;
+  /** Project this session belongs to. null for global drafts (no project chosen yet). */
+  projectId: string | null;
   modeId: string | null;
   type: SessionType;
   /** User-set display name. null/absent when using the computed default label
@@ -180,7 +181,47 @@ export interface Session {
    *  fixtures); REST (`sessions.ts`'s `serializeSession`) always sends an
    *  explicit `null` when there's no PR yet, matching `parentSessionId`. */
   pr?: PrStatus | null;
+  /** Raw draft prompt while the session is in the `"drafting"` lifecycle
+   *  state. Cleared (null) once the draft is started. */
+  draftPrompt?: string | null;
+  /** Draft config while the session is `"drafting"` (see `DraftConfig`).
+   *  Cleared (null) once the draft is started. */
+  draftConfig?: DraftConfig | null;
 }
+
+/**
+ * Config captured while a session is a draft (`state: "drafting"`), mirroring
+ * the daemon `DraftConfig` (`daemon/src/types.ts`). `projectId` and
+ * `worktreeId` are on the `SessionRecord`, not duplicated here.
+ */
+export interface DraftConfig {
+  entryPoint: "worktree" | "direct" | "tab" | "global";
+  modeId?: string;
+  channel?: "tmux" | "pty" | "json";
+  // worktree / global-with-worktree
+  worktreeChoice?: "new" | "existing";
+  existingWorktreeId?: string;
+  branch?: string;
+  baseBranch?: string;
+  useTmux?: boolean;
+  // global entry point
+  useWorktree?: boolean;
+}
+
+/** Body for `POST /sessions` with `state: "drafting"` (create a draft).
+ *  Exactly one of `projectId` / `worktreeId` must be present — expressed as a
+ *  union so TypeScript rejects a body with neither (the shape that used to be
+ *  silently stripped by the daemon's zod union and 400'd at runtime). */
+export type CreateDraftSessionBody = {
+  type: "agent";
+  draftPrompt?: string;
+  draftConfig: DraftConfig;
+  state?: "drafting";
+} & (
+  | { target?: "direct"; projectId: string; worktreeId?: never }
+  | { target?: "worktree"; worktreeId: string; projectId?: never }
+  | { target: "global"; projectId?: never; worktreeId?: never }
+);
 
 /**
  * VCS outcome axis for a session's branch (mirror of daemon `PrStatus`,
@@ -446,8 +487,8 @@ export type WSEvent =
       sessionId: string;
       /** Null for direct sessions (no worktree). */
       worktreeId: string | null;
-      /** Project ID (present for direct sessions). */
-      projectId?: string;
+      /** Project ID (present for direct sessions); null for global drafts. */
+      projectId?: string | null;
       sessionType: SessionType;
       /** Legacy: mode id string when agent; omitted for terminal */
       mode?: string;
@@ -506,6 +547,13 @@ export type WSEvent =
       isMain?: boolean;
       /** Cleared to null by PATCH /sessions/:id/delink; absent means unchanged. */
       parentSessionId?: string | null;
+      /** Set on draft-promotion (draft→real worktree session, POST .../start):
+       *  the worktree this drafting session was promoted into. */
+      worktreeId?: string;
+      /** Set on draft updates (PATCH .../draft): the raw draft prompt. */
+      draftPrompt?: string | null;
+      /** Set on draft updates (PATCH .../draft): the draft config. */
+      draftConfig?: DraftConfig | null;
     }
   | {
       type: "session:error";
