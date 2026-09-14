@@ -546,6 +546,12 @@ function DraftComposerInner({
         await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
       }
       clearGlobalDraft();
+      // If we were started from a server-backed global draft (Tier 1, no project),
+      // terminate that orphaned draft record now that we've promoted to a real session.
+      if (isTier1 && draftSessionId && !session?.projectId) {
+        useServerStore.getState().applySessionDeleted(draftSessionId);
+        void api.terminateSession(draftSessionId).catch(() => {});
+      }
       committedRef.current = true;
       onStarted({ worktreeId, sessionId: sessionId ?? project.id });
     } catch (err) {
@@ -556,8 +562,10 @@ function DraftComposerInner({
   }
 
   async function handleStart() {
-    if (isTier1) return startTier1();
-    // Tier 2 with an existing project selected → use the promoted Tier 1 path.
+    // A global Tier 1 draft (server-backed but no project yet) cannot be started
+    // directly — it must first acquire a project the same way Tier 2 does.
+    if (isTier1 && session?.projectId) return startTier1();
+    // Tier 2 or global Tier 1 with an existing project selected → promoted Tier 1 path.
     if (comboMode === "existing" && selectedProject) return startTier1ForProject(selectedProject, { andStart: true });
     return startTier2NewProject({
       selectedProject,
