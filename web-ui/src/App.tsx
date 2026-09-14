@@ -73,6 +73,8 @@ function AppShell() {
           <Route path="/worktree/:wtId" element={<Workspace />} />
           <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />
           <Route path="/session/:directSessionId" element={<Workspace />} />
+          <Route path="/draft/new" element={<Workspace />} />
+          <Route path="/draft/:draftSessionId" element={<Workspace />} />
           {/* Detached-workspace view (agent-interaction-workspaces/04-workspaces
               Phase 3a, Decision 4) — a saved WorkspaceDoc's own route,
               independent of any worktree. "/workspace" (singular, no param,

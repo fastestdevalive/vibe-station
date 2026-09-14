@@ -293,7 +293,7 @@ describe("TabsStrip", () => {
     expect(within(dialog).getByText(/Agent.*will become the new main session/i)).toBeInTheDocument();
   });
 
-  it("click + opens NewTab dialog", async () => {
+  it("click + creates a draft tab", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -301,7 +301,9 @@ describe("TabsStrip", () => {
       </MemoryRouter>,
     );
     await user.click(screen.getByRole("button", { name: /New agent/i }));
-    expect(screen.getByRole("dialog", { name: /New agent/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /New agent…/i })).toBeInTheDocument();
+    });
   });
 
   it("agent strip has no dock-close control", async () => {

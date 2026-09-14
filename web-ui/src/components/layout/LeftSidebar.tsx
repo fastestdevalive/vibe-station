@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Home, Moon, MoreHorizontal, Pin, Plus, Trash2, Type } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Home, Moon, MoreHorizontal, Pin, Plus, Trash2, Type } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -19,7 +19,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
-import type { Project, Session, SessionState, Worktree } from "@/api/types";
+import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
+import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
@@ -30,12 +31,9 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
-import { sessionLabel } from "@/lib/sessionLabel";
+import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
-import { NewAgentSessionDialog } from "@/components/dialogs/NewAgentSessionDialog";
-import { NewAgentDialog } from "@/components/dialogs/NewAgentDialog";
-import { NewAgentDirectDialog } from "@/components/dialogs/NewAgentDirectDialog";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
 
 /**
@@ -95,6 +93,28 @@ function SortableRow({
 }
 
 /**
+ * A unified item in a project's worktree list: either a real worktree or a
+ * worktree draft (a session in `drafting` state whose `entryPoint` is not
+ * "direct"). Both carry a `sortOrder` so they can be sorted and reordered
+ * together in a single DndContext/SortableContext (the draft is dispatched to
+ * `api.reorderSession`, the worktree to `api.reorderWorktree`, on drag end).
+ */
+type ProjectWorktreeItem =
+  | { kind: "worktree"; data: Worktree; id: string; sortOrder?: number }
+  | { kind: "draft"; data: Session; id: string; sortOrder?: number };
+
+/**
+ * A unified item in the sidebar's top-level (Projects) reorder scope: either a
+ * project or a global draft (a session with `projectId === null` in `drafting`
+ * state). Both live in the same `sortOrders["projects"]` drag order and are
+ * rendered in a single DndContext/SortableContext so a global draft can be
+ * dragged among and between projects.
+ */
+type TopLevelSidebarItem =
+  | { kind: "project"; data: Project; id: string }
+  | { kind: "global_draft"; data: Session; id: string };
+
+/**
  * Merge a persisted drag order with the current live id list: known ids are
  * placed per the stored order, anything not yet in the stored order (new
  * session/worktree) is appended at the end in its natural (server) order, and
@@ -144,6 +164,7 @@ function disambiguatedAbbrev(
 /** Map SessionState to WorktreeRolledUpStatus for StatusDot. */
 function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
   if (state === "not_started") return "spawning";
+  if (state === "drafting") return "none";
   return state; // working, idle, waiting_for_human, done, exited all map directly
 }
 
@@ -249,7 +270,9 @@ export function LeftSidebar({
   const directSessionMap = useMemo(() => {
     const m: Record<string, Session[]> = {};
     for (const s of sessions) {
-      if (s.worktreeId === null && s.projectId && s.type === "agent") {
+      // Skip drafts (state === "drafting") — they render as their own Tier 1
+      // draft rows appended after this list, not as regular direct rows.
+      if (s.worktreeId === null && s.projectId && s.type === "agent" && s.state !== "drafting") {
         (m[s.projectId] ??= []).push(s);
       }
     }
@@ -310,6 +333,7 @@ export function LeftSidebar({
             s.worktreeId === null &&
             s.type === "agent" &&
             s.pinnedAt != null &&
+            s.projectId != null &&
             !hiddenProjectIds.has(s.projectId),
         )
         .slice()
@@ -457,13 +481,33 @@ export function LeftSidebar({
   }, [pinnedWorktrees, pinnedDirectSessions, sortOrders]);
 
   /** Projects reorder scope — local-only (Decision 1 exception, same as
-   *  pinned lists): no `Project.sortOrder` field/route exists server-side. */
-  const orderedVisibleProjects = useMemo(() => {
-    const ids = visibleProjects.map((p) => p.id);
-    const order = applyLocalSortOrder(sortOrders["projects"], ids);
-    const byId = new Map(visibleProjects.map((p) => [p.id, p]));
-    return order.map((id) => byId.get(id)!).filter(Boolean);
-  }, [visibleProjects, sortOrders]);
+   *  pinned lists): no `Project.sortOrder` field/route exists server-side.
+   *  Now a unified top-level scope that mixes projects and global drafts
+   *  (`TopLevelSidebarItem`), ordered by `sortOrders["projects"]`. New global
+   *  drafts not yet persisted in that order float to the top (ordered by their
+   *  server `sortOrder`) so a freshly created draft is immediately visible. */
+  const orderedTopLevelItems = useMemo<TopLevelSidebarItem[]>(() => {
+    const globalDrafts = sessions
+      .filter((s) => s.projectId === null && s.state === "drafting")
+      .slice()
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const items: TopLevelSidebarItem[] = [
+      ...visibleProjects.map((p) => ({ kind: "project" as const, data: p, id: p.id })),
+      ...globalDrafts.map((s) => ({ kind: "global_draft" as const, data: s, id: s.id })),
+    ];
+    const stored = sortOrders["projects"] ?? [];
+    const storedSet = new Set(stored);
+    const knownIds = stored.filter((id) => items.some((x) => x.id === id));
+    const knownSet = new Set(knownIds);
+    const knownItems = knownIds
+      .map((id) => items.find((x) => x.id === id)!)
+      .filter(Boolean);
+    const newDrafts = items.filter(
+      (x) => x.kind === "global_draft" && !knownSet.has(x.id),
+    );
+    const rest = items.filter((x) => !knownSet.has(x.id) && x.kind !== "global_draft");
+    return [...newDrafts, ...knownItems, ...rest];
+  }, [visibleProjects, sessions, sortOrders]);
 
   /** Pinned-scope reorder handler. `pinned-all` is now daemon-synced
    *  (pinned-order-sync) — every other scope stays on the old local-only
@@ -493,6 +537,51 @@ export function LeftSidebar({
       // the newer promise out from under it.
       void p.finally(() => clearOrderedListWrite(p));
     }
+  }
+
+  /** Top-level (Projects) reorder — a unified scope mixing projects and global
+   *  drafts. Persists the full order to `sortOrders["projects"]` locally. If the
+   *  moved item is a global draft, also syncs its server `sortOrder` via
+   *  `api.reorderSession` (fractional interpolation against its draft
+   *  neighbours in the new order). */
+  function handleTopLevelReorder(e: DragEndEvent) {
+    markDrag();
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = orderedTopLevelItems.map((x) => x.id);
+    const from = ids.indexOf(String(active.id));
+    const to = ids.indexOf(String(over.id));
+    if (from === -1 || to === -1) return;
+    const next = ids.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, String(active.id));
+    setSortOrder("projects", next);
+
+    const moved = orderedTopLevelItems[from];
+    if (moved?.kind !== "global_draft") return;
+    const prevSortOrder = moved.data.sortOrder;
+
+    const draftOrder = next
+      .map((id) => orderedTopLevelItems.find((x) => x.id === id)!)
+      .filter((x) => x.kind === "global_draft") as Extract<
+      TopLevelSidebarItem,
+      { kind: "global_draft" }
+    >[];
+    const movedIndex = draftOrder.indexOf(moved);
+    const prevDraft = draftOrder[movedIndex - 1];
+    const nextDraft = draftOrder[movedIndex + 1];
+    const newSortOrder = computeNewSortOrder(
+      prevDraft?.data.sortOrder,
+      nextDraft?.data.sortOrder,
+    );
+
+    const patch = (sortOrder: number | undefined) => {
+      useServerStore.getState().applySessionUpdated(moved.id, { sortOrder });
+    };
+    patch(newSortOrder);
+    void api.reorderSession(moved.id, newSortOrder).catch(() => {
+      patch(prevSortOrder);
+    });
   }
 
   /** Workspaces-section reorder — client-only, mirrors `handleReorder` above
@@ -547,6 +636,47 @@ export function LeftSidebar({
     patch(newSortOrder);
     const call =
       kindArg === "worktree"
+        ? api.reorderWorktree(moved.id, newSortOrder)
+        : api.reorderSession(moved.id, newSortOrder);
+    void call.catch(() => {
+      patch(prevSortOrder);
+    });
+  }
+
+  /** Reorder over a unified project list that mixes worktrees and worktree
+   *  drafts (`ProjectWorktreeItem`). Fractional sortOrder interpolation is
+   *  shared; the dispatch to `reorderWorktree` vs `reorderSession` is chosen
+   *  by the moved item's kind. */
+  function handleServerReorderMixed(orderedList: ProjectWorktreeItem[], e: DragEndEvent) {
+    // Mark BEFORE the early return — see handleServerReorder.
+    markDrag();
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const from = orderedList.findIndex((x) => x.id === String(active.id));
+    const to = orderedList.findIndex((x) => x.id === String(over.id));
+    if (from === -1 || to === -1) return;
+    const moved = orderedList[from]!;
+    const prevSortOrder = moved.sortOrder;
+
+    const reordered = orderedList.slice();
+    reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const newIndex = reordered.indexOf(moved);
+    const prevNeighbor = reordered[newIndex - 1];
+    const nextNeighbor = reordered[newIndex + 1];
+    const newSortOrder = computeNewSortOrder(prevNeighbor?.sortOrder, nextNeighbor?.sortOrder);
+
+    const patch = (sortOrder: number | undefined) => {
+      if (moved.kind === "worktree") {
+        useServerStore.getState().applyWorktreeUpdated({ ...(moved.data as Worktree), sortOrder });
+      } else {
+        useServerStore.getState().applySessionUpdated(moved.id, { sortOrder });
+      }
+    };
+
+    patch(newSortOrder);
+    const call =
+      moved.kind === "worktree"
         ? api.reorderWorktree(moved.id, newSortOrder)
         : api.reorderSession(moved.id, newSortOrder);
     void call.catch(() => {
@@ -608,9 +738,6 @@ export function LeftSidebar({
     ? location.pathname.slice("/workspaces/".length)
     : null;
 
-  const [newSessProject, setNewSessProject] = useState<Project | null>(null);
-  const [directAgentProject, setDirectAgentProject] = useState<Project | null>(null);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [plusMenu, setPlusMenu] = useState<{ project: Project; rect: DOMRect } | null>(null);
   const [wtMenu, setWtMenu] = useState<{ projectId: string; worktree: Worktree; rect: DOMRect } | null>(null);
   const [sessMenu, setSessMenu] = useState<{ session: Session; rect: DOMRect } | null>(null);
@@ -630,6 +757,10 @@ export function LeftSidebar({
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
   const [pendingTerminateSession, setPendingTerminateSession] = useState<Session | null>(null);
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = useState<WorkspaceDoc | null>(null);
+  const [pendingDiscardDraft, setPendingDiscardDraft] = useState<
+    { kind: "global" } | { kind: "session"; session: Session } | null
+  >(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
 
   // Subscribe to live session output for every session we know about so the
   // rollup picks up state transitions in real time. The set of ids comes from
@@ -913,6 +1044,131 @@ export function LeftSidebar({
     return e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0;
   }
 
+  // ── Instant draft flow (Phase 2) ───────────────────────────────────────────
+  // Tier 2 (global-new) draft lives in the reactive Zustand store so the
+  // sidebar's top-level row and the DraftComposer both subscribe to it.
+  const globalDraft = useGlobalDraftStore((s) => s.draft);
+  const globalDraftClear = useGlobalDraftStore((s) => s.clearDraft);
+  const globalDraftSet = useGlobalDraftStore((s) => s.setDraft);
+
+  /** Navigate to a draft by id, closing any open plus menu first. */
+  function gotoDraft(id: string) {
+    setPlusMenu(null);
+    navigate(`/draft/${id}`);
+  }
+
+  /** Global "+ Create new agent" → a FRESH Tier 2 draft at /draft/new.
+   *  Always resets the slot — "new" should start empty, not re-focus whatever
+   *  was left from a previous session (PRD journey 12). */
+  function handleGlobalNewAgent() {
+    if (isMobile) setMobileSidebarOpen(false);
+    setDraftError(null);
+    void (async () => {
+      try {
+        const s = await api.createDraftSession({
+          target: "global",
+          type: "agent",
+          draftConfig: { entryPoint: "global" },
+        });
+        useServerStore.getState().applySessionCreated(s);
+        gotoDraft(s.id);
+      } catch (err) {
+        setDraftError(err instanceof Error ? err.message : "Couldn't create a new draft. Please try again.");
+      }
+    })();
+  }
+
+  /** Project "+" → "Agent in worktree" → create a Tier 1 draft. */
+  function handleNewWorktree(project: Project) {
+    if (isMobile) setMobileSidebarOpen(false);
+    setDraftError(null);
+    void (async () => {
+      try {
+        // no worktree exists yet — the draft hangs off the project; the worktree is created on Start
+        const s = await api.createDraftSession({
+          target: "direct",
+          projectId: project.id,
+          type: "agent",
+          draftConfig: { entryPoint: "worktree", worktreeChoice: "new", channel: "json" },
+        });
+        useServerStore.getState().applySessionCreated(s);
+        gotoDraft(s.id);
+      } catch (err) {
+        setDraftError(err instanceof Error ? err.message : "Couldn't start a new draft. Please try again.");
+      }
+    })();
+  }
+
+  /** Project "+" → "Agent in project dir" → create a Tier 1 direct draft. */
+  function handleNewDirectAgent(project: Project) {
+    if (isMobile) setMobileSidebarOpen(false);
+    setDraftError(null);
+    void (async () => {
+      try {
+        const s = await api.createDraftSession({
+          target: "direct",
+          projectId: project.id,
+          type: "agent",
+          draftConfig: { entryPoint: "direct", channel: "json", useWorktree: false },
+        });
+        useServerStore.getState().applySessionCreated(s);
+        gotoDraft(s.id);
+      } catch (err) {
+        setDraftError(err instanceof Error ? err.message : "Couldn't start a new draft. Please try again.");
+      }
+    })();
+  }
+
+  /** Discard a Tier 1 draft (server-backed session) — DELETE the record, and
+   *  leave the draft route if we're currently viewing it. */
+  function confirmDiscardSession(s: Session) {
+    void (async () => {
+      try {
+        await api.terminateSession(s.id);
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : "Failed to discard draft.");
+      }
+    })();
+    if (location.pathname === `/draft/${s.id}`) {
+      navigate("/", { replace: true });
+    }
+  }
+
+  /** Discard the Tier 2 (global) draft — just clears the store. */
+  function confirmDiscardGlobal() {
+    globalDraftClear();
+    if (location.pathname === "/draft/new") {
+      navigate("/", { replace: true });
+    }
+  }
+
+  function handleConfirmDiscardDraft() {
+    if (!pendingDiscardDraft) return;
+    if (pendingDiscardDraft.kind === "global") {
+      confirmDiscardGlobal();
+    } else {
+      confirmDiscardSession(pendingDiscardDraft.session);
+    }
+    setPendingDiscardDraft(null);
+  }
+
+  /** Draft sessions (state === "drafting") under a given project, partitioned
+   *  into direct drafts (entryPoint === "direct", merged into the direct
+   *  session list) and worktree drafts (any other entry point, merged into the
+   *  worktree list). Both are rendered as Tier 1 draft rows inside their
+   *  merged sortable scope, so a draft can be dragged among its non-draft
+   *  siblings. */
+  const draftsByProject = useMemo(() => {
+    const m: Record<string, { direct: Session[]; worktree: Session[] }> = {};
+    for (const s of sessions) {
+      if (s.state === "drafting" && s.projectId && s.draftConfig?.entryPoint !== "tab") {
+        const bucket = s.draftConfig?.entryPoint === "direct" ? "direct" : "worktree";
+        (m[s.projectId] ??= { direct: [], worktree: [] })[bucket].push(s);
+      }
+    }
+    return m;
+  }, [sessions]);
+
   return (
     <div
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
@@ -954,7 +1210,7 @@ export function LeftSidebar({
             className="left-sidebar__nav-item"
             aria-label="Create new agent"
             title="Create new agent"
-            onClick={() => setAddProjectOpen(true)}
+            onClick={handleGlobalNewAgent}
           >
             <Plus size={16} aria-hidden />
             {!collapsed ? "Create new agent" : null}
@@ -990,7 +1246,7 @@ export function LeftSidebar({
                 {orderedPinnedItems.map((item) => {
                   if (item.kind === "session") {
                     const sess = item.data;
-                    const proj = projectById[sess.projectId];
+                    const proj = sess.projectId != null ? projectById[sess.projectId] : undefined;
                     const isActive = location.pathname === `/session/${sess.id}`;
                     const label = sessionLabel(sess);
                     return (
@@ -1384,13 +1640,52 @@ export function LeftSidebar({
                 className="icon-btn sidebar-projects-heading__add"
                 title="New project"
                 aria-label="New project"
-                onClick={() => setAddProjectOpen(true)}
+                onClick={handleGlobalNewAgent}
               >
                 <FolderPlus size={14} />
               </button>
             </>
           )}
         </div>
+        {!collapsed && draftError ? (
+          <div className="sidebar-inline-error" role="status">
+            <span>{draftError}</span>
+            <button type="button" className="icon-btn" aria-label="Dismiss error" onClick={() => setDraftError(null)}>×</button>
+          </div>
+        ) : null}
+        {/* Tier 2 draft row (global new — no project chosen yet) — a top-level
+            sibling to projects, rendered while a global draft is in the store. */}
+        {!collapsed && globalDraft ? (
+          <div
+            className="tree-row tree-row--project draft-row"
+            data-active={location.pathname === "/draft/new"}
+            style={{ position: "relative" }}
+          >
+            <Link to="/draft/new" className="wt-row__stretch-link" draggable={false} tabIndex={-1} />
+            {/* Mirror the project-expand button structure so icon+label gap matches project rows. */}
+            <div className="tree-row__project-expand" style={{ pointerEvents: "none" }}>
+              <span className="tree-row__project-chevron" aria-hidden>
+                <Folder size={14} />
+              </span>
+              <span className="tree-row__label draft-row__label">{draftLabel(globalDraft.draftPrompt)}</span>
+            </div>
+            <div className="wt-row__trail draft-row__trail">
+              <span className="draft-chip">Draft</span>
+              <button
+                type="button"
+                className="draft-row__discard icon-btn tree-row__action"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setPendingDiscardDraft({ kind: "global" });
+                }}
+                title="Discard draft"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        ) : null}
         {visibleProjects.length === 0 ? (
           <div className={`empty-state ${collapsed ? "empty-state--collapsed-rail" : ""}`} style={{ padding: collapsed ? "var(--space-2)" : "var(--space-4)" }}>
             {collapsed ? (
@@ -1405,23 +1700,59 @@ export function LeftSidebar({
           collisionDetection={closestCenter}
           onDragStart={markDrag}
           onDragCancel={markDrag}
-          onDragEnd={(e) =>
-            handleReorder(
-              "projects",
-              orderedVisibleProjects.map((p) => p.id),
-              e,
-            )
-          }
+          onDragEnd={handleTopLevelReorder}
         >
         <SortableContext
-          items={orderedVisibleProjects.map((p) => p.id)}
+          items={orderedTopLevelItems.map((x) => x.id)}
           strategy={verticalListSortingStrategy}
         >
-        {orderedVisibleProjects.map((p) => (
+        {orderedTopLevelItems.map((item) => {
+          if (item.kind === "global_draft") {
+            const s = item.data;
+            return (
+              <SortableRow key={s.id} id={s.id}>
+                {({ setNodeRef, style, attributes, listeners }) => (
+                  <div ref={setNodeRef} style={style} className="wt-row-wrap" {...attributes} {...listeners}>
+                    <div
+                      className="tree-row tree-row--project draft-row"
+                      data-active={location.pathname === `/draft/${s.id}`}
+                      style={{ position: "relative" }}
+                    >
+                      <Link to={`/draft/${s.id}`} className="wt-row__stretch-link" draggable={false} tabIndex={-1} />
+                      <div className="tree-row__project-expand" style={{ pointerEvents: "none" }}>
+                        <span className="tree-row__project-chevron" aria-hidden>
+                          <Folder size={14} />
+                        </span>
+                        <span className="tree-row__label draft-row__label">{s.name?.trim() || draftLabel(s.draftPrompt)}</span>
+                      </div>
+                      <div className="wt-row__trail draft-row__trail">
+                        <span className="draft-chip">Draft</span>
+                        <button
+                          type="button"
+                          className="draft-row__discard icon-btn tree-row__action"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPendingDiscardDraft({ kind: "session", session: s });
+                          }}
+                          title="Discard draft"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </SortableRow>
+            );
+          }
+          const p = item.data;
+          return (
           <SortableRow key={p.id} id={p.id}>
           {({ setNodeRef, style, attributes, listeners }) => (
-          <div ref={setNodeRef} style={style} className="wt-row-wrap" {...attributes} {...listeners}>
-            <div className="tree-row tree-row--project">
+          <div ref={setNodeRef} style={style} className="wt-row-wrap" {...attributes}>
+            <div className="tree-row tree-row--project" {...listeners}>
               <button
                 type="button"
                 className="tree-row__project-expand"
@@ -1482,21 +1813,26 @@ export function LeftSidebar({
                 </button>
               ) : null}
             </div>
-            {/* Direct sessions (no worktree) — shown first, above worktrees.
-                Own reorder scope (`direct:${projectId}`), independent of the
-                worktrees list below. */}
-            {openProj.has(p.id) && (directSessionMap[p.id] ?? []).length > 0
+            {/* Direct sessions (no worktree) + direct drafts (entryPoint ===
+                "direct") — shown first, above worktrees. Both are Session
+                objects sharing one reorder scope (`direct:${projectId}`);
+                drafting sessions render as draft rows, the rest as direct
+                session rows. */}
+            {openProj.has(p.id)
               ? (() => {
                   // Real server `sortOrder` (Part 03 Decision 1) — no more
                   // local drag-order array for this (non-pinned) scope.
-                  const orderedDirect = (directSessionMap[p.id] ?? [])
-                    .slice()
-                    .sort((a, b) => {
-                      const ao = a.sortOrder ?? 0;
-                      const bo = b.sortOrder ?? 0;
-                      if (ao !== bo) return ao - bo;
-                      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-                    });
+                  const directItems = [
+                    ...(directSessionMap[p.id] ?? []),
+                    ...(draftsByProject[p.id]?.direct ?? []),
+                  ];
+                  if (directItems.length === 0) return null;
+                  const orderedDirect = directItems.slice().sort((a, b) => {
+                    const ao = a.sortOrder ?? 0;
+                    const bo = b.sortOrder ?? 0;
+                    if (ao !== bo) return ao - bo;
+                    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+                  });
                   const orderedIds = orderedDirect.map((s) => s.id);
                   return (
                     <div className="direct-sessions-group">
@@ -1509,6 +1845,58 @@ export function LeftSidebar({
                       >
                         <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
                           {orderedDirect.map((sess) => {
+                            if (sess.state === "drafting") {
+                              return (
+                                <SortableRow key={sess.id} id={sess.id}>
+                                  {({ setNodeRef, style, attributes, listeners }) => (
+                                    <div
+                                      ref={setNodeRef}
+                                      style={style}
+                                      className="wt-row-wrap"
+                                      {...attributes}
+                                      {...listeners}
+                                    >
+                                      <div
+                                        className="tree-row tree-row--direct-session draft-row"
+                                        data-active={location.pathname === `/draft/${sess.id}`}
+                                        style={{ position: "relative" }}
+                                        title={sess.name?.trim() || draftLabel(sess.draftPrompt)}
+                                      >
+                                        <Link
+                                          to={`/draft/${sess.id}`}
+                                          className="wt-row__stretch-link"
+                                          draggable={false}
+                                          tabIndex={-1}
+                                          onClick={() => { if (isMobile) setMobileSidebarOpen(false); }}
+                                        />
+                                        <div className="wt-row__expand">
+                                          <span className="wt-leading-slot">
+                                            <Bot size={10} aria-hidden />
+                                          </span>
+                                          <span className="wt-row__label draft-row__label">{sess.name?.trim() || draftLabel(sess.draftPrompt)}</span>
+                                        </div>
+                                        <div className="wt-row__trail draft-row__trail">
+                                          <span className="draft-chip">Draft</span>
+                                          <button
+                                            type="button"
+                                            className="draft-row__discard icon-btn tree-row__action"
+                                            onPointerDown={(e) => e.stopPropagation()}
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setPendingDiscardDraft({ kind: "session", session: sess });
+                                            }}
+                                            title="Discard draft"
+                                          >
+                                            ×
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </SortableRow>
+                              );
+                            }
                             const label = sessionLabel(sess);
                             return (
                               <SortableRow key={sess.id} id={sess.id}>
@@ -1626,8 +2014,11 @@ export function LeftSidebar({
                   );
                 })()
               : null}
-            {/* Worktrees — shown after direct sessions. Own reorder scope
-                (`worktrees:${projectId}`), independent of direct sessions. */}
+            {/* Worktrees + worktree drafts (entryPoint !== "direct") — shown
+                after direct sessions. Unified reorder scope (`worktrees:${projectId}`):
+                worktrees and worktree drafts sort together by sortOrder in a
+                single DndContext/SortableContext, so a draft can be dragged
+                among its non-draft worktree siblings. */}
             {openProj.has(p.id)
               ? (() => {
                   const wtList = (worktreeMap[p.id] ?? []).filter((w) => {
@@ -1635,25 +2026,88 @@ export function LeftSidebar({
                     const ss = sessionMap[w.id] ?? [];
                     return !worktreeIsInactive(ss, sessionStates);
                   });
+                  const wtDrafts = draftsByProject[p.id]?.worktree ?? [];
                   // Real server `sortOrder` (Part 03 Decision 1) — no more
-                  // local drag-order array for this (non-pinned) scope.
-                  const orderedWtList = wtList.slice().sort((a, b) => {
+                  // local drag-order array for this (non-pinned) scope. Sort
+                  // worktrees and worktree drafts together.
+                  const projectItems: ProjectWorktreeItem[] = [
+                    ...wtList.map((w) => ({ kind: "worktree" as const, data: w, id: w.id, sortOrder: w.sortOrder })),
+                    ...wtDrafts.map((s) => ({ kind: "draft" as const, data: s, id: s.id, sortOrder: s.sortOrder })),
+                  ];
+                  const orderedItems = projectItems.slice().sort((a, b) => {
                     const ao = a.sortOrder ?? 0;
                     const bo = b.sortOrder ?? 0;
                     if (ao !== bo) return ao - bo;
                     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
                   });
-                  const orderedIds = orderedWtList.map((w) => w.id);
+                  const orderedIds = orderedItems.map((x) => x.id);
+                  const orderedWtList = orderedItems
+                    .filter((x): x is Extract<ProjectWorktreeItem, { kind: "worktree" }> => x.kind === "worktree")
+                    .map((x) => x.data);
                   return (
                     <DndContext
                       sensors={dndSensors}
                       collisionDetection={closestCenter}
                       onDragStart={markDrag}
                       onDragCancel={markDrag}
-                      onDragEnd={(e) => handleServerReorder(orderedWtList, "worktree", e)}
+                      onDragEnd={(e) => handleServerReorderMixed(orderedItems, e)}
                     >
                       <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
-                        {orderedWtList.map((w) => {
+                        {orderedItems.map((item) => {
+                          if (item.kind === "draft") {
+                            const s = item.data;
+                            return (
+                              <SortableRow key={s.id} id={s.id}>
+                                {({ setNodeRef, style, attributes, listeners }) => (
+                                  <div
+                                    ref={setNodeRef}
+                                    style={style}
+                                    className="wt-row-wrap"
+                                    {...attributes}
+                                    {...listeners}
+                                  >
+                                    <div
+                                      className="tree-row tree-row--worktree draft-row"
+                                      data-active={location.pathname === `/draft/${s.id}`}
+                                      style={{ position: "relative" }}
+                                      title={s.name?.trim() || draftLabel(s.draftPrompt)}
+                                    >
+                                      <Link
+                                        to={`/draft/${s.id}`}
+                                        className="wt-row__stretch-link"
+                                        draggable={false}
+                                        tabIndex={-1}
+                                        onClick={() => { if (isMobile) setMobileSidebarOpen(false); }}
+                                      />
+                                      <div className="wt-row__expand">
+                                        <span className="wt-leading-slot">
+                                          <Bot size={10} aria-hidden />
+                                        </span>
+                                        <span className="wt-row__label draft-row__label">{s.name?.trim() || draftLabel(s.draftPrompt)}</span>
+                                      </div>
+                                      <div className="wt-row__trail draft-row__trail">
+                                        <span className="draft-chip">Draft</span>
+                                        <button
+                                          type="button"
+                                          className="draft-row__discard icon-btn tree-row__action"
+                                          onPointerDown={(e) => e.stopPropagation()}
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setPendingDiscardDraft({ kind: "session", session: s });
+                                          }}
+                                          title="Discard draft"
+                                        >
+                                          ×
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+                              </SortableRow>
+                            );
+                          }
+                          const w = item.data;
                           const label = worktreeLabel(w);
                           return (
                             <SortableRow key={w.id} id={w.id}>
@@ -1782,7 +2236,8 @@ export function LeftSidebar({
           </div>
           )}
           </SortableRow>
-        ))}
+          );
+        })}
         </SortableContext>
         </DndContext>
       </div>
@@ -1815,49 +2270,16 @@ export function LeftSidebar({
           project={plusMenu.project}
           rect={plusMenu.rect}
           onNewWorktree={() => {
+            const project = plusMenu.project;
             setPlusMenu(null);
-            setNewSessProject(plusMenu.project);
+            handleNewWorktree(project);
           }}
           onDirectAgent={() => {
+            const project = plusMenu.project;
             setPlusMenu(null);
-            setDirectAgentProject(plusMenu.project);
+            handleNewDirectAgent(project);
           }}
           onClose={() => setPlusMenu(null)}
-        />
-      ) : null}
-
-      {/* New worktree dialog */}
-      {newSessProject ? (
-        <NewAgentSessionDialog
-          open
-          projectId={newSessProject.id}
-          projectName={newSessProject.name}
-          api={api}
-          onClose={() => {
-            setNewSessProject(null);
-          }}
-          onCreated={() => { /* store stays current via session:created WS event */ }}
-        />
-      ) : null}
-
-      {/* New agent dialog — owns spawn + navigation itself, so onCreated is
-          just a refresh hook (store stays current via WS events either way). */}
-      <NewAgentDialog
-        open={addProjectOpen}
-        api={api}
-        onClose={() => setAddProjectOpen(false)}
-        onCreated={() => { /* store stays current via WS events */ }}
-      />
-
-      {/* Direct agent dialog */}
-      {directAgentProject ? (
-        <NewAgentDirectDialog
-          open
-          projectId={directAgentProject.id}
-          projectName={directAgentProject.name}
-          api={api}
-          onClose={() => setDirectAgentProject(null)}
-          onCreated={() => { /* store stays current via session:created WS event */ }}
         />
       ) : null}
 
@@ -1892,6 +2314,25 @@ export function LeftSidebar({
         confirmLabel="Terminate"
         onConfirm={() => void confirmTerminateSession()}
         onCancel={() => setPendingTerminateSession(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingDiscardDraft !== null}
+        title="Discard draft?"
+        message={
+          pendingDiscardDraft
+            ? pendingDiscardDraft.kind === "global"
+              ? globalDraft?.draftPrompt?.trim()
+                ? `Discard draft “${draftLabel(globalDraft.draftPrompt)}”? The draft prompt and settings will be removed.`
+                : "Discard this draft? The draft prompt and settings will be removed."
+              : pendingDiscardDraft.session.name?.trim() || pendingDiscardDraft.session.draftPrompt?.trim()
+                ? `Discard draft “${pendingDiscardDraft.session.name?.trim() || draftLabel(pendingDiscardDraft.session.draftPrompt)}”? The draft prompt and settings will be removed.`
+                : "Discard this draft? The draft prompt and settings will be removed."
+            : ""
+        }
+        confirmLabel="Discard"
+        onConfirm={handleConfirmDiscardDraft}
+        onCancel={() => setPendingDiscardDraft(null)}
       />
 
       <ConfirmDialog
