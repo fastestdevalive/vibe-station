@@ -23,14 +23,11 @@
 .draft-composer__body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: var(--space-6);
+  padding: var(--space-6) max(var(--space-6), calc(50% - 320px));
   padding-bottom: var(--space-12, 48px);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  max-width: 640px;
-  margin-inline: auto;
-  width: 100%;
 }
 
 .draft-composer__spacer {
