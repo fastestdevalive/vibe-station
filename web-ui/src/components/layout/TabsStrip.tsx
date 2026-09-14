@@ -606,7 +606,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
               // mirrors the daemon's own eligibility check exactly.
               const closeable =
                 !s.isMain || orderedSessions.filter((x) => x.archivedAt == null).length > 1;
-              const isDraft = s.lifecycleState === "drafting" || s.state === "drafting";
+              const isDraft = s.state === "drafting";
               const label = isDraft ? (s.name?.trim() || draftLabel(s.draftPrompt)) : sessionLabel(s);
               const isRenaming = renamingId === s.id;
               const archived = s.archivedAt != null;
@@ -810,14 +810,14 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       <ConfirmDialog
         open={!!terminateTarget}
         title={
-          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+          terminateTarget?.state === "drafting"
             ? "Discard draft?"
             : isAgent
               ? "Terminate agent?"
               : "Terminate terminal?"
         }
         message={
-          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+          terminateTarget?.state === "drafting"
             ? terminateTarget.name?.trim() || terminateTarget.draftPrompt?.trim()
               ? `Discard draft “${terminateTarget.name?.trim() || draftLabel(terminateTarget.draftPrompt)}”? The draft prompt and settings will be removed.`
               : "Discard this draft? The draft prompt and settings will be removed."
@@ -846,7 +846,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   : "Terminate this terminal?")
         }
         confirmLabel={
-          terminateTarget?.lifecycleState === "drafting" || terminateTarget?.state === "drafting"
+          terminateTarget?.state === "drafting"
             ? "Discard"
             : terminateTargetSubagents.length > 0
               ? "Detach subagents & terminate"

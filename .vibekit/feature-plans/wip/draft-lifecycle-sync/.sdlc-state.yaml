@@ -7,8 +7,8 @@ subfeatures:
     origin: planned
     spawned_from: null
     mode: implementing
-    last_completed: "1.T2"
-    awaiting_phase: implement
+    last_completed: "2.T3"
+    awaiting_phase: verify
     awaiting_artifact: ".vibekit/feature-plans/wip/draft-lifecycle-sync/plan-draft-lifecycle-sync.md"
     phase_chain: [plan, implement]
     superseded_reason: null

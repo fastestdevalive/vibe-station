@@ -65,7 +65,9 @@ export function Workspace() {
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
   const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
-  const activeSessionIsDrafting = activeSession?.lifecycleState === "drafting";
+  // `session.state` (not `.lifecycleState`) — see AgentPaneSlot.tsx:74-80 for why:
+  // the live WS handlers only patch `.state`, so `.lifecycleState` goes stale.
+  const activeSessionIsDrafting = activeSession?.state === "drafting";
   const leftSidebarCollapsed = useWorkspaceStore((s) => s.leftSidebarCollapsed);
   const toggleLeftSidebarCollapsed = useWorkspaceStore((s) => s.toggleLeftSidebarCollapsed);
   const leftSidebarWidthPx = useWorkspaceStore((s) => s.leftSidebarWidthPx);
@@ -248,7 +250,9 @@ export function Workspace() {
       return;
     }
     if (notFoundTimerRef.current) { clearTimeout(notFoundTimerRef.current); notFoundTimerRef.current = null; }
-    if (s.lifecycleState === "drafting") return;
+    // `s.state` (not `.lifecycleState`) — see AgentPaneSlot.tsx:74-80 for why:
+    // `.lifecycleState` is only set on the initial fetch, never patched live.
+    if (s.state === "drafting") return;
     if (s.worktreeId) navigate(`/worktree/${s.worktreeId}`, { replace: true });
     else if (s.projectId) navigate(`/session/${s.id}`, { replace: true });
     else navigate("/", { replace: true });

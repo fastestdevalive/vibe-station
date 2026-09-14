@@ -69,15 +69,15 @@ Two small, independent call sites, no shared new abstraction — no diagram need
 
 ### Phase 2 — Web-UI: read `.state`, not `.lifecycleState`, for the drafting check
 
-- [ ] **2.1** `web-ui/src/routes/Workspace.tsx:68`: `activeSession?.lifecycleState === "drafting"` → `activeSession?.state === "drafting"`.
-- [ ] **2.2** `web-ui/src/routes/Workspace.tsx:251`: `s.lifecycleState === "drafting"` → `s.state === "drafting"`.
-- [ ] **2.3** Add a one-line comment at both sites pointing to `AgentPaneSlot.tsx:74-80`'s explanation, so the next person doesn't revert it back to `.lifecycleState`.
-- [ ] **2.4** `web-ui/src/components/layout/TabsStrip.tsx:609,813,820,849`: drop the now-redundant `s.lifecycleState === "drafting" ||` / `terminateTarget?.lifecycleState === "drafting" ||` clauses, leaving just the `.state` check.
+- [x] **2.1** `web-ui/src/routes/Workspace.tsx:68`: `activeSession?.lifecycleState === "drafting"` → `activeSession?.state === "drafting"`.
+- [x] **2.2** `web-ui/src/routes/Workspace.tsx:251`: `s.lifecycleState === "drafting"` → `s.state === "drafting"`.
+- [x] **2.3** Add a one-line comment at both sites pointing to `AgentPaneSlot.tsx:74-80`'s explanation, so the next person doesn't revert it back to `.lifecycleState`.
+- [x] **2.4** `web-ui/src/components/layout/TabsStrip.tsx:609,813,820,849`: drop the now-redundant `s.lifecycleState === "drafting" ||` / `terminateTarget?.lifecycleState === "drafting" ||` clauses, leaving just the `.state` check.
 
 **Verify phase 2:**
-- [ ] **2.T1** Integration — `Workspace.test.tsx` (or nearest suite): a session whose `state` has transitioned to `"not_started"` via a mocked `session:state` WS event (while `lifecycleState` is deliberately left stale at `"drafting"`, simulating the real bug) renders the real agent pane, not `DraftComposer`.
-- [ ] **2.T2** Regression — same suite: a session still genuinely drafting (`state: "drafting"`) still renders `DraftComposer`.
-- [ ] **2.T3** Regression — `TabsStrip.test.tsx`: a promoted session (`state` no longer `"drafting"`) no longer shows the draft badge/terminate-dialog copy, even with a stale `lifecycleState`.
+- [x] **2.T1** Integration — `Workspace.test.tsx`: a session whose `state` has transitioned to `"not_started"` via a mocked `session:state` WS event (while `lifecycleState` is deliberately left stale at `"drafting"`, simulating the real bug) renders the real agent pane, not `DraftComposer`.
+- [x] **2.T2** Regression — same suite: a session still genuinely drafting (`state: "drafting"`) still renders `DraftComposer`.
+- [x] **2.T3** Regression — `TabsStrip.test.tsx`: a promoted session (`state` no longer `"drafting"`) no longer shows the draft badge/terminate-dialog copy, even with a stale `lifecycleState`.
 
 ---
 
