@@ -1,0 +1,31 @@
+{
+  "id": "vs-141-a-5853aa1a",
+  "worktreeId": "vs-141",
+  "projectId": "vibe-station",
+  "isMain": true,
+  "type": "agent",
+  "modeId": "mode-1785649772352-dlzo2",
+  "name": "port daemon",
+  "nameSource": "auto",
+  "tmuxName": "vs-141-a1",
+  "useTmux": true,
+  "channel": "json",
+  "state": "working",
+  "lifecycleState": "working",
+  "createdAt": "2026-09-14T00:00:00.000Z",
+  "pinnedAt": null,
+  "archivedAt": null,
+  "sortOrder": 1,
+  "handoffSummary": null,
+  "parentSessionId": null,
+  "supersededBy": null,
+  "pr": {
+    "state": "open",
+    "number": 141,
+    "url": "https://github.com/acme/repo/pull/141",
+    "checkedAt": "2026-09-14T00:00:00.000Z",
+    "prBranch": "port-daemon-rust"
+  },
+  "draftPrompt": null,
+  "draftConfig": null
+}

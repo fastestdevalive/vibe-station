@@ -1,0 +1,67 @@
+[workspace]
+resolver = "2"
+members = [
+    "vst-types",
+    "vst-testkit",
+    "vst-store",
+    "vst-proc",
+    "vst-git",
+    "vst-rpc",
+    "vst-agents",
+    "vst-lifecycle",
+    "vst-ws",
+    "vst-routes",
+    "vst-daemon",
+    "vst-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+repository = ""
+
+[workspace.dependencies]
+# async runtime + ecosystem
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# workspace internal crates
+vst-types = { path = "vst-types" }
+vst-testkit = { path = "vst-testkit", default-features = false }
+vst-store = { path = "vst-store" }
+vst-proc = { path = "vst-proc" }
+vst-git = { path = "vst-git" }
+vst-rpc = { path = "vst-rpc" }
+vst-agents = { path = "vst-agents" }
+vst-lifecycle = { path = "vst-lifecycle" }
+vst-ws = { path = "vst-ws" }
+vst-routes = { path = "vst-routes" }
+vst-daemon = { path = "vst-daemon" }
+vst-cli = { path = "vst-cli" }
+
+[workspace.lints.rust]
+# Deny the common rustc warnings directly. NOT the `warnings` group: that
+# group is shared with clippy, so `warnings = "deny"` (here or via a CLI
+# `-D warnings`) would promote every clippy warn-level lint too — which is
+# exactly what Gotcha #12 exists to prevent. Denying these specific rustc
+# lints keeps pedantic and other clippy noise informational (non-blocking).
+unused = "deny"
+dead_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = "warn"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

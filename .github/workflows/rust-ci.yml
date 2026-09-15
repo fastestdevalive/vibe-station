@@ -1,0 +1,38 @@
+name: Rust CI
+
+on:
+  push:
+    paths: ["rust/**"]
+  pull_request:
+    paths: ["rust/**"]
+
+concurrency:
+  group: rust-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: rust-gate.sh --workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+
+      - name: Install cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+
+      - name: Run the gate
+        run: rust/scripts/rust-gate.sh --workspace
+
+      - name: cargo deny check
+        run: cargo deny check --manifest-path rust/Cargo.toml

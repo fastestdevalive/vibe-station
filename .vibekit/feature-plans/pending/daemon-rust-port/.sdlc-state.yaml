@@ -1,0 +1,218 @@
+feature: daemon-rust-port
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141
+created: 2026-09-14T00:00:00Z
+
+master:
+  prd: skipped   # internal engineering rewrite, no user-facing product behavior — see arch doc "PRD: none"
+  plan: complete # arch-daemon-rust-port.md reviewed and approved
+
+current_subfeature: 01-storage
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: retired
+    last_completed: plan
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 00-foundation
+    origin: planned
+    spawned_from: root
+    mode: done
+    last_completed: review
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: 4bb06f8
+
+  - id: 01-storage
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 02-process-pty
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 03-git-worktree
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 04-spike
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 04a-agent-plugins-core
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 04b-acp-transport
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 04c-json-agent-chat
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 05-lifecycle-status
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 06-ws-realtime
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 07a-rest-routes-core
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 07b-rest-routes-misc
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 08-server-bootstrap
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 09-cli-port
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 10-parity-cutover
+    origin: planned
+    spawned_from: root
+    mode: pending
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
