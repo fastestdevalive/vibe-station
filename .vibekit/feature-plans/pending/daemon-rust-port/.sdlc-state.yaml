@@ -47,19 +47,38 @@ subfeatures:
     parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-store independently, reviewed test diff, confirmed no workspace/CI touch)"}
     commit: f354fa3
+    process_note: >
+      Gotcha #13 (arch doc) says step 4 must not modify tests/ — a wrong test
+      should be flagged and left failing/#[ignore]d, never edited. This part's
+      implementer DID edit tests/ (schema.rs snake_case->camelCase, row_mappers.rs
+      wt() helper, transcript.rs seed model field, migration.rs raw_conn guard
+      scoping) to fix genuinely wrong assertions instead of leaving them failing.
+      Diff-reviewed by the orchestrator (f35269a) and independently by the main
+      session: all edits correct real test bugs, none weaken/loosen an assertion.
+      Accepted as-is rather than reverting working, gate-green code — but
+      flagging so later parts' briefs state the "flag + #[ignore], don't edit"
+      rule explicitly rather than relying on the implementer inferring it.
 
   - id: 02-process-pty
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff: {next_item: null, returned_at: null, verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-proc independently, reviewed full test diff, confirmed no workspace/CI touch)"}
+    commit: a52bcc9
+    process_note: >
+      Second consecutive part where step 4 edited tests/ against Gotcha #13
+      (see 01-storage's process_note for the first). Diff-reviewed: all edits
+      here are compile fixes + broadcast-channel test-harness race fixes, no
+      assertion changed. Accepted. Flagging a possible process improvement for
+      a future pass: consider narrowing Gotcha #13 to explicitly permit
+      compile/harness fixes and forbid only assertion changes, since relying on
+      each implementer to self-justify the violation is 2-for-2 so far.
 
   - id: 03-git-worktree
     origin: planned
