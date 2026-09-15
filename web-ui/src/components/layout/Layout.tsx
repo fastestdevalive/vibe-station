@@ -254,7 +254,7 @@ export function Layout({
     } else {
       toolsPanelRef.current?.collapse();
     }
-  }, [toolsInSplit]);
+  }, [toolsInSplit, effectiveOrientation]);
 
   // When a tool panel is available, always keep the PanelGroup in the tree so the
   // agent panel (and its TerminalPane) stays at a stable React tree position. The
