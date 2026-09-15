@@ -122,6 +122,19 @@ export function Layout({
     if (paneFullscreen === "terminal" && !showTerminalDock) setPaneFullscreen(null);
   }, [paneFullscreen, showToolPanel, showTerminalDock, setPaneFullscreen]);
 
+  // toolsInSplit / toolsPanelRef / its effect must all be before any early return
+  // to satisfy Rules of Hooks — the hook count must be identical on every render
+  // regardless of which branch (dashboard vs. agent view) is taken.
+  const toolsInSplit = showToolPanel && paneFullscreen !== "tools";
+  const toolsPanelRef = useRef<ImperativePanelHandle>(null);
+  useEffect(() => {
+    if (toolsInSplit) {
+      toolsPanelRef.current?.expand();
+    } else {
+      toolsPanelRef.current?.collapse();
+    }
+  }, [toolsInSplit, effectiveOrientation]);
+
   const sidebarInner = (
     <div
       className="pane-left-inner"
@@ -192,7 +205,7 @@ export function Layout({
           {isMobile ? sidebarMobile : sidebarDesktop}
           <div
             className="pane pane-dashboard"
-            style={{ overflow: "auto", background: "var(--bg-primary)" }}
+            style={{ overflow: "hidden", background: "var(--bg-primary)" }}
           >
             {dashboardPane}
           </div>
@@ -235,7 +248,6 @@ export function Layout({
 
   const agentFullscreen = paneFullscreen === "agent";
   const terminalFullscreen = paneFullscreen === "terminal";
-  const toolsInSplit = showToolPanel && paneFullscreen !== "tools";
 
   const agentWrapper = () => regionWrapper(agentPane, agentFullscreen);
   const dockWrapper = () => regionWrapper(terminalDock, terminalFullscreen);
@@ -243,18 +255,6 @@ export function Layout({
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
   // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
   const vertical = effectiveOrientation === "vertical";
-
-  // Imperative handle for the tools Panel — used to collapse/expand it without
-  // changing the agent's React tree position (which would remount TerminalPane,
-  // killing the PTY stream). See the invariant in AGENTS.md.
-  const toolsPanelRef = useRef<ImperativePanelHandle>(null);
-  useEffect(() => {
-    if (toolsInSplit) {
-      toolsPanelRef.current?.expand();
-    } else {
-      toolsPanelRef.current?.collapse();
-    }
-  }, [toolsInSplit, effectiveOrientation]);
 
   // When a tool panel is available, always keep the PanelGroup in the tree so the
   // agent panel (and its TerminalPane) stays at a stable React tree position. The
