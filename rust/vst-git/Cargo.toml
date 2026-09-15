@@ -11,6 +11,14 @@ vst-store = { workspace = true }
 vst-proc = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+regex = "1"
+fancy-regex = "0.19"
+getrandom = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+vst-testkit = { workspace = true }
 
 [lints]
 workspace = true

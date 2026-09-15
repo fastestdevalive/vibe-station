@@ -83,15 +83,34 @@ subfeatures:
   - id: 03-git-worktree
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "part 06 (vst-ws) should adopt/replace vst-git's local DirectPtyRegistry stopgap with the real one; whichever part owns paths.ts's remainder should do the same for vst-git::paths::Paths"
+      returned_at: null
+      verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-git independently, reviewed full test diff, confirmed no workspace/CI touch)"
+    commit: 1a3e078
+    process_note: >
+      Third consecutive part where step 4 edited tests/ against Gotcha #13
+      (see 01-storage and 02-process-pty process_notes for the first two).
+      Diff-reviewed: fixture-collision fix, sync->async correctness fix, and a
+      liveness-probe fix (a `kill -0` zombie check was replaced with reap +
+      signal check) — no assertion weakened, one assertion was strengthened.
+      This part also spent an unusually large share of wall-clock (~5 turn
+      boundaries of legitimate but unproductive debugging) on one test's
+      process-group-kill mechanics before the orchestrator gave an explicit
+      "#[ignore] and move on" directive — worth remembering as a concrete
+      instance of when to cut a stuck-but-not-erroring investigation short,
+      distinct from step D's "same error recurring" stuck signal.
+      Separately, this part surfaced a genuine part-01 gap: vst-store never
+      shipped the production DirectPtyRegistry its own test comment promised;
+      vst-git worked around it locally rather than blocking (see its plan's
+      "Closed out" section and this entry's `handoff.next_item`).
 
   - id: 04-spike
     origin: planned
