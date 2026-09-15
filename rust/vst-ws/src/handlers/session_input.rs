@@ -1,0 +1,77 @@
+//! `session:input` handler — forward client keystrokes to the session.
+
+use vst_types::ws::{ClientMessage, ServerMessage, SessionErrorReason};
+
+use super::session_lookup::{find_session_record, SessionLookup};
+use crate::connection::WsConnection;
+
+/// Forward client keystrokes to the session.
+///
+/// Tmux mode: prefer writing through the open `tmux attach-session` PTY so
+/// tmux's input parser sees the bytes and can react to the prefix key; fall
+/// back to `tmux send-keys -l` if no stream is registered (mid attach/detach).
+///
+/// Direct-pty mode: write to the open stream's PTY; drop silently if none.
+pub async fn handle_session_input(
+    conn: &WsConnection,
+    lookup: &SessionLookup,
+    msg: &ClientMessage,
+) {
+    let ClientMessage::SessionInput { session_id, data } = msg else {
+        return;
+    };
+    if data.is_empty() {
+        return;
+    }
+
+    let Some((_project, session)) = find_session_record(lookup, session_id).await else {
+        conn.send(ServerMessage::SessionError {
+            session_id: session_id.clone(),
+            message: format!("Session '{session_id}' not found"),
+            reason: Some(SessionErrorReason::Gone),
+        });
+        return;
+    };
+
+    let entry = conn.open_stream_entry(session_id);
+
+    if session.use_tmux {
+        if let Some(entry) = entry {
+            entry.stream.write(data);
+            return;
+        }
+        // No stream — fall back to `tmux send-keys -l`.
+        let escaped = data.replace('\'', "'\\''");
+        match run_tmux(
+            conn,
+            &["send-keys", "-t", &session.tmux_name, "-l", &escaped],
+        ) {
+            Ok(()) => {}
+            Err(msg) => {
+                conn.send(ServerMessage::SessionError {
+                    session_id: session_id.clone(),
+                    message: msg,
+                    reason: Some(SessionErrorReason::Transient),
+                });
+            }
+        }
+        return;
+    }
+
+    // Direct-pty mode.
+    if let Some(entry) = entry {
+        entry.stream.write(data);
+    }
+}
+
+fn run_tmux(_conn: &WsConnection, args: &[&str]) -> Result<(), String> {
+    let out = std::process::Command::new("tmux")
+        .args(args)
+        .output()
+        .map_err(|e| format!("Failed to send input: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
