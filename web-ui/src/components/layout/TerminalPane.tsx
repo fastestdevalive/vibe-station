@@ -298,8 +298,10 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     // almost immediately, but guard against edge-case browser quirks.
     const openFallbackTimer = window.setTimeout(() => {
       if (!sessionOpened) {
-        try { fit.fit(); } catch { /* ignore */ }
-        openSessionOnce();
+        requestAnimationFrame(() => {
+          try { fit.fit(); } catch { /* ignore */ }
+          openSessionOnce();
+        });
       }
     }, 300);
 
@@ -345,7 +347,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
           if (
             sessionOpened &&
             sessionOpenedAt > 0 &&
-            Date.now() - sessionOpenedAt < 1500 &&
+            Date.now() - sessionOpenedAt < 500 &&
             proposed != null &&
             proposed.rows > term.rows
           ) {
@@ -358,9 +360,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
             // First ResizeObserver fire after mount — open the session now
             // with correctly fitted (pre-IME) dimensions.
             openSessionOnce();
-          } else {
-            void api.resizeSession(activeSessionId, term.cols, term.rows);
           }
+          // Resize RPC is handled by term.onResize (fired synchronously by
+          // fit.fit() above) — no explicit resizeSession call needed here.
 
           if (term.rows > 0) {
             if (wasAtBottom) term.scrollToBottom();
@@ -385,15 +387,18 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
         const proposed = fit.proposeDimensions();
         if (
           sessionOpenedAt > 0 &&
-          Date.now() - sessionOpenedAt < 1500 &&
+          Date.now() - sessionOpenedAt < 500 &&
           proposed != null &&
           proposed.rows > term.rows
         ) {
           term.clear();
         }
         fit.fit();
-        void api.resizeSession(activeSessionId, term.cols, term.rows);
-        if (term.rows > 0 && wasAtBottom) term.scrollToBottom();
+        // Resize RPC handled by term.onResize fired synchronously by fit.fit().
+        if (term.rows > 0) {
+          if (wasAtBottom) term.scrollToBottom();
+          term.refresh(0, term.rows - 1);
+        }
       } catch {
         /* ignore */
       }
@@ -414,6 +419,10 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       inputDebug?.log({ kind: "onData", chunk: data, chunkLen: data.length });
       void api.sendKeystroke(activeSessionId, data);
     });
+    // term.onResize is the single source of truth for PTY resize RPCs.
+    // fit.fit() fires this synchronously when dimensions change; explicit
+    // callers (ResizeObserver, handleWindowResize, font-size effect) do NOT
+    // also call api.resizeSession — this handler covers them all.
     const r = term.onResize(({ cols, rows }) => {
       if (sessionOpened) {
         void api.resizeSession(activeSessionId, cols, rows);
