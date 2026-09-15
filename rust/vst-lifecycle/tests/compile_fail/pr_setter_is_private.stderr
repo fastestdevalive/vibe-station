@@ -1,0 +1,17 @@
+error[E0603]: function `set_pr_status` is private
+ --> tests/compile_fail/pr_setter_is_private.rs:4:39
+  |
+4 |     let _ = vst_lifecycle::pr_poller::set_pr_status;
+  |                                       ^^^^^^^^^^^^^ private function
+  |
+note: the function `set_pr_status` is defined here
+ --> src/pr_poller.rs
+  |
+  | / async fn set_pr_status(
+  | |     project_id: &str,
+  | |     session: &SessionRecord,
+  | |     pr: PrStatus,
+  | |     store: &StoreHandle,
+  | |     broadcaster: &Broadcaster,
+  | | ) {
+  | |_^

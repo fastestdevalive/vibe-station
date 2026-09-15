@@ -182,7 +182,7 @@ pub enum NormalizedEventKind {
 
 /// Token / cost usage numbers, normalized across harnesses.
 #[skip_serializing_none]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageInfo {
     pub input_tokens: i64,
@@ -361,6 +361,47 @@ pub struct NormalizedEvent {
     pub silent: Option<bool>,
 }
 
+impl Default for NormalizedEvent {
+    /// Convenience all-`None` constructor; the provider/kind are overwritten
+    /// by callers (used by `vst-agents`' parser event builders). Purely
+    /// additive — does not change the wire shape.
+    fn default() -> Self {
+        NormalizedEvent {
+            id: String::new(),
+            session_id: String::new(),
+            ts: String::new(),
+            provider: NormalizedEventProvider::Claude,
+            kind: NormalizedEventKind::User,
+            role: None,
+            text: None,
+            tool_name: None,
+            tool_id: None,
+            tool_input: None,
+            tool_result: None,
+            usage: None,
+            model: None,
+            turn_id: None,
+            log_seq: None,
+            attachments: None,
+            edited: None,
+            cancelled: None,
+            superseded: None,
+            agent_chat_id: None,
+            blocks: None,
+            tool_diffs: None,
+            tool_locations: None,
+            tool_kind: None,
+            tool_status: None,
+            mode_id: None,
+            commands: None,
+            subagent_id: None,
+            subagent_name: None,
+            subagent_state: None,
+            silent: None,
+        }
+    }
+}
+
 /// `user` | `assistant`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -371,7 +412,7 @@ pub enum Role {
 
 /// `tool_result` payload.
 #[skip_serializing_none]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolResult {
     pub content: Option<String>,

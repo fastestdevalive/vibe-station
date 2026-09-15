@@ -1,0 +1,17 @@
+error[E0603]: function `set_lifecycle_state` is private
+ --> tests/compile_fail/lifecycle_setter_is_private.rs:4:39
+  |
+4 |     let _ = vst_lifecycle::lifecycle::set_lifecycle_state;
+  |                                       ^^^^^^^^^^^^^^^^^^^ private function
+  |
+note: the function `set_lifecycle_state` is defined here
+ --> src/lifecycle.rs
+  |
+  | / async fn set_lifecycle_state(
+  | |     project_id: &str,
+  | |     session: &SessionRecord,
+  | |     new_state: LifecycleState,
+... |
+  | |     broadcaster: &Broadcaster,
+  | | ) {
+  | |_^
