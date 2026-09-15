@@ -93,6 +93,20 @@ describe("normalizeSessionUpdate (1.T3)", () => {
     expect(ev?.toolDiffs).toEqual([{ path: "/a.ts", oldText: "old", newText: "new" }]);
   });
 
+  it("tool_call with write tool input populates toolDiffs with empty oldText and entire content as newText", () => {
+    const ev = normalizeSessionUpdate(
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "tc-3",
+        title: "Write",
+        rawInput: { file_path: "/src/index.ts", content: "console.log('hello');" },
+      },
+      "sess1",
+      "claude",
+    );
+    expect(ev?.toolDiffs).toEqual([{ path: "/src/index.ts", oldText: "", newText: "console.log('hello');" }]);
+  });
+
   it("current_mode_update maps to a mode_update event", () => {
     const ev = normalizeSessionUpdate(
       { sessionUpdate: "current_mode_update", currentModeId: "build" },
