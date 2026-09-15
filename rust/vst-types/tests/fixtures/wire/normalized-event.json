@@ -1,0 +1,12 @@
+{
+  "id": "evt-0001",
+  "sessionId": "vs-141-a-5853aa1a",
+  "ts": "2026-09-14T00:00:00.000Z",
+  "provider": "opencode",
+  "kind": "user",
+  "role": "user",
+  "text": "Implement the plan",
+  "turnId": "turn-0001",
+  "logSeq": 1,
+  "attachments": []
+}

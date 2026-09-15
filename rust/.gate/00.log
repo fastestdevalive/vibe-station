@@ -1,0 +1,500 @@
+== fmt ==
+== clippy ==
+    Checking vst-types v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-types)
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:316:9
+    |
+316 |     /// tool_use
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+    = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+    |
+316 -     /// tool_use
+316 +     /// `tool_use`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:318:9
+    |
+318 |     /// tool_use | tool_result
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+318 -     /// tool_use | tool_result
+318 +     /// `tool_use` | tool_result
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:318:20
+    |
+318 |     /// tool_use | tool_result
+    |                    ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+318 -     /// tool_use | tool_result
+318 +     /// tool_use | `tool_result`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:320:9
+    |
+320 |     /// tool_use
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+320 -     /// tool_use
+320 +     /// `tool_use`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:348:13
+    |
+348 |     /// ACP ToolCallStatus (Gap 5).
+    |             ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+348 -     /// ACP ToolCallStatus (Gap 5).
+348 +     /// ACP `ToolCallStatus` (Gap 5).
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:350:9
+    |
+350 |     /// mode_update only.
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+350 -     /// mode_update only.
+350 +     /// `mode_update` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:352:9
+    |
+352 |     /// commands_update only.
+    |         ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+352 -     /// commands_update only.
+352 +     /// `commands_update` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:354:9
+    |
+354 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+354 -     /// message_generated only.
+354 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:356:9
+    |
+356 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+356 -     /// message_generated only.
+356 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:358:9
+    |
+358 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+358 -     /// message_generated only.
+358 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:416:16
+    |
+416 |     /// Latest commands_update catalog (full-replace).
+    |                ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+416 -     /// Latest commands_update catalog (full-replace).
+416 +     /// Latest `commands_update` catalog (full-replace).
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:511:9
+    |
+511 |     /// SessionId this session was spawned from.
+    |         ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+511 -     /// SessionId this session was spawned from.
+511 +     /// `SessionId` this session was spawned from.
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:143:12
+    |
+143 |     pub fn new(capacity: usize) -> Self {
+    |            ^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+    = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+    |
+143 ~     #[must_use]
+144 ~     pub fn new(capacity: usize) -> Self {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:154:12
+    |
+154 |     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
+    |            ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+154 ~     #[must_use]
+155 ~     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:159:12
+    |
+159 |     pub fn receiver_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+159 ~     #[must_use]
+160 ~     pub fn receiver_count(&self) -> usize {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:16:5
+   |
+16 | /     pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+17 | |     where
+18 | |         S: Serializer,
+   | |______________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+   = note: `-W clippy::missing-errors-doc` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_errors_doc)]`
+
+warning: casting `f64` to `i64` may truncate the value
+  --> vst-types/src/serde_ext.rs:24:38
+   |
+24 |             serializer.serialize_i64(*value as i64)
+   |                                      ^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_truncation
+   = note: `-W clippy::cast-possible-truncation` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_possible_truncation)]`
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:29:5
+   |
+29 | /     pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
+30 | |     where
+31 | |         D: Deserializer<'de>,
+   | |_____________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: casting `i64` to `f64` may cause a loss of precision (`i64` is 64 bits wide, but `f64`'s mantissa is only 52 bits wide)
+  --> vst-types/src/serde_ext.rs:43:20
+   |
+43 |                 Ok(v as f64)
+   |                    ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_precision_loss
+   = note: `-W clippy::cast-precision-loss` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_precision_loss)]`
+
+warning: casting `u64` to `f64` may cause a loss of precision (`u64` is 64 bits wide, but `f64`'s mantissa is only 52 bits wide)
+  --> vst-types/src/serde_ext.rs:47:20
+   |
+47 |                 Ok(v as f64)
+   |                    ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_precision_loss
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:67:5
+   |
+67 | /     pub fn serialize<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+68 | |     where
+69 | |         S: Serializer,
+   | |______________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:78:5
+   |
+78 | /     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+79 | |     where
+80 | |         D: Deserializer<'de>,
+   | |_____________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: `vst-types` (lib test) generated 22 warnings (22 duplicates)
+warning: `vst-types` (lib) generated 22 warnings (run `cargo clippy --fix --lib -p vst-types -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 15 suggestions)
+    Checking vst-store v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-store)
+    Checking vst-proc v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-proc)
+    Checking vst-rpc v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-rpc)
+    Checking vst-testkit v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-testkit)
+    Checking vst-cli v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-cli)
+    Checking vst-agents v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-agents)
+    Checking vst-git v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-git)
+warning: this method could have a `#[must_use]` attribute
+  --> vst-testkit/src/git_fixture.rs:26:12
+   |
+26 |     pub fn git(&self, args: &[&str]) -> String {
+   |            ^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+   = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+   |
+26 ~     #[must_use]
+27 ~     pub fn git(&self, args: &[&str]) -> String {
+   |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-testkit/src/git_fixture.rs:49:8
+   |
+49 | pub fn create_git_fixture(prefix: &str) -> GitFixture {
+   |        ^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+49 + #[must_use]
+50 | pub fn create_git_fixture(prefix: &str) -> GitFixture {
+   |
+
+warning: `vst-testkit` (lib) generated 2 warnings (run `cargo clippy --fix --lib -p vst-testkit -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 2 suggestions)
+    Checking vst-lifecycle v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-lifecycle)
+    Checking vst-ws v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-ws)
+warning: `vst-testkit` (lib test) generated 2 warnings (2 duplicates)
+    Checking vst-routes v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-routes)
+warning: the borrowed expression implements the required traits
+   --> vst-types/tests/wire.rs:123:38
+    |
+123 |     let value = serde_json::to_value(&vst_types::SessionId("vs-141".into())).unwrap();
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `vst_types::SessionId("vs-141".into())`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_borrows_for_generic_args
+    = note: `#[warn(clippy::needless_borrows_for_generic_args)]` on by default
+
+warning: `vst-types` (test "wire") generated 1 warning (run `cargo clippy --fix --test "wire" -p vst-types -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 1 suggestion)
+    Checking vst-daemon v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-daemon)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.82s
+== test (--workspace) ==
+   Compiling vst-types v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-types)
+   Compiling vst-proc v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-proc)
+   Compiling vst-store v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-store)
+   Compiling vst-rpc v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-rpc)
+   Compiling vst-testkit v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-testkit)
+   Compiling vst-agents v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-agents)
+   Compiling vst-git v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-git)
+   Compiling vst-ws v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-ws)
+   Compiling vst-lifecycle v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-lifecycle)
+   Compiling vst-routes v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-routes)
+   Compiling vst-daemon v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-daemon)
+   Compiling vst-cli v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.66s
+     Running unittests src/lib.rs (target/debug/deps/vst_agents-bf17252e8f79f5e1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/vst_cli-a0eb70bbc05d3bd1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/vst_daemon-ef6eab5da6c86232)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_git-a8a686c852239f4a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_lifecycle-b1a5c6c89051c81b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_proc-f7415406b0faa5f1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_routes-a30a8b3bafcd5786)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_rpc-4614924a26b6c449)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_store-953fe5bc5090666c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_testkit-9d7a2aeb8bb3d141)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/git_fixture.rs (target/debug/deps/git_fixture-757f0fba99cb36a2)
+
+running 1 test
+test git_fixture_creates_a_repo_on_main ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_types-698f448fce2d2fef)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wire.rs (target/debug/deps/wire-631f9d3bdc5651b7)
+
+running 13 tests
+test enqueue_chat_result_roundtrips ... ok
+test client_message_session_open_roundtrips ... ok
+test id_newtypes_serialize_as_bare_strings ... ok
+test mode_fixture_roundtrips ... ok
+test project_fixture_roundtrips ... ok
+test global_draft_fixture_roundtrips ... ok
+test server_message_session_created_roundtrips ... ok
+test server_message_session_state_roundtrips ... ok
+test server_message_session_updated_roundtrips ... ok
+test server_message_chat_replay_roundtrips ... ok
+test session_updated_omits_unchanged_optionals ... ok
+test session_fixture_roundtrips ... ok
+test worktree_fixture_roundtrips ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/vst_ws-3356f378cac54d38)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_agents
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_git
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_lifecycle
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_proc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_routes
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_rpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_testkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_types
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_ws
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+== gate green ==

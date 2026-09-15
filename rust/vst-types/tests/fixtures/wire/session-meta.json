@@ -1,0 +1,12 @@
+{
+  "sessionId": "vs-141-a-5853aa1a",
+  "channel": "json",
+  "modeId": "mode-1785649772352-dlzo2",
+  "modeName": "DeepSeek v4 flash",
+  "cli": "opencode",
+  "model": "deepseek-local/deepseek-v4-flash-0731",
+  "turnState": "idle",
+  "queueDepth": 0,
+  "queuedTurnIds": [],
+  "editingTurnIds": []
+}

@@ -1,0 +1,14 @@
+{
+  "id": "vs-141",
+  "projectId": "vibe-station",
+  "name": "port daemon rust",
+  "branch": "port-daemon-rust",
+  "branchIsPlaceholder": false,
+  "baseBranch": "main",
+  "baseSha": "285334f2fa387d96dfeb12da2d7e349fd7978a95",
+  "createdAt": "2026-09-14T00:00:00.000Z",
+  "pinnedAt": null,
+  "hiddenAt": null,
+  "sortOrder": 1,
+  "mainSessionId": "vs-141-a-5853aa1a"
+}

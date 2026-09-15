@@ -1,0 +1,20 @@
+[package]
+name = "vst-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vst-cli"
+path = "src/main.rs"
+
+[dependencies]
+vst-types = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
