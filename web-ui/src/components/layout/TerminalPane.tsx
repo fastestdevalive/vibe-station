@@ -269,13 +269,39 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       }
     });
 
-    // Open session synchronously after fit. Daemon won't emit chunks
-    // until openSession lands. Skipped for a released (done) session — its
-    // pane is gone; Resume is what brings it back.
-    if (!paneReleasedRef.current) {
+    // Delay openSession to the first ResizeObserver callback instead of
+    // calling it synchronously here. On mobile, term.focus() (above) triggers
+    // the soft keyboard (IME) which shrinks the layout viewport via
+    // interactive-widget=resizes-content. The IME takes ~100-300 ms to appear;
+    // the ResizeObserver fires within one frame (~16 ms). By deferring, the
+    // session almost always opens with the full-height pre-IME dimensions, so
+    // the initial tmux buffer replay arrives at the right size. If the IME was
+    // already open at mount (e.g. switching agents while the keyboard was
+    // visible), the early-growth guard in the ResizeObserver RAF will clear
+    // xterm's scrollback before the first size increase so no stale replay
+    // rows appear frozen at the top of the expanded viewport.
+    //
+    // Released sessions skip openSession entirely — Resume is what re-opens
+    // them — so we initialise sessionOpened to true for that case.
+    let sessionOpened = paneReleasedRef.current;
+    let sessionOpenedAt = 0;
+
+    const openSessionOnce = () => {
+      if (sessionOpened || !mounted) return;
+      sessionOpened = true;
+      sessionOpenedAt = Date.now();
       markSessionAttachPending(activeSessionId);
       void api.openSession(activeSessionId, term.cols, term.rows);
-    }
+    };
+
+    // Safety fallback: the ResizeObserver fires for the initial observation
+    // almost immediately, but guard against edge-case browser quirks.
+    const openFallbackTimer = window.setTimeout(() => {
+      if (!sessionOpened) {
+        try { fit.fit(); } catch { /* ignore */ }
+        openSessionOnce();
+      }
+    }, 300);
 
     // Mobile vertical-swipe scrolling. In normal buffer it scrolls xterm's
     // scrollback; in alternate buffer (vim/htop/tmux copy-mode) it sends
@@ -301,20 +327,47 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
         roPendingRaf = null;
         if (!mounted) return;
         try {
+          const b = term.buffer.active;
+          // Capture whether we're at the bottom BEFORE fit changes term.rows.
+          // After fit() grows the terminal (e.g. IME dismissed, tools pane
+          // toggled), xterm's internal ydisp can lag behind the new ybase,
+          // making the viewport appear cut off from the top. scrollToBottom()
+          // resets ydisp = ybase so the live tail is visible again.
+          const wasAtBottom = b.viewportY >= b.length - term.rows;
+
+          // Early-growth guard: if the terminal is about to get taller within
+          // 1.5 s of first session open, clear xterm's scrollback first. This
+          // prevents stale initial-replay rows from being pulled out of
+          // scrollback into the newly visible top rows when the IME dismisses.
+          // The top rows briefly show as empty; tmux immediately fills them
+          // with its own full-screen redraw on the resize notification.
+          const proposed = fit.proposeDimensions();
+          if (
+            sessionOpened &&
+            sessionOpenedAt > 0 &&
+            Date.now() - sessionOpenedAt < 1500 &&
+            proposed != null &&
+            proposed.rows > term.rows
+          ) {
+            term.clear();
+          }
+
           fit.fit();
-          void api.resizeSession(activeSessionId, term.cols, term.rows);
-          // Bug #2 (resize doubling): switching the workspace layout (e.g. to a
-          // vertical split) remounts the terminal — see Layout.tsx, the
-          // terminalPosition left/bottom branches are different React subtrees —
-          // and the remount's scrollback replay reflowed at an unstable width
-          // leaves duplicated rows on the canvas. Forcing a full redraw from the
-          // buffer after the fit settles clears those stale rows (the same thing
-          // a workspace-switch remount does, which is why it "self-heals").
-          // NOTE for reviewer: this is a render-level mitigation. The root fix is
-          // to stop the terminal remounting on a layout-position change (keep it
-          // in a stable React position). Evaluate whether that larger Layout
-          // change is worth doing instead of / in addition to this.
-          if (term.rows > 0) term.refresh(0, term.rows - 1);
+
+          if (!sessionOpened) {
+            // First ResizeObserver fire after mount — open the session now
+            // with correctly fitted (pre-IME) dimensions.
+            openSessionOnce();
+          } else {
+            void api.resizeSession(activeSessionId, term.cols, term.rows);
+          }
+
+          if (term.rows > 0) {
+            if (wasAtBottom) term.scrollToBottom();
+            // Force a full row redraw after any resize to clear stale canvas
+            // pixels from the previous size (see Bug #2 comment in AGENTS.md).
+            term.refresh(0, term.rows - 1);
+          }
         } catch {
           /* ignore */
         }
@@ -323,10 +376,24 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     ro.observe(host);
 
     const handleWindowResize = () => {
-      if (!mounted) return;
+      if (!mounted || !sessionOpened) return;
       try {
+        const b = term.buffer.active;
+        const wasAtBottom = b.viewportY >= b.length - term.rows;
+        // Same early-growth guard as in the ResizeObserver — window resize
+        // fires on Android when the IME appears/disappears.
+        const proposed = fit.proposeDimensions();
+        if (
+          sessionOpenedAt > 0 &&
+          Date.now() - sessionOpenedAt < 1500 &&
+          proposed != null &&
+          proposed.rows > term.rows
+        ) {
+          term.clear();
+        }
         fit.fit();
         void api.resizeSession(activeSessionId, term.cols, term.rows);
+        if (term.rows > 0 && wasAtBottom) term.scrollToBottom();
       } catch {
         /* ignore */
       }
@@ -348,11 +415,14 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       void api.sendKeystroke(activeSessionId, data);
     });
     const r = term.onResize(({ cols, rows }) => {
-      void api.resizeSession(activeSessionId, cols, rows);
+      if (sessionOpened) {
+        void api.resizeSession(activeSessionId, cols, rows);
+      }
     });
 
     return () => {
       mounted = false;
+      window.clearTimeout(openFallbackTimer);
       disposeInputFix?.();
       inputDebug?.dispose();
       offOutput();
