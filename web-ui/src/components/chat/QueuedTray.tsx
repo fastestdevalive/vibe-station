@@ -79,7 +79,7 @@ export function QueuedTray({
     if (focusedIndex > rows.length - 1) setFocusedIndex(Math.max(0, rows.length - 1));
   }, [rows.length, focusedIndex]);
 
-  if (rows.length === 0 && !noticeSlot) return null;
+  if (rows.length === 0 && (!noticeSlot || noticeSlot.running)) return null;
 
   function moveFocus(delta: number) {
     const next = Math.min(Math.max(focusedIndex + delta, 0), rows.length - 1);
@@ -109,20 +109,27 @@ export function QueuedTray({
     >
       {noticeSlot && !noticeSlot.running ? (() => {
         const names = Object.values(noticeSlot.children);
-        const label = names.length === 0
-          ? "Checking on subagent…"
-          : names.length === 1
-          ? `Will wake parent when idle — ${names[0]}`
-          : `Will wake parent when idle — ${names.join(", ")}`;
+        const verb = names.length === 1 ? "needs" : "need";
+        const ariaLabel = names.length === 0
+          ? "Subagent needs your input (queued)"
+          : `${names.join(", ")} ${verb} your input (queued)`;
         return (
           <div
             key="__notice__"
             className="chat-queued-tray__row chat-queued-tray__row--notice"
-            style={{ opacity: 0.7 }}
             role="listitem"
-            aria-label={label}
+            aria-label={ariaLabel}
           >
-            <div className="chat-queued-tray__text">{label}</div>
+            <div className="chat-queued-tray__notice-label">
+              {names.length === 0
+                ? <span className="chat-queued-tray__notice-suffix">Subagent</span>
+                : names.map((name) => (
+                    <span key={name} className="chat-queued-tray__name-chip">{name}</span>
+                  ))
+              }
+              <span>{" "}{verb} your input</span>
+              <span className="chat-queued-tray__notice-suffix"> (queued)</span>
+            </div>
             <div className="chat-queued-tray__actions">
               <button
                 type="button"

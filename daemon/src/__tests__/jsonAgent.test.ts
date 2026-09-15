@@ -1525,7 +1525,7 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     await agent.release();
   });
 
-  it("aborting the notice slot turn suppresses 'wake-up dropped' pill and emitStopped", async () => {
+  it("aborting the notice slot turn emits notification pill (before turn) but no 'wake-up dropped' pill and no emitStopped", async () => {
     const { JsonAgentSession } = await import("../services/jsonAgent.js");
     const { getProject } = await import("../state/project-store.js");
     const session = getProject(PROJECT_ID)!.directSessions[0]!;
@@ -1577,11 +1577,12 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     // Wait for the turn to unwind.
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
-    // No abort annotation pill should have been emitted.
+    // Notification pill emitted before the turn started (one chip per pruned child).
+    // No "wake-up dropped" annotation should follow the abort.
     const pills = (broadcast as Array<Record<string, unknown>>).filter(
       (e) => e.kind === "message_generated",
     );
-    expect(pills.length).toBe(0);
+    expect(pills.length).toBe(1); // one notification chip, emitted before runOneTurn
 
     // Turn stopped marker must be suppressed for notice turns.
     const stoppedEvents = (broadcast as Array<Record<string, unknown>>).filter(
@@ -1639,10 +1640,11 @@ describe("JsonAgentSession — commands_update catalog capture (skill-invocation
     agent.dismissNoticeSlot();
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
+    // Notification pill was emitted before the turn started; dismiss produces no additional pills.
     const pills = (broadcast as Array<Record<string, unknown>>).filter(
       (e) => e.kind === "message_generated",
     );
-    expect(pills.length).toBe(0);
+    expect(pills.length).toBe(1); // notification chip, emitted before runOneTurn
 
     const stoppedEvents = (broadcast as Array<Record<string, unknown>>).filter(
       (e) => e.kind === "status" && e.status === "stopped",

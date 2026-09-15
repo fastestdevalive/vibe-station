@@ -172,14 +172,17 @@ describe("QueuedTray", () => {
     expect(screen.queryByRole("listitem")).toBeNull();
   });
 
-  it("renders label 'Will wake parent when idle — <names>' correctly for single and plural", () => {
+  it("renders name chips and 'needs/need your input' label correctly for single and plural", () => {
     const singleSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
     const { unmount } = renderTray([], { noticeSlot: singleSlot });
-    expect(screen.getByText("Will wake parent when idle — Worker")).toBeTruthy();
+    expect(screen.getByText("Worker")).toBeTruthy();
+    expect(screen.getByText(/needs your input/)).toBeTruthy();
     unmount();
 
     const pluralSlot: NoticeSlotInfo = { children: { "c1": "Worker", "c2": "Reviewer" }, running: false };
     renderTray([], { noticeSlot: pluralSlot });
-    expect(screen.getByText("Will wake parent when idle — Worker, Reviewer")).toBeTruthy();
+    expect(screen.getByText("Worker")).toBeTruthy();
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    expect(screen.getByText(/need your input/)).toBeTruthy();
   });
 });
