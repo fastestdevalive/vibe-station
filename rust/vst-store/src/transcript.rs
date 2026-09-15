@@ -106,11 +106,11 @@ fn user_signature(ev: &NormalizedEvent) -> Option<String> {
 /// Mutates `ev` in place, capping oversized `tool_result.content` and
 /// `tool_diff` text. Ported from `capToolResultContent` (`toolResultCap.ts`).
 ///
-/// NOTE: `toolResultCap.ts` is file-mapped to part 05; this crate holds a
-/// private copy because the transcript store's constructor backfill and
+/// `pub` so `vst-agents` (JsonAgentSession's event handling) can apply the same
+/// cap on live-session events. The transcript store's constructor backfill and
 /// `import_transaction` invoke it directly (flagged in the part's report for
 /// reconciliation when part 05 lands).
-pub(crate) fn cap_tool_result_content(ev: &mut NormalizedEvent) {
+pub fn cap_tool_result_content(ev: &mut NormalizedEvent) {
     if ev.kind == NormalizedEventKind::ToolResult {
         if let Some(tr) = ev.tool_result.as_mut() {
             if let Some(content) = tr.content.as_ref() {

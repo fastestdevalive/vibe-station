@@ -1,0 +1,3657 @@
+== fmt ==
+== clippy ==
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:316:9
+    |
+316 |     /// tool_use
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+    = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+    |
+316 -     /// tool_use
+316 +     /// `tool_use`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:318:9
+    |
+318 |     /// tool_use | tool_result
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+318 -     /// tool_use | tool_result
+318 +     /// `tool_use` | tool_result
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:318:20
+    |
+318 |     /// tool_use | tool_result
+    |                    ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+318 -     /// tool_use | tool_result
+318 +     /// tool_use | `tool_result`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:320:9
+    |
+320 |     /// tool_use
+    |         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+320 -     /// tool_use
+320 +     /// `tool_use`
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:348:13
+    |
+348 |     /// ACP ToolCallStatus (Gap 5).
+    |             ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+348 -     /// ACP ToolCallStatus (Gap 5).
+348 +     /// ACP `ToolCallStatus` (Gap 5).
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:350:9
+    |
+350 |     /// mode_update only.
+    |         ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+350 -     /// mode_update only.
+350 +     /// `mode_update` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:352:9
+    |
+352 |     /// commands_update only.
+    |         ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+352 -     /// commands_update only.
+352 +     /// `commands_update` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:354:9
+    |
+354 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+354 -     /// message_generated only.
+354 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:356:9
+    |
+356 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+356 -     /// message_generated only.
+356 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:358:9
+    |
+358 |     /// message_generated only.
+    |         ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+358 -     /// message_generated only.
+358 +     /// `message_generated` only.
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:457:16
+    |
+457 |     /// Latest commands_update catalog (full-replace).
+    |                ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+457 -     /// Latest commands_update catalog (full-replace).
+457 +     /// Latest `commands_update` catalog (full-replace).
+    |
+
+warning: item in documentation is missing backticks
+   --> vst-types/src/domain.rs:552:9
+    |
+552 |     /// SessionId this session was spawned from.
+    |         ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+552 -     /// SessionId this session was spawned from.
+552 +     /// `SessionId` this session was spawned from.
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:143:12
+    |
+143 |     pub fn new(capacity: usize) -> Self {
+    |            ^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+    = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+    |
+143 ~     #[must_use]
+144 ~     pub fn new(capacity: usize) -> Self {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:154:12
+    |
+154 |     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
+    |            ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+154 ~     #[must_use]
+155 ~     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ServerEvent> {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-types/src/events.rs:159:12
+    |
+159 |     pub fn receiver_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+159 ~     #[must_use]
+160 ~     pub fn receiver_count(&self) -> usize {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:16:5
+   |
+16 | /     pub fn serialize<S>(value: &f64, serializer: S) -> Result<S::Ok, S::Error>
+17 | |     where
+18 | |         S: Serializer,
+   | |______________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+   = note: `-W clippy::missing-errors-doc` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_errors_doc)]`
+
+warning: casting `f64` to `i64` may truncate the value
+  --> vst-types/src/serde_ext.rs:24:38
+   |
+24 |             serializer.serialize_i64(*value as i64)
+   |                                      ^^^^^^^^^^^^^
+   |
+   = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_truncation
+   = note: `-W clippy::cast-possible-truncation` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_possible_truncation)]`
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:29:5
+   |
+29 | /     pub fn deserialize<'de, D>(deserializer: D) -> Result<f64, D::Error>
+30 | |     where
+31 | |         D: Deserializer<'de>,
+   | |_____________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: casting `i64` to `f64` may cause a loss of precision (`i64` is 64 bits wide, but `f64`'s mantissa is only 52 bits wide)
+  --> vst-types/src/serde_ext.rs:43:20
+   |
+43 |                 Ok(v as f64)
+   |                    ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_precision_loss
+   = note: `-W clippy::cast-precision-loss` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_precision_loss)]`
+
+warning: casting `u64` to `f64` may cause a loss of precision (`u64` is 64 bits wide, but `f64`'s mantissa is only 52 bits wide)
+  --> vst-types/src/serde_ext.rs:47:20
+   |
+47 |                 Ok(v as f64)
+   |                    ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_precision_loss
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:67:5
+   |
+67 | /     pub fn serialize<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+68 | |     where
+69 | |         S: Serializer,
+   | |______________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-types/src/serde_ext.rs:78:5
+   |
+78 | /     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+79 | |     where
+80 | |         D: Deserializer<'de>,
+   | |_____________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: `vst-types` (lib) generated 22 warnings (run `cargo clippy --fix --lib -p vst-types -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 15 suggestions)
+warning: boolean to int conversion using if
+   --> vst-store/src/migration.rs:143:13
+    |
+143 |             if is_main { 1 } else { 0 },
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with from: `i32::from(is_main)`
+    |
+    = note: `is_main as i32` or `is_main.into()` can also be valid options
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+    = note: `-W clippy::bool-to-int-with-if` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::bool_to_int_with_if)]`
+
+warning: boolean to int conversion using if
+   --> vst-store/src/migration.rs:150:13
+    |
+150 |             if s.use_tmux { 1 } else { 0 },
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with from: `i32::from(s.use_tmux)`
+    |
+    = note: `s.use_tmux as i32` or `s.use_tmux.into()` can also be valid options
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+
+warning: boolean to int conversion using if
+   --> vst-store/src/migration.rs:206:17
+    |
+206 |                 if legacy.is_git { 1 } else { 0 },
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with from: `i32::from(legacy.is_git)`
+    |
+    = note: `legacy.is_git as i32` or `legacy.is_git.into()` can also be valid options
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+
+warning: boolean to int conversion using if
+   --> vst-store/src/migration.rs:209:17
+    |
+209 |                 if legacy.hidden.unwrap_or(false) { 1 } else { 0 },
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with from: `i32::from(legacy.hidden.unwrap_or(false))`
+    |
+    = note: `legacy.hidden.unwrap_or(false) as i32` or `legacy.hidden.unwrap_or(false).into()` can also be valid options
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/migration.rs:229:21
+    |
+229 |                     wi as i64,
+    |                     ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+    = note: `-W clippy::cast-possible-wrap` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_possible_wrap)]`
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/migration.rs:236:73
+    |
+236 |                 insert_legacy_session(&txn, s, Some(&w.id), &legacy.id, si as i64)?;
+    |                                                                         ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/migration.rs:241:62
+    |
+241 |             insert_legacy_session(&txn, s, None, &legacy.id, si as i64)?;
+    |                                                              ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `u64` to `i64` may wrap around the value
+   --> vst-store/src/migration.rs:298:37
+    |
+298 |     let (month, day) = month_day(y, remaining as i64);
+    |                                     ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/migration.rs:326:21
+    |
+326 |             return (i as i64 + 1, d + 1);
+    |                     ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/migration.rs:335:1
+    |
+335 | / pub fn migrate_manifests_to_sqlite(
+336 | |     conn: &mut Connection,
+337 | |     projects_dir: &Path,
+338 | | ) -> crate::StoreResult<()> {
+    | |___________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+    = note: `-W clippy::missing-errors-doc` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_errors_doc)]`
+
+warning: this could be rewritten as `let...else`
+   --> vst-store/src/migration.rs:341:5
+    |
+341 | /     let entries = match std::fs::read_dir(projects_dir) {
+342 | |         Ok(e) => e,
+343 | |         Err(_) => return Ok(()), // no projects dir yet
+344 | |     };
+    | |______^ help: consider writing: `let Ok(entries) = std::fs::read_dir(projects_dir) else { return Ok(()) };`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_let_else
+    = note: `-W clippy::manual-let-else` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::manual_let_else)]`
+
+warning: boolean to int conversion using if
+  --> vst-store/src/row_mappers.rs:20:5
+   |
+20 | /     if v {
+21 | |         1
+22 | |     } else {
+23 | |         0
+24 | |     }
+   | |_____^ help: replace with from: `i64::from(v)`
+   |
+   = note: `v as i64` or `v.into()` can also be valid options
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+
+warning: these match arms have identical bodies
+  --> vst-store/src/row_mappers.rs:76:9
+   |
+76 |         "idle" => LifecycleState::Idle,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+83 |         _ => LifecycleState::Idle,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^ the wildcard arm
+   |
+   = help: if this is unintentional make the arms return different values
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#match_same_arms
+   = note: `-W clippy::match-same-arms` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::match_same_arms)]`
+help: otherwise remove the non-wildcard arm
+   |
+76 -         "idle" => LifecycleState::Idle,
+   |
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/row_mappers.rs:250:1
+    |
+250 | / pub fn session_to_row(
+251 | |     session: &SessionRecord,
+252 | |     project_id: &str,
+253 | |     worktree_id: Option<&str>,
+254 | | ) -> SessionRow {
+    | |_______________^
+    |
+note: first possible panic found here
+   --> vst-store/src/row_mappers.rs:287:22
+    |
+287 |             .map(|c| serde_json::to_string(c).expect("draft config serializable")),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+    = note: `-W clippy::missing-panics-doc` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_panics_doc)]`
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/row_mappers.rs:319:8
+    |
+319 | pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> WorktreeRecord {
+    |        ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+    = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+    |
+319 + #[must_use]
+320 | pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> WorktreeRecord {
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/row_mappers.rs:340:8
+    |
+340 | pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
+    |        ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+340 + #[must_use]
+341 | pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/row_mappers.rs:372:8
+    |
+372 | pub fn row_to_project(
+    |        ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+372 + #[must_use]
+373 | pub fn row_to_project(
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/row_mappers.rs:392:8
+    |
+392 | pub fn project_to_row(p: &ProjectRecord) -> ProjectRow {
+    |        ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+392 + #[must_use]
+393 | pub fn project_to_row(p: &ProjectRecord) -> ProjectRow {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-store/src/schema.rs:13:1
+   |
+13 | pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: this function has too many lines (108/100)
+  --> vst-store/src/schema.rs:13:1
+   |
+13 | pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+   = note: `-W clippy::too-many-lines` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::too_many_lines)]`
+
+warning: it is more idiomatic to use `Option<&T>` instead of `&Option<T>`
+  --> vst-store/src/transcript.rs:88:1
+   |
+88 | / fn has_real_usage(usage: &Option<vst_types::UsageInfo>) -> bool {
+89 | |     usage.as_ref().is_some_and(|u| u.total_tokens > 0)
+90 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ref_option
+   = note: `-W clippy::ref-option` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::ref_option)]`
+help: change this to
+   |
+88 - fn has_real_usage(usage: &Option<vst_types::UsageInfo>) -> bool {
+88 + fn has_real_usage(usage: Option<&vst_types::UsageInfo>) -> bool {
+   |
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/transcript.rs:204:20
+    |
+204 |     if imported != non_empty.len() as i64 {
+    |                    ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/transcript.rs:210:13
+    |
+210 |             non_empty.len() as i64 - imported
+    |             ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/transcript.rs:217:16
+    |
+217 |         lines: non_empty.len() as i64,
+    |                ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: casting `usize` to `i64` may wrap around the value on targets with 64-bit wide pointers
+   --> vst-store/src/transcript.rs:281:48
+    |
+281 |                 .query_map(params![session_id, TOOL_RESULT_MAX_BYTES as i64], |r| {
+    |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+
+warning: item in documentation is missing backticks
+   --> vst-store/src/transcript.rs:401:45
+    |
+401 |     /// Last model + last real usage + last commands_update, via a bounded
+    |                                             ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+    = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+    |
+401 -     /// Last model + last real usage + last commands_update, via a bounded
+401 +     /// Last model + last real usage + last `commands_update`, via a bounded
+    |
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> vst-store/src/transcript.rs:423:17
+    |
+423 |                 meta.model = ev.model.clone();
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `meta.model.clone_from(&ev.model)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#assigning_clones
+    = note: `-W clippy::assigning-clones` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::assigning_clones)]`
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> vst-store/src/transcript.rs:427:17
+    |
+427 |                 meta.usage = ev.usage.clone();
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `meta.usage.clone_from(&ev.usage)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#assigning_clones
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> vst-store/src/transcript.rs:434:17
+    |
+434 |                 meta.commands = ev.commands.clone();
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `meta.commands.clone_from(&ev.commands)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#assigning_clones
+
+warning: this function has too many lines (118/100)
+   --> vst-store/src/transcript.rs:446:5
+    |
+446 | /     pub fn import_transaction(
+447 | |         &mut self,
+448 | |         events: Vec<NormalizedEvent>,
+449 | |         opts: ImportOptions,
+450 | |     ) -> ImportOutcome {
+    | |______________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+
+warning: called `filter_map(..).next()` on an `Iterator`. This is more succinctly expressed by calling `.find_map(..)` instead
+   --> vst-store/src/transcript.rs:511:32
+    |
+511 |                 let user_sig = group_events.iter().filter_map(user_signature).next();
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `group_events.iter().find_map(user_signature)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#filter_map_next
+    = note: `-W clippy::filter-map-next` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::filter_map_next)]`
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/transcript.rs:595:5
+    |
+595 |     pub fn tail(&self, n_turns: i64) -> TranscriptPage {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/transcript.rs:614:24
+    |
+614 |         let cut_seq = *starts.last().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/transcript.rs:619:5
+    |
+619 |     pub fn page_before(&self, seq: i64, limit: i64) -> TranscriptPage {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/transcript.rs:638:41
+    |
+638 |         let (oldest_seq, oldest_turn) = rows.last().unwrap();
+    |                                         ^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/transcript.rs:652:5
+    |
+652 |     pub fn since(&self, seq: i64, limit: Option<i64>) -> SincePage {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/transcript.rs:675:24
+    |
+675 |         let last_seq = rows.last().unwrap().0;
+    |                        ^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: called `map(<f>).unwrap_or(false)` on a `Result` value
+   --> vst-store/src/transcript.rs:734:9
+    |
+734 | /         self.conn
+735 | |             .query_row(
+736 | |                 "SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ?1 AND superseded = 0 AND seq < ?2)",
+737 | |                 params![self.session_id, seq],
+...   |
+740 | |             .map(|e| e == 1)
+741 | |             .unwrap_or(false)
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+    = note: `-W clippy::map-unwrap-or` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::map_unwrap_or)]`
+help: use `is_ok_and(<f>)` instead
+    |
+740 -             .map(|e| e == 1)
+741 -             .unwrap_or(false)
+740 +             .is_ok_and(|e| e == 1)
+    |
+
+warning: called `map(<f>).unwrap_or(false)` on a `Result` value
+   --> vst-store/src/transcript.rs:745:9
+    |
+745 | /         self.conn
+746 | |             .query_row(
+747 | |                 "SELECT EXISTS(SELECT 1 FROM message WHERE session_id = ?1 AND superseded = 0 AND seq > ?2)",
+748 | |                 params![self.session_id, seq],
+...   |
+751 | |             .map(|e| e == 1)
+752 | |             .unwrap_or(false)
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `is_ok_and(<f>)` instead
+    |
+751 -             .map(|e| e == 1)
+752 -             .unwrap_or(false)
+751 +             .is_ok_and(|e| e == 1)
+    |
+
+warning: unused `self` argument
+   --> vst-store/src/transcript.rs:757:18
+    |
+757 |     fn parse_row(&self, seq: i64, payload: &str) -> Option<NormalizedEvent> {
+    |                  ^^^^^
+    |
+    = help: consider refactoring to an associated function
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_self
+    = note: `-W clippy::unused-self` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::unused_self)]`
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/transcript.rs:772:8
+    |
+772 | pub fn transcript_db_path(data_dir: &Path) -> std::path::PathBuf {
+    |        ^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+772 + #[must_use]
+773 | pub fn transcript_db_path(data_dir: &Path) -> std::path::PathBuf {
+    |
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/transcript.rs:778:1
+    |
+778 | pub fn open_transcript_store(data_dir: &Path, session_id: &str) -> TranscriptStore {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/transcript.rs:781:5
+    |
+781 |     TranscriptStore::new(&db_path, session_id, Some(&jsonl_path)).expect("open transcript store")
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-store/src/transcript.rs:778:8
+    |
+778 | pub fn open_transcript_store(data_dir: &Path, session_id: &str) -> TranscriptStore {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+778 + #[must_use]
+779 | pub fn open_transcript_store(data_dir: &Path, session_id: &str) -> TranscriptStore {
+    |
+
+warning: docs for function which may panic missing `# Panics` section
+  --> vst-store/src/ordered_lists.rs:42:5
+   |
+42 |     pub async fn get_ordered_list(&self, scope_key: &str) -> OrderedList {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: first possible panic found here
+  --> vst-store/src/ordered_lists.rs:46:24
+   |
+46 |             let conn = inner.conn.lock().unwrap();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+  --> vst-store/src/ordered_lists.rs:64:5
+   |
+64 |     pub async fn set_ordered_list(&self, scope_key: &str, item_ids: Vec<String>) -> OrderedList {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: first possible panic found here
+  --> vst-store/src/ordered_lists.rs:69:24
+   |
+69 |             let conn = inner.conn.lock().unwrap();
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: boolean to int conversion using if
+  --> vst-store/src/tunnel.rs:72:13
+   |
+72 |             if state.enabled { 1 } else { 0 },
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace with from: `i32::from(state.enabled)`
+   |
+   = note: `state.enabled as i32` or `state.enabled.into()` can also be valid options
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#bool_to_int_with_if
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/tunnel.rs:103:5
+    |
+103 |     pub async fn get_tunnel_state(&self) -> TunnelStateRow {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/tunnel.rs:106:24
+    |
+106 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/tunnel.rs:115:5
+    |
+115 |     pub async fn set_tunnel_state(&self, state: TunnelStateRow) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/tunnel.rs:118:24
+    |
+118 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/tunnel.rs:126:5
+    |
+126 |     pub async fn clear_tunnel(&self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/tunnel.rs:129:24
+    |
+129 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/tunnel.rs:137:5
+    |
+137 |     pub async fn clear_tunnel_process(&self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/tunnel.rs:140:24
+    |
+140 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-store/src/lib.rs:85:5
+   |
+85 |     pub fn open(db_path: impl AsRef<Path>) -> StoreResult<Self> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:138:5
+    |
+138 |     pub async fn get_project(&self, id: &str) -> Option<ProjectRecord> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:140:9
+    |
+140 |         self.0.cache.read().unwrap().get(id).cloned()
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:144:5
+    |
+144 |     pub async fn get_all_projects(&self) -> Vec<ProjectRecord> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:146:9
+    |
+146 |         self.0.cache.read().unwrap().values().cloned().collect()
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:150:5
+    |
+150 |     pub async fn add_project(&self, record: ProjectRecord) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:153:12
+    |
+153 |         if self.0.cache.read().unwrap().contains_key(&record.id) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:150:5
+    |
+150 |     pub async fn add_project(&self, record: ProjectRecord) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:174:5
+    |
+174 | /     pub async fn mutate_project<F>(&self, id: &str, f: F) -> StoreResult<ProjectRecord>
+175 | |     where
+176 | |         F: FnOnce(&mut ProjectRecord) -> Result<ProjectRecord, StoreError> + Send + 'static,
+    | |____________________________________________________________________________________________^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:180:24
+    |
+180 |           let existing = self
+    |  ________________________^
+181 | |             .0
+182 | |             .cache
+183 | |             .read()
+184 | |             .unwrap()
+    | |_____________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:174:5
+    |
+174 | /     pub async fn mutate_project<F>(&self, id: &str, f: F) -> StoreResult<ProjectRecord>
+175 | |     where
+176 | |         F: FnOnce(&mut ProjectRecord) -> Result<ProjectRecord, StoreError> + Send + 'static,
+    | |____________________________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:212:5
+    |
+212 |     pub async fn delete_project(&self, id: &str) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:215:13
+    |
+215 |         if !self.0.cache.read().unwrap().contains_key(id) {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:212:5
+    |
+212 |     pub async fn delete_project(&self, id: &str) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:233:5
+    |
+233 | /     pub async fn update_session_lifecycle(
+234 | |         &self,
+235 | |         project_id: &str,
+236 | |         session_id: &str,
+237 | |         lifecycle: SessionLifecycle,
+238 | |     ) -> StoreResult<bool> {
+    | |__________________________^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:245:24
+    |
+245 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:233:5
+    |
+233 | /     pub async fn update_session_lifecycle(
+234 | |         &self,
+235 | |         project_id: &str,
+236 | |         session_id: &str,
+237 | |         lifecycle: SessionLifecycle,
+238 | |     ) -> StoreResult<bool> {
+    | |__________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:268:5
+    |
+268 | /     pub async fn update_session_pr(
+269 | |         &self,
+270 | |         project_id: &str,
+271 | |         session_id: &str,
+272 | |         pr: vst_types::PrStatus,
+273 | |     ) -> StoreResult<bool> {
+    | |__________________________^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:280:24
+    |
+280 |             let conn = inner.conn.lock().unwrap();
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:268:5
+    |
+268 | /     pub async fn update_session_pr(
+269 | |         &self,
+270 | |         project_id: &str,
+271 | |         session_id: &str,
+272 | |         pr: vst_types::PrStatus,
+273 | |     ) -> StoreResult<bool> {
+    | |__________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-store/src/lib.rs:306:5
+    |
+306 |     pub async fn migrate_manifests(&self, projects_dir: impl AsRef<Path>) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-store/src/lib.rs:310:28
+    |
+310 |             let mut conn = inner.conn.lock().unwrap();
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-store/src/lib.rs:306:5
+    |
+306 |     pub async fn migrate_manifests(&self, projects_dir: impl AsRef<Path>) -> StoreResult<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-proc/src/child_stdio.rs:29:8
+   |
+29 | pub fn classify_child_stdio_error(err: &io::Error) -> StdioErrorClass {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+   = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+   |
+29 + #[must_use]
+30 | pub fn classify_child_stdio_error(err: &io::Error) -> StdioErrorClass {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-proc/src/error.rs:32:12
+   |
+32 |     pub fn stderr(&self) -> &str {
+   |            ^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+32 ~     #[must_use]
+33 ~     pub fn stderr(&self) -> &str {
+   |
+
+warning: allocating a local array larger than 16384 bytes
+   --> vst-proc/src/pty.rs:101:19
+    |
+101 |             ring: [0u8; RING_CAPACITY],
+    |                   ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider allocating on the heap with `vec![0u8; RING_CAPACITY].into_boxed_slice()`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#large_stack_arrays
+    = note: `-W clippy::large-stack-arrays` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::large_stack_arrays)]`
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:264:5
+    |
+264 |     pub async fn attach(&self, cols: u16, rows: u16, subscriber_id: &str) -> Result<(), ProcError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:267:24
+    |
+267 |         let replay = { self.0.state.lock().unwrap().ring_contents() };
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+    = note: `-W clippy::missing-panics-doc` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_panics_doc)]`
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:264:5
+    |
+264 |     pub async fn attach(&self, cols: u16, rows: u16, subscriber_id: &str) -> Result<(), ProcError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+    = note: `-W clippy::missing-errors-doc` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_errors_doc)]`
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:291:5
+    |
+291 |     pub fn write(&self, data: &str) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:292:12
+    |
+292 |         if self.0.state.lock().unwrap().exited {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:312:5
+    |
+312 |     pub fn resize(&self, cols: u16, rows: u16, subscriber_id: Option<&str>) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:314:22
+    |
+314 |             let st = self.0.state.lock().unwrap();
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:334:5
+    |
+334 |     pub async fn detach(&self, subscriber_id: &str) -> Result<(), ProcError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:335:22
+    |
+335 |         let mut st = self.0.state.lock().unwrap();
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:334:5
+    |
+334 |     pub async fn detach(&self, subscriber_id: &str) -> Result<(), ProcError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:344:5
+    |
+344 |     pub fn kill(&self) {
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:345:31
+    |
+345 |         if let Some(killer) = self.0.killer.lock().unwrap().as_mut() {
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:353:5
+    |
+353 |     pub async fn wait_for_output(&self, needle: &str, timeout: Duration) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:355:22
+    |
+355 |             let st = self.0.state.lock().unwrap();
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:395:5
+    |
+395 |     pub fn get_recent_output(&self, max_bytes: usize) -> String {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:396:20
+    |
+396 |         let full = self.0.state.lock().unwrap().ring_contents();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:395:12
+    |
+395 |     pub fn get_recent_output(&self, max_bytes: usize) -> String {
+    |            ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+395 ~     #[must_use]
+396 ~     pub fn get_recent_output(&self, max_bytes: usize) -> String {
+    |
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-proc/src/pty.rs:408:5
+    |
+408 |     pub fn is_exited(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-proc/src/pty.rs:409:9
+    |
+409 |         self.0.state.lock().unwrap().exited
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:408:12
+    |
+408 |     pub fn is_exited(&self) -> bool {
+    |            ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+408 ~     #[must_use]
+409 ~     pub fn is_exited(&self) -> bool {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:413:12
+    |
+413 |     pub fn on_chunk(&self) -> broadcast::Receiver<String> {
+    |            ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+413 ~     #[must_use]
+414 ~     pub fn on_chunk(&self) -> broadcast::Receiver<String> {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:418:12
+    |
+418 |     pub fn on_close(&self) -> broadcast::Receiver<()> {
+    |            ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+418 ~     #[must_use]
+419 ~     pub fn on_close(&self) -> broadcast::Receiver<()> {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:423:12
+    |
+423 |     pub fn on_opened(&self) -> broadcast::Receiver<()> {
+    |            ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+423 ~     #[must_use]
+424 ~     pub fn on_opened(&self) -> broadcast::Receiver<()> {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:428:12
+    |
+428 |     pub fn session_id(&self) -> &str {
+    |            ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+428 ~     #[must_use]
+429 ~     pub fn session_id(&self) -> &str {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:433:12
+    |
+433 |     pub fn project_id(&self) -> &str {
+    |            ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+433 ~     #[must_use]
+434 ~     pub fn project_id(&self) -> &str {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/pty.rs:438:12
+    |
+438 |     pub fn worktree_id(&self) -> Option<&str> {
+    |            ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+438 ~     #[must_use]
+439 ~     pub fn worktree_id(&self) -> Option<&str> {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:448:1
+    |
+448 | pub fn spawn_child(opts: SpawnChildOptions) -> Result<PtyHandle, ProcError> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: this `continue` expression is redundant
+   --> vst-proc/src/pty.rs:511:82
+    |
+511 |                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+    |                                                                                  ^^^^^^^^
+    |
+    = help: consider dropping the `continue` expression
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_continue
+    = note: `-W clippy::needless-continue` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::needless_continue)]`
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:536:1
+    |
+536 | pub fn spawn_tmux(opts: &TmuxSpawnOptions) -> Result<(), ProcError> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:552:5
+    |
+552 |     fn spawn_child(&self, opts: SpawnChildOptions) -> Result<PtyHandle, ProcError>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/pty.rs:554:5
+    |
+554 |     fn spawn_tmux(&self, opts: &TmuxSpawnOptions) -> Result<(), ProcError>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-proc/src/resolve_use_tmux.rs:9:8
+   |
+ 9 | pub fn resolve_use_tmux(input: Option<bool>) -> bool {
+   |        ^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+ 9 + #[must_use]
+10 | pub fn resolve_use_tmux(input: Option<bool>) -> bool {
+   |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-proc/src/shell.rs:11:8
+   |
+11 | pub fn sq(s: &str) -> String {
+   |        ^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+11 + #[must_use]
+12 | pub fn sq(s: &str) -> String {
+   |
+
+warning: item in documentation is missing backticks
+ --> vst-proc/src/tmux.rs:4:56
+  |
+4 | //! directly as an argv element — no shell quoting, no ARG_MAX issues with large
+  |                                                        ^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+  = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+  = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+4 - //! directly as an argv element — no shell quoting, no ARG_MAX issues with large
+4 + //! directly as an argv element — no shell quoting, no `ARG_MAX` issues with large
+  |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-proc/src/tmux.rs:42:8
+   |
+42 | pub fn classify_list_sessions_error(stderr: &str) -> ListErrorClass {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+42 + #[must_use]
+43 | pub fn classify_list_sessions_error(stderr: &str) -> ListErrorClass {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-proc/src/tmux.rs:85:12
+   |
+85 |     pub fn new() -> Self {
+   |            ^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+85 ~     #[must_use]
+86 ~     pub fn new() -> Self {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/tmux.rs:122:12
+    |
+122 |     pub fn has_session(&self, name: &str) -> bool {
+    |            ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+122 ~     #[must_use]
+123 ~     pub fn has_session(&self, name: &str) -> bool {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/tmux.rs:137:5
+    |
+137 |     pub fn new_session(&self, opts: &NewSessionOptions) -> Result<(), TmuxError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/tmux.rs:164:5
+    |
+164 |     pub fn send_keys(&self, target: &str, keys: &str, enter: bool) -> Result<(), TmuxError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/tmux.rs:174:5
+    |
+174 | /     pub fn capture_pane(
+175 | |         &self,
+176 | |         target: &str,
+177 | |         opts: &CapturePaneOptions,
+178 | |     ) -> Result<String, TmuxError> {
+    | |__________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: variables can be used directly in the `format!` string
+   --> vst-proc/src/tmux.rs:190:23
+    |
+190 |             args.push(format!("-{}", lines));
+    |                       ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#uninlined_format_args
+    = note: `-W clippy::uninlined-format-args` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::uninlined_format_args)]`
+help: change this to
+    |
+190 -             args.push(format!("-{}", lines));
+190 +             args.push(format!("-{lines}"));
+    |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-proc/src/tmux.rs:197:12
+    |
+197 |     pub fn list_sessions(&self) -> Vec<String> {
+    |            ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+197 ~     #[must_use]
+198 ~     pub fn list_sessions(&self) -> Vec<String> {
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-proc/src/tmux.rs:239:5
+    |
+239 |     pub fn paste_buffer(&self, target: &str, buffer_id: &str, data: &str) -> Result<(), TmuxError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: called `map(<f>).unwrap_or(<a>)` on a `Result` value
+   --> vst-proc/src/tmux.rs:240:21
+    |
+240 |           let nanos = std::time::SystemTime::now()
+    |  _____________________^
+241 | |             .duration_since(std::time::UNIX_EPOCH)
+242 | |             .map(|d| d.as_millis())
+243 | |             .unwrap_or(0);
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+    = note: `-W clippy::map-unwrap-or` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::map_unwrap_or)]`
+help: use `map_or(<a>, <f>)` instead
+    |
+242 -             .map(|d| d.as_millis())
+243 -             .unwrap_or(0);
+242 +             .map_or(0, |d| d.as_millis());
+    |
+
+warning: `vst-store` (lib) generated 62 warnings (run `cargo clippy --fix --lib -p vst-store -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 16 suggestions)
+warning: `vst-proc` (lib) generated 39 warnings (run `cargo clippy --fix --lib -p vst-proc -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 19 suggestions)
+    Checking vst-agents v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-agents)
+warning: binding's name is too similar to existing binding
+   --> vst-agents/src/agy.rs:430:21
+    |
+430 |             let mut argv = vec![
+    |                     ^^^^
+    |
+note: existing binding defined here
+   --> vst-agents/src/agy.rs:418:35
+    |
+418 |     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
+    |                                   ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#similar_names
+    = note: `-W clippy::similar-names` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::similar_names)]`
+
+warning: binding's name is too similar to existing binding
+   --> vst-agents/src/claude.rs:356:21
+    |
+356 |             let mut argv = vec![
+    |                     ^^^^
+    |
+note: existing binding defined here
+   --> vst-agents/src/claude.rs:344:35
+    |
+344 |     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
+    |                                   ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#similar_names
+
+warning: binding's name is too similar to existing binding
+   --> vst-agents/src/cursor.rs:436:21
+    |
+436 |             let mut argv = vec!["cursor-agent".to_string(), "--resume".to_string(), chat_id];
+    |                     ^^^^
+    |
+note: existing binding defined here
+   --> vst-agents/src/cursor.rs:424:35
+    |
+424 |     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
+    |                                   ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#similar_names
+
+warning: unnested or-patterns
+   --> vst-agents/src/opencode.rs:178:13
+    |
+178 |             Some("running") | Some("pending") => {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnested_or_patterns
+    = note: `-W clippy::unnested-or-patterns` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::unnested_or_patterns)]`
+help: nest the patterns
+    |
+178 -             Some("running") | Some("pending") => {
+178 +             Some("running" | "pending") => {
+    |
+
+warning: unnested or-patterns
+   --> vst-agents/src/opencode.rs:181:13
+    |
+181 |             Some("completed") | Some("error") => {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnested_or_patterns
+help: nest the patterns
+    |
+181 -             Some("completed") | Some("error") => {
+181 +             Some("completed" | "error") => {
+    |
+
+warning: binding's name is too similar to existing binding
+   --> vst-agents/src/opencode.rs:423:29
+    |
+423 |                     let mut argv = vec!["opencode".to_string()];
+    |                             ^^^^
+    |
+note: existing binding defined here
+   --> vst-agents/src/opencode.rs:417:35
+    |
+417 |     fn get_restore_command(&self, args: RestoreArgs<'_>) -> AsyncResult<Option<Vec<String>>> {
+    |                                   ^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#similar_names
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-agents/src/acp_connection.rs:147:12
+    |
+147 |     pub fn new(spec: AcpLaunchSpec) -> Self {
+    |            ^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+    = note: `-W clippy::must-use-candidate` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::must_use_candidate)]`
+help: add the attribute
+    |
+147 ~     #[must_use]
+148 ~     pub fn new(spec: AcpLaunchSpec) -> Self {
+    |
+
+warning: this function has too many lines (180/100)
+   --> vst-agents/src/acp_connection.rs:291:1
+    |
+291 | / fn spawn_actor(
+292 | |     spec: Arc<AcpLaunchSpec>,
+293 | |     shared: Arc<Shared>,
+294 | |     cmd_rx: mpsc::UnboundedReceiver<Command>,
+295 | | ) {
+    | |_^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+    = note: `-W clippy::too-many-lines` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::too_many_lines)]`
+
+warning: casting `u64` to `usize` may truncate the value on targets with 32-bit wide pointers
+   --> vst-agents/src/acp_connection.rs:402:70
+    |
+402 |                 output_byte_limit: request.output_byte_limit.map(|l| l as usize),
+    |                                                                      ^^^^^^^^^^
+    |
+    = help: if this is intentional allow the lint with `#[allow(clippy::cast_possible_truncation)]` ...
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_truncation
+    = note: `-W clippy::cast-possible-truncation` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_possible_truncation)]`
+help: ... or use `try_from` and handle the error accordingly
+    |
+402 -                 output_byte_limit: request.output_byte_limit.map(|l| l as usize),
+402 +                 output_byte_limit: request.output_byte_limit.map(|l| usize::try_from(l)),
+    |
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-agents/src/acp_file_system.rs:57:1
+   |
+57 | / pub async fn read_text_file(
+58 | |     cwd: &Path,
+59 | |     path: &str,
+60 | |     line: Option<usize>,
+61 | |     limit: Option<usize>,
+62 | | ) -> Result<String, AcpFsError> {
+   | |_______________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+   = note: `-W clippy::missing-errors-doc` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_errors_doc)]`
+
+warning: docs for function returning `Result` missing `# Errors` section
+  --> vst-agents/src/acp_file_system.rs:80:1
+   |
+80 | pub async fn write_text_file(cwd: &Path, path: &str, content: &str) -> Result<(), AcpFsError> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-agents/src/acp_terminal_manager.rs:127:5
+    |
+127 |     pub fn has_live_terminals(&self) -> bool {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-agents/src/acp_terminal_manager.rs:128:19
+    |
+128 |         let map = self.terminals.lock().unwrap();
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+    = note: `-W clippy::missing-panics-doc` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::missing_panics_doc)]`
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-agents/src/acp_terminal_manager.rs:127:12
+    |
+127 |     pub fn has_live_terminals(&self) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+127 ~     #[must_use]
+128 ~     pub fn has_live_terminals(&self) -> bool {
+    |
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-agents/src/acp_terminal_manager.rs:134:5
+    |
+134 | /     pub fn create(
+135 | |         &self,
+136 | |         params: TerminalCreateParams,
+137 | |         session_id: &str,
+138 | |         project_id: &str,
+139 | |         worktree_id: Option<&str>,
+140 | |     ) -> String {
+    | |_______________^
+    |
+note: first possible panic found here
+   --> vst-agents/src/acp_terminal_manager.rs:146:22
+    |
+146 |           let handle = spawn_child(SpawnChildOptions {
+    |  ______________________^
+147 | |             command: params.command.clone(),
+148 | |             args: params.args.clone(),
+149 | |             cwd,
+...   |
+156 | |         })
+157 | |         .expect("spawn_child must succeed for a valid launch spec");
+    | |___________________________________________________________________^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: this argument is passed by value, but not consumed in the function body
+   --> vst-agents/src/acp_terminal_manager.rs:136:17
+    |
+136 |         params: TerminalCreateParams,
+    |                 ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_pass_by_value
+    = note: `-W clippy::needless-pass-by-value` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+136 |         params: &TerminalCreateParams,
+    |                 +
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-agents/src/acp_terminal_manager.rs:184:5
+    |
+184 |     pub fn output(&self, terminal_id: &str) -> Result<TerminalOutput, AcpTerminalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-agents/src/acp_terminal_manager.rs:186:19
+    |
+186 |         let out = tracked.output.lock().unwrap().render();
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-agents/src/acp_terminal_manager.rs:184:5
+    |
+184 |     pub fn output(&self, terminal_id: &str) -> Result<TerminalOutput, AcpTerminalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function returning `Result` missing `# Errors` section
+   --> vst-agents/src/acp_terminal_manager.rs:191:5
+    |
+191 | /     pub async fn wait_for_exit(
+192 | |         &self,
+193 | |         terminal_id: &str,
+194 | |     ) -> Result<TerminalExitStatus, AcpTerminalError> {
+    | |_____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_errors_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-agents/src/acp_terminal_manager.rs:216:5
+    |
+216 |     pub fn release(&self, terminal_id: &str) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-agents/src/acp_terminal_manager.rs:217:23
+    |
+217 |         let removed = self.terminals.lock().unwrap().remove(terminal_id);
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: docs for function which may panic missing `# Panics` section
+   --> vst-agents/src/acp_terminal_manager.rs:226:5
+    |
+226 |     pub fn kill_all(&self) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: first possible panic found here
+   --> vst-agents/src/acp_terminal_manager.rs:227:32
+    |
+227 |         let ids: Vec<String> = self.terminals.lock().unwrap().keys().cloned().collect();
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#missing_panics_doc
+
+warning: called `map(<f>).unwrap_or(<a>)` on a `Result` value
+   --> vst-agents/src/acp_terminal_manager.rs:249:14
+    |
+249 |       let ts = SystemTime::now()
+    |  ______________^
+250 | |         .duration_since(UNIX_EPOCH)
+251 | |         .map(|d| d.as_millis())
+252 | |         .unwrap_or(0);
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+    = note: `-W clippy::map-unwrap-or` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::map_unwrap_or)]`
+help: use `map_or(<a>, <f>)` instead
+    |
+251 -         .map(|d| d.as_millis())
+252 -         .unwrap_or(0);
+251 +         .map_or(0, |d| d.as_millis());
+    |
+
+warning: item in documentation is missing backticks
+  --> vst-agents/src/agy.rs:50:22
+   |
+50 | /// object per turn (step_index resets every turn).
+   |                      ^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+   = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+   |
+50 - /// object per turn (step_index resets every turn).
+50 + /// object per turn (`step_index` resets every turn).
+   |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-agents/src/agy.rs:56:8
+   |
+56 | pub fn create_agy_stream_state() -> AgyStreamState {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+56 + #[must_use]
+57 | pub fn create_agy_stream_state() -> AgyStreamState {
+   |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-agents/src/agy.rs:61:8
+   |
+61 | pub fn agy_log_path(session_id: &str) -> PathBuf {
+   |        ^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+61 + #[must_use]
+62 | pub fn agy_log_path(session_id: &str) -> PathBuf {
+   |
+
+warning: this function has too many lines (144/100)
+   --> vst-agents/src/agy.rs:119:1
+    |
+119 | / pub fn parse_agy_stream_line(
+120 | |     line: &str,
+121 | |     session_id: &str,
+122 | |     state: &mut AgyStreamState,
+123 | |     fallback_model: Option<&str>,
+124 | | ) -> Vec<NormalizedEvent> {
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/agy.rs:159:38
+    |
+159 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+    = note: `-W clippy::default-trait-access` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::default_trait_access)]`
+
+warning: redundant closure
+   --> vst-agents/src/agy.rs:181:27
+    |
+181 |                 .and_then(|i| i.as_i64())
+    |                           ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `serde_json::Value::as_i64`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+    = note: `-W clippy::redundant-closure-for-method-calls` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/agy.rs:186:42
+    |
+186 |                 .unwrap_or(Value::Object(Default::default()));
+    |                                          ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> vst-agents/src/agy.rs:209:17
+    |
+209 |                 ev.tool_id = tool_id.clone();
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `ev.tool_id.clone_from(&tool_id)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#assigning_clones
+    = note: `-W clippy::assigning-clones` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::assigning_clones)]`
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/agy.rs:228:38
+    |
+228 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/agy.rs:235:38
+    |
+235 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/agy.rs:236:28
+    |
+236 |         let input_tokens = usage_raw.get("input_tokens").map(num).unwrap_or(0);
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+236 -         let input_tokens = usage_raw.get("input_tokens").map(num).unwrap_or(0);
+236 +         let input_tokens = usage_raw.get("input_tokens").map_or(0, num);
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/agy.rs:237:29
+    |
+237 |         let output_tokens = usage_raw.get("output_tokens").map(num).unwrap_or(0);
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+237 -         let output_tokens = usage_raw.get("output_tokens").map(num).unwrap_or(0);
+237 +         let output_tokens = usage_raw.get("output_tokens").map_or(0, num);
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/agy.rs:238:28
+    |
+238 |           let total_tokens = usage_raw
+    |  ____________________________^
+239 | |             .get("total_tokens")
+240 | |             .map(num)
+241 | |             .unwrap_or(input_tokens + output_tokens);
+    | |____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+240 -             .map(num)
+241 -             .unwrap_or(input_tokens + output_tokens);
+240 +             .map_or(input_tokens + output_tokens, num);
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-agents/src/agy.rs:287:8
+    |
+287 | pub fn create_agy_plugin() -> AgyPlugin {
+    |        ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+287 + #[must_use]
+288 | pub fn create_agy_plugin() -> AgyPlugin {
+    |
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/agy.rs:292:23
+    |
+292 |     fn name(&self) -> &str {
+    |                       ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+    = note: `-W clippy::unnecessary-literal-bound` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::unnecessary_literal_bound)]`
+
+warning: called `map(<f>).unwrap_or_else(<g>)` on an `Option` value
+   --> vst-agents/src/agy.rs:343:33
+    |
+343 |               let combined_file = PathBuf::from(&input.system_prompt_file)
+    |  _________________________________^
+344 | |                 .parent()
+345 | |                 .map(|p| p.join("combined_prompt.txt"))
+346 | |                 .unwrap_or_else(|| PathBuf::from("combined_prompt.txt"));
+    | |________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: try
+    |
+343 ~             let combined_file = PathBuf::from(&input.system_prompt_file)
+344 ~                 .parent().map_or_else(|| PathBuf::from("combined_prompt.txt"), |p| p.join("combined_prompt.txt"));
+    |
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/agy.rs:350:17
+    |
+350 |                 shell_line.push_str(&format!(" --model {}", sq(model)));
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+    = note: `-W clippy::format-push-string` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::format_push_string)]`
+help: consider using `write!` to avoid the extra allocation
+    |
+350 -                 shell_line.push_str(&format!(" --model {}", sq(model)));
+350 +                 let _ = write!(shell_line, " --model {}", sq(model));
+    |
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/agy.rs:353:17
+    |
+353 |                 shell_line.push_str(&format!(" --conversation {}", sq(id)));
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+    |
+353 -                 shell_line.push_str(&format!(" --conversation {}", sq(id)));
+353 +                 let _ = write!(shell_line, " --conversation {}", sq(id));
+    |
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/agy.rs:359:13
+    |
+359 |             shell_line.push_str(&format!(" --log-file {}", sq(&log_path.to_string_lossy())));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+    |
+359 -             shell_line.push_str(&format!(" --log-file {}", sq(&log_path.to_string_lossy())));
+359 +             let _ = write!(shell_line, " --log-file {}", sq(&log_path.to_string_lossy()));
+    |
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/agy.rs:360:13
+    |
+360 | /             shell_line.push_str(&format!(
+361 | |                 " -i \"$(cat {})\"",
+362 | |                 sq(&combined_file.to_string_lossy())
+363 | |             ));
+    | |______________^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+    |
+360 ~             let _ = write!(shell_line, " -i \"$(cat {})\"",
+361 ~                 sq(&combined_file.to_string_lossy()));
+    |
+
+warning: redundant closure
+   --> vst-agents/src/agy.rs:386:47
+    |
+386 |                 models: AGY_MODELS.iter().map(|s| s.to_string()).collect(),
+    |                                               ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: calling `to_string` on `&&str`
+   --> vst-agents/src/agy.rs:386:51
+    |
+386 |                 models: AGY_MODELS.iter().map(|s| s.to_string()).collect(),
+    |                                                   ^^^^^^^^^^^^^ help: try dereferencing the receiver: `(*s).to_string()`
+    |
+    = help: `&str` implements `ToString` through a slower blanket impl, but `str` has a fast specialization of `ToString`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#inefficient_to_string
+    = note: `-W clippy::inefficient-to-string` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::inefficient_to_string)]`
+
+warning: redundant closure
+   --> vst-agents/src/agy.rs:421:36
+    |
+421 |         let model = args.model.map(|m| m.to_string());
+    |                                    ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-agents/src/claude.rs:38:8
+   |
+38 | pub fn format_skill_directive(
+   |        ^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+38 + #[must_use]
+39 | pub fn format_skill_directive(
+   |
+
+warning: item in documentation is missing backticks
+  --> vst-agents/src/claude.rs:68:45
+   |
+68 | /// `.claude/vibe-recorder.sh` hook script (VST_SPAWN_TOKEN → chat-id capture).
+   |                                             ^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+   |
+68 - /// `.claude/vibe-recorder.sh` hook script (VST_SPAWN_TOKEN → chat-id capture).
+68 + /// `.claude/vibe-recorder.sh` hook script (`VST_SPAWN_TOKEN` → chat-id capture).
+   |
+
+warning: called `map(<f>).unwrap_or(false)` on an `Option` value
+   --> vst-agents/src/claude.rs:169:9
+    |
+169 | /         entry
+170 | |             .get("hooks")
+171 | |             .and_then(|h| h.as_array())
+172 | |             .map(|hooks| {
+...   |
+176 | |             })
+177 | |             .unwrap_or(false)
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `is_some_and(<f>)` instead
+    |
+172 ~             .is_some_and(|hooks| {
+173 |                 hooks
+174 |                     .iter()
+175 |                     .any(|h| h.get("command").and_then(|c| c.as_str()) == Some(command))
+176 ~             })
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-agents/src/claude.rs:189:8
+    |
+189 | pub fn create_claude_plugin() -> ClaudePlugin {
+    |        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+189 + #[must_use]
+190 | pub fn create_claude_plugin() -> ClaudePlugin {
+    |
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/claude.rs:194:23
+    |
+194 |     fn name(&self) -> &str {
+    |                       ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/claude.rs:198:32
+    |
+198 |     fn default_model(&self) -> &str {
+    |                                ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/claude.rs:229:13
+    |
+229 |             shell_line.push_str(&format!(" --model {}", sq(model)));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+    |
+229 -             shell_line.push_str(&format!(" --model {}", sq(model)));
+229 +             let _ = write!(shell_line, " --model {}", sq(model));
+    |
+
+warning: matching over `()` is more explicit
+   --> vst-agents/src/claude.rs:265:17
+    |
+265 |             let _ = ensure_gitignore_entry(root.join(".gitignore"), ".claude/").await;
+    |                 ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ignored_unit_patterns
+    = note: `-W clippy::ignored-unit-patterns` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::ignored_unit_patterns)]`
+
+warning: matching over `()` is more explicit
+   --> vst-agents/src/claude.rs:266:17
+    |
+266 |             let _ = ensure_gitignore_entry(root.join(".gitignore"), ".vibe-station/").await;
+    |                 ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ignored_unit_patterns
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/claude.rs:271:80
+    |
+271 |                 serde_json::from_str(&raw).unwrap_or(serde_json::Value::Object(Default::default()));
+    |                                                                                ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: redundant closure
+   --> vst-agents/src/claude.rs:334:50
+    |
+334 |                 models: CLAUDE_MODELS.iter().map(|s| s.to_string()).collect(),
+    |                                                  ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: calling `to_string` on `&&str`
+   --> vst-agents/src/claude.rs:334:54
+    |
+334 |                 models: CLAUDE_MODELS.iter().map(|s| s.to_string()).collect(),
+    |                                                      ^^^^^^^^^^^^^ help: try dereferencing the receiver: `(*s).to_string()`
+    |
+    = help: `&str` implements `ToString` through a slower blanket impl, but `str` has a fast specialization of `ToString`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#inefficient_to_string
+
+warning: redundant closure
+   --> vst-agents/src/claude.rs:347:36
+    |
+347 |         let model = args.model.map(|m| m.to_string());
+    |                                    ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: this function has too many lines (213/100)
+  --> vst-agents/src/cursor.rs:35:1
+   |
+35 | pub fn parse_cursor_stream_line(line: &str, session_id: &str) -> Vec<NormalizedEvent> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/cursor.rs:133:38
+    |
+133 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/cursor.rs:147:38
+    |
+147 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/cursor.rs:191:38
+    |
+191 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/cursor.rs:192:28
+    |
+192 |           let input_tokens = usage_raw
+    |  ____________________________^
+193 | |             .get("inputTokens")
+194 | |             .or_else(|| usage_raw.get("input_tokens"))
+195 | |             .map(num)
+196 | |             .unwrap_or(0);
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+195 -             .map(num)
+196 -             .unwrap_or(0);
+195 +             .map_or(0, num);
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/cursor.rs:197:29
+    |
+197 |           let output_tokens = usage_raw
+    |  _____________________________^
+198 | |             .get("outputTokens")
+199 | |             .or_else(|| usage_raw.get("output_tokens"))
+200 | |             .map(num)
+201 | |             .unwrap_or(0);
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+200 -             .map(num)
+201 -             .unwrap_or(0);
+200 +             .map_or(0, num);
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/cursor.rs:202:33
+    |
+202 |           let cache_read_tokens = usage_raw
+    |  _________________________________^
+203 | |             .get("cacheReadTokens")
+204 | |             .or_else(|| usage_raw.get("cache_read_input_tokens"))
+205 | |             .map(num)
+206 | |             .unwrap_or(0);
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+205 -             .map(num)
+206 -             .unwrap_or(0);
+205 +             .map_or(0, num);
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> vst-agents/src/cursor.rs:207:35
+    |
+207 |           let cache_create_tokens = usage_raw
+    |  ___________________________________^
+208 | |             .get("cacheWriteTokens")
+209 | |             .or_else(|| usage_raw.get("cache_creation_input_tokens"))
+210 | |             .map(num)
+211 | |             .unwrap_or(0);
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+210 -             .map(num)
+211 -             .unwrap_or(0);
+210 +             .map_or(0, num);
+    |
+
+warning: redundant closure
+   --> vst-agents/src/cursor.rs:223:58
+    |
+223 |             cost_usd: msg.get("total_cost_usd").and_then(|c| c.as_f64()),
+    |                                                          ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `serde_json::Value::as_f64`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-agents/src/cursor.rs:314:8
+    |
+314 | pub fn create_cursor_plugin() -> CursorPlugin {
+    |        ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+314 + #[must_use]
+315 | pub fn create_cursor_plugin() -> CursorPlugin {
+    |
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/cursor.rs:319:23
+    |
+319 |     fn name(&self) -> &str {
+    |                       ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/cursor.rs:323:32
+    |
+323 |     fn default_model(&self) -> &str {
+    |                                ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: `format!(..)` appended to existing `String`
+   --> vst-agents/src/cursor.rs:366:13
+    |
+366 |             stdin_content.push_str(&format!("; printf '\\n\\n'; printf %s {}", sq(task)));
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: you may need to import the `std::fmt::Write` trait
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#format_push_string
+help: consider using `write!` to avoid the extra allocation
+    |
+366 -             stdin_content.push_str(&format!("; printf '\\n\\n'; printf %s {}", sq(task)));
+366 +             let _ = write!(stdin_content, "; printf '\\n\\n'; printf %s {}", sq(task));
+    |
+
+warning: matching over `()` is more explicit
+   --> vst-agents/src/cursor.rs:399:17
+    |
+399 |             let _ = ensure_gitignore_entry(root.join(".gitignore"), ".cursor/").await;
+    |                 ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ignored_unit_patterns
+
+warning: redundant closure
+   --> vst-agents/src/cursor.rs:427:36
+    |
+427 |         let model = args.model.map(|m| m.to_string());
+    |                                    ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: called `map(<f>).unwrap_or_else(<g>)` on a `Result` value
+  --> vst-agents/src/home.rs:32:5
+   |
+32 | /     std::env::var("HOME")
+33 | |         .map(PathBuf::from)
+34 | |         .unwrap_or_else(|_| PathBuf::from("."))
+   | |_______________________________________________^ help: try: `std::env::var("HOME").map_or_else(|_| PathBuf::from("."), PathBuf::from)`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+
+warning: case-sensitive file extension comparison
+  --> vst-agents/src/native_chat_id.rs:45:16
+   |
+45 |             if name.ends_with(".jsonl") {
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: consider using a case-insensitive comparison instead
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#case_sensitive_file_extension_comparisons
+   = note: `-W clippy::case-sensitive-file-extension-comparisons` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::case_sensitive_file_extension_comparisons)]`
+help: use std::path::Path
+   |
+45 ~             if std::path::Path::new(&name)
+46 +                 .extension()
+47 ~                 .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")) {
+   |
+
+warning: called `map(<f>).unwrap_or(<a>)` on a `Result` value
+  --> vst-agents/src/normalize.rs:40:17
+   |
+40 |       let nanos = SystemTime::now()
+   |  _________________^
+41 | |         .duration_since(UNIX_EPOCH)
+42 | |         .map(|d| d.subsec_nanos())
+43 | |         .unwrap_or(0);
+   | |_____________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+   |
+42 -         .map(|d| d.subsec_nanos())
+43 -         .unwrap_or(0);
+42 +         .map_or(0, |d| d.subsec_nanos());
+   |
+
+warning: this argument (1 byte) is passed by reference, but would be more efficient if passed by value (limit: 8 byte)
+   --> vst-agents/src/normalize.rs:197:25
+    |
+197 | fn tool_kind_from(kind: &ToolKind) -> Option<AcpToolKind> {
+    |                         ^^^^^^^^^ help: consider passing by value instead: `ToolKind`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#trivially_copy_pass_by_ref
+    = note: `-W clippy::trivially-copy-pass-by-ref` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::trivially_copy_pass_by_ref)]`
+
+warning: this argument (1 byte) is passed by reference, but would be more efficient if passed by value (limit: 8 byte)
+   --> vst-agents/src/normalize.rs:213:29
+    |
+213 | fn tool_status_from(status: &ToolCallStatus) -> Option<ToolStatus> {
+    |                             ^^^^^^^^^^^^^^^ help: consider passing by value instead: `ToolCallStatus`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#trivially_copy_pass_by_ref
+
+warning: item in documentation is missing backticks
+   --> vst-agents/src/normalize.rs:223:18
+    |
+223 | /// True iff the raw_input value is "empty" (null, or an object with no keys) —
+    |                  ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+223 - /// True iff the raw_input value is "empty" (null, or an object with no keys) —
+223 + /// True iff the `raw_input` value is "empty" (null, or an object with no keys) —
+    |
+
+warning: this function has too many lines (126/100)
+   --> vst-agents/src/normalize.rs:232:1
+    |
+232 | / pub fn normalize_session_update(
+233 | |     update: &SessionUpdate,
+234 | |     session_id: &str,
+235 | |     provider: NormalizedEventProvider,
+236 | |     enrich: Option<&AcpEnrichHook>,
+237 | | ) -> Option<NormalizedEvent> {
+    | |____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+
+warning: unneeded late initialization
+   --> vst-agents/src/normalize.rs:247:5
+    |
+247 |     let base: Option<NormalizedEvent>;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_late_init
+    = note: `#[warn(clippy::needless_late_init)]` on by default
+help: move the declaration `base` here and remove the assignments from the `match` arms
+    |
+247 ~     
+248 |
+249 ~     let base: Option<NormalizedEvent> = match update {
+250 |         SessionUpdate::AgentMessageChunk(ContentChunk { content, .. }) => {
+...
+258 |             ev.blocks = blocks;
+259 ~             Some(stamp(NormalizedEventKind::Text, ev))
+260 |         }
+...
+269 |             ev.blocks = blocks;
+270 ~             Some(stamp(NormalizedEventKind::Thinking, ev))
+271 |         }
+...
+301 |             ev.tool_status = tool_status_from(status);
+302 ~             Some(stamp(NormalizedEventKind::ToolUse, ev))
+303 |         }
+...
+327 |             ev.tool_kind = fields.kind.as_ref().and_then(tool_kind_from);
+328 ~             Some(stamp(NormalizedEventKind::ToolResult, ev))
+329 |         }
+...
+334 |             ev.mode_id = Some(current_mode_id.to_string());
+335 ~             Some(stamp(NormalizedEventKind::ModeUpdate, ev))
+336 |         }
+...
+344 |             ev.commands = Some(commands);
+345 ~             Some(stamp(NormalizedEventKind::CommandsUpdate, ev))
+346 |         }
+...
+359 |             ev.text = Some(text);
+360 ~             Some(stamp(NormalizedEventKind::Status, ev))
+361 |         }
+...
+367 |         _ => return None,
+368 ~     };
+    |
+
+warning: these match arms have identical bodies
+   --> vst-agents/src/normalize.rs:362:9
+    |
+362 | /         SessionUpdate::SessionInfoUpdate(_)
+363 | |         | SessionUpdate::ConfigOptionUpdate(_)
+364 | |         | SessionUpdate::UsageUpdate(_) => return None,
+    | |______________________________________________________^
+...
+367 |           _ => return None,
+    |           ^^^^^^^^^^^^^^^^ the wildcard arm
+    |
+    = help: if this is unintentional make the arms return different values
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#match_same_arms
+    = note: `-W clippy::match-same-arms` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::match_same_arms)]`
+help: otherwise remove the non-wildcard arm
+    |
+362 -         SessionUpdate::SessionInfoUpdate(_)
+363 -         | SessionUpdate::ConfigOptionUpdate(_)
+364 -         | SessionUpdate::UsageUpdate(_) => return None,
+    |
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:256:13
+    |
+256 |             ev.role = Some(Role::Assistant);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { role: Some(Role::Assistant), text: text, blocks: blocks, ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:255:13
+    |
+255 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+    = note: `#[warn(clippy::field_reassign_with_default)]` on by default
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:267:13
+    |
+267 |             ev.role = Some(Role::Assistant);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { role: Some(Role::Assistant), text: text, blocks: blocks, ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:266:13
+    |
+266 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:294:13
+    |
+294 |             ev.role = Some(Role::Assistant);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { role: Some(Role::Assistant), tool_id: Some(tool_call_id.to_string()), tool_name: tool_name, tool_input: raw_input.clone(), tool_locations: tool_locations_from(locations), tool_kind: tool_kind_from(kind), tool_diffs: tool_diffs_from_content(content), tool_status: tool_status_from(status), ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:293:13
+    |
+293 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: unnecessary boolean `not` operation
+   --> vst-agents/src/normalize.rs:288:29
+    |
+288 |               let tool_name = if !title.is_empty() {
+    |  _____________________________^
+289 | |                 Some(title.clone())
+290 | |             } else {
+291 | |                 None
+292 | |             };
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#if_not_else
+    = note: `-W clippy::if-not-else` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::if_not_else)]`
+help: try
+    |
+288 ~             let tool_name = if title.is_empty() {
+289 +                 None
+290 +             } else {
+291 +                 Some(title.clone())
+292 ~             };
+    |
+
+warning: assigning the result of `Clone::clone()` may be inefficient
+   --> vst-agents/src/normalize.rs:297:13
+    |
+297 |             ev.tool_input = raw_input.clone();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `ev.tool_input.clone_from(raw_input)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#assigning_clones
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:320:13
+    |
+320 |             ev.tool_id = Some(tool_call_id.to_string());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { tool_id: Some(tool_call_id.to_string()), tool_input: refined_input, tool_result: tool_result, tool_status: status, tool_diffs: tool_diffs_from_content(fields.content.as_deref().unwrap_or_default()), tool_locations: tool_locations_from(fields.locations.as_deref().unwrap_or_default()), tool_kind: fields.kind.as_ref().and_then(tool_kind_from), ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:319:13
+    |
+319 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:334:13
+    |
+334 |             ev.mode_id = Some(current_mode_id.to_string());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { mode_id: Some(current_mode_id.to_string()), ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:333:13
+    |
+333 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:344:13
+    |
+344 |             ev.commands = Some(commands);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { commands: Some(commands), ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:343:13
+    |
+343 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: field assignment outside of initializer for an instance created with Default::default()
+   --> vst-agents/src/normalize.rs:359:13
+    |
+359 |             ev.text = Some(text);
+    |             ^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `vst_types::NormalizedEvent { text: Some(text), ..Default::default() }` and removing relevant reassignments
+   --> vst-agents/src/normalize.rs:358:13
+    |
+358 |             let mut ev = NormalizedEvent::default();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#field_reassign_with_default
+
+warning: casting `u64` to `i64` may wrap around the value
+   --> vst-agents/src/normalize.rs:400:16
+    |
+400 |     let secs = now.as_secs() as i64;
+    |                ^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_possible_wrap
+    = note: `-W clippy::cast-possible-wrap` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_possible_wrap)]`
+
+warning: casts from `u32` to `i64` can be expressed infallibly using `From`
+   --> vst-agents/src/normalize.rs:401:18
+    |
+401 |     let millis = (now.subsec_millis()) as i64;
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: an `as` cast can become silently lossy if the types change in the future
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#cast_lossless
+    = note: `-W clippy::cast-lossless` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::cast_lossless)]`
+help: use `i64::from` instead
+    |
+401 -     let millis = (now.subsec_millis()) as i64;
+401 +     let millis = i64::from((now.subsec_millis()));
+    |
+
+warning: item in documentation is missing backticks
+ --> vst-agents/src/opencode.rs:1:5
+  |
+1 | //! OpenCode CLI plugin — ports `agent-plugins/opencode.ts`.
+  |     ^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+  |
+1 - //! OpenCode CLI plugin — ports `agent-plugins/opencode.ts`.
+1 + //! `OpenCode` CLI plugin — ports `agent-plugins/opencode.ts`.
+  |
+
+warning: this function has too many lines (153/100)
+  --> vst-agents/src/opencode.rs:37:1
+   |
+37 | / pub fn parse_opencode_stream_line(
+38 | |     line: &str,
+39 | |     session_id: &str,
+40 | |     state: &mut OpencodeStreamState,
+41 | | ) -> Vec<NormalizedEvent> {
+   | |_________________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#too_many_lines
+
+warning: calling `Map::default()` is more clear than this expression
+  --> vst-agents/src/opencode.rs:58:34
+   |
+58 |         .unwrap_or(Value::Object(Default::default()));
+   |                                  ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `Map::default()` is more clear than this expression
+  --> vst-agents/src/opencode.rs:81:38
+   |
+81 |             .unwrap_or(Value::Object(Default::default()));
+   |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `Map::default()` is more clear than this expression
+  --> vst-agents/src/opencode.rs:85:38
+   |
+85 |             .unwrap_or(Value::Object(Default::default()));
+   |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+  --> vst-agents/src/opencode.rs:86:28
+   |
+86 |         let input_tokens = tokens.get("input").map(num).unwrap_or(0);
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+   |
+86 -         let input_tokens = tokens.get("input").map(num).unwrap_or(0);
+86 +         let input_tokens = tokens.get("input").map_or(0, num);
+   |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+  --> vst-agents/src/opencode.rs:87:29
+   |
+87 |         let output_tokens = tokens.get("output").map(num).unwrap_or(0);
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+   |
+87 -         let output_tokens = tokens.get("output").map(num).unwrap_or(0);
+87 +         let output_tokens = tokens.get("output").map_or(0, num);
+   |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+  --> vst-agents/src/opencode.rs:88:33
+   |
+88 |         let cache_read_tokens = cache.get("read").map(num).unwrap_or(0);
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+   |
+88 -         let cache_read_tokens = cache.get("read").map(num).unwrap_or(0);
+88 +         let cache_read_tokens = cache.get("read").map_or(0, num);
+   |
+
+warning: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+  --> vst-agents/src/opencode.rs:89:35
+   |
+89 |         let cache_create_tokens = cache.get("write").map(num).unwrap_or(0);
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+   |
+89 -         let cache_create_tokens = cache.get("write").map(num).unwrap_or(0);
+89 +         let cache_create_tokens = cache.get("write").map_or(0, num);
+   |
+
+warning: redundant closure
+   --> vst-agents/src/opencode.rs:106:53
+    |
+106 |                 cost_usd: part.get("cost").and_then(|c| c.as_f64()),
+    |                                                     ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `serde_json::Value::as_f64`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: calling `Map::default()` is more clear than this expression
+   --> vst-agents/src/opencode.rs:160:38
+    |
+160 |             .unwrap_or(Value::Object(Default::default()));
+    |                                      ^^^^^^^^^^^^^^^^^^ help: try: `Map::default()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: item in documentation is missing backticks
+   --> vst-agents/src/opencode.rs:271:5
+    |
+271 | /// OpenCode plugin (stateless singleton).
+    |     ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+    |
+271 - /// OpenCode plugin (stateless singleton).
+271 + /// `OpenCode` plugin (stateless singleton).
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-agents/src/opencode.rs:275:8
+    |
+275 | pub fn create_opencode_plugin() -> OpencodePlugin {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+275 + #[must_use]
+276 | pub fn create_opencode_plugin() -> OpencodePlugin {
+    |
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/opencode.rs:280:23
+    |
+280 |     fn name(&self) -> &str {
+    |                       ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: returning a `str` unnecessarily tied to the lifetime of arguments
+   --> vst-agents/src/opencode.rs:284:32
+    |
+284 |     fn default_model(&self) -> &str {
+    |                                ^^^^ help: try: `&'static str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unnecessary_literal_bound
+
+warning: this let-binding has unit value
+   --> vst-agents/src/opencode.rs:311:9
+    |
+311 |         let _ = write_opencode_config_blocking(&config_path, &prompt_file);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#let_unit_value
+    = note: `#[warn(clippy::let_unit_value)]` on by default
+help: omit the `let` binding
+    |
+311 -         let _ = write_opencode_config_blocking(&config_path, &prompt_file);
+311 +         write_opencode_config_blocking(&config_path, &prompt_file);
+    |
+
+warning: matching over `()` is more explicit
+   --> vst-agents/src/opencode.rs:311:13
+    |
+311 |         let _ = write_opencode_config_blocking(&config_path, &prompt_file);
+    |             ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ignored_unit_patterns
+
+warning: these match arms have identical bodies
+   --> vst-agents/src/opencode.rs:353:17
+    |
+353 | /                 Ok(_) => {
+354 | |                     let _ = fs::write(&plugin_path, VST_RECORDER).await;
+355 | |                 }
+    | |_________________^
+356 | /                 Err(_) => {
+357 | |                     let _ = fs::write(&plugin_path, VST_RECORDER).await;
+358 | |                 }
+    | |_________________^
+    |
+    = help: if this is unintentional make the arms return different values
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#match_same_arms
+help: otherwise merge the patterns into a single arm
+    |
+353 ~                 Ok(_) | Err(_) => {
+354 |                     let _ = fs::write(&plugin_path, VST_RECORDER).await;
+355 |                 }
+356 ~                 }
+    |
+
+warning: matching over `()` is more explicit
+   --> vst-agents/src/opencode.rs:371:17
+    |
+371 |             let _ = ensure_gitignore_entry(root.join(".gitignore"), ".opencode/").await;
+    |                 ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ignored_unit_patterns
+
+warning: constructing a `Duration` using a smaller unit when a larger unit would be more readable
+   --> vst-agents/src/opencode.rs:395:56
+    |
+395 |             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30_000);
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#duration_suboptimal_units
+    = note: `-W clippy::duration-suboptimal-units` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::duration_suboptimal_units)]`
+help: try using from_secs
+    |
+395 -             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(30_000);
+395 +             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    |
+
+warning: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+   --> vst-agents/src/opencode.rs:397:17
+    |
+397 | /                 match fs::read_to_string(&token_file).await {
+398 | |                     Ok(raw) => {
+399 | |                         let id = raw.trim().to_string();
+400 | |                         let _ = fs::remove_file(&token_file).await;
+...   |
+412 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#single_match_else
+    = note: `-W clippy::single-match-else` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::single_match_else)]`
+help: try
+    |
+397 ~                 if let Ok(raw) = fs::read_to_string(&token_file).await {
+398 +                     let id = raw.trim().to_string();
+399 +                     let _ = fs::remove_file(&token_file).await;
+400 +                     if id.is_empty() {
+401 +                         return None;
+402 +                     }
+403 +                     return Some(id);
+404 +                 } else {
+405 +                     if std::time::Instant::now() >= deadline {
+406 +                         return None;
+407 +                     }
+408 +                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+409 +                 }
+    |
+
+warning: redundant closure
+   --> vst-agents/src/opencode.rs:419:36
+    |
+419 |         let model = args.model.map(|m| m.to_string());
+    |                                    ^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::ToString::to_string`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: writing `&PathBuf` instead of `&Path` involves a new object where a slice will do
+   --> vst-agents/src/opencode.rs:470:71
+    |
+470 | fn write_opencode_config_blocking(config_path: &PathBuf, prompt_file: &PathBuf) {
+    |                                                                       ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#ptr_arg
+    = note: `#[warn(clippy::ptr_arg)]` on by default
+help: change this to
+    |
+470 - fn write_opencode_config_blocking(config_path: &PathBuf, prompt_file: &PathBuf) {
+470 + fn write_opencode_config_blocking(config_path: &PathBuf, prompt_file: &Path) {
+    |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:39:12
+   |
+39 |     pub fn with_home(vst_home: PathBuf) -> Self {
+   |            ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+39 ~     #[must_use]
+40 ~     pub fn with_home(vst_home: PathBuf) -> Self {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:44:12
+   |
+44 |     pub fn vst_home(&self) -> &Path {
+   |            ^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+44 ~     #[must_use]
+45 ~     pub fn vst_home(&self) -> &Path {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:49:12
+   |
+49 |     pub fn project_dir(&self, project_id: &str) -> PathBuf {
+   |            ^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+49 ~     #[must_use]
+50 ~     pub fn project_dir(&self, project_id: &str) -> PathBuf {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:54:12
+   |
+54 |     pub fn session_data_dir(
+   |            ^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+54 ~     #[must_use]
+55 ~     pub fn session_data_dir(
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:67:12
+   |
+67 |     pub fn direct_session_data_dir(&self, project_id: &str, session_id: &str) -> PathBuf {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+67 ~     #[must_use]
+68 ~     pub fn direct_session_data_dir(&self, project_id: &str, session_id: &str) -> PathBuf {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:74:12
+   |
+74 |     pub fn system_prompt_path(
+   |            ^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+74 ~     #[must_use]
+75 ~     pub fn system_prompt_path(
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:85:12
+   |
+85 |     pub fn direct_system_prompt_path(&self, project_id: &str, session_id: &str) -> PathBuf {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+85 ~     #[must_use]
+86 ~     pub fn direct_system_prompt_path(&self, project_id: &str, session_id: &str) -> PathBuf {
+   |
+
+warning: this method could have a `#[must_use]` attribute
+  --> vst-agents/src/paths.rs:91:12
+   |
+91 |     pub fn opencode_config_path(
+   |            ^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+91 ~     #[must_use]
+92 ~     pub fn opencode_config_path(
+   |
+
+warning: this method could have a `#[must_use]` attribute
+   --> vst-agents/src/paths.rs:102:12
+    |
+102 |     pub fn direct_opencode_config_path(&self, project_id: &str, session_id: &str) -> PathBuf {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+102 ~     #[must_use]
+103 ~     pub fn direct_opencode_config_path(&self, project_id: &str, session_id: &str) -> PathBuf {
+    |
+
+warning: this function could have a `#[must_use]` attribute
+   --> vst-agents/src/plugin.rs:140:8
+    |
+140 | pub fn prompt_verification_needle(session_id: &str) -> String {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+    |
+140 + #[must_use]
+141 | pub fn prompt_verification_needle(session_id: &str) -> String {
+    |
+
+warning: called `map(<f>).unwrap_or(<a>)` on a `Result` value
+   --> vst-agents/src/plugin.rs:253:18
+    |
+253 |       let millis = std::time::SystemTime::now()
+    |  __________________^
+254 | |         .duration_since(std::time::UNIX_EPOCH)
+255 | |         .map(|d| d.as_millis())
+256 | |         .unwrap_or(0);
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `map_or(<a>, <f>)` instead
+    |
+255 -         .map(|d| d.as_millis())
+256 -         .unwrap_or(0);
+255 +         .map_or(0, |d| d.as_millis());
+    |
+
+warning: this function could have a `#[must_use]` attribute
+  --> vst-agents/src/registry.rs:22:8
+   |
+22 | pub fn resolve_plugin(cli: CliId) -> Box<dyn AgentPlugin> {
+   |        ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#must_use_candidate
+help: add the attribute
+   |
+22 + #[must_use]
+23 | pub fn resolve_plugin(cli: CliId) -> Box<dyn AgentPlugin> {
+   |
+
+warning: `vst-agents` (lib test) generated 127 warnings (57 duplicates) (run `cargo clippy --fix --lib -p vst-agents --tests -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 43 suggestions)
+warning: `vst-agents` (lib) generated 127 warnings (70 duplicates) (run `cargo clippy --fix --lib -p vst-agents -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 30 suggestions)
+warning: this argument is passed by value, but not consumed in the function body
+  --> vst-agents/tests/acp_normalize.rs:20:17
+   |
+20 | fn norm(update: SessionUpdate) -> Option<NormalizedEvent> {
+   |                 ^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_pass_by_value
+   = note: `-W clippy::needless-pass-by-value` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+20 | fn norm(update: &SessionUpdate) -> Option<NormalizedEvent> {
+   |                 +
+
+warning: calling `HashMap::default()` is more clear than this expression
+  --> vst-agents/tests/acp_terminal_manager.rs:24:18
+   |
+24 |             env: Default::default(),
+   |                  ^^^^^^^^^^^^^^^^^^ help: try: `HashMap::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+   = note: `-W clippy::default-trait-access` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::default_trait_access)]`
+
+warning: calling `HashMap::default()` is more clear than this expression
+  --> vst-agents/tests/acp_terminal_manager.rs:50:18
+   |
+50 |             env: Default::default(),
+   |                  ^^^^^^^^^^^^^^^^^^ help: try: `HashMap::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: unused `async` for function with no await statements
+  --> vst-agents/tests/acp_live.rs:30:1
+   |
+30 | / async fn live_conn() -> Option<AcpConnection> {
+31 | |     if std::env::var("VST_ACP_LIVE_TESTS").is_err() {
+32 | |         return None;
+...  |
+41 | |     }))
+42 | | }
+   | |_^
+   |
+   = help: consider removing the `async` from this function
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_async
+   = note: `-W clippy::unused-async` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::unused_async)]`
+
+warning: calling `HashMap::default()` is more clear than this expression
+  --> vst-agents/tests/acp_terminal_manager.rs:73:18
+   |
+73 |             env: Default::default(),
+   |                  ^^^^^^^^^^^^^^^^^^ help: try: `HashMap::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: calling `HashMap::default()` is more clear than this expression
+  --> vst-agents/tests/acp_terminal_manager.rs:97:18
+   |
+97 |             env: Default::default(),
+   |                  ^^^^^^^^^^^^^^^^^^ help: try: `HashMap::default()`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#default_trait_access
+
+warning: item in documentation is missing backticks
+ --> vst-agents/tests/acp_transport.rs:5:69
+  |
+5 | //! The frozen `AcpTransport` trait (04-spike) exposes initialize / new_session /
+  |                                                                     ^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+  = note: `-W clippy::doc-markdown` implied by `-W clippy::pedantic`
+  = help: to override `-W clippy::pedantic` add `#[allow(clippy::doc_markdown)]`
+help: try
+  |
+5 - //! The frozen `AcpTransport` trait (04-spike) exposes initialize / new_session /
+5 + //! The frozen `AcpTransport` trait (04-spike) exposes initialize / `new_session` /
+  |
+
+warning: item in documentation is missing backticks
+ --> vst-agents/tests/acp_transport.rs:6:5
+  |
+6 | //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+  |     ^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+  |
+6 - //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+6 + //! `load_session` / send_prompt / cancel_active_prompt / is_alive / dispose. The
+  |
+
+warning: item in documentation is missing backticks
+ --> vst-agents/tests/acp_transport.rs:6:20
+  |
+6 | //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+  |                    ^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+  |
+6 - //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+6 + //! load_session / `send_prompt` / cancel_active_prompt / is_alive / dispose. The
+  |
+
+warning: item in documentation is missing backticks
+ --> vst-agents/tests/acp_transport.rs:6:34
+  |
+6 | //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+  |                                  ^^^^^^^^^^^^^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+  |
+6 - //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+6 + //! load_session / send_prompt / `cancel_active_prompt` / is_alive / dispose. The
+  |
+
+warning: item in documentation is missing backticks
+ --> vst-agents/tests/acp_transport.rs:6:57
+  |
+6 | //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+  |                                                         ^^^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+  |
+6 - //! load_session / send_prompt / cancel_active_prompt / is_alive / dispose. The
+6 + //! load_session / send_prompt / cancel_active_prompt / `is_alive` / dispose. The
+  |
+
+warning: item in documentation is missing backticks
+  --> vst-agents/tests/acp_transport.rs:12:19
+   |
+12 | //! fake agent's "selected:allow_always"/"cancelled" echo and `_session/steering`
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#doc_markdown
+help: try
+   |
+12 - //! fake agent's "selected:allow_always"/"cancelled" echo and `_session/steering`
+12 + //! fake agent's "`selected:allow_always"/"cancelled`" echo and `_session/steering`
+   |
+
+warning: `vst-agents` (test "acp_terminal_manager") generated 4 warnings
+warning: `vst-agents` (test "acp_live") generated 1 warning
+warning: unused `async` for function with no await statements
+  --> vst-agents/tests/agy.rs:31:1
+   |
+31 | / async fn write_log(home: &Path, id: &str, content: &str) {
+32 | |     let path = log_path_for(home, id);
+33 | |     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+34 | |     std::fs::write(&path, content).unwrap();
+35 | | }
+   | |_^
+   |
+   = help: consider removing the `async` from this function
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_async
+   = note: `-W clippy::unused-async` implied by `-W clippy::pedantic`
+   = help: to override `-W clippy::pedantic` add `#[allow(clippy::unused_async)]`
+
+warning: unused `async` for function with no await statements
+   --> vst-agents/tests/agy.rs:308:5
+    |
+308 | /     async fn write_acp_sessions_file(home: &std::path::Path, sessions_json: &str) {
+309 | |         let dir = home.join(".agy-acp");
+310 | |         std::fs::create_dir_all(&dir).unwrap();
+311 | |         std::fs::write(dir.join("sessions.json"), sessions_json).unwrap();
+312 | |     }
+    | |_____^
+    |
+    = help: consider removing the `async` from this function
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unused_async
+
+warning: `vst-agents` (test "acp_normalize") generated 1 warning
+warning: `vst-agents` (test "agy") generated 2 warnings
+warning: `vst-agents` (test "acp_transport") generated 6 warnings (run `cargo clippy --fix --test "acp_transport" -p vst-agents -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 6 suggestions)
+warning: redundant closure
+   --> vst-agents/tests/registry_plugins.rs:127:46
+    |
+127 |         assert_eq!(env.get("CLAUDECODE").map(|s| s.as_str()), Some("1"));
+    |                                              ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::String::as_str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+    = note: `-W clippy::redundant-closure-for-method-calls` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+warning: redundant closure
+   --> vst-agents/tests/registry_plugins.rs:129:51
+    |
+129 |             env.get("CLAUDE_CODE_ENTRYPOINT").map(|s| s.as_str()),
+    |                                                   ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::String::as_str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: called `map(<f>).unwrap_or(false)` on an `Option` value
+   --> vst-agents/tests/registry_plugins.rs:233:13
+    |
+233 | /             e.get("hooks")
+234 | |                 .and_then(|h| h.as_array())
+235 | |                 .map(|hs| {
+236 | |                     hs.iter().any(|h| {
+...   |
+240 | |                 })
+241 | |                 .unwrap_or(false)
+    | |_________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+    = note: `-W clippy::map-unwrap-or` implied by `-W clippy::pedantic`
+    = help: to override `-W clippy::pedantic` add `#[allow(clippy::map_unwrap_or)]`
+help: use `is_some_and(<f>)` instead
+    |
+235 ~                 .is_some_and(|hs| {
+236 |                     hs.iter().any(|h| {
+...
+239 |                     })
+240 ~                 })
+    |
+
+warning: called `map(<f>).unwrap_or(false)` on an `Option` value
+   --> vst-agents/tests/registry_plugins.rs:264:13
+    |
+264 | /             e.get("hooks")
+265 | |                 .and_then(|h| h.as_array())
+266 | |                 .map(|hs| {
+267 | |                     hs.iter()
+268 | |                         .any(|h| h.get("command").and_then(|c| c.as_str()) == Some("my-hook.sh"))
+269 | |                 })
+270 | |                 .unwrap_or(false)
+    | |_________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `is_some_and(<f>)` instead
+    |
+266 ~                 .is_some_and(|hs| {
+267 |                     hs.iter()
+268 |                         .any(|h| h.get("command").and_then(|c| c.as_str()) == Some("my-hook.sh"))
+269 ~                 })
+    |
+
+warning: called `map(<f>).unwrap_or(false)` on an `Option` value
+   --> vst-agents/tests/registry_plugins.rs:273:13
+    |
+273 | /             e.get("hooks")
+274 | |                 .and_then(|h| h.as_array())
+275 | |                 .map(|hs| {
+276 | |                     hs.iter().any(|h| {
+...   |
+280 | |                 })
+281 | |                 .unwrap_or(false)
+    | |_________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `is_some_and(<f>)` instead
+    |
+275 ~                 .is_some_and(|hs| {
+276 |                     hs.iter().any(|h| {
+...
+279 |                     })
+280 ~                 })
+    |
+
+warning: called `map(<f>).unwrap_or(false)` on an `Option` value
+   --> vst-agents/tests/registry_plugins.rs:302:17
+    |
+302 | /                 e.get("hooks")
+303 | |                     .and_then(|h| h.as_array())
+304 | |                     .map(|hs| {
+305 | |                         hs.iter().any(|h| {
+...   |
+309 | |                     })
+310 | |                     .unwrap_or(false)
+    | |_____________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#map_unwrap_or
+help: use `is_some_and(<f>)` instead
+    |
+304 ~                     .is_some_and(|hs| {
+305 |                         hs.iter().any(|h| {
+...
+308 |                         })
+309 ~                     })
+    |
+
+warning: redundant closure
+   --> vst-agents/tests/registry_plugins.rs:582:44
+    |
+582 |             env.get("OPENCODE_CONFIG").map(|s| s.as_str()),
+    |                                            ^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::string::String::as_str`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#redundant_closure_for_method_calls
+
+warning: `vst-agents` (test "registry_plugins") generated 7 warnings (run `cargo clippy --fix --test "registry_plugins" -p vst-agents -- -D clippy::correctness -D clippy::suspicious -D clippy::complexity -D clippy::perf` to apply 7 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s
+== test (vst-agents) ==
+   Compiling vst-agents v0.1.0 (/home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141/rust/vst-agents)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.87s
+     Running unittests src/lib.rs (target/debug/deps/vst_agents-2fb5f0fdea5e0372)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acp_file_system.rs (target/debug/deps/acp_file_system-c5048d2a7118edbd)
+
+running 5 tests
+test writes_a_file_inside_the_cwd ... ok
+test returns_error_for_a_missing_path ... ok
+test reads_a_file_inside_the_cwd_by_relative_path ... ok
+test respects_line_limit_slicing ... ok
+test resolves_an_absolute_path ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acp_live.rs (target/debug/deps/acp_live-97277d59f5c3f1a1)
+
+running 1 test
+test live_claude_initialize_new_session_prompt ... ignored, live CLI test: requires VST_ACP_LIVE_TESTS=1 and an authenticated claude
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acp_normalize.rs (target/debug/deps/acp_normalize-b6dea1b2c8ef6d69)
+
+running 14 tests
+test agent_message_chunk_with_non_text_block_populates_blocks ... ok
+test available_commands_update_preserves_hint_as_argument_hint ... ok
+test available_commands_update_strips_one_leading_slash ... ok
+test current_mode_update_maps_to_mode_update ... ok
+test drops_user_message_chunk ... ok
+test empty_plan_maps_to_status_with_default_text ... ok
+test in_progress_tool_call_update_has_no_tool_result ... ok
+test maps_agent_message_chunk_to_text_event ... ok
+test maps_agent_thought_chunk_to_thinking_event ... ok
+test maps_plan_to_status_event ... ok
+test the_enrich_hook_can_replace_the_default_mapping ... ok
+test maps_tool_call_then_tool_call_update_same_tool_id ... ok
+test tool_call_with_diff_content_populates_tool_diffs ... ok
+test unknown_update_kind_is_dropped_not_thrown ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/acp_terminal_manager.rs (target/debug/deps/acp_terminal_manager-804c29a60d2463ac)
+
+running 5 tests
+test output_on_unknown_terminal_errors ... ok
+test has_live_terminals_is_true_while_running_false_after_release ... ok
+test kill_force_stops_a_live_child ... ok
+test has_live_terminals_is_false_once_child_exits_on_its_own ... ok
+test output_returns_buffered_stdout_and_not_truncated_under_limit ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/acp_transport.rs (target/debug/deps/acp_transport-39df60fec406c22d)
+
+running 8 tests
+test dispose_is_idempotent_and_flips_is_alive ... ok
+test prompt_against_disposed_connection_rejects_immediately ... ok
+test is_alive_flips_false_when_child_exits_on_its_own ... ok
+test initialize_rejects_typed_failure_when_process_exits_before_ready ... ok
+test happy_path_initialize_new_session_send_prompt_streams_and_resolves_end_turn ... ok
+test cancel_active_prompt_resolves_with_cancelled_without_killing_connection ... ok
+test prompt_times_out_with_clear_error_instead_of_hanging ... ok
+test initialize_times_out_with_initialize_failed_not_indefinitely ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+     Running tests/agy.rs (target/debug/deps/agy-0955d526d10947f4)
+
+running 15 tests
+test agy_log_path_is_per_session ... ok
+test capture_chat_id_resolves_once_line_appended_mid_poll ... ok
+test capture_chat_id_resolves_created_line ... ok
+test capture_chat_id_prefers_last_streaming_line ... ok
+test capture_chat_id_times_out_to_null ... ok
+test capture_native_chat_id::falls_back_to_cwd_keyed_last_conversations ... ok
+test capture_native_chat_id::never_overwrites_already_captured_native_id ... ok
+test capture_native_chat_id::prefers_acp_adapter_session_keyed_conversation_id ... ok
+test capture_native_chat_id::returns_null_when_neither_channel_has_value ... ok
+test compose_launch_prompt_writes_combined_prompt_file ... ok
+test parse_last_conversation_id_tolerates_trailing_garbage ... ok
+test refresh_chat_id_on_toggle_immediate_read ... ok
+test get_launch_command_wires_per_session_log_file_and_creates_dir ... ok
+test two_sessions_independent_log_files ... ok
+test refresh_chat_id_on_toggle_returns_null_when_no_conversation_line ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+     Running tests/json_plugins.rs (target/debug/deps/json_plugins-5656256bad91994e)
+
+running 27 tests
+test agy_parser::agent_response_text_delta_active ... ok
+test agy_parser::agent_response_done_carries_usage_not_surfaced ... ok
+test agy_parser::empty_text_delta_emits_nothing ... ok
+test agy_parser::init_event_to_session_init_with_fallback_model ... ok
+test agy_parser::no_payload_step_types_dropped ... ok
+test agy_parser::result_error_immediate_hard_fail ... ok
+test agy_parser::result_success_usage_and_result ... ok
+test agy_parser::skips_malformed_lines ... ok
+test agy_parser::tool_info_error_is_error ... ok
+test agy_parser::tool_step_done_only_synthesizes_both ... ok
+test cursor_parser::reads_camel_case_usage_keys ... ok
+test agy_parser::tool_step_active_then_done ... ok
+test cursor_parser::picks_toolcall_key_with_sibling_keys ... ok
+test cursor_parser::result_error_emits_typed_error ... ok
+test cursor_parser::skips_malformed_lines ... ok
+test cursor_parser::result_success_usage_and_result_with_summed_tokens ... ok
+test cursor_parser::streams_thinking_delta ... ok
+test cursor_parser::suppresses_user_echo ... ok
+test cursor_parser::system_init_to_session_init ... ok
+test cursor_parser::tool_call_completed_success_not_error ... ok
+test cursor_parser::tool_call_started_and_completed_same_call_id ... ok
+test cursor_parser::tool_call_completed_failure_is_error ... ok
+test opencode_parser::does_not_duplicate_tool_use_after_running ... ok
+test opencode_parser::reasoning_and_tool_running_completed ... ok
+test opencode_parser::surfaces_session_id_as_session_init_once ... ok
+test opencode_parser::step_finish_stop_ends_turn_tool_calls_dropped ... ok
+test opencode_parser::terminal_only_tool_emits_tool_use_then_tool_result ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_chat_id.rs (target/debug/deps/native_chat_id-c674c322e9d6215c)
+
+running 5 tests
+test returns_none_when_projects_dir_does_not_exist ... ok
+test returns_uuid_of_newest_jsonl_by_mtime ... ok
+test returns_uuid_when_only_one_jsonl_exists ... ok
+test ignores_non_jsonl_files_and_directories ... ok
+test slug_strips_dots ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/registry_plugins.rs (target/debug/deps/registry_plugins-6b7f341ce6f7a84c)
+
+running 41 tests
+test claude_plugin::compose_launch_prompt_no_task ... ok
+test claude_plugin::launch_command_starts_with_claude ... ok
+test claude_plugin::environment_has_claudecode ... ok
+test claude_plugin::fork_command_present_for_claude_only ... ok
+test claude_plugin::compose_launch_prompt_with_system_and_task ... ok
+test claude_plugin::ready_signal_has_sentinel ... ok
+test claude_plugin::list_models_includes_fable_alias_and_full_name ... ok
+test cursor_plugin::direct_context_uses_project_dir_as_workspace ... ok
+test claude_plugin::restore_command_uses_agent_chat_id_without_fs ... ok
+test cursor_plugin::launch_command_no_resume_without_agent_chat_id ... ok
+test cursor_plugin::compose_launch_prompt_shell_line ... ok
+test cursor_plugin::launch_command_has_force_sandbox_approve_mcps ... ok
+test chat_id_capture::claude_capture_chat_id_null_when_no_token_file ... ok
+test chat_id_capture::claude_capture_chat_id_reads_and_deletes_token_file ... ok
+test claude_plugin::restore_command_null_when_no_uuid ... ok
+test cursor_hooks::gitignore_not_duplicated ... ok
+test claude_hooks::merges_with_existing_user_hooks ... ok
+test claude_hooks::writes_vst_command_content ... ok
+test claude_hooks::creates_vibe_recorder_and_settings ... ok
+test cursor_plugin::launch_command_resumes_with_agent_chat_id ... ok
+test claude_hooks::vst_command_idempotent ... ok
+test cursor_hooks::vst_command_idempotent ... ok
+test cursor_hooks::writes_vst_command_no_arg_substitution ... ok
+test opencode_plugin::compose_launch_prompt_task_and_needle_not_system_prompt ... ok
+test cursor_plugin::restore_command_uses_agent_chat_id ... ok
+test cursor_plugin::restore_command_null_without_agent_chat_id ... ok
+test cursor_hooks::adds_cursor_to_gitignore ... ok
+test opencode_plugin::restore_command_null_without_agent_chat_id ... ok
+test opencode_plugin::restore_command_with_agent_chat_id ... ok
+test resolution::agy_supports_json ... ok
+test resolution::resolves_each_cli_to_its_name ... ok
+test resolution::supported_clis_are_all_resolvable ... ok
+test opencode_hooks::gitignore_not_duplicated ... ok
+test opencode_hooks::adds_opencode_to_gitignore ... ok
+test opencode_hooks::vst_command_idempotent ... ok
+test claude_hooks::idempotent_no_duplicate_entry ... ok
+test opencode_plugin::direct_context_config_resolves_to_direct_session_data_dir ... ok
+test resolution::default_model_matches_plugin_defaults ... ok
+test opencode_hooks::writes_vst_command_with_arg_substitution ... ok
+test opencode_hooks::writes_vst_recorder_plugin ... ok
+test opencode_hooks::idempotent_no_rewrite_if_unchanged ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+   Doc-tests vst_agents
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+== test vst-types (wire fixtures) ==
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (target/debug/deps/vst_types-2cb2d76340ecdc59)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wire.rs (target/debug/deps/wire-66f22a41a6d2658b)
+
+running 13 tests
+test enqueue_chat_result_roundtrips ... ok
+test id_newtypes_serialize_as_bare_strings ... ok
+test client_message_session_open_roundtrips ... ok
+test mode_fixture_roundtrips ... ok
+test project_fixture_roundtrips ... ok
+test global_draft_fixture_roundtrips ... ok
+test server_message_session_created_roundtrips ... ok
+test server_message_session_state_roundtrips ... ok
+test server_message_chat_replay_roundtrips ... ok
+test server_message_session_updated_roundtrips ... ok
+test session_updated_omits_unchanged_optionals ... ok
+test session_fixture_roundtrips ... ok
+test worktree_fixture_roundtrips ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests vst_types
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+== gate green ==
