@@ -10,10 +10,25 @@ vst-types = { workspace = true }
 vst-proc = { workspace = true }
 vst-store = { workspace = true }
 vst-rpc = { workspace = true }
+vst-git = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+notify = "6"
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Pinned exact (04-spike, frozen before any 04a/04b/04c session touches it —
+# see arch doc Gotcha #5 and the vst-agents<->external-agent-CLIs System
+# Boundary row). Bump only via a deliberate, reviewed amendment, never a
+# routine `cargo update`.
+agent-client-protocol = "=2.1.0"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true

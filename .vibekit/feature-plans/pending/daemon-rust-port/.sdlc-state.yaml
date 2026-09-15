@@ -115,67 +115,238 @@ subfeatures:
   - id: 04-spike
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "04b's plan must cite rust/vst-agents/src/acp_transport.rs and implement AcpTransport as-is, never redesign the signature"
+      returned_at: null
+      verified_by: "orchestrator (vs-141-a-0af564da) — done directly, not dispatched, per the arch doc's explicit instruction for this part"
+    commit: 9f8ebbf
 
   - id: 04a-agent-plugins-core
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
-
-  - id: 04b-acp-transport
-    origin: planned
-    spawned_from: root
-    mode: pending
-    last_completed: null
-    awaiting_phase: null
-    awaiting_artifact: null
-    phase_chain: [plan, implement, verify, review]
-    superseded_reason: null
-    parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
-
-  - id: 04c-json-agent-chat
-    origin: planned
-    spawned_from: root
-    mode: pending
-    last_completed: null
-    awaiting_phase: null
-    awaiting_artifact: null
-    phase_chain: [plan, implement, verify, review]
-    superseded_reason: null
-    parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "04b and 04c's phase briefs MUST instruct implementers to read vst-agents::native_chat_id / opencode_config / paths (pulled forward by 04a) first and adopt/extend rather than re-derive from TS — see those files' OWNERSHIP NOTE doc comments"
+      returned_at: null
+      verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-agents, re-ran cargo test -p vst-types for the Default amendment, whitespace-normalized-diffed the full test tree, confirmed N6 empty)"
+    commit: cf66a3c
+    process_note: >
+      Fourth consecutive part where step 4 touched tests/ — this time the raw
+      diff stat was large (554 lines / 4 files) which warranted extra
+      scrutiny; whitespace-normalized diffing confirmed it was entirely
+      cargo fmt reflow plus the two exact harness fixes disclosed in the
+      report (a redundant format! call, 3x an unneeded to_path_buf()), no
+      assertion changed. Also: this part pulled forward two other parts'
+      file-map-assigned scope (04b's native-chat-id/*, 04c's opencodeConfig
+      +paths) because its own ported tests needed that behavior through the
+      AgentPlugin trait — orchestrator caught this mid-flight (before the
+      test-contract commit) via the module doc comment and directed loud
+      OWNERSHIP NOTE markers rather than either accepting it silently or
+      forcing a disruptive stub-and-rewrite. See handoff.next_item — this
+      is a real cross-part coordination requirement, not just a note.
 
   - id: 05-lifecycle-status
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
+    handoff:
+      next_item: "subagent_notify.rs's emit_pill is stubbed pending the jsonAgent runtime (04c) — whichever part wires them together (likely 08-server-bootstrap) needs to complete it. cloudflared.rs's doc comment is stale (claims vst_proc::spawn_child, actually uses raw Command+PID tracking for orphan-sweep reasons) — cosmetic fix only, whoever next touches the file."
+      returned_at: null
+      verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-lifecycle, confirmed N6 empty, inspected trybuild fixtures directly, investigated and confirmed the cloudflared spawn-mechanism deviation was correct engineering not a shortcut)"
+    commit: f98596a
+    process_note: >
+      ONE-OFF PARALLEL DISPATCH, closed out. Two coordination incidents during
+      the parallel window with 04c (both self-corrected/harmless, see 04c's
+      process_note for the mirror record): (1) this session's gate/fmt step
+      briefly committed 04c's uncommitted vst-agents edits into its own
+      commit (workspace-wide cargo fmt + broad git add) — caught, self-
+      corrected via git reset within minutes of being told. (2) the
+      orchestrator's own bare `git commit` for an unrelated .sdlc-state.yaml
+      update accidentally swept up this session's staged two-axis fix —
+      harmless (content correct, just misattributed), fixed by committing
+      the gate log separately afterward. Lesson applied going forward:
+      always scope commits to explicit paths when a parallel session shares
+      the worktree, never a bare `git commit`.
+
+      Also: a real correctness bug was found in the initial two-axis
+      enforcement (pub(super) on sibling modules doesn't actually restrict
+      cross-module access — needs full privacy) and fixed with genuine
+      trybuild compile-fail fixtures, not the originally-stubbed
+      always-passing test. This was caught during orchestrator gate review,
+      not self-reported — a good instance of gate review value-add.
+
+      Verdict: despite two coordination hiccups and one real bug needing a
+      steered fix, the Haiku implementer delivered a large (12-file) part
+      correctly and self-corrected well when redirected both times. Parallel
+      dispatch worked, but confirms it needs active orchestrator attention
+      at gate/commit boundaries, not passive monitoring — consistent with
+      why this stays a one-off, not a standing policy.
+
+  - id: 04b-acp-transport
+    origin: planned
+    spawned_from: root
+    mode: done
+    last_completed: review
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: "whichever part wires up production agent spawning (04c+) should verify whether the AcpAgentConfig cwd gap (agent child inherits daemon cwd, not session worktree cwd — upstream agent-client-protocol crate limitation) is resolved in a newer crate version before cutover"
+      returned_at: null
+      verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-agents, confirmed every new test file passed including the correctly-ignored live test, diff-reviewed full test tree incl. cross-checking the one assertion removal against actual TS source, confirmed N6 empty)"
+    commit: bed2129
+    process_note: >
+      First real escalation on this feature (step D's ladder, not step G's —
+      this was stuck-in-flight, never reached a gate). DeepSeek session
+      vs-141-a-4c95a907 correctly diagnosed a genuine architecture gap in the
+      04-spike-frozen AcpTransport trait: agent_client_protocol's
+      connect_with() runs the whole connection as one closure that only
+      returns on connection close, which doesn't naturally fit the trait's
+      separately-callable &self methods. It then fell into a hard repeated-
+      text loop ("Let me create the stubs... Let me create them.") instead of
+      implementing its own correct diagnosis. One steering message with a
+      concrete actor-pattern resolution did not unstick it (identical loop
+      continued). No commits existed for this part, so nothing was lost by
+      escalating — terminated and dispatched fresh on $HAIKU_MODE
+      (mode-1789474690627-p55ag) as vs-141-a-df7cdb81.
+      That Haiku session made no visible progress before the user (having
+      separately noticed the model-swap cost discussion happening in the
+      main orchestrator session) directed reverting to DeepSeek instead —
+      terminated vs-141-a-df7cdb81 (no commits, nothing lost) and dispatched
+      vs-141-a-3c4270a9 on $DEEPSEEK_MODE with the same pre-solved
+      actor-pattern resolution in the prompt. Net effect: this part has now
+      had 3 dispatch attempts (2 DeepSeek, 1 Haiku) without a commit yet;
+      if the current DeepSeek attempt also stalls, that's step G's "3 total
+      attempts, mixed models" ceiling — stop dispatching further rounds and
+      surface to the human rather than trying a 4th.
+
+  - id: 04c-json-agent-chat
+    origin: planned
+    spawned_from: root
+    mode: done
+    last_completed: review
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: "08-server-bootstrap (or whichever part wires vst-lifecycle+vst-agents together) needs to complete 05's subagent_notify.rs emit_pill, which calls into this crate's JsonAgentSession"
+      returned_at: null
+      verified_by: "vs-141-a-0af564da (final independent gate re-run green, N6 confirmed empty across the full 68f98b1..9870454 range including the corrected tokio-util violation, zero test-tree drift after every test-contract commit)"
+    commit: 9870454
+    process_note: >
+      COMPLETE — largest part of the whole port, 4 dispatch continuations
+      across 2 models (DeepSeek then Haiku, per user direction for the last
+      two continuations). Full dispatch history recorded in the plan file's
+      "Closed out" section. Headline findings from this part's closeout gate
+      review: (1) a real N6 violation (tokio-util landed in workspace
+      [workspace.dependencies] instead of crate-local) went undetected for
+      several continuations until the final closeout pass — caught only
+      because I ran the N6 diff check across the FULL part range, not just
+      the latest continuation's range; lesson: N6 must be checked against
+      the part's start commit every time, not just incrementally, since a
+      violation can hide in an earlier continuation's range. (2) Two
+      commit-attribution incidents during the parallel window with 05
+      (see 05's own process_note) — both self-corrected, no code lost.
+      Continuation 2 delivered cleanly (json_agent_registry, cap_tool_result_
+      content visibility widening, AcpTransport steer()/supports_steering
+      amendment + AcpConnection impl using the crate's JsonRpcRequest/
+      JsonRpcResponse derive macros — no fallback stub needed) — independently
+      re-verified (both vst-agents and vst-store gates green, N6 holds, zero
+      test-tree diff after the test-contract commit). Commits ac6d303..159eb27.
+      One coordination incident during this window: the parallel 05 session
+      briefly committed 04c's uncommitted working-tree edits into its own
+      commit (workspace-wide cargo fmt + broad git add), self-corrected via
+      git reset within minutes once caught and firmly redirected. No code
+      lost, no lasting damage — see 05's own process_note for the full
+      incident record. Also caught and fixed a real correctness bug in 05's
+      pub(super) two-axis enforcement (siblings under the same parent are
+      NOT excluded by pub(super) — needs full module-privacy instead).
+      Still blocked: JsonAgentSession's core (queue/drain/connection/events/
+      mod) needs 05-lifecycle-status's persist functions — dispatch the next
+      continuation once 05 is done.
+
+      Largest part yet by a wide margin — jsonAgent.ts alone is 2057 lines
+      (one 1470-line JsonAgentSession class). Pre-dispatch, researched a
+      file-split decomposition (module list in the plan) before writing the
+      brief, rather than dispatching blind and hoping the implementer designs
+      it under context pressure — a deliberate response to 04b needing 3
+      dispatch attempts on a much smaller (594-line) file. Expect this part
+      to run long; poll patiently but watch closely for the stuck-vs-large
+      distinction from step D.
+
+      First dispatch (vs-141-a-cd841104): initially skipped the test-first
+      commit boundary on its first chunk (ffd0793, no preceding test(04c)
+      commit, inline #[cfg(test)] instead of tests/, zero tests on the
+      Gotcha #9 chokidar file) — caught and steered, fixed retroactively as
+      7e0cc3e, held cleanly for the rest of the run (verified: every
+      subsequent tests/ touch has its own preceding test-commit, confirmed
+      via `git log --oneline -- tests/` showing paired test/feat commits).
+      One commit (d9e78cf) was mislabeled "fmt reflow, no semantic change"
+      but actually included a real MetaTail->TranscriptMeta type
+      consolidation and a test-determinism fix (home-dir mocking) —
+      diff-reviewed, both legitimate improvements, nothing weakened, just an
+      inaccurate commit message; not worth another round-trip over.
+      Delivered (gated green, N6 holds): skill_resolution, skill_tokens,
+      user_skill_catalog (incl. the required atomic-rename-on-save test),
+      native_history_importer + claude/opencode importers, prompt_builder,
+      context, json_agent_session::{meta,pids}.
+      Then correctly STOPPED at a real, verified cross-part gap: AgentPlugin
+      (04a) never got a `runTurn` method, even though it's genuinely part of
+      the same TS interface/files 04a ported — missed because it's optional
+      and wasn't in the AGENTS.md method table my 04a brief cited. Not
+      implementer error. Added a "Continuation — run_turn bridge" section to
+      the plan with the bridge design (TurnContext.get_acp_connection as a
+      boxed async closure, AgentPlugin::run_turn returning an
+      mpsc::UnboundedReceiver<NormalizedEvent> matching 04b's PromptTurn
+      idiom, ONE shared run_turn_acp free function instead of TS's 4x
+      per-plugin duplication) before dispatching a continuation session, the
+      same pattern as 04-spike freezing AcpTransport before 04b touched it.
+
+  - id: 05-lifecycle-status
+    origin: planned
+    spawned_from: root
+    mode: implementing
+    last_completed: plan
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/pending/daemon-rust-port/05-lifecycle-status/plan-05-daemon-rust-port-lifecycle-status.md
+    phase_chain: [plan, implement, verify, review]
+    superseded_reason: null
+    parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
     commit: null
+    process_note: >
+      ONE-OFF PARALLEL DISPATCH (user-directed, 2026-09-15) — dispatched to
+      Haiku (vs-141-a-4e3f4b61) while 04c-json-agent-chat (DeepSeek) is still
+      in flight. Safe: 05 depends only on 00/01/02/03 (not 04c), lives in a
+      completely separate crate (vst-lifecycle vs vst-agents), zero file
+      overlap. This is NOT a standing policy — do not repeat without an
+      equally explicit user instruction. Step A of the loop: after 04c
+      finishes, do NOT pick 05 (it's already claimed here, in flight or
+      done) — go straight to 06-ws-realtime next. See
+      ORCHESTRATION-PROMPT.md's matching note under step A.
 
   - id: 06-ws-realtime
     origin: planned
