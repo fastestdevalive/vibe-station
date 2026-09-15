@@ -6,7 +6,7 @@ master:
   prd: skipped   # internal engineering rewrite, no user-facing product behavior — see arch doc "PRD: none"
   plan: complete # arch-daemon-rust-port.md reviewed and approved
 
-current_subfeature: 01-storage
+current_subfeature: null
 
 subfeatures:
   - id: root
@@ -38,15 +38,15 @@ subfeatures:
   - id: 01-storage
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff: {next_item: null, returned_at: null, verified_by: "vs-141-a-0af564da (re-ran rust-gate.sh vst-store independently, reviewed test diff, confirmed no workspace/CI touch)"}
+    commit: f354fa3
 
   - id: 02-process-pty
     origin: planned
