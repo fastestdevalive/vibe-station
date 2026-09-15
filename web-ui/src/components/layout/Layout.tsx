@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
 import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
 import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } from "@/hooks/useStore";
@@ -243,7 +243,25 @@ export function Layout({
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
   // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
   const vertical = effectiveOrientation === "vertical";
-  const topRow = toolsInSplit ? (
+
+  // Imperative handle for the tools Panel — used to collapse/expand it without
+  // changing the agent's React tree position (which would remount TerminalPane,
+  // killing the PTY stream). See the invariant in AGENTS.md.
+  const toolsPanelRef = useRef<ImperativePanelHandle>(null);
+  useEffect(() => {
+    if (toolsInSplit) {
+      toolsPanelRef.current?.expand();
+    } else {
+      toolsPanelRef.current?.collapse();
+    }
+  }, [toolsInSplit]);
+
+  // When a tool panel is available, always keep the PanelGroup in the tree so the
+  // agent panel (and its TerminalPane) stays at a stable React tree position. The
+  // tools panel is collapsed/expanded via the imperative ref instead of being added
+  // to / removed from the tree — this prevents the agent from remounting on toggle.
+  // When no tool panel is available, render the agent directly (no PanelGroup needed).
+  const topRow = hasToolPanel ? (
     <PanelGroup
       direction={vertical ? "vertical" : "horizontal"}
       autoSaveId={`vs-ide-top-${wt}-${effectiveOrientation}`}
@@ -251,8 +269,16 @@ export function Layout({
     >
       {[
         vertical ? (
-          <Panel defaultSize={42} minSize={18} key="tools" order={1}>
-            {wrap(toolPanel)}
+          <Panel
+            ref={toolsPanelRef}
+            collapsible
+            collapsedSize={0}
+            defaultSize={42}
+            minSize={18}
+            key="tools"
+            order={1}
+          >
+            {toolsInSplit ? wrap(toolPanel) : null}
           </Panel>
         ) : (
           <Panel defaultSize={58} minSize={25} key="agent" order={1}>
@@ -262,14 +288,23 @@ export function Layout({
         <PanelResizeHandle
           className={`resize-handle ${vertical ? "resize-handle--row" : "resize-handle--col"}`}
           key="handle"
+          style={toolsInSplit ? undefined : { display: "none" }}
         />,
         vertical ? (
           <Panel defaultSize={58} minSize={25} key="agent" order={2}>
             {agentWrapper()}
           </Panel>
         ) : (
-          <Panel defaultSize={42} minSize={18} key="tools" order={2}>
-            {wrap(toolPanel)}
+          <Panel
+            ref={toolsPanelRef}
+            collapsible
+            collapsedSize={0}
+            defaultSize={42}
+            minSize={18}
+            key="tools"
+            order={2}
+          >
+            {toolsInSplit ? wrap(toolPanel) : null}
           </Panel>
         ),
       ]}

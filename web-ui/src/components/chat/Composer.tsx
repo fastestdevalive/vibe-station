@@ -96,6 +96,13 @@ export function Composer({
     return () => window.clearTimeout(id);
   }, [justSent]);
 
+  // Auto-focus the composer on mount (mirrors term.focus() in TerminalPane).
+  // Composer is re-keyed on sessionId in ChatPane so this fires on every
+  // agent/worktree switch, letting the user type immediately without tapping.
+  useEffect(() => {
+    internalEditorRef.current?.focus();
+  }, []);
+
   async function handleSend(queue: boolean) {
     if (!canSend) return;
     const message = internalEditorRef.current?.getText().trim() ?? text.trim();
