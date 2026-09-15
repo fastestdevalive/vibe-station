@@ -247,6 +247,38 @@ describe("TabsStrip", () => {
     expect(within(dialog).queryByRole("button", { name: "Detach subagents & terminate" })).not.toBeInTheDocument();
   });
 
+  it("2.T3 — a promoted session (state no longer 'drafting') shows no draft badge/terminate-dialog copy even with a stale lifecycleState", async () => {
+    // Regression for the draft-lifecycle-sync fix (Phase 2): the drafting check
+    // now reads `.state`, which the live `session:state` WS handler keeps fresh,
+    // instead of `.lifecycleState`, which goes stale after the initial fetch.
+    // A promoted session keeps `lifecycleState === "drafting"` (never patched
+    // live) — the old `s.lifecycleState === "drafting" || s.state === "drafting"`
+    // OR-clause would have shown it as a draft forever. `state` is the truth.
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const stalePromoted = snapshot.map((s) =>
+      s.id === "sess-agent2" ? { ...s, state: "working", lifecycleState: "drafting" } : s,
+    );
+    vi.spyOn(localApi, "listSessions").mockResolvedValue(stalePromoted);
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    const agentTwoTab = screen.getByRole("tab", { name: /agent-2/i });
+    // No draft badge (data-draft would be "true" only if state were "drafting").
+    expect(agentTwoTab.getAttribute("data-draft")).not.toBe("true");
+
+    // Terminate dialog carries today's real-agent copy, not "Discard draft?".
+    await user.click(screen.getByRole("button", { name: /Terminate agent-2/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByText(/Discard draft/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Terminate" })).toBeInTheDocument();
+  });
+
   it("M4 — a session:updated{isMain:true} WS event propagates through TabsStrip's local reconciliation (A2.3) and is read by dependent UI (A2.5's dialog naming)", async () => {
     // Direct test of the isMain patch added at TabsStrip.tsx's own
     // `session:updated` handler (`:415-432`) — NOT routed through the global

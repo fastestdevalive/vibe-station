@@ -1488,7 +1488,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
           ...p,
           directSessions: p.directSessions.filter((s) => s.id !== id),
           worktrees: p.worktrees.map((w) =>
-            w.id === wtId ? { ...w, sessions: [...w.sessions, updatedSession] } : w,
+            w.id === wtId
+              ? { ...w, sessions: [...w.sessions.filter((s) => s.id !== id), updatedSession] }
+              : w,
           ),
         }));
       } else {
@@ -1498,6 +1500,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         }));
       }
 
+      if (existingWorktree) {
+        broadcastAll({ type: "session:updated", sessionId: id, worktreeId: existingWorktree.id });
+      }
       broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
 
       void spawnNewSessionForChannel({
