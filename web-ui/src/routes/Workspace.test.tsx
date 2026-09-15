@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockApi } from "@/api/mock";
+import { createMockApi, type MockApi } from "@/api/mock";
 import { api } from "@/api";
 import type { Session } from "@/api/types";
 import { Workspace } from "./Workspace";
@@ -113,7 +113,7 @@ describe("Workspace drafting gate", () => {
     // The live `session:state` WS handler patches ONLY `.state` (useServerSync),
     // leaving `.lifecycleState` stale at "drafting" — the exact real-bug shape.
     await act(async () => {
-      api.__test.emit({ type: "session:state", sessionId: DRAFT_ID, state: "not_started" });
+      (api as MockApi).__test.emit({ type: "session:state", sessionId: DRAFT_ID, state: "not_started" });
     });
 
     await waitFor(() => {
