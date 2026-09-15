@@ -322,6 +322,15 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       setAtBottom(b.viewportY >= b.length - term.rows);
     });
 
+    // Tracks the last time a confirmed IME-dismiss resize fired — height grew
+    // without width changing. The ResizeObserver RAF checks this (< 500 ms) to
+    // decide whether to clear scrollback. A generic window.resize on desktop
+    // (almost always changes width) does NOT set this flag, so desktop users
+    // resizing their browser window never accidentally lose scrollback history.
+    let lastIMEResizeAt = 0;
+    let prevInnerWidth = window.innerWidth;
+    let prevInnerHeight = window.innerHeight;
+
     let roPendingRaf: number | null = null;
     const ro = new ResizeObserver(() => {
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
@@ -337,19 +346,19 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
           // resets ydisp = ybase so the live tail is visible again.
           const wasAtBottom = b.viewportY >= b.length - term.rows;
 
-          // Early-growth guard: if the terminal is about to get taller within
-          // 1.5 s of first session open, clear xterm's scrollback first. This
-          // prevents stale initial-replay rows from being pulled out of
-          // scrollback into the newly visible top rows when the IME dismisses.
-          // The top rows briefly show as empty; tmux immediately fills them
-          // with its own full-screen redraw on the resize notification.
+          // Clear scrollback before a grow triggered by a window-resize event
+          // (IME dismiss/appear on Android, device rotation). Panel drag grows
+          // the host div without firing window.resize, so that path skips the
+          // clear — the user may have scrolled back in xterm's scrollback for
+          // that case. In tmux mode, xterm scrollback only contains daemon
+          // replay, so clearing is always safe on window-resize-triggered grows;
+          // tmux redraws from scratch on the PTY resize notification.
           const proposed = fit.proposeDimensions();
           if (
             sessionOpened &&
-            sessionOpenedAt > 0 &&
-            Date.now() - sessionOpenedAt < 500 &&
             proposed != null &&
-            proposed.rows > term.rows
+            proposed.rows > term.rows &&
+            Date.now() - lastIMEResizeAt < 500
           ) {
             term.clear();
           }
@@ -380,17 +389,23 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     const handleWindowResize = () => {
       if (!mounted || !sessionOpened) return;
       try {
+        const newWidth = window.innerWidth;
+        const newHeight = window.innerHeight;
+        const heightGrew = newHeight > prevInnerHeight;
+        const widthUnchanged = newWidth === prevInnerWidth;
+        prevInnerWidth = newWidth;
+        prevInnerHeight = newHeight;
+        // Only mark an IME resize when height grows without width changing —
+        // the signature of Android IME dismiss (interactive-widget=resizes-content).
+        // Desktop browser-window resizes almost always change width; rotation
+        // changes both dimensions. Neither should clear the user's scrollback.
+        if (heightGrew && widthUnchanged) {
+          lastIMEResizeAt = Date.now();
+        }
         const b = term.buffer.active;
         const wasAtBottom = b.viewportY >= b.length - term.rows;
-        // Same early-growth guard as in the ResizeObserver — window resize
-        // fires on Android when the IME appears/disappears.
         const proposed = fit.proposeDimensions();
-        if (
-          sessionOpenedAt > 0 &&
-          Date.now() - sessionOpenedAt < 500 &&
-          proposed != null &&
-          proposed.rows > term.rows
-        ) {
+        if (proposed != null && proposed.rows > term.rows && heightGrew && widthUnchanged) {
           term.clear();
         }
         fit.fit();
