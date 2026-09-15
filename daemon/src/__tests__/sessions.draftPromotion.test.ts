@@ -126,6 +126,16 @@ describe("POST /sessions/:id/start — draft-promotion broadcasts", () => {
     return res.json<{ id: string }>().id;
   }
 
+  async function createTabDraft(): Promise<string> {
+    const res = await app.inject({
+      method: "POST",
+      url: "/sessions",
+      payload: { target: "worktree", worktreeId, type: "agent", state: "drafting" },
+    });
+    expect(res.statusCode).toBe(201);
+    return res.json<{ id: string }>().id;
+  }
+
   it("1.T1 — a direct draft promoted into an EXISTING worktree broadcasts session:updated { worktreeId } in addition to session:state", async () => {
     // Uses entryPoint "worktree"/worktreeChoice "existing" (a direct draft
     // choosing an already-existing worktree at start time) rather than
@@ -155,6 +165,13 @@ describe("POST /sessions/:id/start — draft-promotion broadcasts", () => {
       },
     });
     expect(res.statusCode).toBe(200);
+    // The HTTP response itself must report the worktreeId too — the web-ui
+    // navigates off this response synchronously (before the WS broadcast
+    // above necessarily lands), and previously fell back to `undefined` here,
+    // which routed the just-started agent to the direct-session `/session/:id`
+    // URL instead of `/worktree/:id` (issue: tab/existing-worktree draft
+    // landing on the wrong URL after Start).
+    expect(res.json()).toMatchObject({ ok: true, worktreeId });
 
     const broadcastAll = vi.mocked(broadcasterNs.broadcastAll);
     const updatedCall = broadcastAll.mock.calls.find(
@@ -172,6 +189,27 @@ describe("POST /sessions/:id/start — draft-promotion broadcasts", () => {
     );
     expect(stateCall).toBeDefined();
     expect(stateCall![0]).toMatchObject({ type: "session:state", sessionId: draftId, state: "not_started" });
+  });
+
+  it("1.T3 — an entryPoint \"tab\" draft (already inside a worktree) reports worktreeId in the HTTP response and does not duplicate itself in the worktree's sessions", async () => {
+    const draftId = await createTabDraft();
+    vi.mocked(broadcasterNs.broadcastAll).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${draftId}/start`,
+      payload: {
+        draftPrompt: "fix the thing from the agent tab",
+        draftConfig: { entryPoint: "tab", modeId: "bug-fix", channel: "json" },
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, worktreeId });
+
+    const sessRes = await app.inject({ method: "GET", url: `/sessions?worktree=${worktreeId}` });
+    const sessionsInWorktree = sessRes.json<Array<{ id: string }>>();
+    expect(sessionsInWorktree.filter((s) => s.id === draftId)).toHaveLength(1);
   });
 
   it("1.T2 — a draft promoted into a BRAND-NEW worktree still broadcasts worktree:created + session:updated { worktreeId } + session:state (unchanged)", async () => {
@@ -195,12 +233,29 @@ describe("POST /sessions/:id/start — draft-promotion broadcasts", () => {
       },
     });
     expect(res.statusCode).toBe(200);
+    // The HTTP response must also carry the full serialized worktree, not
+    // just its id — the web-ui registers it in the store synchronously off
+    // this response (DraftComposer.startTier1's `applyWorktreeCreated` call),
+    // rather than depending on the `worktree:created` broadcast below racing
+    // its own navigation (issue: new-worktree draft sometimes staying blank
+    // until a page refresh). `mainSessionId` must resolve to the real
+    // promoted session, not null — `newWorktree` was built with an empty
+    // `sessions: []` and needs the promoted session merged in before
+    // serializing, which is the same fix this response and the broadcast
+    // below both needed.
+    const body = res.json<{ ok: true; worktreeId: string; worktree: { id: string; mainSessionId: string | null } }>();
+    expect(body.worktree).toBeDefined();
+    expect(body.worktree.id).toBe(body.worktreeId);
+    expect(body.worktree.mainSessionId).toBe(draftId);
 
     const broadcastAll = vi.mocked(broadcasterNs.broadcastAll);
     const worktreeCreated = broadcastAll.mock.calls.find(
       ([msg]) => (msg as { type: string }).type === "worktree:created",
     );
     expect(worktreeCreated).toBeDefined();
+    expect((worktreeCreated![0] as { worktree: { mainSessionId: string | null } }).worktree.mainSessionId).toBe(
+      draftId,
+    );
 
     const updatedCall = broadcastAll.mock.calls.find(
       ([msg]) => (msg as { type: string }).type === "session:updated",

@@ -23,7 +23,7 @@ interface DraftComposerProps {
   api: ApiInstance;
   /** null = /draft/new (Tier 2, localStorage-only global draft). */
   draftSessionId: string | null;
-  onStarted: (result: { worktreeId?: string; sessionId: string }) => void;
+  onStarted: (result: { worktreeId?: string; sessionId?: string }) => void;
   onDiscard: () => void;
 }
 
@@ -421,6 +421,25 @@ function DraftComposerInner({
         draftConfig: currentConfig,
         skipAutoTurn: isJson,
       });
+      // Register a brand-new worktree (entryPoint "worktree"/"new") in the
+      // store immediately, the same way startTier2NewProject does for its own
+      // createWorktree call below — this response is the only place the web-ui
+      // learns about it before the `worktree:created` WS broadcast lands.
+      // Without this, `handleAgentCreated`'s store lookup can lose that race
+      // (reconnect, event ordering) and `activeWorktreeId` never gets set, so
+      // the pane stays blank until a manual refresh re-fetches everything over
+      // REST (issue: new-worktree draft sometimes never shows its terminal).
+      if (res.worktree) {
+        useServerStore.getState().applyWorktreeCreated(res.worktree);
+      }
+      // Optimistic channel patch: the session record's `channel` field only
+      // flips server-side on start (draftConfig.channel holds the pending
+      // choice until then), and the `session:updated` broadcast reporting the
+      // new value can lose the race with the navigation below. Without this,
+      // AgentPaneSlot briefly reads the stale pre-start channel (default
+      // "json") and renders Rich Chat during the starting state even for an
+      // agent started on the Terminal channel.
+      useServerStore.getState().applySessionUpdated(draftSessionId, { channel: currentConfig.channel });
       if (isJson) {
         await sendJsonFirstTurn(api, draftSessionId, prompt, files);
       }
@@ -496,16 +515,6 @@ function DraftComposerInner({
         const created = await api.createProject({
           name,
           ...(opts.parentDir.trim() ? { dir: opts.parentDir.trim() } : {}),
-          ...(!isJson
-            ? {
-                startAgent: {
-                  modeId,
-                  prompt: prompt.trim(),
-                  useWorktree,
-                  branch: useWorktree ? branch.trim() || undefined : undefined,
-                },
-              }
-            : {}),
         });
         project = created.project;
         warning = created.warning;
@@ -525,11 +534,21 @@ function DraftComposerInner({
           baseBranch: baseBranch.trim() || project.defaultBranch,
           modeId,
           prompt: prompt.trim(),
-          channel: "json",
+          // Pass the channel the user actually selected — this path used to
+          // hardcode `"json"`, which turned a Terminal-selected agent into a
+          // Rich Chat agent (the pane showed ChatPane even though the sidebar
+          // showed a terminal session spawning).
+          channel: currentConfig.channel,
           skipAutoTurn: true,
         });
         worktreeId = wt.id;
         sessionId = wt.mainSessionId ?? undefined;
+        // Register the worktree in the store before navigating so URL sync
+        // (and the subsequent `session:created` WS event) can select it. Without
+        // this the /worktree/:id read effect found nothing and the write effect
+        // rewrote the URL to a bare /worktree, so the UI never landed on the
+        // newly created agent (issue: "UI didn't navigate to the new agent").
+        useServerStore.getState().applyWorktreeCreated(wt);
       } else {
         const sess = await api.createDirectSession({
           target: "direct",
@@ -537,10 +556,14 @@ function DraftComposerInner({
           type: "agent",
           modeId,
           prompt: prompt.trim(),
-          channel: "json",
+          channel: currentConfig.channel,
           skipAutoTurn: true,
         });
         sessionId = sess.id;
+        // Same as the worktree branch: register the direct session before
+        // navigating so the /session/:id route doesn't bounce to the dashboard
+        // (the redirect effect redirects when the session isn't in the store).
+        useServerStore.getState().applySessionCreated(sess);
       }
       if (isJson && sessionId) {
         await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
@@ -553,7 +576,7 @@ function DraftComposerInner({
         void api.terminateSession(draftSessionId).catch(() => {});
       }
       committedRef.current = true;
-      onStarted({ worktreeId, sessionId: sessionId ?? project.id });
+      onStarted({ worktreeId, sessionId: sessionId ?? undefined });
     } catch (err) {
       setError(errorMessage(err, "Failed to create project."));
     } finally {
@@ -724,8 +747,18 @@ function DraftComposerInner({
             </>
           )}
 
-          {/* Use worktree checkbox — all non-tab entry points */}
-          {entryPoint !== "tab" ? (
+          {/* Use worktree checkbox — "global"/"direct" entry points only.
+              For entryPoint "worktree" this checkbox would be a no-op:
+              `currentConfig`'s "worktree" branch never reads `useWorktree` (it
+              always submits entryPoint "worktree"), so toggling it only hid/
+              showed the branch fields below while silently doing nothing to
+              what Start actually submits — confusingly, "Use project folder
+              instead" (above) is the ONLY control that really switches this
+              entry point to a direct/no-worktree session. Showing both
+              invited exactly that confusion (issue: unchecking this box for
+              a worktree-entry-point draft looked like it opted out of a
+              worktree, but Start still created one). */}
+          {entryPoint === "global" || entryPoint === "direct" ? (
             <div className="draft-composer__field">
               <label className="draft-composer__checkbox">
                 <input

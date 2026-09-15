@@ -10,6 +10,7 @@ import { Composer } from "@/components/chat/Composer";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
+import { SpawningPlaceholder } from "./SpawningPlaceholder";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -52,6 +53,20 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   const contextId = session?.worktreeId ?? session?.projectId ?? null;
   const scope: FileScope = session?.worktreeId ? "worktree" : "project";
 
+  // Live lifecycle state for this session, resolved exactly the way
+  // `TerminalPane`/`LeftSidebar`/`DashboardPanel` do: the WS-fed `sessionStates`
+  // map first, the session record's own `state` as the fallback.
+  //
+  // This deliberately does NOT read `session.lifecycleState`. That field is only
+  // ever written by the initial REST fetch — the live `session:state` handler
+  // (`useServerSync.ts:227`) patches `.state` and nothing else — so for a
+  // session created during THIS page session it is frozen at whatever it was
+  // when the record first arrived ("drafting", or absent). The spawn guard below
+  // was keyed on it, which is why a Rich Chat agent promoted from a draft showed
+  // its empty "Start chatting" state for the whole spawn window while the left
+  // sidebar (which uses the resolution above) correctly showed a starting dot.
+  const liveState =
+    useWorkspaceStore((s) => (sessionId ? s.sessionStates[sessionId] : undefined)) ?? session?.state;
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
@@ -256,6 +271,14 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // must never remount. `hidden` also stops the offscreen list from scrolling.
   if (!enabled) {
     return <div className="chat-pane chat-pane--hidden" aria-hidden hidden style={chatFontVars} />;
+  }
+
+  if (liveState === "not_started") {
+    return (
+      <div className="chat-pane" style={chatFontVars}>
+        <SpawningPlaceholder reason="spawning" />
+      </div>
+    );
   }
 
   return (
