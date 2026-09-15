@@ -38,8 +38,6 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
       return;
     }
 
-    urlConsumed.current = true;
-
     // Apply path params to store
     const wtId = params.wtId;
     const sessionId = params.sessionId;
@@ -69,6 +67,10 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
           activeWorktreeId: w.id,
           activeSessionId: pickedSessionId,
         });
+
+        // Only mark consumed once the worktree was found and the store populated,
+        // so the read effect retries if the worktree is still loading.
+        urlConsumed.current = true;
       }
     }
   }, [ready, worktrees, sessions, params.wtId, params.sessionId, navigate, location.search]);
@@ -79,15 +81,20 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
     // Only update URL if we're on a /worktree path
     if (!location.pathname.startsWith("/worktree")) return;
 
+    // Read the current values directly from the store — the subscribed closure
+    // values are stale in the same-flush render where the read effect populated
+    // the store (setState hasn't propagated to subscriptions yet).
+    const { activeWorktreeId: wtId, activeSessionId: sessId } = useWorkspaceStore.getState();
+
     // Compute target path
     let targetPath = "/worktree";
-    if (activeWorktreeId) {
-      targetPath = `/worktree/${activeWorktreeId}`;
-      if (activeSessionId) {
-        const activeSession = sessions.find((s) => s.id === activeSessionId);
+    if (wtId) {
+      targetPath = `/worktree/${wtId}`;
+      if (sessId) {
+        const activeSession = sessions.find((s) => s.id === sessId);
         // Only append sessionId if it's not the main slot
         if (!activeSession?.isMain) {
-          targetPath = `/worktree/${activeWorktreeId}/${activeSessionId}`;
+          targetPath = `/worktree/${wtId}/${sessId}`;
         }
       }
     }

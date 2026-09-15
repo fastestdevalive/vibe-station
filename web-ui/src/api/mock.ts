@@ -658,7 +658,7 @@ export function createMockApi() {
     async startDraft(
       id: string,
       body: { draftPrompt: string; draftConfig: DraftConfig },
-    ): Promise<{ ok: true; worktreeId?: string }> {
+    ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("Session not found", 404);
       if (!body.draftPrompt.trim()) throw new ApiError("Draft prompt is empty", 400);

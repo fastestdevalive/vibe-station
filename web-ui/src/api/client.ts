@@ -643,14 +643,14 @@ export function createClientApi() {
     async startDraft(
       id: string,
       body: { draftPrompt: string; draftConfig: DraftConfig; skipAutoTurn?: boolean },
-    ): Promise<{ ok: true; worktreeId?: string }> {
+    ): Promise<{ ok: true; worktreeId?: string; worktree?: Worktree }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      return parseJson<{ ok: true; worktreeId?: string }>(res);
+      return parseJson<{ ok: true; worktreeId?: string; worktree?: Worktree }>(res);
     },
 
     /** Default name the next terminal in this worktree would get ("Terminal N"). */
