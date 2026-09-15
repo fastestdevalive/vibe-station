@@ -74,7 +74,20 @@ export function summarizeToolInput(input: unknown, locations?: { path: string; l
     if (typeof input === "string") return relativize(input, cwd);
     if (typeof input === "object") {
       const obj = input as Record<string, unknown>;
-      for (const key of ["command", "cmd", "path", "file_path", "filePath", "pattern", "query", "description", "prompt"]) {
+      for (const key of [
+        "command",
+        "cmd",
+        "path",
+        "file_path",
+        "filePath",
+        "TargetFile",
+        "targetFile",
+        "target_file",
+        "pattern",
+        "query",
+        "description",
+        "prompt",
+      ]) {
         if (typeof obj[key] === "string") return relativize(obj[key] as string, cwd);
       }
     }
@@ -113,4 +126,87 @@ export const CLIENT_TOOL_RESULT_MAX_CHARS = 20_000;
 export function capForDisplay(text: string): string {
   if (text.length <= CLIENT_TOOL_RESULT_MAX_CHARS) return text;
   return `(tool result omitted — ${text.length} chars)`;
+}
+
+const WRITE_TOOL_NAMES = new Set([
+  "write",
+  "writefile",
+  "write_file",
+  "writetofile",
+  "write_to_file",
+  "create_file",
+  "new_file",
+]);
+
+export function isWriteToolName(name: string): boolean {
+  const lower = name.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  return WRITE_TOOL_NAMES.has(lower) || lower.startsWith("write_") || lower.endsWith("_write");
+}
+
+export function extractFilePath(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+  for (const key of ["file_path", "filePath", "path", "TargetFile", "targetFile", "target_file", "file", "filename"]) {
+    if (typeof obj[key] === "string" && (obj[key] as string).trim()) {
+      return obj[key] as string;
+    }
+  }
+  return undefined;
+}
+
+export function extractFileContent(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+  for (const key of ["content", "CodeContent", "codeContent", "code_content", "contents", "text", "file_content", "fileContent"]) {
+    if (typeof obj[key] === "string") {
+      return obj[key] as string;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extracts structured diffs from a tool call entry. If structured `diffs` are
+ * already present on the entry, returns them directly. Otherwise, inspects
+ * `toolInput` to reconstruct diffs for edit and write tool calls (e.g. for write
+ * file calls or sessions where the backend emitted raw input without diffs).
+ */
+export function extractToolDiffs(tool: ToolCallEntry): ToolDiff[] | undefined {
+  if (tool.diffs && tool.diffs.length > 0) return tool.diffs;
+
+  const input = tool.toolInput;
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+
+  const path = extractFilePath(obj) ?? tool.locations?.[0]?.path;
+
+  // Edit / MultiEdit inputs (e.g. if daemon didn't populate tool.diffs)
+  if (path && typeof obj.old_string === "string" && typeof obj.new_string === "string") {
+    return [{ path, oldText: obj.old_string, newText: obj.new_string }];
+  }
+  if (path && typeof obj.oldText === "string" && typeof obj.newText === "string") {
+    return [{ path, oldText: obj.oldText, newText: obj.newText }];
+  }
+  if (Array.isArray(obj.edits)) {
+    const edits = (obj.edits as unknown[])
+      .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
+      .filter((e) => typeof e.old_string === "string" && typeof e.new_string === "string")
+      .map((e) => ({
+        path: String(e.file_path ?? e.filePath ?? e.path ?? path ?? ""),
+        oldText: e.old_string as string,
+        newText: e.new_string as string,
+      }))
+      .filter((e) => e.path.length > 0);
+    if (edits.length > 0) return edits;
+  }
+
+  // Write file inputs
+  const hasEdit = typeof obj.old_string === "string" || typeof obj.oldText === "string" || Array.isArray(obj.edits);
+  const isWrite = isWriteToolName(tool.toolName) || (tool.toolKind === "edit" && !hasEdit);
+  const content = extractFileContent(obj);
+  if (isWrite && path && typeof content === "string") {
+    return [{ path, oldText: "", newText: content }];
+  }
+
+  return undefined;
 }

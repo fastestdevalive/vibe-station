@@ -45,7 +45,7 @@ const SKIP_TYPES = new Set([
 ]);
 
 /** Tool names whose `tool_use` input can be replayed into a rendered diff. */
-const DIFF_TOOL_NAMES = new Set(["Edit", "MultiEdit"]);
+const DIFF_TOOL_NAMES = new Set(["Edit", "MultiEdit", "Write"]);
 
 const num = (v: unknown): number => (typeof v === "number" ? v : 0);
 
@@ -192,13 +192,15 @@ export function parseClaudeNativeHistory(
             editToolCallById.delete(toolId); // one result per call — keep the map bounded
             const { name, input } = call;
             if (name === "Edit" && typeof input.old_string === "string" && typeof input.new_string === "string") {
-              toolDiffs = [{ path: String(input.file_path ?? ""), oldText: input.old_string, newText: input.new_string }];
+              toolDiffs = [{ path: String(input.file_path ?? input.path ?? ""), oldText: input.old_string, newText: input.new_string }];
+            } else if (name === "Write" && typeof input.content === "string") {
+              toolDiffs = [{ path: String(input.file_path ?? input.path ?? ""), oldText: "", newText: input.content }];
             } else if (name === "MultiEdit" && Array.isArray(input.edits)) {
               const diffs = (input.edits as unknown[])
                 .filter((e): e is Record<string, unknown> => !!e && typeof e === "object")
                 .filter((e) => typeof e.old_string === "string" && typeof e.new_string === "string")
                 .map((e) => ({
-                  path: String(e.file_path ?? input.file_path ?? ""),
+                  path: String(e.file_path ?? input.file_path ?? input.path ?? ""),
                   oldText: e.old_string as string,
                   newText: e.new_string as string,
                 }));

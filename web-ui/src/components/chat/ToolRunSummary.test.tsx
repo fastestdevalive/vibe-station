@@ -197,5 +197,72 @@ describe("ToolRunSummary structured diffs (Decision 3/4, 4.T2)", () => {
     // The input JSON body block must still be present (not suppressed by the diff result).
     expect(document.querySelector(".chat-tool-entry__pre code")).toBeTruthy();
   });
+
+  it("renders write file blocks via DiffView (entirely green added lines) and suppresses raw JSON", () => {
+    const writeInput = { file_path: "/app/src/hello.ts", content: "console.log('hello');\nconsole.log('world');" };
+    const tools = [
+      tool({
+        toolName: "Write",
+        toolInput: writeInput,
+        status: "completed",
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    // Write tool rows start expanded.
+    // Diffs should render with all lines marked as added.
+    const addedLines = document.querySelectorAll(".diff-line--added");
+    expect(addedLines.length).toBe(2);
+    // Raw JSON must NOT appear.
+    expect(screen.queryByText(/"file_path"/)).toBeNull();
+    expect(document.querySelector(".chat-tool-entry__pre")).toBeNull();
+  });
+
+  it("renders write_to_file (TargetFile/CodeContent) via DiffView and suppresses raw JSON", () => {
+    const writeInput = { TargetFile: "/app/src/foo.txt", CodeContent: "line 1\nline 2\nline 3" };
+    const tools = [
+      tool({
+        toolName: "write_to_file",
+        toolInput: writeInput,
+        status: "completed",
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    const addedLines = document.querySelectorAll(".diff-line--added");
+    expect(addedLines.length).toBe(3);
+    expect(screen.queryByText(/"TargetFile"/)).toBeNull();
+  });
+
+  it("buckets write tools into 'wrote N files' in summary header even when toolKind is edit", () => {
+    const tools = [
+      tool({
+        id: "t1",
+        toolName: "Write",
+        toolKind: "edit",
+        toolInput: { file_path: "/a.ts", content: "export const a = 1;" },
+      }),
+      tool({
+        id: "t2",
+        toolName: "writeFile",
+        toolKind: "edit",
+        toolInput: { path: "/b.ts", content: "export const b = 2;" },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(screen.getByText("Wrote 2 files")).toBeTruthy();
+  });
+
+  it("reconstructs diffs for Edit tool calls from toolInput when diffs is absent and suppresses raw JSON", () => {
+    const editInput = { file_path: "/app/bar.ts", old_string: "const a = 1;", new_string: "const a = 2;" };
+    const tools = [
+      tool({
+        toolName: "Edit",
+        toolInput: editInput,
+        status: "completed",
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(document.querySelector(".diff-line")).toBeTruthy();
+    expect(screen.queryByText(/old_string/)).toBeNull();
+  });
 });
 

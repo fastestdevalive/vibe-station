@@ -972,8 +972,8 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
     ]);
     const sysEvents = items.filter((i) => i.type === "system_event");
     expect(sysEvents).toHaveLength(1);
-    // Notification pills compose "subagent <name> is now waiting for your reply"
-    expect((sysEvents[0] as { text: string }).text).toBe("subagent subagent-abc is now waiting for your reply");
+    // Notification pills show "paused — waiting for you"
+    expect((sysEvents[0] as { text: string }).text).toBe("paused — waiting for you");
   });
 
   it("4.T1b — FIX-B: annotation pill (non-empty text) renders ev.text directly, not composed copy", () => {
@@ -1034,8 +1034,8 @@ describe("groupEvents message_generated (4.T1 / 4.T2)", () => {
     const { container } = render(<MessageList events={events} pending={[]} />);
     const el = container.querySelector(".chat-system-event");
     expect(el).toBeTruthy();
-    // chip (subagentName) + text: "subagent-abc" + "subagent subagent-abc is now waiting for your reply"
-    expect(el!.textContent).toContain("subagent subagent-abc is now waiting for your reply");
+    // chip (subagentName) + text: "subagent-abc" + "paused — waiting for you"
+    expect(el!.textContent).toContain("paused — waiting for you");
     expect(el!.textContent).toContain("subagent-abc");
   });
 
