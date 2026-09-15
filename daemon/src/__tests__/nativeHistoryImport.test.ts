@@ -202,6 +202,7 @@ describe("P2.T1 — claude native-history adapter", () => {
             { type: "tool_use", id: "e1", name: "Edit", input: { file_path: "/p/a.ts", old_string: "a", new_string: "b" } },
             { type: "tool_use", id: "e2", name: "MultiEdit", input: { file_path: "/p/b.ts", edits: [{ old_string: "1", new_string: "2" }, { old_string: "3", new_string: "4" }] } },
             { type: "tool_use", id: "e3", name: "Read", input: { file_path: "/p/c.ts" } },
+            { type: "tool_use", id: "e4", name: "Write", input: { file_path: "/p/d.ts", content: "new file content" } },
           ],
         },
       },
@@ -213,6 +214,7 @@ describe("P2.T1 — claude native-history adapter", () => {
             { type: "tool_result", tool_use_id: "e1", content: "ok" },
             { type: "tool_result", tool_use_id: "e2", content: "ok" },
             { type: "tool_result", tool_use_id: "e3", content: "ok" },
+            { type: "tool_result", tool_use_id: "e4", content: "ok" },
           ],
         },
       },
@@ -230,6 +232,8 @@ describe("P2.T1 — claude native-history adapter", () => {
     ]);
     // A non-edit tool never grows a diff.
     expect(byId.get("e3")!.toolDiffs).toBeUndefined();
+    // A Write tool call grows a full-file diff with oldText: "".
+    expect(byId.get("e4")!.toolDiffs).toEqual([{ path: "/p/d.ts", oldText: "", newText: "new file content" }]);
   });
 });
 

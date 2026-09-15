@@ -257,7 +257,7 @@ describe("TabsStrip", () => {
     const localApi = createMockApi();
     const snapshot = await localApi.listSessions("wt-1");
     const stalePromoted = snapshot.map((s) =>
-      s.id === "sess-agent2" ? { ...s, state: "working", lifecycleState: "drafting" } : s,
+      s.id === "sess-agent2" ? { ...s, state: "working" as const, lifecycleState: "drafting" as const } : s,
     );
     vi.spyOn(localApi, "listSessions").mockResolvedValue(stalePromoted);
 
