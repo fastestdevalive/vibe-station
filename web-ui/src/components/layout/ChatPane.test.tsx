@@ -151,6 +151,32 @@ describe("ChatPane (4.T2)", () => {
     expect(block).toMatch(/font-size:\s*var\(--font-size-base\)/);
   });
 
+  // Regression: "during the starting state the blinking dot is not shown on the
+  // agent UI, only in the left sidebar." The spawn guard used to be keyed on
+  // `session.lifecycleState`, which is only ever written by the initial REST
+  // fetch — the live `session:state` handler (useServerSync.ts) patches
+  // `.state` and nothing else. So for an agent created during THIS page session
+  // (a Rich Chat draft that was just started) the guard could never fire: the
+  // record's `lifecycleState` was frozen at whatever it was when the draft was
+  // created, while the sidebar — resolving `sessionStates[id] ?? s.state` —
+  // correctly showed a starting dot.
+  it("shows the spawning placeholder from the LIVE state, not the stale lifecycleState field", () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({ sessionStates: { "js-spawn": "not_started" } });
+    // `lifecycleState` stays "idle" (what jsonSession hardcodes) — deliberately
+    // disagreeing with the live map, exactly as it does after a promotion.
+    render(<ChatPane api={api} session={jsonSession("js-spawn")} visible />);
+    expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
+  });
+
+  it("does not show the spawning placeholder once the live state has moved on", () => {
+    const api = createMockApi();
+    const stale: Session = { ...jsonSession("js-live-state"), lifecycleState: "not_started" };
+    useWorkspaceStore.setState({ sessionStates: { "js-live-state": "working" } });
+    render(<ChatPane api={api} session={stale} visible />);
+    expect(screen.queryByRole("status", { name: /starting/i })).toBeNull();
+  });
+
   it("a non-archived session still renders the live composer", async () => {
     const api = createMockApi();
     render(<ChatPane api={api} session={jsonSession("js-live")} visible />);

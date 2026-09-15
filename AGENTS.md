@@ -42,6 +42,57 @@ The terminal is **never** rendered in `fullscreenOverlay`. Only the preview pane
 
 ---
 
+## Session status in a pane — always `sessionStates[id] ?? session.state`, never `session.lifecycleState`
+
+**Files:** `web-ui/src/components/layout/TerminalPane.tsx` · `ChatPane.tsx` · `LeftSidebar.tsx` · `DashboardPanel.tsx` · `SubagentRow.tsx` · `TabsStrip.tsx` · `useServerSync.ts`
+
+### The invariant
+
+A session's lifecycle status is readable from **two** places on the client, and they are not interchangeable:
+
+- `useWorkspaceStore`'s `sessionStates` map — the LIVE value, patched by `useServerSync.ts`'s `session:state`/`session:exited`/`session:resumed` WS handlers, and re-seeded wholesale on every reconnect (`syncSessionsFromApi`). This is the only place a page-session-old client ever finds out a status changed.
+- The `Session` record's own two fields: `.state` (patched by the SAME three WS handlers, via `useServerStore`'s `applySessionUpdated`) and `.lifecycleState` (written **only** by the initial REST fetch — no live handler ever touches it, so for any session created or promoted during the current page load it is permanently frozen at whatever value it had the moment its record first arrived, typically `"drafting"` or `undefined`).
+
+Any pane/row that shows a status-dependent placeholder ("Starting…", a draft badge, a colored dot) must resolve state as **`sessionStates[id] ?? session.state`** — the live map first, the session record's `.state` as fallback for a session the map has no entry for yet (a session this client only just learned about). Never read `.lifecycleState` for anything live-updating; it is a one-shot initial value, not a status field.
+
+This was violated three separate times in the same feature (the instant-draft-agent flow), each with a different symptom, before all three were normalized to the rule above:
+
+1. `TerminalPane.tsx` read `sessionStates[id]` with **no fallback at all**. A freshly-promoted draft has no entry in that map yet, so `lifecycleState` was `undefined`, which made BOTH `mountTerminal` and `showSpawningOverlay` false — no xterm mounted, no "Starting…" either, just a silent empty box until a reload repopulated the map from REST.
+2. `ChatPane.tsx`'s spawning guard read `session.lifecycleState` — frozen forever at `"drafting"`/`undefined` for any session created this page-session, so the guard could never fire; a Rich Chat agent showed its empty "Start chatting" view for the entire spawn window.
+3. `TabsStrip.tsx` keeps its own REST-fetched `localSessions` copy (worktree-scoped tabs are NOT rendered off the global store) and its WS `session:updated` handler patched `name`/`channel`/`isMain`/etc but never `.state` — and there were no handlers at all for `session:state`/`session:exited`/`session:resumed`. A tab's "Draft" badge (`s.state === "drafting"`) stuck forever after Start, even though the session was long since running, until a hard refresh forced a fresh `listSessions()` fetch.
+
+In all three cases the left sidebar (`LeftSidebar.tsx`, `DashboardPanel.tsx`, `SubagentRow.tsx`) showed the correct status the whole time — it has always used the `sessionStates[id] ?? s.state` resolution — which is the fastest way to tell "is this a live-state-resolution bug" apart from "is the session actually stuck": if the sidebar shows it correctly and a specific pane/row doesn't, suspect this pattern first.
+
+### What to watch for
+
+- **New status-driven UI:** resolve state via `sessionStates[id] ?? session.state`, matching the sidebar. Do not introduce a fourth divergent resolution.
+- **A component with its OWN fetched copy of sessions** (like `TabsStrip.tsx`'s `localSessions`) needs its OWN WS reconciliation for `.state`/`session:exited`/`session:resumed` — subscribing only to `session:updated` is not enough, since that event never carries `.state` at all (state changes go out as their own three distinct event types).
+- **`.lifecycleState` is not a live field.** Grep for `.lifecycleState` before adding a new read of it — every existing one is either the same intentional one-shot idempotency use `AgentPaneSlot.tsx` documents at its `session.state` comment, or a bug waiting to be found.
+
+---
+
+## Draft promotion (`POST /sessions/:id/start`) — the HTTP response must be self-sufficient, not just the WS broadcast
+
+**Files:** `daemon/src/routes/sessions.ts` (the `/sessions/:id/start` handler) · `web-ui/src/components/draft/DraftComposer.tsx`
+
+### The invariant
+
+When a draft is promoted to a live session, the web-ui navigates off the **HTTP response** of `startDraft` synchronously — it does not, and must not have to, wait for the corresponding `worktree:created`/`session:updated` WS broadcasts to be processed first. Those broadcasts exist for OTHER connected clients (other tabs, other devices); the client that made the request already has a perfectly good response to use immediately.
+
+Two bugs shipped from forgetting this:
+
+- The brand-new-worktree branch's response only ever included `worktreeId`, not the worktree record itself. The caller had no way to register the worktree in its own store without waiting on the `worktree:created` broadcast — which could lose the race against the client's own navigation (reconnect, event ordering), leaving the pane blank until a manual refresh re-fetched everything over REST.
+- The already-existing-worktree branch (entryPoint `"tab"`, or `"worktree"` + `worktreeChoice: "existing"`) didn't return `worktreeId` in its response AT ALL. The caller saw `worktreeId: undefined` and fell through to the direct-session `/session/:id` route instead of `/worktree/:id`, even though the session was now living inside a worktree.
+
+The fix in both cases was the same shape: make the response carry everything the client needs to update its own store *before* navigating (`{ ok: true, worktreeId, worktree: serializedWorktree }`), and have `DraftComposer.tsx` call `applyWorktreeCreated`/`applySessionUpdated` on it immediately, the same way `startTier2NewProject`'s direct `api.createWorktree()` call already did (that path never had this bug, because its response was always the full record).
+
+### What to watch for
+
+- **A new `/start`-like promotion path:** if the client needs to know about a worktree/session/anything-else right after the call succeeds, put it in the response body — don't make the client wait on a WS broadcast for data the server already has in hand while building the reply.
+- **`serializeWorktree(projectId, worktree)` needs the worktree's REAL `sessions` array to compute `mainSessionId` correctly.** The brand-new-worktree branch builds its `WorktreeRecord` with `sessions: []` (via `buildSessions: () => []`) and only attaches the real session afterward via `mutateProject` — serializing the original (still-empty) object gives `mainSessionId: null` in both the HTTP response and the `worktree:created` broadcast. Serialize `{ ...worktree, sessions: [theRealSession] }`, not the pre-mutation object.
+
+---
+
 ## Agent plugin — all CLI-specific logic lives in the plugin, nowhere else
 
 **Files:** `daemon/src/agent-plugins/` · Interface: `daemon/src/services/spawn.ts`

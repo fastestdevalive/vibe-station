@@ -158,6 +158,50 @@ export function Workspace() {
       });
   }, [activeWorktree, navigate]);
 
+  // Navigate to a just-created agent. The draft→worktree/direct-session jump
+  // is a SPA navigation, so `useWorkspaceUrlSync`'s read effect (which only
+  // consumes URL params on first load) will NOT pick up the new id — we have to
+  // select it in the store ourselves. For a worktree, `setActiveWorktree`
+  // sets activeWorktreeId; for a direct session, `createDirectSession` has
+  // already registered the session so `/session/:id` resolves and its no-bounce
+  // redirect check passes.
+  const handleAgentCreated = useCallback(
+    (result: { worktreeId?: string; sessionId?: string }) => {
+      if (result.worktreeId) {
+        const serverStore = useServerStore.getState();
+        const wt = serverStore.worktrees.find((w) => w.id === result.worktreeId);
+        if (wt) {
+          const wtSessions = serverStore.sessions.filter((s) => s.worktreeId === wt.id);
+          useWorkspaceStore.getState().setActiveWorktree(wt.projectId, wt.id, wtSessions);
+          // `setActiveWorktree` picks its own default session (last-used → main
+          // → first agent), which is NOT necessarily the one the user just
+          // started/promoted — e.g. Tier 1 `startDraft` promotes a specific
+          // draft session, and `setActiveWorktree`'s idempotency guard no-ops
+          // if we're already on that worktree with a stale activeSessionId.
+          // Force the freshly-started session to be the active one when we
+          // already know it (the draft session for Tier 1; the main session for
+          // Tier 2 once its `session:created` WS event has landed — otherwise
+          // TabsStrip picks it up).
+          if (result.sessionId && serverStore.sessions.some((s) => s.id === result.sessionId)) {
+            useWorkspaceStore.getState().setActiveSession(result.sessionId);
+          }
+        } else {
+          // Not in the store yet (e.g. Tier 1 `startDraft` relies on the
+          // daemon's `worktree:created` WS broadcast, which can lose the race
+          // to this HTTP reply). URL sync can't select a worktree it can't
+          // see, so this would otherwise regress to the original bare
+          // `/worktree` bug; the WS event / TabsStrip fetch recovers once it
+          // lands. Log so it's visible if this becomes common.
+          console.warn(`[workspace] created worktree ${result.worktreeId} not yet in store`);
+        }
+        navigate(`/worktree/${result.worktreeId}`);
+      } else if (result.sessionId) {
+        navigate(`/session/${result.sessionId}`);
+      }
+    },
+    [navigate],
+  );
+
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
   // Quick Open + pane shortcuts work in both worktree and direct-session modes
   // (direct sessions browse the project base dir); only full-width panes (and
@@ -566,8 +610,7 @@ export function Workspace() {
             draftSessionId={activeSessionId}
             onStarted={(result) => {
               useWorkspaceStore.setState({ activeSessionId: null });
-              if (result.worktreeId) navigate(`/worktree/${result.worktreeId}`);
-              else navigate(`/session/${result.sessionId}`);
+              handleAgentCreated(result);
             }}
             onDiscard={async () => {
               try {
@@ -737,8 +780,7 @@ export function Workspace() {
               api={api}
               draftSessionId={draftSessionId}
               onStarted={(result) => {
-                if (result.worktreeId) navigate(`/worktree/${result.worktreeId}`);
-                else navigate(`/session/${result.sessionId}`);
+                handleAgentCreated(result);
               }}
               onDiscard={async () => {
                 if (draftSessionId) {

@@ -1422,8 +1422,13 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         ),
       }));
 
-      broadcastAll({ type: "worktree:created", worktree: serializeWorktree(project.id, newWorktree) as unknown as Record<string, unknown> });
-      broadcastAll({ type: "session:updated", sessionId: id, worktreeId: wtId, isMain: true });
+      // `newWorktree` itself still has the empty `sessions: []` it was built
+      // with (`buildSessions: () => []` above) — serialize a copy with
+      // `updatedSession` attached so `mainSessionId` resolves correctly,
+      // instead of always coming back null.
+      const serializedWorktree = serializeWorktree(project.id, { ...newWorktree, sessions: [updatedSession] });
+      broadcastAll({ type: "worktree:created", worktree: serializedWorktree as unknown as Record<string, unknown> });
+      broadcastAll({ type: "session:updated", sessionId: id, worktreeId: wtId, isMain: true, channel: updatedSession.channel });
       broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
 
       void spawnNewSessionForChannel({
@@ -1436,7 +1441,16 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         skipAutoTurn,
       });
 
-      return reply.send({ ok: true, worktreeId: wtId });
+      // Report the full worktree record too, not just its id — the web-ui
+      // navigates off this HTTP response synchronously, before the
+      // `worktree:created` broadcast above is guaranteed to have been
+      // processed by this same client. Without it, the caller has no way to
+      // register the worktree in its store immediately and has to wait on
+      // that broadcast to land; if it's ever delayed (reconnect, event
+      // ordering), the pane stays blank until a manual refresh re-fetches
+      // everything over REST (issue: new-worktree draft sometimes never
+      // shows its terminal until a page refresh).
+      return reply.send({ ok: true, worktreeId: wtId, worktree: serializedWorktree });
     }
 
     if (isDirect) {
@@ -1501,7 +1515,9 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       }
 
       if (existingWorktree) {
-        broadcastAll({ type: "session:updated", sessionId: id, worktreeId: existingWorktree.id });
+        broadcastAll({ type: "session:updated", sessionId: id, worktreeId: existingWorktree.id, channel: updatedSession.channel });
+      } else {
+        broadcastAll({ type: "session:updated", sessionId: id, channel: updatedSession.channel });
       }
       broadcastAll({ type: "session:state", sessionId: id, state: "not_started" });
 
@@ -1515,7 +1531,12 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         skipAutoTurn,
       });
 
-      return reply.send({ ok: true });
+      // Report the worktree even though it already existed (entryPoint "tab",
+      // or "worktree" with an existing choice) — without this the caller sees
+      // `worktreeId: undefined` and falls back to the direct-session
+      // `/session/:id` route, even though this session now lives inside a
+      // worktree (issue: agent-tab draft landing on the wrong URL).
+      return reply.send({ ok: true, ...(existingWorktree ? { worktreeId: existingWorktree.id } : {}) });
     }
 
     return reply.status(400).send({ error: `Unknown entryPoint: ${entryPoint}` });

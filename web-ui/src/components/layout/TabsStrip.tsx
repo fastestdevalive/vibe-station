@@ -489,10 +489,34 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       }
     });
 
+    // `.state` reconciliation — mirrors useServerSync.ts's global-store
+    // handlers for the same three events. Without this, `localSessions`'
+    // `.state` field never advances past whatever it was when the tab was
+    // fetched/created (e.g. "drafting"), so the tab strip's "Draft" chip
+    // (which reads `s.state === "drafting"` off this exact array) sticks
+    // forever even after the session is long since running — only a hard
+    // refresh (which re-fetches via `api.listSessions` above) clears it,
+    // since that's the only other place this array's `.state` gets set.
+    const offState = api.on("session:state", (ev) => {
+      if (ev.type !== "session:state") return;
+      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: ev.state } : s)));
+    });
+    const offExited = api.on("session:exited", (ev) => {
+      if (ev.type !== "session:exited") return;
+      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: "exited" } : s)));
+    });
+    const offResumed = api.on("session:resumed", (ev) => {
+      if (ev.type !== "session:resumed") return;
+      setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: "working" } : s)));
+    });
+
     return () => {
       offCreated();
       offDeleted();
       offUpdated();
+      offState();
+      offExited();
+      offResumed();
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 

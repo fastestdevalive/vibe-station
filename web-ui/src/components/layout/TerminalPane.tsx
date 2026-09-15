@@ -72,7 +72,20 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
   const [atBottom, setAtBottom] = useState(true);
   const [resumePending, setResumePending] = useState(false);
 
-  const lifecycleState = activeSessionId ? sessionStates[activeSessionId] : undefined;
+  // `sessionStates` is the LIVE map (WS `session:state`/`session:exited`/
+  // `session:resumed` + the REST overlay on every reconnect). It can legitimately
+  // have no entry at all for a session this client only just learned about —
+  // e.g. a draft promoted a moment ago whose `session:state` frame hasn't landed
+  // yet (or was missed while the socket was reconnecting). Falling back to the
+  // session record's own `state` is what every other status surface already does
+  // (`LeftSidebar.tsx:1287`, `DashboardPanel.tsx:185`, `SubagentRow.tsx:114` —
+  // all `sessionStates[id] ?? s.state`), and it is exactly why the sidebar could
+  // show a freshly-started agent's status dot while THIS pane showed nothing:
+  // with `lifecycleState` undefined, `mountTerminal` AND `showSpawningOverlay`
+  // below are both false, so the pane renders an empty box — no xterm mounted at
+  // all and no "Starting…" placeholder — until a full page reload repopulates
+  // the map via `syncSessionsFromApi`.
+  const lifecycleState = (activeSessionId ? sessionStates[activeSessionId] : undefined) ?? session?.state;
   const attach = activeSessionId ? sessionAttachState[activeSessionId] : undefined;
 
   const attachPending = attach === "pending";
@@ -86,10 +99,19 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     lifecycleState === "not_started" ||
     (attachPending && (lifecycleState === "working" || lifecycleState === "idle"));
 
+  // `drafting` joins `not_started` as a "there is nothing to attach to yet"
+  // state: a draft has no tmux pane / pty at all, and the composer is what's
+  // rendered in the pane's place. Before the `?? session.state` fallback above
+  // this was unreachable (the map simply had no entry for a draft), but with it
+  // a tab-scoped draft would otherwise mount a live xterm and fire
+  // `session:open` at the daemon for a session that cannot be opened — and it
+  // would do so while this pane is still parked in PaneHostLayer's hidden
+  // offscreen holder, so xterm would measure a 0x0 cell grid too.
   const mountTerminal =
     Boolean(activeSessionId) &&
     lifecycleState != null &&
-    lifecycleState !== "not_started";
+    lifecycleState !== "not_started" &&
+    lifecycleState !== "drafting";
 
   // "Mark as done" releases the session's runtime: the daemon kills the tmux
   // pane / pty child, so there is nothing left to attach to. Every open would
@@ -415,7 +437,10 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
     }
   }
 
-  const state = activeSessionId ? sessionStates[activeSessionId] : undefined;
+  // Same live-map-with-record-fallback resolution as `lifecycleState` above —
+  // they must agree, or the banner and the mount condition can disagree about
+  // whether the pane is dead.
+  const state = lifecycleState;
   // `done` gets the same banner as `exited`: the daemon has killed the pane in
   // both cases and Resume is the same one-click recovery. Without this a
   // done session would render a frozen, dead terminal with no way back — the

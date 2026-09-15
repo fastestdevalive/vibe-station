@@ -2,6 +2,7 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createMockApi } from "@/api/mock";
+import type { Session } from "@/api/types";
 import { TerminalPane } from "./TerminalPane";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
@@ -70,6 +71,78 @@ describe("TerminalPane", () => {
     });
     render(<TerminalPane api={api} sessionId="sess-main" />);
     expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
+  });
+
+  // --- Live-state resolution: `sessionStates[id] ?? session.state` ---
+  //
+  // Regression for "the new terminal agent's pane is completely blank — the
+  // terminal isn't even mounted — until I reload". `sessionStates` is the LIVE
+  // map; it legitimately has no entry for a session this client only just
+  // learned about (a draft promoted a moment ago whose `session:state` frame
+  // hasn't landed, or was missed while the socket was reconnecting). With no
+  // fallback, `lifecycleState` was `undefined`, which makes BOTH `mountTerminal`
+  // and `showSpawningOverlay` false — so the pane rendered an empty box: no
+  // xterm, and no "Starting…" either. The left sidebar meanwhile looked fine,
+  // because it has always resolved `sessionStates[s.id] ?? s.state`
+  // (LeftSidebar.tsx:1287, DashboardPanel.tsx:185, SubagentRow.tsx:114).
+  function sessionRecord(state: Session["state"]): Session {
+    return {
+      id: "sess-main",
+      worktreeId: "wt-1",
+      projectId: "proj-1",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: true,
+      state,
+      // Deliberately mismatched: `.lifecycleState` is only ever written by the
+      // initial REST fetch — nothing patches it live — so no pane may read it.
+      lifecycleState: "idle",
+      tmuxName: "sess-main",
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  it("falls back to the session record's own state when the live map has no entry (spawning)", () => {
+    useWorkspaceStore.setState({ sessionStates: {}, sessionAttachState: {} });
+    render(<TerminalPane api={api} sessionId="sess-main" session={sessionRecord("not_started")} />);
+    expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
+  });
+
+  it("falls back to the session record's own state when the live map has no entry (running)", () => {
+    const openSpy = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({ sessionStates: {}, sessionAttachState: {} });
+    const { container } = render(
+      <TerminalPane api={api} sessionId="sess-main" session={sessionRecord("working")} />,
+    );
+    // The xterm host must actually mount — the reported symptom was that it
+    // never did, so asserting "no placeholder" alone would not catch it.
+    expect(container.querySelector(".terminal-host")).not.toBeNull();
+    expect(openSpy).toHaveBeenCalledWith("sess-main", expect.any(Number), expect.any(Number));
+    openSpy.mockRestore();
+  });
+
+  it("the live map still wins over the record when both are present", () => {
+    useWorkspaceStore.setState({ sessionStates: { "sess-main": "not_started" }, sessionAttachState: {} });
+    render(<TerminalPane api={api} sessionId="sess-main" session={sessionRecord("working")} />);
+    expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
+  });
+
+  it("a drafting session mounts no terminal and opens no stream", () => {
+    // A draft has no tmux pane / pty at all — the composer is what's rendered
+    // in the pane's place, and this pane is still parked in PaneHostLayer's
+    // hidden offscreen holder. Before the fallback above this was unreachable
+    // (the map simply had no entry for a draft); with it, `drafting` has to be
+    // excluded explicitly or the pane would create an xterm at a 0x0 cell grid
+    // and fire `session:open` for a session the daemon cannot open.
+    const openSpy = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({ sessionStates: {}, sessionAttachState: {} });
+    const { container } = render(
+      <TerminalPane api={api} sessionId="sess-main" session={sessionRecord("drafting")} />,
+    );
+    expect(container.querySelector(".terminal-host")).toBeNull();
+    expect(screen.queryByRole("status", { name: /starting/i })).toBeNull();
+    expect(openSpy).not.toHaveBeenCalled();
+    openSpy.mockRestore();
   });
 
   it("resume banner hidden when state !== exited", () => {

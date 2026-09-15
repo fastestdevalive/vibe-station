@@ -3,6 +3,19 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  flex: 1;
+  /* Load-bearing, do not drop. As a flex item this box's `height: 100%` is also
+     its "specified size suggestion", so the default `min-height: auto` resolves
+     its automatic minimum size to the FULL height of `.pane-stack` — which then
+     wins over `flex: 1`'s share of the remaining space. In the tab-draft layout
+     the pane stack also holds the agent `TabsStrip` above this, so the composer
+     ended up exactly one tab-strip taller than its slot and its footer bar
+     (prompt textarea + ▶ Start) was pushed past `.pane-shell__body`'s
+     `overflow: hidden` edge with no way to scroll to it — invisible at desktop
+     heights, but at a ~412x924 phone viewport that clipped most of the bar off
+     the bottom of the screen. `min-height: 0` restores the normal
+     "shrink to the slot, scroll `__body`, keep `__bar` pinned" behaviour. */
+  min-height: 0;
   background: var(--bg-primary);
 }
 

@@ -279,6 +279,41 @@ describe("TabsStrip", () => {
     expect(within(dialog).getByRole("button", { name: "Terminate" })).toBeInTheDocument();
   });
 
+  it("a live session:state WS event clears a tab's draft badge without a refetch", async () => {
+    // Regression for the "tab strip still shows Draft after Start" bug:
+    // TabsStrip's own `session:updated` WS handler patched name/archivedAt/
+    // sortOrder/pinnedAt/supersededBy/isMain/channel, but never `.state` —
+    // and there was no handler at all for `session:state`/`session:exited`/
+    // `session:resumed`. So once a tab-scoped draft was promoted (its
+    // `.state` flips server-side from "drafting" through "not_started" to
+    // "working"/"waiting_for_human"), THIS component's local `sessions` copy
+    // (which the draft chip and `data-draft` read) never advanced past
+    // "drafting" — even though the global store (and thus the terminal pane
+    // itself, driven by `activeSessionIsDrafting` off that global store) had
+    // already moved on. Only a hard refresh's fresh `listSessions()` fetch
+    // cleared it. Confirms the tab-local copy now tracks `session:state`.
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const withDraftTab = snapshot.map((s) =>
+      s.id === "sess-agent2" ? { ...s, state: "drafting" as const, lifecycleState: "drafting" as const } : s,
+    );
+    vi.spyOn(localApi, "listSessions").mockResolvedValue(withDraftTab);
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const agentTwoTab = await screen.findByRole("tab", { name: /agent-2/i });
+    expect(agentTwoTab.getAttribute("data-draft")).toBe("true");
+
+    await act(async () => {
+      localApi.__test.emit({ type: "session:state", sessionId: "sess-agent2", state: "not_started" });
+    });
+
+    expect(screen.getByRole("tab", { name: /agent-2/i }).getAttribute("data-draft")).not.toBe("true");
+  });
+
   it("M4 — a session:updated{isMain:true} WS event propagates through TabsStrip's local reconciliation (A2.3) and is read by dependent UI (A2.5's dialog naming)", async () => {
     // Direct test of the isMain patch added at TabsStrip.tsx's own
     // `session:updated` handler (`:415-432`) — NOT routed through the global
