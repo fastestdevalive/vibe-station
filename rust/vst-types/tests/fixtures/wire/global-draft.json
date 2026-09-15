@@ -1,0 +1,28 @@
+{
+  "id": "g-0001",
+  "worktreeId": null,
+  "projectId": null,
+  "isMain": false,
+  "type": "agent",
+  "modeId": null,
+  "name": "draft session",
+  "nameSource": null,
+  "tmuxName": "__draft__-g-0001",
+  "useTmux": false,
+  "channel": "json",
+  "state": "drafting",
+  "lifecycleState": "drafting",
+  "createdAt": "2026-09-14T00:00:00.000Z",
+  "pinnedAt": null,
+  "archivedAt": null,
+  "sortOrder": 1,
+  "handoffSummary": null,
+  "parentSessionId": null,
+  "supersededBy": null,
+  "pr": null,
+  "draftPrompt": "Write a README",
+  "draftConfig": {
+    "entryPoint": "global",
+    "useWorktree": true
+  }
+}
