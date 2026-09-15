@@ -4,6 +4,8 @@ import remarkGfm from "remark-gfm";
 import { DiffView } from "@/components/preview/DiffView";
 import {
   capForDisplay,
+  extractToolDiffs,
+  isWriteToolName,
   looksLikeUnifiedDiff,
   prettyToolInput,
   relativize,
@@ -87,7 +89,8 @@ function summarizeGroup(tools: ToolCallEntry[]): string {
   const displayName = new Map<string, string>();
   for (const t of tools) {
     const raw = t.toolName.toLowerCase();
-    const key = isTask(t) ? "task" : (KIND_BUCKET[t.toolKind ?? ""] ?? TOOL_ALIASES[raw] ?? raw);
+    const isWrite = isWriteToolName(t.toolName);
+    const key = isTask(t) ? "task" : isWrite ? "write" : (KIND_BUCKET[t.toolKind ?? ""] ?? TOOL_ALIASES[raw] ?? raw);
     counts.set(key, (counts.get(key) ?? 0) + 1);
     if (!displayName.has(key)) displayName.set(key, t.toolName);
   }
@@ -161,7 +164,8 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   const resultText = result?.content ? capForDisplay(result.content) : "";
   const hasResultBody = resultText.length > 0;
   const isError = !!result?.isError || tool.status === "failed";
-  const hasDiffs = !!tool.diffs && tool.diffs.length > 0;
+  const diffs = extractToolDiffs(tool);
+  const hasDiffs = !!diffs && diffs.length > 0;
   // Structured diffs win over the heuristic text-sniffing path (Decision 3).
   const isDiff = !hasDiffs && !isError && hasResultBody && looksLikeUnifiedDiff(resultText);
   // Phase 6 — a Task's bracketed sub-thread (Decision 4) also expands the row,
@@ -214,7 +218,7 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
             </pre>
           ) : null}
           {hasDiffs
-            ? tool.diffs!.map((diff, i) => (
+            ? diffs!.map((diff, i) => (
                 <DiffView
                   key={`${diff.path}-${i}`}
                   oldText={diff.oldText ?? ""}

@@ -98,6 +98,52 @@ function toolDiffsFromContent(content: unknown): ToolDiff[] | undefined {
   return diffs.length > 0 ? diffs : undefined;
 }
 
+const WRITE_TOOL_NAMES = new Set([
+  "write",
+  "writefile",
+  "write_file",
+  "writetofile",
+  "write_to_file",
+  "create_file",
+  "new_file",
+]);
+
+function isWriteToolName(name: string): boolean {
+  const lower = name.toLowerCase().replace(/[^a-z0-9_]/g, "");
+  return WRITE_TOOL_NAMES.has(lower) || lower.startsWith("write_") || lower.endsWith("_write");
+}
+
+function toolDiffsFromInput(title: unknown, input: unknown, kind?: unknown, locations?: { path: string }[]): ToolDiff[] | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const obj = input as Record<string, unknown>;
+  const name = typeof title === "string" ? title : "";
+  const hasEdit = typeof obj.old_string === "string" || typeof obj.oldText === "string" || Array.isArray(obj.edits);
+  const isWrite = isWriteToolName(name) || (kind === "edit" && !hasEdit);
+  if (!isWrite) return undefined;
+
+  let path: string | undefined;
+  for (const key of ["file_path", "filePath", "path", "TargetFile", "targetFile", "target_file", "file", "filename"]) {
+    if (typeof obj[key] === "string" && (obj[key] as string).trim()) {
+      path = obj[key] as string;
+      break;
+    }
+  }
+  path ??= locations?.[0]?.path;
+  if (!path) return undefined;
+
+  let content: string | undefined;
+  for (const key of ["content", "CodeContent", "codeContent", "code_content", "contents", "text", "file_content", "fileContent"]) {
+    if (typeof obj[key] === "string") {
+      content = obj[key] as string;
+      break;
+    }
+  }
+  if (typeof content === "string") {
+    return [{ path, oldText: "", newText: content }];
+  }
+  return undefined;
+}
+
 /** Extract text blocks from a `tool_call`/`tool_call_update.content` array (existing behavior). */
 function textFromToolCallContent(content: unknown): string | undefined {
   if (!Array.isArray(content)) return undefined;
@@ -183,15 +229,18 @@ export function normalizeSessionUpdate(
     case "tool_call": {
       const toolCallId = typeof raw.toolCallId === "string" ? raw.toolCallId : undefined;
       const status = typeof raw.status === "string" ? raw.status : undefined;
+      const toolLocations = toolLocationsFrom(raw.locations);
+      const toolInput = raw.rawInput ?? raw.input ?? undefined;
+      const toolTitle = typeof raw.title === "string" ? raw.title : undefined;
       base = stamp({
         kind: "tool_use",
         role: "assistant",
         toolId: toolCallId,
-        toolName: typeof raw.title === "string" ? raw.title : (typeof raw.kind === "string" ? raw.kind : undefined),
-        toolInput: raw.rawInput ?? raw.input ?? undefined,
-        toolLocations: toolLocationsFrom(raw.locations),
+        toolName: toolTitle ?? (typeof raw.kind === "string" ? raw.kind : undefined),
+        toolInput,
+        toolLocations,
         toolKind: toolKindFrom(raw.kind),
-        toolDiffs: toolDiffsFromContent(raw.content),
+        toolDiffs: toolDiffsFromContent(raw.content) ?? toolDiffsFromInput(toolTitle, toolInput, raw.kind, toolLocations),
         toolStatus:
           status === "pending" || status === "in_progress" || status === "completed" || status === "failed"
             ? status
@@ -216,6 +265,8 @@ export function normalizeSessionUpdate(
         !(typeof rawInputValue === "object" && Object.keys(rawInputValue as Record<string, unknown>).length === 0)
           ? rawInputValue
           : undefined;
+      const toolLocations = toolLocationsFrom(raw.locations);
+      const toolTitle = typeof raw.title === "string" ? raw.title : undefined;
       base = stamp({
         kind: "tool_result",
         toolId: toolCallId,
@@ -225,8 +276,8 @@ export function normalizeSessionUpdate(
           status === "pending" || status === "in_progress" || status === "completed" || status === "failed"
             ? status
             : undefined,
-        toolDiffs: toolDiffsFromContent(raw.content),
-        toolLocations: toolLocationsFrom(raw.locations),
+        toolDiffs: toolDiffsFromContent(raw.content) ?? (refinedInput ? toolDiffsFromInput(toolTitle, refinedInput, raw.kind, toolLocations) : undefined),
+        toolLocations,
         toolKind: toolKindFrom(raw.kind),
       });
       break;
