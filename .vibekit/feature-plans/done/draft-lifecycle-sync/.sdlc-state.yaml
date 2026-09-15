@@ -1,0 +1,17 @@
+feature: draft-lifecycle-sync
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-136
+master: {prd: skipped, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "2.T3"
+    awaiting_phase: verify
+    awaiting_artifact: ".vibekit/feature-plans/wip/draft-lifecycle-sync/plan-draft-lifecycle-sync.md"
+    phase_chain: [plan, implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
