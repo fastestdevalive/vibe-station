@@ -12,11 +12,19 @@ vst-git = { workspace = true }
 vst-agents = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
+vst-proc = { workspace = true }
 axum = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ring = "0.17"
+subtle = "2.6"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,239 @@
+== fmt ==
+== clippy ==
+== test (vst-routes) ==
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 11 tests
+test test_pure_helpers ... ok
+Initialized empty Git repository in /tmp/.tmpDUNTwi/my-existing-proj/.git/
+[main (root-commit) dbc20e7] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+Initialized empty Git repository in /tmp/.tmpqOxsOO/del-proj/.git/
+Initialized empty Git repository in /tmp/.tmpDUNTwi/other-proj/.git/
+Initialized empty Git repository in /tmp/.tmpL99Oi4/real-git/.git/
+[main (root-commit) dbc20e7] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test test_create_new_project_validation ... ok
+test test_tree_file_list_and_get_file ... ok
+test test_patch_project_hidden ... ok
+test test_list_projects_order ... ok
+[main (root-commit) dbc20e7] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+[main (root-commit) dbc20e7] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test test_delete_project ... ok
+test test_create_project_register_existing ... ok
+test test_list_project_branches ... ok
+test test_create_new_project_real_git_success ... ok
+test test_create_new_project_with_start_agent_direct ... ok
+test test_create_new_project_with_start_agent_worktree ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+
+running 18 tests
+test group_json_output_skips_non_text_and_empty ... ok
+test group_json_output_joins_chunks_within_turn_but_not_across ... ok
+test serialize_global_draft_falls_back_to_created_at_ms_for_sort_order ... ok
+test serialize_session_direct_has_null_worktree_id_and_json_channel ... ok
+test serialize_session_flattens_lifecycle_and_wire_fields ... ok
+test serialize_global_draft_produces_fixed_wire_shape ... ok
+test global_draft_wire_roundtrips_through_serde ... ok
+test session_wire_roundtrips_through_serde ... ok
+test create_draft_session_missing_project_and_worktree_is_400 ... ok
+test list_sessions_filters_by_worktree_and_errors_missing ... ok
+test create_draft_session_global_persists_and_serializes ... ok
+test create_draft_session_worktree_missing_404 ... ok
+test create_draft_session_worktree_attaches_to_worktree ... ok
+test find_worktree_context_finds_and_returns_none ... ok
+test find_session_context_finds_worktree_direct_and_global ... ok
+test get_session_by_id_all_three_kinds ... ok
+test list_sessions_returns_all_then_filters_by_project ... ok
+test create_draft_session_direct_attaches_to_direct_sessions ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+
+running 31 tests
+test delete_worktree_main_sole_session_400 ... ok
+test delete_missing_session_404 ... ok
+test patch_draft_not_drafting_403 ... ok
+test delink_archived_session_400 ... ok
+test find_session_context_and_worktree_still_work ... ok
+test delete_worktree_non_main_session_no_promotion ... ok
+test patch_draft_missing_404 ... ok
+test delete_worktree_main_promotes_eligible_sibling_and_carries_pr ... ok
+test delete_worktree_main_with_only_drafting_sibling_400 ... ok
+test patch_draft_global_updates_and_renames ... ok
+test delete_global_draft_removes_row ... ok
+test delete_worktree_main_with_only_terminal_sibling_400 ... ok
+test delete_direct_session_removes_from_direct_sessions ... ok
+test delink_clears_parent_session_id ... ok
+test patch_draft_global_no_rename_when_user_named ... ok
+test patch_draft_direct_updates_direct_session ... ok
+test start_worktree_new_promotes_into_new_worktree ... ignored, requires a live git repo (git worktree add)
+test pin_missing_404 ... ok
+test reorder_persists_global_draft_sort_order ... ok
+test rename_sets_user_name_and_clears_with_empty ... ok
+test reorder_persists_worktree_sort_order ... ok
+test start_missing_mode_id_400 ... ok
+test rename_truncates_to_60_chars ... ok
+test start_direct_entry_promotes_to_direct ... ok
+test start_global_draft_400 ... ok
+test pin_toggles_and_is_idempotent ... ok
+test start_empty_prompt_400 ... ok
+test start_not_drafting_403 ... ok
+test patch_draft_worktree_updates_session ... ok
+test start_unknown_entry_point_400 ... ok
+test start_tab_entry_promotes_into_worktree ... ok
+
+test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+
+running 26 tests
+test handoff_tmux_channel_pastes_and_reads_summary ... ignored, requires a live tmux session to paste to + bounded poll (would take 30s timeout)
+test handoff_missing_session_404 ... ok
+test handoff_global_draft_404 ... ok
+test reset_global_draft_404 ... ok
+test done_missing_session_404 ... ok
+test done_global_draft_404 ... ok
+test resume_agent_sets_lifecycle_to_working ... ignored, requires a real agent spawn (restore argv or fresh launch) — not safe in unit tests
+test resume_already_running_returns_current_state ... ignored, requires a live tmux session or a PtyHandle in the registry — neither constructible cheaply
+test reset_missing_session_404 ... ok
+test done_terminal_session_400 ... ok
+test handoff_json_channel_returns_ok_with_no_summary ... ok
+test handoff_terminal_session_400 ... ok
+test reset_archives_old_and_creates_new_in_worktree ... ok
+test find_session_context_still_works ... ok
+test done_is_idempotent_when_already_done ... ok
+test done_marks_agent_done_and_strips_initial_prompt ... ok
+test done_broadcasts_session_state_done ... ok
+test resume_missing_session_404 ... ok
+test resume_archived_session_400 ... ok
+test resume_global_draft_400 ... ok
+test reset_persists_handoff_summary_on_archived_row ... ok
+test reset_archived_session_400 ... ok
+test reset_rejects_unknown_requested_mode_before_teardown ... ok
+test reset_returns_both_ids ... ok
+test reset_session_without_mode_400 ... ok
+test reset_terminal_session_400 ... ok
+
+test result: ok. 23 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+
+running 27 tests
+test chat_json_returns_202_turn_id ... ignored, spawns a real claude process via the agent drain loop
+test chat_missing_session_404 ... ok
+test dismiss_notice_missing_404 ... ok
+test patch_model_missing_session_404 ... ok
+test fork_missing_session_404 ... ok
+test promote_notice_missing_404 ... ok
+test chat_global_draft_404 ... ok
+test cancel_turn_not_found_404 ... ok
+test dismiss_notice_idempotent_no_agent_ok ... ok
+test patch_model_done_session_409 ... ok
+test cancel_missing_session_404 ... ok
+test chat_archived_400 ... ok
+test chat_attachment_not_found_400 ... ok
+test promote_missing_session_404 ... ok
+test edit_missing_session_404 ... ok
+test edit_turn_not_queued_404 ... ok
+test promote_notice_idempotent_no_agent_ok ... ok
+test resubmit_missing_session_404 ... ok
+test send_missing_session_404 ... ok
+test promote_turn_not_queued_404 ... ok
+test stop_missing_404 ... ok
+test send_attachments_require_json_400 ... ok
+test send_global_draft_404 ... ok
+test send_direct_pty_not_running_409 ... ok
+test resubmit_not_editing_404 ... ok
+test stop_no_agent_409 ... ok
+test send_json_archived_400 ... ok
+
+test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+
+running 14 tests
+test meta_missing_session_404 ... ok
+test patch_channel_missing_session_404 ... ok
+test transcript_invalid_limit_zero_or_negative_400 ... ok
+test transcript_all_empty_ok ... ok
+test meta_rebuilds_from_disk_for_existing_session_ok ... ok
+test patch_channel_global_draft_404 ... ok
+test transcript_missing_session_404 ... ok
+test patch_channel_idempotent_noop_json_ok ... ok
+test patch_channel_terminal_session_400 ... ok
+test transcript_non_json_session_404 ... ok
+test transcript_invalid_since_400 ... ok
+test patch_channel_idempotent_noop_ok ... ok
+test transcript_invalid_before_seq_400 ... ok
+test transcript_empty_data_dir_tail_ok ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+
+running 10 tests
+test test_pure_helpers ... ok
+Initialized empty Git repository in /tmp/.tmp7k18JH/.git/
+test test_worktrees_list ... ok
+[main (root-commit) 6bbe197] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test test_pending_file_opens ... ok
+test test_get_file_and_file_list ... ok
+test test_tree_and_disk_usage ... ok
+test test_worktree_done_and_delete ... ok
+test test_worktrees_pin_hide_rename_reorder ... ok
+test test_git_surface_routes_on_real_repo ... ok
+Initialized empty Git repository in /tmp/.tmpc6jzcP/.git/
+[main (root-commit) 99b7e39] Initial commit
+ 1 file changed, 1 insertion(+)
+ create mode 100644 README.md
+test test_create_worktree_success_and_events ... ok
+test test_create_worktree_validation_and_errors ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+== test vst-types (wire fixtures) ==
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 13 tests
+test enqueue_chat_result_roundtrips ... ok
+test id_newtypes_serialize_as_bare_strings ... ok
+test client_message_session_open_roundtrips ... ok
+test global_draft_fixture_roundtrips ... ok
+test mode_fixture_roundtrips ... ok
+test project_fixture_roundtrips ... ok
+test server_message_session_created_roundtrips ... ok
+test server_message_chat_replay_roundtrips ... ok
+test server_message_session_state_roundtrips ... ok
+test server_message_session_updated_roundtrips ... ok
+test session_updated_omits_unchanged_optionals ... ok
+test session_fixture_roundtrips ... ok
+test worktree_fixture_roundtrips ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+== gate green ==
