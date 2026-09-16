@@ -1,0 +1,97 @@
+feature: claude-native-acp
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-141
+created: 2026-09-16T00:00:00Z
+
+master:
+  prd: skipped   # internal engineering investigation, no user-facing product behavior change (see arch note)
+  plan: complete # arch-claude-native-acp.md reviewed and approved (quick plan, per explicit user request)
+
+current_subfeature: 00-protocol-spike
+
+# ============================================================================
+# Context: this feature exists because forking `claude-agent-acp` alone (the
+# user's original idea) does NOT eliminate the Node.js dependency for Claude
+# support — see arch-claude-native-acp.md for the full investigation. The
+# real Node dependency is one layer deeper, in @anthropic-ai/claude-agent-sdk,
+# which extracts and drives a 309MB closed-source, precompiled `claude`
+# binary (confirmed to be the same `claude` CLI already on PATH) via an
+# UNDOCUMENTED stdin/stdout protocol. Phase 00 is a spike with a real
+# go/no-go gate, not a foregone conclusion — see its phase brief.
+#
+# The official `agent-client-protocol` Rust crate (already a dependency,
+# confirmed via research subagent to be the same project as
+# github.com/agentclientprotocol/rust-sdk) provides real Agent-builder
+# scaffolding useful for phase 01's outer shape, but gives zero help with the
+# actual hard part (the inner claude-binary protocol) — its own
+# `claude_agent()` convenience constructor just shells out to the same
+# Node.js package this feature exists to eliminate.
+# ============================================================================
+
+model_policy_note: >
+  Per user direction (2026-09-16): same DeepSeek/agy-medium dispatch pattern
+  as daemon-rust-port, with a flagged caveat — phase 00 is reverse-engineering/
+  protocol-archaeology against an undocumented vendor protocol, not
+  line-for-line porting of readable source (the shape of work every other
+  part of daemon-rust-port was). Consider a stronger model for phase 00
+  specifically, or plan for tighter orchestrator review of its findings
+  before greenlighting phase 01 — see arch-claude-native-acp.md's risk
+  section.
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: retired
+    last_completed: plan
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 00-protocol-spike
+    origin: planned
+    spawned_from: root
+    mode: planned
+    last_completed: plan
+    awaiting_phase: implement
+    awaiting_artifact: null
+    phase_chain: [plan]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+    process_note: >
+      Go/no-go gate for the whole feature — see phase brief's Exit Criteria.
+      Produces a protocol note (protocol-notes.md, not yet written) that
+      phase 01 depends on directly. Do not start 01 before this closes out,
+      even under time pressure — a wrong protocol assumption here silently
+      propagates into everything downstream.
+
+  - id: 01-native-driver
+    origin: planned
+    spawned_from: 00-protocol-spike
+    mode: blocked
+    last_completed: null
+    awaiting_phase: plan
+    awaiting_artifact: "00-protocol-spike close-out (go/no-go + protocol-notes.md)"
+    phase_chain: []
+    superseded_reason: null
+    parked_reason: "waiting on 00-protocol-spike's go/no-go gate"
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+
+  - id: 02-cutover
+    origin: planned
+    spawned_from: 01-native-driver
+    mode: blocked
+    last_completed: null
+    awaiting_phase: plan
+    awaiting_artifact: "01-native-driver close-out (parity check, gap list)"
+    phase_chain: []
+    superseded_reason: null
+    parked_reason: "waiting on 01-native-driver"
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
