@@ -6,7 +6,6 @@ use vst_cli::program::{
     self, Command, DaemonCommand, FileCommand, ModeCommand, ProjectCommand, SessionCommand,
     WorktreeCommand,
 };
-
 #[tokio::main]
 async fn main() {
     let cmd = program::parse_args(std::env::args());
@@ -318,6 +317,45 @@ async fn main() {
                 );
             }
         },
+        Command::Open(args) => {
+            let opts = match commands::open::parse_open_options(&args.args) {
+                Ok(o) => o,
+                Err(err) => die(&err, Some(1)),
+            };
+            if let Err((err, code)) = commands::open::run_open(opts).await {
+                die(&err, Some(code));
+            }
+        }
+        Command::Status(args) => {
+            let opts = match commands::status::parse_status_options(&args.args) {
+                Ok(o) => o,
+                Err(err) => die(&err, Some(1)),
+            };
+            if let Err((err, code)) = commands::status::run_status(opts).await {
+                die(&err, Some(code));
+            }
+        }
+        Command::Summary(args) => {
+            let opts = match commands::summary::parse_summary_options(&args.args) {
+                Ok(o) => o,
+                Err(err) => die(&err, Some(1)),
+            };
+            if let Err((err, code)) = commands::summary::run_summary(opts).await {
+                die(&err, Some(code));
+            }
+        }
+        Command::Doctor(args) => {
+            if let Err(err) = commands::doctor::parse_doctor_options(&args.args) {
+                die(&err, Some(1));
+            }
+            if let Err((err, code)) = commands::doctor::run_doctor().await {
+                if !err.is_empty() {
+                    die(&err, Some(code));
+                } else {
+                    std::process::exit(code);
+                }
+            }
+        }
         _ => {
             eprintln!("Command not yet implemented in Rust port");
         }
