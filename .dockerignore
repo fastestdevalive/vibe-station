@@ -1,0 +1,34 @@
+# Docker build context excludes.
+#
+# Without this file, `docker compose up --build` sends the ENTIRE repo
+# (including multi-GB build caches that have nothing to do with the image)
+# as build context on every build. Discovered 2026-09-16 while debugging a
+# dev-sandbox build that filled the host disk and failed: rust/target/ alone
+# was 53GB (accumulated Rust debug+release build artifacts across every
+# crate), and node_modules/ (root + every sub-package) is reinstalled fresh
+# inside the container by `RUN pnpm install --frozen-lockfile` in
+# dev.Dockerfile anyway, so copying the host's copy in is pure waste (and
+# would bake host-platform-specific native addon builds into a Linux
+# container, which is actively wrong, not just slow).
+
+# Rust build artifacts — never needed in the image; the dev sandbox mounts
+# pre-built release binaries from the host (see docker-compose.dev.yml).
+rust/target/
+
+# Reinstalled fresh inside the container (dev.Dockerfile's pnpm install
+# step) — copying the host's node_modules in is wasted transfer at best,
+# and bakes in host-native-addon builds at worst.
+node_modules/
+**/node_modules/
+
+# Version control history — never needed inside the image.
+.git/
+
+# Editor/OS noise.
+.DS_Store
+*.swp
+
+# Local scratch files this session's debugging created — harmless but no
+# reason to ship them into a build context either.
+.diag_out.txt
+.sandbox-build.log

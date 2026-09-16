@@ -1,11 +1,11 @@
 //! `GET/PUT /user/ordered-lists/:scopeKey` — `routes/orderedLists.ts`.
 
 use serde::{Deserialize, Serialize};
-use serde_with::skip_serializing_none;
 
 /// `GET /user/ordered-lists/:scopeKey` response. `updatedAt` is `null` when no
-/// list exists yet.
-#[skip_serializing_none]
+/// list exists yet. NOT `skip_serializing_none`: the Node daemon (Fastify)
+/// emits `"updatedAt": null` explicitly, so F1 byte-compat requires the field
+/// to be present as `null` rather than omitted (parity harness, part 10).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderedList {

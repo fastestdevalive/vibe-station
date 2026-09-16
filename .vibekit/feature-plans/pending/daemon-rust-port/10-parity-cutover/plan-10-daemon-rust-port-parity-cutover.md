@@ -55,35 +55,108 @@ own separate, later action.
 | 5 | **Update `scripts/dev-sandbox.sh`, `docker-compose.dev.yml`, root `package.json` build scripts** to build/run the Rust binaries instead of (or alongside, during transition) the Node ones. Cross-reference the "Docker dev sandboxes" section of `AGENTS.md` — don't reintroduce the seed-mode-volume-corruption hazard documented there while touching these scripts. | The dev sandbox actually boots against the Rust daemon and behaves per the demo dataset expectations already documented in `AGENTS.md`. |
 | 6 | **⚠️ DEFERRED — separate action, not part of dispatch #1 or #2.** Delete the old TS `daemon/`+`cli/` trees. The Rust binaries (`rust/vst-daemon`+`rust/vst-cli`) are unaffected by this deletion — confirm they build and run standalone (not accidentally depending on anything under the trees being deleted) before deleting, whenever this is eventually dispatched. | A human said "yes, delete it" — not an assumption inferred from "all tasks above passed," and not something either dispatch #1 or #2 should even ask about. |
 
-## Checklist — dispatch #1 (correctness & parity: tasks 1-3)
-- [ ] 0. Load rust-coding skill (for harness/fixture code)
-- [ ] 1. Read F1, F3, F4, and AGENTS.md's documented concurrency-bug sections in full
-- [ ] 2. Write the behavior contract for the parity harness specifically (what
+## Checklist — dispatch #1 (correctness & parity: tasks 1-3) — DONE, commit `57a13cb`
+- [x] 0. Load rust-coding skill (for harness/fixture code)
+- [x] 1. Read F1, F3, F4, and AGENTS.md's documented concurrency-bug sections in full
+- [x] 2. Write the behavior contract for the parity harness specifically (what
         counts as "byte-compatible," what the one deliberate fork-path exception covers)
-- [ ] 3. Build the parity harness + regression tests + SQLite compat check first,
+- [x] 3. Build the parity harness + regression tests + SQLite compat check first,
         against BOTH binaries actually running —
         `git commit -m "test(10-1): parity harness + regression suite + SQLite compat"`
-- [ ] 4. Implement (N6 still applies if anything under `rust/` is touched)
-- [ ] 5. Run everything; save results (parity diffs, regression outcomes, SQLite
+- [x] 4. Implement (N6 still applies if anything under `rust/` is touched)
+- [x] 5. Run everything; save results (parity diffs, regression outcomes, SQLite
         compat result) to a report file, not just pass/fail; commit
-- [ ] 6. Report: parity results, any real divergence found (including the expected
+- [x] 6. Report: parity results, any real divergence found (including the expected
         fork-path one), regression test outcomes, SQLite compat result — STOP.
         Do not touch task 4/5 (dispatch #2's scope) or task 6 (deletion, deferred
         indefinitely, not this dispatch's concern at all)
 
-## Checklist — dispatch #2 (measurement & tooling: tasks 4-5)
-- [ ] 0. Load rust-coding skill (in case any `rust/` code needs touching, though
+### Closed out — dispatch #1 complete (2026-09-15, autonomous overnight run)
+
+- **Found and fixed 2 real F1 byte-compat bugs**: `OrderedList`/`TunnelStatus` used
+  `#[skip_serializing_none]`, silently omitting `null` fields the Node daemon emits
+  explicitly. This is exactly the class of bug this part exists to catch.
+- Correctly distinguished deterministic routes (byte-diffed) from environment-
+  dependent ones (`/settings`, `/tailscale/status`, `/skills` — structural-only).
+- Design detour handled well: initial attempt to spawn the Node daemon as an
+  external `tsx` child process hit a genuine pnpm/tsx-ESM module-resolution dead
+  end (a real environment constraint, not a design flaw) — steered to Fastify's
+  `app.inject()`, which worked immediately and mirrors the Rust side's
+  `tower::ServiceExt::oneshot` pattern. No daemon-safety violation at any point.
+- Task 2 added a genuine new runtime regression test for the two-axis lifecycle/PR
+  race (previously only structural coverage existed).
+- Independently re-verified: full workspace gate run surfaced one **pre-existing,
+  unrelated flaky test** in `vst-git` (confirmed passing in isolation) — not a
+  regression from this dispatch. `vst-types`/`vst-store`/`vst-daemon` all green
+  individually. N6 clean. Directly read and ran every new test file.
+
+## Checklist — dispatch #2 (measurement & tooling: tasks 4-5) — DONE, commits `5bcfdb4` + `90e39f7`
+- [x] 0. Load rust-coding skill (in case any `rust/` code needs touching, though
         this dispatch is mostly outside `rust/`)
-- [ ] 1. Read N1, N2, and AGENTS.md's "Docker dev sandboxes" section in full
-- [ ] 2. Measure the CURRENT Node daemon's binary size + cold-start time first —
+- [x] 1. Read N1, N2, and AGENTS.md's "Docker dev sandboxes" section in full
+- [x] 2. Measure the CURRENT Node daemon's binary size + cold-start time first —
         this baseline doesn't exist yet anywhere in the repo
-- [ ] 3. Measure the Rust binary's equivalents; commit the baseline + comparison
+- [x] 3. Measure the Rust binary's equivalents; commit the baseline + comparison
         numbers to a report file — `git commit -m "chore(10-2): N1/N2 baseline measurement"`
-- [ ] 4. Update `scripts/dev-sandbox.sh`, `docker-compose.dev.yml`, root
+- [x] 4. Update `scripts/dev-sandbox.sh`, `docker-compose.dev.yml`, root
         `package.json` build scripts; N6 applies if `rust/` is touched
-- [ ] 5. Verify the dev sandbox actually boots against the Rust daemon
-- [ ] 6. Report: N1/N2 numbers (flag clearly if either regressed, don't bury it),
-        script changes made — STOP. Do not touch task 6 (deletion) at all
+- [x] 5. Verify the dev sandbox — DEFERRED to a manual follow-up (see below),
+        live docker build skipped as too heavyweight for an unattended overnight run
+- [x] 6. Report: N1/N2 numbers, script changes made — STOP. Task 6 (deletion) not
+        touched at all
+
+### Closed out — dispatch #2 complete (2026-09-16, autonomous overnight run)
+
+- **N1 and N2 both HOLD decisively**: Rust `vst-daemon` is 5.7× smaller (14MB vs
+  75MB packaged Node) and ~5.7× faster cold-start (68ms median vs ~388ms).
+- Found 2 real, pre-existing bugs unrelated to this port, honestly disclosed:
+  the packaged Node daemon binary (`@yao-pkg/pkg`) cannot actually boot (an
+  ESM/`import.meta` vs CJS-bundle mismatch in `build-daemon-binary.sh`), and
+  `pkg-fetch`'s `patches.json` has no node-24 entry (a version-pinning mismatch).
+- `dev-entrypoint.sh` correctly guards with `-f`/`-x` (not `-e`) to avoid
+  Docker's mount-creates-empty-dir footgun; Node fallback fully intact.
+- Live docker-sandbox boot verification deferred to a manual follow-up — steered
+  away from a heavyweight build during the unattended overnight run.
+- **Manual follow-up completed (2026-09-16, live session)**: ran the live
+  docker-sandbox boot test the overnight run deferred. Found and fixed 2 more
+  real bugs in the process, neither anticipated by the phase brief: (1) no
+  `.dockerignore` existed at all — `rust/target/` alone was 53GB, sent as
+  Docker build context on every build, which filled host disk and failed the
+  first attempt outright (added `.dockerignore` excluding `rust/target/`,
+  `node_modules/`, `.git/`); (2) the release binary built on the host (glibc
+  2.39) couldn't run inside the `node:24-slim` container (older glibc) — fixed
+  by building `vst-daemon`/`vst-cli` in a one-off containerized build matching
+  the runtime environment (`rust/target-docker/`, gitignored, not a permanent
+  build location), verified with `ldd` that all deps resolve. Confirmed
+  end-to-end: daemon boots (`vst daemon listening on http://0.0.0.0:7421`),
+  `/health` returns `{"ok":true,"version":"0.1.0",...}` (version string
+  confirms it's genuinely the Rust build, distinct from Node's `0.0.0`), UI
+  reachable at `http://localhost:7141` (200), LAN-accessible by default
+  (Docker publishes to `0.0.0.0`/`[::]` without any config change).
+- **Exceptional self-correction**: when asked to investigate a mid-flight
+  "real-home read" finding more precisely, went back and corrected its own
+  earlier imprecise framing — the check shells out to the system `tailscale`
+  CLI for machine-level state, never touches `~/.vibe-station` at all. Not an
+  isolation gap.
+- **Flagged for human review**: the report notes the user's real daemon on
+  port 7421 restarted independently near the end of measurement (uptime reset)
+  — the second such occurrence this session, verified NOT caused by this
+  dispatch's isolated measurements. Root cause unknown, worth separate
+  investigation.
+- Independently re-verified: N6 clean, no `.rs` files in the task-5 commit,
+  no docker containers left running, real daemon's mtime/uptime state matched
+  the report's claims.
+
+# ============================================================
+# 10-PARITY-CUTOVER — PART COMPLETE
+# ============================================================
+
+Both dispatches done, gate-verified. Task 6 (deletion) never attempted, remains
+fully pending an explicit future user request.
+
+**This closes out the entire 15-part daemon-rust-port feature.** See
+`.sdlc-state.yaml`'s prominent top-level "FEATURE COMPLETE" note for the full
+part-by-part summary and recommended follow-ups.
 
 ## ⚠️ The parity harness (task #1) literally runs BOTH daemons — this is the highest daemon-safety risk in the whole feature
 
