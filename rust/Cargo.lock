@@ -2750,13 +2750,18 @@ name = "vst-routes"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
+ "ring",
  "serde",
  "serde_json",
+ "subtle",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "vst-agents",
  "vst-git",
  "vst-lifecycle",
+ "vst-proc",
  "vst-store",
  "vst-types",
  "vst-ws",

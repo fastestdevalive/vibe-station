@@ -23,6 +23,8 @@ pub mod transcript;
 pub mod ordered_lists;
 pub mod tunnel;
 
+pub mod global_drafts;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -593,5 +595,6 @@ fn insert_session(
     Ok(())
 }
 
+pub use global_drafts::{GlobalDraftPatch, GlobalDraftRow};
 pub use ordered_lists::OrderedList;
 pub use tunnel::TunnelStateRow;
