@@ -509,7 +509,19 @@ export function Workspace() {
       }
       if (key.startsWith("terminal:")) {
         const id = key.slice("terminal:".length);
-        return <TerminalPane api={api} sessionId={id} session={sessions.find((s) => s.id === id)} />;
+        // A plain terminal tile must never steal focus in canvas mode either
+        // — same reasoning as AgentPaneSlot's `focusOnMount={!canvasMode}`
+        // just above (59d44a7 added that for agent panes but missed this
+        // sibling path, since a plain terminal session renders TerminalPane
+        // directly rather than through AgentPaneSlot).
+        return (
+          <TerminalPane
+            api={api}
+            sessionId={id}
+            session={sessions.find((s) => s.id === id)}
+            focusOnMount={!inWorkspaceCanvas}
+          />
+        );
       }
       const wtId = key.slice("tools:".length);
       const onCloseToolsTile = inWorkspaceCanvas

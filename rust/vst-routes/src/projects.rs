@@ -684,12 +684,16 @@ impl ProjectRoutes {
                         }
                     }
 
+                    let main_session_serialized =
+                        serialize_session(Some(&wt_id), &id, &main_session);
                     self.broadcaster.send(ServerEvent::SessionCreated {
                         session_id: main_session_id.clone(),
                         worktree_id: Some(wt_id.clone()),
                         project_id: Some(id.clone()),
                         session_type: "agent".to_string(),
                         mode: Some(resolved_mode_id.clone()),
+                        snapshot: Some((&main_session_serialized).into()),
+                        parent_session_id: main_session.parent_session_id.clone(),
                     });
 
                     // Background spawn
@@ -712,7 +716,7 @@ impl ProjectRoutes {
                     });
 
                     result_worktree = Some(api_wt);
-                    result_session = Some(serialize_session(Some(&wt_id), &id, &main_session));
+                    result_session = Some(main_session_serialized);
                 }
             } else {
                 // Direct session
@@ -784,12 +788,15 @@ impl ProjectRoutes {
                     })
                     .await;
 
+                let session_record_serialized = serialize_session(None, &id, &session_record);
                 self.broadcaster.send(ServerEvent::SessionCreated {
                     session_id: session_id.clone(),
                     project_id: Some(id.clone()),
                     worktree_id: None,
                     session_type: "agent".to_string(),
                     mode: Some(resolved_mode_id.clone()),
+                    snapshot: Some((&session_record_serialized).into()),
+                    parent_session_id: session_record.parent_session_id.clone(),
                 });
 
                 // Background spawn
@@ -809,7 +816,7 @@ impl ProjectRoutes {
                         .await;
                 });
 
-                result_session = Some(serialize_session(None, &id, &session_record));
+                result_session = Some(session_record_serialized);
             }
         }
 

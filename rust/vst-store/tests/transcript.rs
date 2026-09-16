@@ -536,3 +536,54 @@ fn import_transaction_dedups_and_persists_watermark() {
     let wm: Option<NativeWatermark> = store.get_native_watermark();
     assert_eq!(wm.unwrap().cursor, "cur-1");
 }
+
+/// Regression test for the daemon-aborting bug: two callers opening the SAME
+/// brand-new session's `messages.db` concurrently (live-reproduced as a
+/// direct-agent session's `chat:open` racing its own auto-enqueued turn-1)
+/// must not panic. Before the fix, both threads' `PRAGMA table_info`
+/// idempotency check saw the `superseded` column missing (neither had
+/// committed yet), both ran `ALTER TABLE ... ADD COLUMN`, the loser's
+/// statement failed with `SqliteFailure` ("duplicate column name:
+/// superseded"), and that error propagated through `TranscriptStore::new`'s
+/// `?` into `open_transcript_store`'s `.expect()` — aborting the entire
+/// daemon process, not just the one racing session.
+///
+/// This spawns many concurrent openers on one fresh path and asserts every
+/// single one returns successfully. Caveat, checked by hand rather than
+/// asserted here: this synchronous, in-process thread race does NOT
+/// reliably reproduce the exact interleaving on its own — SQLite's
+/// writer-serialization narrows the window far more than the real bug's
+/// actual trigger (two independent `tokio` tasks, each with an `.await`
+/// spanning a store-actor round trip, racing across a multithreaded
+/// runtime and a live TCP/WS round trip). Verified by hand that this test
+/// still passes 5/5 runs even with the fix reverted — so its value is as a
+/// basic "concurrent first-open works at all" sanity check and a home for
+/// a stronger repro if one is added later, not as proof the fix closes the
+/// race. The fix itself (tolerate `duplicate column name` as "someone else
+/// already added it") is correct by inspection: it matches the exact error
+/// string captured from the live crash.
+#[test]
+fn concurrent_first_open_does_not_panic_on_superseded_column_race() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = std::sync::Arc::new(dir.path().to_path_buf());
+    const THREAD_COUNT: usize = 8;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREAD_COUNT));
+
+    let handles: Vec<_> = (0..THREAD_COUNT)
+        .map(|i| {
+            let data_dir = data_dir.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                // Must not panic — this is the exact call path that used to
+                // abort the process (`open_transcript_store`'s `.expect()`).
+                let _store = open_transcript_store(&data_dir, &format!("race-session-{i}"));
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join()
+            .expect("open_transcript_store must not panic under concurrent first-open");
+    }
+}

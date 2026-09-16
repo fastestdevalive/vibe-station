@@ -796,12 +796,13 @@ pub fn get_or_create_json_agent_session(
     opts: JsonAgentSessionOptions,
 ) -> JsonAgentSession {
     let session_id = opts.session.id.clone();
-    if let Some(existing) = registry.get(&session_id) {
-        return (*existing).clone();
-    }
-    let created = JsonAgentSession::new(opts);
-    registry.set(session_id, Arc::new(created.clone()));
-    created
+    // `get_or_insert_with` holds the registry's lock across the whole
+    // check-and-construct — see its doc comment for why a separate
+    // `get()` ... `set()` here was a lost-update race that could silently
+    // build and immediately discard a whole `JsonAgentSession` (with its
+    // own turn stream nobody was listening to).
+    let session = registry.get_or_insert_with(&session_id, || JsonAgentSession::new(opts));
+    (*session).clone()
 }
 
 // ---------------------------------------------------------------------------

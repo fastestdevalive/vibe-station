@@ -135,6 +135,22 @@ export function Layout({
     }
   }, [toolsInSplit, effectiveOrientation]);
 
+  // Terminal dock ↔ collapsed via the imperative ref, same reasoning as the
+  // tools panel above: `topRow` (which holds the agent pane's live
+  // TerminalPane) must stay at ONE stable React tree position regardless of
+  // whether the dock is shown, or toggling the dock (⌘/Ctrl+Shift+Z, the
+  // dock's close button) unmounts+remounts the agent pane's terminal — see
+  // AGENTS.md "Terminal — never unmount TerminalPane during UI transitions".
+  const dockInSplit = showTerminalDock;
+  const dockPanelRef = useRef<ImperativePanelHandle>(null);
+  useEffect(() => {
+    if (dockInSplit) {
+      dockPanelRef.current?.expand();
+    } else {
+      dockPanelRef.current?.collapse();
+    }
+  }, [dockInSplit]);
+
   const sidebarInner = (
     <div
       className="pane-left-inner"
@@ -313,17 +329,46 @@ export function Layout({
     agentWrapper()
   );
 
-  const classicMainColumnInner = showTerminalDock ? (
+  // When a terminal dock is available for this route, always keep the
+  // PanelGroup in the tree (mirroring the tools-panel fix above) so `topRow`
+  // never changes React tree depth when the dock is shown/hidden. Unlike the
+  // tools panel, the dock's own content (`dockWrapper()`, which holds a live
+  // TerminalPane / PTY) must ALSO stay mounted at all times — collapsing to
+  // size 0 hides it visually without tearing down its stream, whereas
+  // conditionally rendering `null` here would kill+recreate that PTY too.
+  const classicMainColumnInner = hasTerminalDock ? (
     <PanelGroup
       direction="vertical"
       autoSaveId={`vs-ide-dock-${wt}`}
       style={{ width: "100%", height: "100%" }}
     >
-      <Panel defaultSize={68} minSize={20}>
+      <Panel defaultSize={68} minSize={20} order={1}>
         {topRow}
       </Panel>
-      <PanelResizeHandle className="resize-handle resize-handle--row" />
-      <Panel defaultSize={32} minSize={12}>
+      <PanelResizeHandle
+        className="resize-handle resize-handle--row"
+        style={dockInSplit ? undefined : { display: "none" }}
+      />
+      <Panel
+        ref={dockPanelRef}
+        collapsible
+        collapsedSize={0}
+        // Declarative, not just imperative: a brand-new worktree has no
+        // saved `autoSaveId` layout yet, so this literal is what actually
+        // renders on first mount. `32` unconditionally meant the dock's
+        // Panel always mounted EXPANDED — including for a new session that
+        // should start with the dock closed — and the imperative
+        // `dockPanelRef.current?.collapse()` effect above raced the
+        // panel's own ref registration on mount and could lose, leaving
+        // the terminal dock open with no way to retry (its effect's dep
+        // array, `[dockInSplit]`, never changes again once mount has
+        // passed). Matching the initial render to the actual target state
+        // removes the race entirely; the imperative effect still runs for
+        // every SUBSEQUENT toggle.
+        defaultSize={dockInSplit ? 32 : 0}
+        minSize={12}
+        order={2}
+      >
         {dockWrapper()}
       </Panel>
     </PanelGroup>

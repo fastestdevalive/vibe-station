@@ -73,7 +73,7 @@ use vst_ws::services::ignore_filter::build_ignore_matcher;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 
 use crate::modes::{find_mode, json_unsupported_cli, resolve_mode_id};
-use crate::sessions::{spawn_session, SpawnSessionOpts};
+use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 
 pub const MAX_DIFF_BYTES: usize = 512 * 1024;
 pub const COMMIT_SHA_RE: &str = "^[0-9a-fA-F]{7,40}$";
@@ -659,12 +659,15 @@ impl WorktreeRoutes {
             }
         }
 
+        let main_session_serialized = serialize_session(Some(&wt_id), &project.id, &main_session);
         self.broadcaster.send(ServerEvent::SessionCreated {
             session_id: main_session.id.clone(),
             project_id: Some(project.id.clone()),
             worktree_id: Some(wt_id.clone()),
             session_type: "agent".to_string(),
             mode: Some(mode_id.clone()),
+            snapshot: Some((&main_session_serialized).into()),
+            parent_session_id: main_session.parent_session_id.clone(),
         });
 
         if is_json {

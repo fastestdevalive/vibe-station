@@ -89,7 +89,10 @@ use vst_types::{
     NormalizedEventProvider, PrStatus, ProjectRecord, SessionLifecycle, SessionNameSource,
     SessionRecord, SessionType, TranscriptKind, TranscriptRef, WorktreeChoice, WorktreeRecord,
 };
+use vst_ws::connection::SessionStream;
+use vst_ws::handlers::session_open::DirectStreamRegistry;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
+use vst_ws::streams::pty_stream::PtySessionStream;
 
 use crate::modes::{find_mode, resolve_mode_id};
 
@@ -272,6 +275,17 @@ pub struct SessionRoutes {
     /// Direct-pty streams keyed by session id (spawned by this crate's spawn
     /// path). Provides `get_recent_output` for `GET /sessions/:id/output`.
     pub direct_ptys: std::sync::RwLock<HashMap<String, PtyHandle>>,
+    /// Shared with `vst-ws`'s `DispatchContext` (same `Arc` — NOT re-created
+    /// per clone, unlike `direct_ptys` above): `session:open`'s handler reads
+    /// this to find the `SessionStream` for a `use_tmux: false` session.
+    /// Without this being populated from the SAME spawn path that inserts
+    /// into `direct_ptys`, every non-tmux ("plain terminal", `useTmux`
+    /// unchecked in `NewTerminalDialog`) session's `session:open` fails with
+    /// "Session '<id>' not running" the moment it (re-)attaches — surfacing
+    /// to the user as the session appearing to close/terminate. Confirmed:
+    /// `PtySessionStream` (the adapter this registry is supposed to hold)
+    /// was previously constructed nowhere in the codebase.
+    pub direct_streams: DirectStreamRegistry,
     pub tmux: Tmux,
     pub daemon_port: u16,
     pub json_unsupported: JsonUnsupportedFn,
@@ -307,6 +321,11 @@ impl Clone for SessionRoutes {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect(),
             ),
+            // Shared `Arc` — clone it, don't snapshot-copy it (unlike
+            // `direct_ptys` above), so an insert from a background spawn
+            // job's clone is visible to every other clone, including the
+            // one serving `session:open` over WS.
+            direct_streams: self.direct_streams.clone(),
             tmux: self.tmux.clone(),
             daemon_port: self.daemon_port,
             json_unsupported: self.json_unsupported.clone(),
@@ -522,14 +541,17 @@ impl SessionRoutes {
                 .add_global_draft(&row)
                 .await
                 .map_err(create_err)?;
+            let global_draft = serialize_global_draft(&row);
             self.broadcaster.send(ServerEvent::SessionCreated {
                 session_id,
                 project_id: None,
                 worktree_id: None,
                 session_type: session_type_str(session_type).to_string(),
                 mode: None,
+                snapshot: Some((&global_draft).into()),
+                parent_session_id: None,
             });
-            return Ok(SessionOrDraft::GlobalDraft(serialize_global_draft(&row)));
+            return Ok(SessionOrDraft::GlobalDraft(global_draft));
         }
 
         let (derived_project_id, derived_worktree_id) = if let Some(wt_id) = &draft.worktree_id {
@@ -589,19 +611,18 @@ impl SessionRoutes {
                 .map_err(create_err)?;
         }
 
+        let serialized = serialize_session(derived_worktree_id.as_deref(), &project_id, &record);
         self.broadcaster.send(ServerEvent::SessionCreated {
             session_id: session_id.clone(),
             project_id: Some(project_id.clone()),
             worktree_id: derived_worktree_id.clone(),
             session_type: session_type_str(session_type).to_string(),
             mode: None,
+            snapshot: Some((&serialized).into()),
+            parent_session_id: None,
         });
 
-        Ok(SessionOrDraft::Session(serialize_session(
-            derived_worktree_id.as_deref(),
-            &project_id,
-            &record,
-        )))
+        Ok(SessionOrDraft::Session(serialized))
     }
 
     async fn create_normal_session(
@@ -795,12 +816,15 @@ impl SessionRoutes {
             .await
             .map_err(create_err)?;
 
+        let serialized = serialize_session(None, &project.id, &record);
         self.broadcaster.send(ServerEvent::SessionCreated {
             session_id: session_id.clone(),
             project_id: Some(project.id.clone()),
             worktree_id: None,
             session_type: session_type_str(r#type).to_string(),
             mode: mode_id.clone(),
+            snapshot: Some((&serialized).into()),
+            parent_session_id: record.parent_session_id.clone(),
         });
 
         if r#type == SessionType::Agent && mode_id.is_some() {
@@ -819,11 +843,7 @@ impl SessionRoutes {
             });
         }
 
-        Ok(SessionOrDraft::Session(serialize_session(
-            None,
-            &project.id,
-            &record,
-        )))
+        Ok(SessionOrDraft::Session(serialized))
     }
 
     /// See `create_direct_session`'s comment on the parameter count.
@@ -977,12 +997,21 @@ impl SessionRoutes {
             .await
             .map_err(create_err)?;
 
+        // This is the "new agent tab inside an already-open worktree" path —
+        // a live TabsStrip is almost certainly already mounted and listening
+        // for this exact broadcast (bug #3: previously silently dropped
+        // twice over, both by the subscriber-only routing this event never
+        // qualified for, and by the missing `snapshot` every listener gates
+        // on — see `spawn_event_fanout`'s and `SessionCreated`'s comments).
+        let serialized = serialize_session(Some(&worktree_id), &project.id, &record);
         self.broadcaster.send(ServerEvent::SessionCreated {
             session_id: session_id.clone(),
             project_id: Some(project.id.clone()),
             worktree_id: Some(worktree_id.clone()),
             session_type: session_type_str(r#type).to_string(),
             mode: mode_id.clone(),
+            snapshot: Some((&serialized).into()),
+            parent_session_id: record.parent_session_id.clone(),
         });
 
         if r#type == SessionType::Agent && mode_id.is_some() {
@@ -1001,11 +1030,7 @@ impl SessionRoutes {
             });
         }
 
-        Ok(SessionOrDraft::Session(serialize_session(
-            Some(&worktree_id),
-            &project.id,
-            &record,
-        )))
+        Ok(SessionOrDraft::Session(serialized))
     }
 
     /// Spawn a terminal session's TTY (tmux or direct pty). Mirrors the
@@ -1045,7 +1070,17 @@ impl SessionRoutes {
             self.direct_ptys
                 .write()
                 .unwrap()
-                .insert(session.id.clone(), handle);
+                .insert(session.id.clone(), handle.clone());
+            // Without this, `session:open`'s direct-pty branch
+            // (`vst-ws`'s `session_open.rs`) finds nothing in
+            // `direct_streams` and rejects the attach with "Session '<id>'
+            // not running" — the confirmed cause of a `useTmux: false`
+            // plain terminal appearing to close/terminate as soon as it
+            // (re-)attaches.
+            self.direct_streams.lock().unwrap().insert(
+                session.id.clone(),
+                Arc::new(PtySessionStream::new(handle)) as Arc<dyn SessionStream>,
+            );
             Ok(())
         }
     }
@@ -1673,14 +1708,38 @@ impl SessionRoutes {
         })?;
 
         let entry_point = draft_config.entry_point;
-        let is_worktree_new = (entry_point == DraftEntryPoint::Worktree
+        // "global" and "direct" both render the New/Existing worktree radios
+        // + worktree select whenever `useWorktree` is checked
+        // (DraftComposer.tsx's `entryPoint !== "tab" && useWorktree` guard),
+        // so both must honor `worktreeChoice`/`existingWorktreeId` here — not
+        // just entryPoint "worktree". Mirrors the identical fix in
+        // `daemon/src/routes/sessions.ts` (TS had the exact same bug: (a)
+        // "global" + useWorktree unconditionally minted a NEW worktree
+        // regardless of an "existing worktree" selection, live-reproduced
+        // against :7141; (b) "direct" ignored `useWorktree` entirely).
+        let wants_new_worktree = (entry_point == DraftEntryPoint::Worktree
             && draft_config.worktree_choice == Some(WorktreeChoice::New))
-            || (entry_point == DraftEntryPoint::Global && draft_config.use_worktree == Some(true));
-        let is_direct = entry_point == DraftEntryPoint::Direct
-            || entry_point == DraftEntryPoint::Tab
+            || ((entry_point == DraftEntryPoint::Global || entry_point == DraftEntryPoint::Direct)
+                && draft_config.use_worktree == Some(true)
+                && draft_config.worktree_choice != Some(WorktreeChoice::Existing));
+        let is_worktree_new = wants_new_worktree;
+        let is_direct = entry_point == DraftEntryPoint::Tab
             || (entry_point == DraftEntryPoint::Worktree
                 && draft_config.worktree_choice == Some(WorktreeChoice::Existing))
-            || (entry_point == DraftEntryPoint::Global && draft_config.use_worktree == Some(false));
+            || (entry_point == DraftEntryPoint::Global && draft_config.use_worktree == Some(false))
+            || ((entry_point == DraftEntryPoint::Global || entry_point == DraftEntryPoint::Direct)
+                && draft_config.use_worktree == Some(true)
+                && draft_config.worktree_choice == Some(WorktreeChoice::Existing))
+            // entryPoint "direct" with no worktree opinion at all
+            // (`use_worktree` unset) keeps its original meaning: stay
+            // direct/in-place. This must NOT be widened to also swallow
+            // entryPoint "global" with no `use_worktree` opinion, which
+            // must fall through to the "Unknown entryPoint" validation
+            // error below — see `start_unknown_entry_point_400`, which
+            // constructs exactly that case (`DraftEntryPoint::Global` with
+            // `use_worktree: None`) and expects it to be neither direct
+            // nor worktree-new.
+            || (entry_point == DraftEntryPoint::Direct && draft_config.use_worktree != Some(true));
 
         if is_worktree_new {
             return self
@@ -1799,12 +1858,12 @@ impl SessionRoutes {
         let serialized_wt = serialize_worktree_json(&project.id, &wt_with_session);
 
         self.broadcaster.send(ServerEvent::WorktreeCreated {
-            worktree: serialized_wt,
+            worktree: serialized_wt.clone(),
         });
         self.broadcaster.send(ServerEvent::SessionUpdated {
             session_id: session.id.clone(),
             pinned_at: None,
-            channel: None,
+            channel: updated_session.channel,
             name: None,
             archived_at: None,
             sort_order: None,
@@ -1836,9 +1895,18 @@ impl SessionRoutes {
             routes.spawn_new_session_for_channel(opts).await;
         });
 
+        // Report the full worktree record too, not just its id — the web-ui
+        // navigates off this HTTP response synchronously, before the
+        // `worktree:created` broadcast above is guaranteed to have been
+        // processed by this same client. Without it the caller has no way to
+        // register the worktree in its store immediately and has to wait on
+        // that broadcast to land; if it's ever delayed (reconnect, event
+        // ordering), the pane stays blank until a manual refresh re-fetches
+        // everything over REST.
         Ok(StartDraftResult {
             ok: true,
             worktree_id: Some(wt_id),
+            worktree: Some(serialized_wt),
         })
     }
 
@@ -1856,9 +1924,17 @@ impl SessionRoutes {
         daemon_port: u16,
     ) -> Result<StartDraftResult, StartError> {
         let mut existing_worktree: Option<WorktreeRecord> = None;
-        if draft_config.entry_point == DraftEntryPoint::Worktree
-            && draft_config.worktree_choice == Some(WorktreeChoice::Existing)
-        {
+        // Determine worktree if the user picked "Existing worktree" — for
+        // entryPoint "worktree" directly, or for "global"/"direct" when
+        // `useWorktree` is checked (see `is_direct`'s comment in the
+        // caller for why all three need this; mirrors
+        // `daemon/src/routes/sessions.ts`'s identical fix).
+        let wants_existing_worktree = matches!(
+            draft_config.entry_point,
+            DraftEntryPoint::Worktree | DraftEntryPoint::Global | DraftEntryPoint::Direct
+        ) && draft_config.worktree_choice
+            == Some(WorktreeChoice::Existing);
+        if wants_existing_worktree {
             if let Some(wt_id) = &draft_config.existing_worktree_id {
                 let (_, wt) = find_worktree_context(&self.store, wt_id)
                     .await
@@ -1939,7 +2015,7 @@ impl SessionRoutes {
             self.broadcaster.send(ServerEvent::SessionUpdated {
                 session_id: session.id.clone(),
                 pinned_at: None,
-                channel: None,
+                channel: updated_session.channel,
                 name: None,
                 archived_at: None,
                 sort_order: None,
@@ -1948,6 +2024,22 @@ impl SessionRoutes {
                 is_main: None,
                 parent_session_id: None,
                 worktree_id: Some(wt.id.clone()),
+                draft_prompt: None,
+                draft_config: None,
+            });
+        } else {
+            self.broadcaster.send(ServerEvent::SessionUpdated {
+                session_id: session.id.clone(),
+                pinned_at: None,
+                channel: updated_session.channel,
+                name: None,
+                archived_at: None,
+                sort_order: None,
+                pr: None,
+                superseded_by: None,
+                is_main: None,
+                parent_session_id: None,
+                worktree_id: None,
                 draft_prompt: None,
                 draft_config: None,
             });
@@ -1972,9 +2064,15 @@ impl SessionRoutes {
             routes.spawn_new_session_for_channel(opts).await;
         });
 
+        // Report the worktree even though it already existed (entryPoint
+        // "tab", or "worktree" with an existing choice) — without this the
+        // caller sees `worktreeId: undefined`/`None` and falls back to the
+        // direct-session `/session/:id` route, even though this session now
+        // lives inside a worktree.
         Ok(StartDraftResult {
             ok: true,
-            worktree_id: None,
+            worktree_id: target_wt_id,
+            worktree: None,
         })
     }
 
@@ -2894,15 +2992,19 @@ impl SessionRoutes {
             draft_prompt: None,
             draft_config: None,
         });
-        // Cross-part gap: ServerEvent::SessionCreated cannot carry `snapshot`
-        // or `parentSessionId` (the wire ServerMessage supports both, but the
-        // internal event + vst-ws mapping lack them), so those are dropped.
+        // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
+        // (the former cross-part gap noted here is closed — see the field's
+        // doc comment in `vst-types/src/events.rs`).
+        let new_session_serialized =
+            serialize_session(wt_id_for_serialize.as_deref(), &project.id, &new_session);
         self.broadcaster.send(ServerEvent::SessionCreated {
             session_id: new_id.clone(),
             worktree_id: wt_id_for_serialize,
             project_id: Some(project.id.clone()),
             session_type: "agent".to_string(),
             mode: Some(new_session.mode_id.clone().unwrap_or_default()),
+            snapshot: Some((&new_session_serialized).into()),
+            parent_session_id: new_session.parent_session_id.clone(),
         });
 
         // Spawn the replacement through the SAME channel-aware, guarded helper
@@ -3587,6 +3689,7 @@ impl SessionRoutes {
                     if let Some(handle) = ptys.remove(id) {
                         handle.kill();
                     }
+                    self.direct_streams.lock().unwrap().remove(id);
                 }
 
                 // Self-heal agentChatId against CLI's own live state. Overwrites even an already-set id.

@@ -1361,12 +1361,40 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
 
     const entryPoint = draftConfig.entryPoint;
-    const isWorktreeNew =
+    // "global" and "direct" both render the New/Existing worktree radios +
+    // worktree `<Select>` whenever `useWorktree` is true (DraftComposer.tsx's
+    // `entryPoint !== "tab" && useWorktree` guard), so both must honor
+    // `worktreeChoice`/`existingWorktreeId` here — not just entryPoint
+    // "worktree". Before this fix: (a) "global" + useWorktree unconditionally
+    // minted a NEW worktree regardless of an "existing worktree" selection
+    // (live-reproduced: picking a specific existing worktree in the global
+    // composer still created a brand-new one on submit), and (b) "direct"
+    // ignored `useWorktree` entirely — checking "Use worktree" in a
+    // direct-entry draft and picking "new" silently did nothing, the submit
+    // always took the direct/in-place path.
+    const wantsNewWorktree =
       (entryPoint === "worktree" && draftConfig.worktreeChoice === "new") ||
-      (entryPoint === "global" && draftConfig.useWorktree === true);
-    const isDirect = entryPoint === "direct" || entryPoint === "tab" ||
+      ((entryPoint === "global" || entryPoint === "direct") &&
+        draftConfig.useWorktree === true &&
+        draftConfig.worktreeChoice !== "existing");
+    const isWorktreeNew = wantsNewWorktree;
+    const isDirect =
+      entryPoint === "tab" ||
       (entryPoint === "worktree" && draftConfig.worktreeChoice === "existing") ||
-      (entryPoint === "global" && draftConfig.useWorktree === false);
+      (entryPoint === "global" && draftConfig.useWorktree === false) ||
+      ((entryPoint === "global" || entryPoint === "direct") &&
+        draftConfig.useWorktree === true &&
+        draftConfig.worktreeChoice === "existing") ||
+      // entryPoint "direct" with no worktree opinion at all (`useWorktree`
+      // unset) keeps its original meaning: stay direct/in-place. Only an
+      // EXPLICIT `useWorktree: true` + "new" (→ `wantsNewWorktree`) routes
+      // it to the worktree-creation branch instead — `!wantsNewWorktree`
+      // must NOT be widened to also swallow entryPoint "global" with no
+      // `useWorktree` opinion, which must fall through to the
+      // "Unknown entryPoint" 400 below (see `start_unknown_entry_point_400`
+      // — that case is `entryPoint: "global"` with `useWorktree: undefined`,
+      // deliberately neither direct nor worktree-new).
+      (entryPoint === "direct" && draftConfig.useWorktree !== true);
 
     if (isWorktreeNew) {
       // Create a new worktree and promote the session into it
@@ -1454,9 +1482,15 @@ export function registerSessionRoutes(app: FastifyInstance): void {
     }
 
     if (isDirect) {
-      // Determine worktree if entryPoint is "worktree" with existing choice
+      // Determine worktree if the user picked "Existing worktree" — for
+      // entryPoint "worktree" directly, or for "global"/"direct" when
+      // `useWorktree` is checked (see the `wantsNewWorktree`/`isDirect`
+      // comment above for why all three need this).
       let existingWorktree: WorktreeRecord | undefined;
-      if (entryPoint === "worktree" && draftConfig.worktreeChoice === "existing" && draftConfig.existingWorktreeId) {
+      const wantsExistingWorktree =
+        (entryPoint === "worktree" || entryPoint === "global" || entryPoint === "direct") &&
+        draftConfig.worktreeChoice === "existing";
+      if (wantsExistingWorktree && draftConfig.existingWorktreeId) {
         const wtCtx = findWorktreeContext(draftConfig.existingWorktreeId);
         if (!wtCtx) return reply.status(404).send({ error: "Existing worktree not found" });
         existingWorktree = wtCtx.worktree;

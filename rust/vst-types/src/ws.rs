@@ -270,7 +270,33 @@ pub struct RemoteSession {
     pub device_name: Option<String>,
 }
 
-/// The snapshot carried by `session:created`. Mirrors `SessionCreatedSnapshot`.
+/// The snapshot carried by `session:created`.
+///
+/// IMPORTANT: despite `daemon/src/ws/protocol.ts`'s `SessionCreatedSnapshot`
+/// zod schema declaring only the narrower field set this struct used to
+/// mirror, the ACTUAL runtime object TS sends on the wire is
+/// `serializeSession(...)`'s full return value — the complete `Session`
+/// shape, extra fields and all. That schema is a lax `z.object({...})`
+/// (no `.strict()`) used only as an outbound TS type; nothing on the send
+/// path ever calls `.parse()` on it to strip anything, and the client's own
+/// type for this field is `snapshot?: Session`
+/// (`web-ui/src/api/types.ts`) — the FULL type, not the narrower one. So
+/// the narrower Rust struct this used to be was a real, load-bearing wire
+/// gap, not a faithful port of TS's declared type: any field TS's real
+/// object carries but this struct didn't declare could never reach the
+/// client at all, because Rust's serde serialization is strict — unlike
+/// TS, it cannot silently pass through a field that isn't in the struct.
+///
+/// Concretely confirmed missing: `sortOrder`. `TabsStrip.tsx`'s
+/// `session:created` handler sorts its local tab list by
+/// `a.sortOrder ?? 0` — a `session:created` snapshot missing `sortOrder`
+/// defaulted to `0`, sorting BEFORE every real (`Date.now()`-based)
+/// existing session and landing brand-new tabs at the far LEFT of the tab
+/// strip instead of the right, where the "+" button that created them
+/// lives. Fixed by widening this struct to carry the same full field set
+/// `Session` does (see `From<&Session>`/`From<&GlobalDraft>` below) —
+/// don't narrow it again without checking every field the client's
+/// `Session` type declares is still covered.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionCreatedSnapshot {
@@ -281,6 +307,8 @@ pub struct SessionCreatedSnapshot {
     pub r#type: crate::domain::SessionType,
     pub mode_id: Option<String>,
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_source: Option<crate::domain::SessionNameSource>,
     pub tmux_name: String,
     pub use_tmux: Option<bool>,
     pub channel: Option<Channel>,
@@ -289,6 +317,22 @@ pub struct SessionCreatedSnapshot {
     pub created_at: String,
     pub pinned_at: Option<String>,
     pub archived_at: Option<String>,
+    /// Present so freshly-created sessions sort correctly wherever a
+    /// client orders by `sortOrder` off a `session:created` snapshot
+    /// instead of a REST-fetched `Session` — see this struct's doc
+    /// comment for the exact bug this fixes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PrStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_config: Option<crate::domain::DraftConfig>,
 }
 
 /// `SessionCreatedSnapshot` lifecycle — accepts `needs_review` as input only.
@@ -303,4 +347,85 @@ pub enum SnapshotLifecycleState {
     Done,
     Exited,
     Drafting,
+}
+
+impl From<LifecycleState> for SnapshotLifecycleState {
+    fn from(s: LifecycleState) -> Self {
+        match s {
+            LifecycleState::NotStarted => SnapshotLifecycleState::NotStarted,
+            LifecycleState::Working => SnapshotLifecycleState::Working,
+            LifecycleState::Idle => SnapshotLifecycleState::Idle,
+            LifecycleState::WaitingForHuman => SnapshotLifecycleState::WaitingForHuman,
+            LifecycleState::Done => SnapshotLifecycleState::Done,
+            LifecycleState::Exited => SnapshotLifecycleState::Exited,
+            LifecycleState::Drafting => SnapshotLifecycleState::Drafting,
+        }
+    }
+}
+
+/// Build the `session:created` wire snapshot from the canonical serialized
+/// `Session` (`serialize_session`/`serializeSession`). Every `session:created`
+/// emit site should populate `snapshot` from this — a `None` snapshot makes
+/// every frontend listener (`TabsStrip.tsx`, `useServerSync.ts`) discard the
+/// event outright, since they all gate on `if (!ev.snapshot) return`.
+impl From<&crate::rest::shared::Session> for SessionCreatedSnapshot {
+    fn from(s: &crate::rest::shared::Session) -> Self {
+        SessionCreatedSnapshot {
+            id: s.id.clone(),
+            worktree_id: s.worktree_id.clone(),
+            project_id: Some(s.project_id.clone()),
+            is_main: s.is_main,
+            r#type: s.r#type,
+            mode_id: s.mode_id.clone(),
+            name: s.name.clone(),
+            name_source: s.name_source,
+            tmux_name: s.tmux_name.clone(),
+            use_tmux: Some(s.use_tmux),
+            channel: Some(s.channel),
+            state: s.state.into(),
+            lifecycle_state: s.lifecycle_state.into(),
+            created_at: s.created_at.clone(),
+            pinned_at: s.pinned_at.clone(),
+            archived_at: s.archived_at.clone(),
+            sort_order: Some(s.sort_order),
+            handoff_summary: s.handoff_summary.clone(),
+            superseded_by: s.superseded_by.clone(),
+            pr: s.pr.clone(),
+            draft_prompt: s.draft_prompt.clone(),
+            draft_config: s.draft_config.clone(),
+        }
+    }
+}
+
+/// Same as the `Session` conversion above, for a global (project-less) draft
+/// — TS's equivalent emit site casts `serializeGlobalDraft(...)` straight
+/// into the `snapshot` field (`snapshot: serialized as never`); `GlobalDraft`
+/// shares the same overlapping key set as `Session`; see its doc comment.
+impl From<&crate::rest::shared::GlobalDraft> for SessionCreatedSnapshot {
+    fn from(s: &crate::rest::shared::GlobalDraft) -> Self {
+        SessionCreatedSnapshot {
+            id: s.id.clone(),
+            worktree_id: s.worktree_id.clone(),
+            project_id: s.project_id.clone(),
+            is_main: s.is_main,
+            r#type: s.r#type,
+            mode_id: s.mode_id.clone(),
+            name: s.name.clone(),
+            name_source: s.name_source,
+            tmux_name: s.tmux_name.clone(),
+            use_tmux: Some(s.use_tmux),
+            channel: Some(s.channel),
+            state: s.state.into(),
+            lifecycle_state: s.lifecycle_state.into(),
+            created_at: s.created_at.clone(),
+            pinned_at: s.pinned_at.clone(),
+            archived_at: s.archived_at.clone(),
+            sort_order: Some(s.sort_order),
+            handoff_summary: s.handoff_summary.clone(),
+            superseded_by: s.superseded_by.clone(),
+            pr: s.pr.clone(),
+            draft_prompt: s.draft_prompt.clone(),
+            draft_config: s.draft_config.clone(),
+        }
+    }
 }

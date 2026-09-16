@@ -195,16 +195,55 @@ impl SessionStream for TmuxOutputStream {
         Ok(())
     }
 
+    /// Write raw bytes into the pty via `MasterPty::as_raw_fd()` directly —
+    /// deliberately NOT via `MasterPty::take_writer()`.
+    ///
+    /// `take_writer()`'s own doc comment says it plainly: "Dropping the
+    /// writer will send EOF to the slave end. It is invalid to take the
+    /// writer more than once." Its `Drop` impl (portable-pty's
+    /// `UnixMasterWriter`) unconditionally writes a synthetic `\n` + the
+    /// terminal's EOF character (Ctrl-D) into the pty before closing its own
+    /// duplicated fd. For the `tmux attach-session` child on the other end
+    /// of this pty, that phantom EOF is indistinguishable from the user
+    /// actually typing Ctrl-D — tmux passes it straight through as real
+    /// input to the active pane's shell, which interprets EOF-at-an-empty-
+    /// prompt as "exit", killing the pane and, since it's the session's only
+    /// pane, the whole tmux SESSION (and the server, once it has zero
+    /// sessions left).
+    ///
+    /// This was live-reproduced two different ways: (1) calling
+    /// `take_writer()` fresh on every keystroke (the original bug) sent this
+    /// phantom EOF after every single character, killing the session on the
+    /// very first keystroke/tap; (2) even after fixing that by taking the
+    /// writer once and holding it for the stream's lifetime, dropping that
+    /// held writer exactly once — in `detach()`, i.e. on every WS
+    /// disconnect/tab-switch/remount — still sent the same phantom EOF at
+    /// that moment, killing the session on detach instead of on keystroke.
+    /// Neither "take once per write" nor "take once per stream" avoids the
+    /// footgun; only never taking a `Write` handle at all does. Writing
+    /// through the master's own raw fd (borrowed, not a `try_clone()`'d
+    /// duplicate — see `take_writer()`'s impl) has no such side effect on
+    /// its own, and we never close or otherwise take ownership of it here:
+    /// `master`'s own `Drop` (triggered when `detach()` clears the
+    /// `Mutex<Option<..>>`) closes the real fd exactly once, same as before
+    /// this change.
     fn write(&self, data: &str) {
         if self.inner.closed.load(Ordering::SeqCst) {
             return;
         }
-        use std::io::Write;
-        if let Some(master) = self.inner.master.lock().unwrap().as_mut() {
-            if let Ok(mut w) = master.take_writer() {
-                let _ = w.write_all(data.as_bytes());
-            }
-        }
+        let fd = match self.inner.master.lock().unwrap().as_ref() {
+            Some(master) => master.as_raw_fd(),
+            None => None,
+        };
+        let Some(fd) = fd else { return };
+        // `fd` is still owned by `master` (held in the mutex above; only
+        // `detach()` clears it, under the same lock) — `write_borrowed_fd`
+        // writes through it without taking ownership, so it is never closed
+        // here. This crate `#![forbid(unsafe_code)]`; the one documented
+        // `unsafe` FFI boundary this needs lives in `vst-proc` instead — see
+        // its module doc comment for why this must not go through
+        // `MasterPty::take_writer()`.
+        vst_proc::write_borrowed_fd(fd, data.as_bytes());
     }
 
     fn resize(&self, cols: i64, rows: i64, _subscriber_id: Option<&str>) {
