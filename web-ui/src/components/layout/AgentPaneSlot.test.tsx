@@ -12,9 +12,11 @@ vi.mock("./TerminalPane", () => ({
   TerminalPane: ({
     sessionId,
     channelToggle,
+    focusOnMount,
   }: {
     sessionId: string | null;
     channelToggle?: ReactNode;
+    focusOnMount?: boolean;
   }) => {
     useEffect(() => {
       terminalMounts += 1;
@@ -26,7 +28,7 @@ vi.mock("./TerminalPane", () => ({
     // while live, in-flow below the exited banner). Here we just surface whether
     // AgentPaneSlot handed it the toggle at all.
     return (
-      <div data-testid="terminal" data-session={sessionId ?? "null"}>
+      <div data-testid="terminal" data-session={sessionId ?? "null"} data-focus={String(focusOnMount)}>
         {channelToggle}
       </div>
     );
@@ -34,8 +36,8 @@ vi.mock("./TerminalPane", () => ({
 }));
 
 vi.mock("./ChatPane", () => ({
-  ChatPane: ({ visible }: { visible: boolean }) => (
-    <div data-testid="chatpane" data-visible={String(visible)} />
+  ChatPane: ({ visible, focusOnMount }: { visible: boolean; focusOnMount?: boolean }) => (
+    <div data-testid="chatpane" data-visible={String(visible)} data-focus={String(focusOnMount)} />
   ),
 }));
 
@@ -240,5 +242,23 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     } finally {
       useWorkspaceStore.setState({ showAgentStatusBorders: prev });
     }
+  });
+
+  // --- Canvas mode never steals focus (navigation-focus-change) ---
+  // In workspace-canvas mode the panes are floating tiles the user clicks
+  // between; focus must never be yanked onto them. AgentPaneSlot is what
+  // translates `canvasMode` into `focusOnMount={false}` on both child panes.
+  it("passes focusOnMount=true to both panes in classic mode (default)", () => {
+    const { getByTestId } = render(<AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />);
+    expect(getByTestId("terminal").dataset.focus).toBe("true");
+    expect(getByTestId("chatpane").dataset.focus).toBe("true");
+  });
+
+  it("passes focusOnMount=false to both panes in canvas mode", () => {
+    const { getByTestId } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} canvasMode />,
+    );
+    expect(getByTestId("terminal").dataset.focus).toBe("false");
+    expect(getByTestId("chatpane").dataset.focus).toBe("false");
   });
 });

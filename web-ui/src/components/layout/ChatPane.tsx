@@ -4,6 +4,7 @@ import type { ApiInstance } from "@/api";
 import type { Attachment, FileScope, Session } from "@/api/types";
 import { useChat } from "@/hooks/useChat";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useIsTouch } from "@/hooks/useIsTouch";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
@@ -36,6 +37,10 @@ interface ChatPaneProps {
   /** Whether the pane is the visible one in its slot (CSS visibility toggle —
    *  Decision 14; the sibling TerminalPane stays permanently mounted). */
   visible: boolean;
+  /** Whether the composer may steal keyboard focus on mount. Defaults to
+   *  `true`. The agent pane sets it to `false` in canvas/workspace mode, where
+   *  focus must never be yanked onto a tile (navigation-focus-change). */
+  focusOnMount?: boolean;
 }
 
 /**
@@ -43,7 +48,7 @@ interface ChatPaneProps {
  * toggled by CSS visibility (never an if/else remount — Decision 14). Only opens
  * a chat when it's the visible pane for a `channel:"json"` session.
  */
-export function ChatPane({ api, session, visible }: ChatPaneProps) {
+export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPaneProps) {
   const isJson = session?.channel === "json";
   const sessionId = session?.id ?? null;
   const enabled = visible && isJson && !!sessionId;
@@ -67,6 +72,10 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
   // sidebar (which uses the resolution above) correctly showed a starting dot.
   const liveState =
     useWorkspaceStore((s) => (sessionId ? s.sessionStates[sessionId] : undefined)) ?? session?.state;
+  // Never steal focus on a touch-primary device (the soft keyboard / IME would
+  // pop up over the pane for no reason). Reactive to the device's pointer
+  // capability; see `useIsTouch`.
+  const isTouch = useIsTouch();
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
@@ -403,6 +412,7 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             canSteer={meta?.canSteer ?? false}
             onStop={() => void stop()}
             commands={meta?.commands}
+            focusOnMount={focusOnMount && !isTouch}
             {...(salvage ? { initialText: salvage.text, initialAttachments: salvage.attachments } : {})}
           />
         ) : null}

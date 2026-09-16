@@ -503,6 +503,7 @@ export function Workspace() {
             session={paneSession}
             branch={paneBranch}
             pr={panePr}
+            canvasMode={inWorkspaceCanvas}
           />
         );
       }
