@@ -163,6 +163,7 @@ vst session create "$VST_WORKTREE" --type=agent --mode="$DEEPSEEK_MODE" --json \
   --prompt="Implement .vibekit/feature-plans/pending/daemon-rust-port/<NN>/plan-<NN>-daemon-rust-port-<slug>.md in full. Load the rust-coding skill before writing any .rs file. Follow the plan's checklist exactly, in order. When you reach the plan's REPORT step, stop — do not start any other part's crate."
 ```
 - **DeepSeek implementer sessions always use `--json` (the Rich Chat / JSON agent-chat channel), never plain tmux.** This is a deliberate, standing preference — don't drop the flag on later dispatches or on the Haiku fallback below.
+- **If the dispatch prompt contains backtick-quoted code** (e.g. explaining an API like `` `os.homedir()` ``), an inline `--prompt="..."` argument will hit a shell command-substitution parse error (the backticks get interpreted as a subshell). Write the prompt to a file (e.g. under the scratchpad dir) and pass `--prompt-file=<path>` instead — this sidesteps all shell-quoting hazards, not just backticks.
 - Capture the returned session id. This session is **fire-and-forget** — it is not a Claude Code subagent you get a task-notification from; it's a separate CLI process. You must poll it.
 - Update `.sdlc-state.yaml`: this subfeature's `mode: implementing`.
 

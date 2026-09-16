@@ -23,6 +23,11 @@ target/
 # target/ above already covers desktop/src-tauri/target/ — no duplicate needed.
 # rust/target/ is explicit for clarity (also covered by the bare `target/` above).
 rust/target/
+# rust/target-docker/ — a one-off containerized release build (built inside
+# node:24-slim to match the dev-sandbox's glibc, since a host-built binary
+# can hit `GLIBC_x.xx not found` inside the container). Not a standard build
+# location; kept out of git the same as rust/target/.
+rust/target-docker/
 # *.rs.bk are backup files left by rustfmt.
 *.rs.bk
 # Gate logs (rust/.gate/<part>.log) are a committed deliverable — the bare

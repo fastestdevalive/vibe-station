@@ -104,6 +104,18 @@ case "$CMD" in
     export VST_SEED_MODE="$SEED_MODE"
 
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
+    # Transition (part 10, task 5): the sandbox mounts the host Rust release
+    # binaries and dev-entrypoint.sh prefers them, falling back to Node. Tell
+    # the user which daemon this sandbox will actually boot so a missing Rust
+    # build doesn't silently fall back to Node. The compose default paths are
+    # ./rust/target/release/{vst-daemon,vst-cli}; VST_RUST_DAEMON_BIN /
+    # VST_RUST_CLI_BIN override them.
+    RUST_DAEMON_BIN="${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}"
+    if [ -x "$RUST_DAEMON_BIN" ]; then
+      echo "    daemon: RUST ($RUST_DAEMON_BIN)"
+    else
+      echo "    daemon: NODE (fallback) — Rust binary not found at $RUST_DAEMON_BIN; run 'pnpm build:rust' to boot the Rust daemon"
+    fi
     # demo-seed.sh and seed-file-search-demo.sh guard themselves
     # independently (a $VST/.seeded marker vs. a project-registration check)
     # — neither knows about the other, so switching --seed on a worktree-name

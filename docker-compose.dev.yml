@@ -70,6 +70,12 @@ services:
       # through the tunnel. Vite proxies /mobile-auth and /api/* back to the
       # daemon. Unset in production (daemon serves SPA directly on its own port).
       VST_TUNNEL_PORT: "5173"
+      # Point the Rust daemon at the built SPA for static serving (the Node
+      # daemon resolves web-ui/dist itself from the image; the Rust daemon
+      # resolves `dist` relative to its own mounted binary, so it needs the
+      # absolute path). The Vite dev server serves the browser, so a missing
+      # dist is fine — the Rust daemon 404s the fallback route harmlessly.
+      VST_DIST_PATH: "/app/web-ui/dist"
       # "demo" (default) seeds the same realistic 3-project/9-worktree/
       # 14-session dataset docker-compose.screenshots.yml uses, so every
       # sandbox has actual worktrees/agents to test against; "file-search"
@@ -131,6 +137,18 @@ services:
       # own config/skills and is mounted in full.
       - ${OPENCODE_DATA_HOME:-${HOME}/.local/share/opencode}:/seed/opencode-data:ro
       - ${OPENCODE_CONFIG_HOME:-${HOME}/.config/opencode}:/seed/opencode-config:ro
+
+      # Rust daemon/CLI binaries (transition toward the Rust port — part 10,
+      # task 5). Mount the host's pre-built release binaries read-only so the
+      # sandbox can boot the Rust daemon instead of the Node one. Build them
+      # with `pnpm build:rust` (or `cargo build --release -p vst-daemon -p
+      # vst-cli` from rust/). Override the paths with VST_RUST_DAEMON_BIN /
+      # VST_RUST_CLI_BIN if yours differ. dev-entrypoint.sh prefers these when
+      # present and falls back to the Node daemon/CLI otherwise, so a sandbox
+      # still boots cleanly if the Rust binaries haven't been built yet (or
+      # during the pre-deletion transition window).
+      - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
+      - ${VST_RUST_CLI_BIN:-./rust/target/release/vst-cli}:/usr/local/bin/vst-rust:ro
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)
