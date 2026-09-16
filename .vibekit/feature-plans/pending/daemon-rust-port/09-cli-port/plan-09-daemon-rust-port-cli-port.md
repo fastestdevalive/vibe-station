@@ -138,5 +138,24 @@ relevant earlier part, don't invent a CLI-local type to paper over it.
   all clean, N6 clean, zero `matches!()` in the new tests (not just zero
   unwrapped), spot-read `worktree/create.rs` — real, complete port.
 - **#4** (top-level standalone commands: doctor/summary/open/status,
-  ~500 LOC) — not yet dispatched, the last one for `09`.
+  ~500 LOC) — `c96a202`, clean, DeepSeek. Confirmed `doctor.ts` is NOT a
+  thin wrapper around `08`'s `services/doctor.ts` (has its own subprocess
+  checks). `status.ts`'s `LifecycleState` idle/running/error mismatch
+  documented in a doc comment as instructed.
+
+# ============================================================
+# 09-CLI-PORT — PART COMPLETE
+# ============================================================
+
+All 4 dispatches done and independently gated. **Zero code-quality gate
+failures** across the whole part (unlike `07a`'s 2 and `07b`'s 0-but-close) —
+the only real incident was dispatch #3 hitting agy's account-wide quota
+exhaustion across its entire fallback chain, an infrastructure/availability
+problem, not a code problem, resolved by a user-directed DeepSeek pickup of
+the already-complete uncommitted work (no re-porting needed).
+
+2,438 LOC across 44 TS files ported into `vst-cli`, 104 tests, no cross-part
+gaps surfaced, no daemon-touching commands found in any dispatch's transcript.
+
+**Next:** `10-parity-cutover` — the only remaining part of the whole feature.
 
