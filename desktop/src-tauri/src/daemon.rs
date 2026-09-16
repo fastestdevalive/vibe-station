@@ -102,19 +102,40 @@ pub fn spawn_daemon(
 
     // The bundled vst-daemon binary is the daemon entrypoint itself —
     // it starts listening immediately on launch without any subcommand args.
-    let (mut rx, _child) = app_handle
+    let mut cmd = app_handle
         .shell()
         .sidecar("vst-daemon")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
         .env("VST_CLOUDFLARED_BIN", cloudflared_str)
         .env("VST_CLI_BIN", vst_bin_str)
-        .env("VST_SKILL_PATH", skill_path_str)
+        .env("VST_SKILL_PATH", skill_path_str);
+
+    // Point the Rust daemon at the built web-ui so its own HTTP server can
+    // serve the SPA when it's reached directly over HTTP (e.g. via a
+    // cloudflared/Tailscale tunnel to the daemon port). The desktop webview
+    // loads the frontend itself (Vite in dev, embedded assets in release), so
+    // this is best-effort: set it only when the built dist exists on disk, else
+    // leave it unset and let the daemon fall back to its exe-relative `dist/`
+    // (and degrade gracefully with 404s when neither is present).
+    if let Ok(cwd) = std::env::current_dir() {
+        let dist_candidate = cwd.join("web-ui").join("dist");
+        if dist_candidate.is_dir() {
+            if let Some(dist) = dist_candidate.to_str() {
+                cmd = cmd.env("VST_DIST_PATH", dist);
+            }
+        }
+    }
+
+    let (mut rx, _child) = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn vst-daemon sidecar: {e}"))?;
 
-    // Poll stdout/stderr for the ready signal.
+    // Poll stdout/stderr for the ready signal. The Rust daemon prints
+    // "vst daemon listening on http://0.0.0.0:<port>" (the Node daemon printed
+    // 127.0.0.1) — match the port from either host so we don't time out against
+    // the Rust binary.
     let ready_pattern =
-        regex::Regex::new(r"listening on http://127\.0\.0\.1:(\d+)").expect("valid regex");
+        regex::Regex::new(r"listening on http://[0-9.]+:(\d+)").expect("valid regex");
 
     let start = Instant::now();
     let timeout = Duration::from_secs(30);
