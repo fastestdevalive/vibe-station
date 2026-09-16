@@ -9,6 +9,7 @@ import {
   looksLikeUnifiedDiff,
   prettyToolInput,
   relativize,
+  splitPath,
   summarizeToolInput,
   type ToolCallEntry,
 } from "./toolFormat";
@@ -145,6 +146,22 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
   // skip it so the cwd path isn't shown inline as if it were the command. No
   // known bash adapter populates locations with anything else today.
   const inlineFull = summarizeToolInput(tool.toolInput, isBash ? undefined : tool.locations, cwd);
+  // Only read/edit/write tools report a file path inline — split it so the
+  // basename renders brightly and stays visible while the directory ellipsizes
+  // from the left. Search (grep/glob pattern), fetch (URL), think, and bash
+  // (command) all stay a single muted string. `toolKind` is reliable for ACP
+  // sessions; fall back to native tool names otherwise.
+  const isPathTool =
+    tool.toolKind === "read" ||
+    tool.toolKind === "edit" ||
+    isWriteToolName(tool.toolName) ||
+    name === "read";
+  const isPathInline = !isBash && isPathTool && inlineFull.length > 0;
+  // For file-path tools the basename leads the header (bright, left-aligned —
+  // consistent whether or not there's a directory); the directory moves into
+  // the expanded body as a leading line before the content preview, so it
+  // never competes with the filename for the right edge.
+  const pathParts = isPathInline ? splitPath(inlineFull) : null;
   // Cap long inline text (e.g. Task tool prompts) so it doesn't overflow the row.
   const INLINE_CAP = 80;
   const inline = inlineFull.length > INLINE_CAP ? `${inlineFull.slice(0, INLINE_CAP)}…` : inlineFull;
@@ -194,7 +211,13 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
           {isError ? "⚠" : "🔧"}
         </span>
         <span className="chat-tool-entry__name">{isBash ? "Ran" : tool.toolName}</span>
-        {inline ? <code className="chat-tool-entry__inline">{inline}</code> : null}
+        {pathParts ? (
+          <code className="chat-tool-entry__inline chat-tool-entry__inline--path">
+            {pathParts.name}
+          </code>
+        ) : inline ? (
+          <code className="chat-tool-entry__inline">{inline}</code>
+        ) : null}
         {hasChildren ? (
           <span className="chat-tool-entry__child-count">
             {tool.children!.length} tool{tool.children!.length === 1 ? "" : "s"}
@@ -212,6 +235,11 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
       </button>
       {open && hasBody ? (
         <div className="chat-tool-entry__body">
+          {pathParts && pathParts.dir ? (
+            <div className="chat-tool-entry__dir">
+              <code>{pathParts.dir + pathParts.name}</code>
+            </div>
+          ) : null}
           {hasInputBody && !hasDiffs ? (
             <pre className="chat-tool-entry__pre">
               <code>{pretty}</code>

@@ -36,7 +36,9 @@ describe("ToolRunSummary shows a file name for a location-only tool call", () =>
       }),
     ];
     render(<ToolRunSummary tools={tools} live={false} />);
-    expect(screen.getByText("/app/README.md")).toBeTruthy();
+    // The bright basename leads the header; the directory lives in the body.
+    expect(screen.getByText("README.md")).toBeTruthy();
+    expect(document.querySelector(".chat-tool-entry__inline--path")?.textContent).toBe("README.md");
   });
 
   it("does not expand into a useless empty {} body when toolInput is {} and locations cover it", () => {
@@ -46,6 +48,67 @@ describe("ToolRunSummary shows a file name for a location-only tool call", () =>
     render(<ToolRunSummary tools={tools} live={false} />);
     const header = document.querySelector(".chat-tool-entry__header") as HTMLElement;
     expect(header.hasAttribute("disabled")).toBe(true);
+  });
+});
+
+describe("ToolRunSummary — bright basename in header, dir in body (ui-file-ellipsized)", () => {
+  it("shows the basename in the header and the directory as the body's first line", () => {
+    const tools = [
+      tool({
+        toolName: "Write",
+        toolInput: { file_path: "/app/src/hello.ts", content: "x" },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    // Write rows start expanded — the header shows the basename, the body's
+    // first line carries the full directory + basename path.
+    expect(document.querySelector(".chat-tool-entry__inline--path")?.textContent).toBe("hello.ts");
+    expect(document.querySelector(".chat-tool-entry__dir")?.textContent).toBe("/app/src/hello.ts");
+  });
+
+  it("a root-level file shows only the basename (no directory line)", () => {
+    const tools = [
+      tool({
+        toolName: "Read",
+        toolKind: "read",
+        toolInput: { file_path: "/README.md" },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(document.querySelector(".chat-tool-entry__inline--path")?.textContent).toBe("README.md");
+    // No directory line — no body was rendered for a read with no body.
+    expect(document.querySelector(".chat-tool-entry__dir")).toBeNull();
+  });
+
+  it("a read with a result expands to reveal the directory above the content", () => {
+    const tools = [
+      tool({
+        toolName: "Read",
+        toolKind: "read",
+        toolInput: { file_path: "/app/src/components/very/long/directory/structure/MyLongFileName.tsx" },
+        result: { content: "file contents" },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(document.querySelector(".chat-tool-entry__inline--path")?.textContent).toBe("MyLongFileName.tsx");
+    // Read rows start collapsed — expand to reveal the dir line.
+    fireEvent.click(document.querySelector(".chat-tool-entry__header") as HTMLElement);
+    expect(document.querySelector(".chat-tool-entry__dir")?.textContent).toBe(
+      "/app/src/components/very/long/directory/structure/MyLongFileName.tsx",
+    );
+  });
+
+  it("does NOT split a bash command into basename/dir", () => {
+    const tools = [
+      tool({
+        toolName: "Bash",
+        toolInput: { command: "npm run build --workspace web-ui" },
+      }),
+    ];
+    render(<ToolRunSummary tools={tools} live={false} />);
+    expect(document.querySelector(".chat-tool-entry__inline--path")).toBeNull();
+    expect(document.querySelector(".chat-tool-entry__dir")).toBeNull();
+    expect(screen.getByText("npm run build --workspace web-ui")).toBeTruthy();
   });
 });
 

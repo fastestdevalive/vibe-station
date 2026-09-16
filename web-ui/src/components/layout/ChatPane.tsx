@@ -7,6 +7,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { MessageList } from "@/components/chat/MessageList";
 import { QueuedTray, type QueuedTrayRow } from "@/components/chat/QueuedTray";
 import { Composer } from "@/components/chat/Composer";
+import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
@@ -390,7 +391,9 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             This session has been archived. Start a new agent to continue.
           </div>
         ) : sessionId ? (
-          <Composer
+          <div className="chat-pane__composer">
+            <TodoStrip events={events} liveState={liveState} />
+            <Composer
             key={`${sessionId}:${composerKey}`}
             api={api}
             sessionId={sessionId}
@@ -404,7 +407,8 @@ export function ChatPane({ api, session, visible }: ChatPaneProps) {
             onStop={() => void stop()}
             commands={meta?.commands}
             {...(salvage ? { initialText: salvage.text, initialAttachments: salvage.attachments } : {})}
-          />
+            />
+          </div>
         ) : null}
       </div>
     </div>
