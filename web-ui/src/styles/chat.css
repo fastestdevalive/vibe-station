@@ -668,6 +668,22 @@
   flex: 1;
   min-width: 0;
 }
+/* A file-path inline shows only the bright basename, left-aligned (consistent
+   for root-level and nested files alike); the directory moves into the body as
+   a leading line (see .chat-tool-entry__dir) instead of competing with the
+   filename for the right edge. */
+.chat-tool-entry__inline--path {
+  color: var(--fg-primary);
+}
+.chat-tool-entry__dir {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-base);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: var(--space-1) var(--space-3);
+}
 .chat-tool-entry__status {
   margin-left: auto;
   display: inline-flex;
@@ -1256,6 +1272,93 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+}
+
+/* ── Persistent TODO strip (agent plan above the composer) ─────────────────── */
+/* One live list per session, shown only while the agent is working/idle and
+   removed once it yields back to the human (see TodoStrip lifecycle gate). */
+.chat-pane__composer {
+  display: flex;
+  flex-direction: column;
+}
+.chat-todo-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) 0;
+  font-size: var(--font-size-xs);
+}
+.chat-todo-strip__label {
+  flex-shrink: 0;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  padding-top: 2px;
+}
+.chat-todo-strip__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+.chat-todo-strip__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-width: 0;
+}
+.chat-todo-strip__marker {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+.chat-todo-strip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-todo-strip__item--done {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+.chat-todo-strip__item--active {
+  color: var(--fg-primary);
+  font-weight: var(--font-weight-medium);
+}
+.chat-todo-strip__item--active .chat-todo-strip__marker {
+  color: var(--chat-accent);
+}
+.chat-todo-strip__item--pending {
+  color: var(--fg-muted);
+  opacity: 0.7;
+}
+.chat-todo-strip__progress {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  padding-top: 2px;
+}
+.chat-todo-strip__close {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-left: var(--space-1);
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  line-height: 1;
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+}
+.chat-todo-strip__close:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
 }
 .chat-composer--dragover {
   outline: var(--border-width-2) dashed var(--chat-accent);

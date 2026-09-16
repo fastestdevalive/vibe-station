@@ -98,6 +98,131 @@ export function summarizeToolInput(input: unknown, locations?: { path: string; l
   return "";
 }
 
+/**
+ * Split a (relative) file path into its directory and basename so a tool row
+ * can render the basename prominently (bright, leading the header) while the
+ * full directory + basename path appears in the expanded body. A bare file
+ * name with no directory returns `{ dir: "", name }`.
+ */
+export function splitPath(path: string): { dir: string; name: string } {
+  if (!path) return { dir: "", name: "" };
+  const idx = path.lastIndexOf("/");
+  if (idx < 0) return { dir: "", name: path };
+  return { dir: path.slice(0, idx + 1), name: path.slice(idx + 1) };
+}
+
+/** One item of the agent's todo list, as derived from a todoWrite tool call. */
+export interface TodoItem {
+  text: string;
+  state: "done" | "active" | "pending";
+}
+
+/** Claude Code `TodoWrite` / opencode `todoWrite` family of plan tools. */
+export function isTodoToolName(name: string | undefined): boolean {
+  const lower = (name ?? "").toLowerCase().replace(/[^a-z0-9_]/g, "");
+  return lower === "todowrite" || lower === "todo_write" || lower === "todo" || lower === "todolist";
+}
+
+/** Parse a markdown checkbox list (`- [x] item`) or a plain JSON string array
+ *  out of a tool result's text — the fallback for adapters that only return
+ *  the todo list in the result rather than a structured `toolInput`. */
+export function parseTodoResult(content: string | undefined): TodoItem[] | undefined {
+  if (!content) return undefined;
+  // Markdown checkboxes: `- [x] done` / `- [ ] pending` / `- [X] done`.
+  const lines = content
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /^[-*]\s*\[[ xX]\]/.test(l));
+  if (lines.length > 0) {
+    return lines.map((l) => ({
+      text: l.replace(/^[-*]\s*\[[ xX]\]\s*/, "").trim(),
+      state: /\[[xX]\]/.test(l) ? ("done" as const) : ("pending" as const),
+    }));
+  }
+  // Plain JSON string array.
+  try {
+    const trimmed = content.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      const arr = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(arr)) {
+        const items = arr.filter((t): t is string => typeof t === "string" && t.trim().length > 0);
+        if (items.length > 0) return items.map((t) => ({ text: t, state: "pending" as const }));
+      }
+    }
+  } catch {
+    /* not JSON — ignore */
+  }
+  return undefined;
+}
+
+/** Map a todo item's status string to our display state. opencode uses
+ *  `in_progress` / `completed` / `pending` (or `done`); treat anything
+ *  completed-ish as done, in-progress-ish as active, else pending. */
+function stateFromStatus(status: unknown): TodoItem["state"] {
+  const s = typeof status === "string" ? status.toLowerCase() : "";
+  if (s === "completed" || s === "done") return "done";
+  if (s === "in_progress" || s === "active") return "active";
+  return "pending";
+}
+
+/**
+ * Derive the agent's todo list from a todoWrite/todoWrite-family tool call.
+ * The list arrives in `toolInput.todos`, which for opencode is an array of
+ * objects `{ content, status, priority }` (each item carries its own status —
+ * the most accurate signal) and for other adapters may be `string[]` plus a
+ * single active `todo`. Claude's `TodoWrite` sends just `todo` + `status` and
+ * often the list in the result text. Returns `undefined` when the call isn't a
+ * todo tool or carries nothing usable. The "last snapshot wins" model relies
+ * on opencode re-sending the whole list each time, so the newest snapshot is
+ * the current truth.
+ */
+export function extractTodos(toolName: string | undefined, toolInput: unknown, toolResultContent?: string): TodoItem[] | undefined {
+  if (!isTodoToolName(toolName)) return undefined;
+  const items: TodoItem[] = [];
+
+  if (toolInput && typeof toolInput === "object") {
+    const obj = toolInput as Record<string, unknown>;
+    const rawTodos = Array.isArray(obj.todos) ? obj.todos : undefined;
+    if (rawTodos && rawTodos.length > 0) {
+      // opencode sends objects with per-item status; some adapters send plain
+      // strings (then we fall back to position relative to the active `todo`).
+      const allStrings = rawTodos.every((t) => typeof t === "string");
+      if (allStrings) {
+        const strings = rawTodos as string[];
+        const activeText = typeof obj.todo === "string" ? obj.todo : undefined;
+        const activeIdx = activeText !== undefined ? strings.indexOf(activeText) : -1;
+        const allDone = stateFromStatus(obj.status) === "done";
+        strings.forEach((s, i) => {
+          const t = s.trim();
+          if (!t) return;
+          let state: TodoItem["state"] = "pending";
+          if (allDone) state = "done";
+          else if (activeIdx >= 0) {
+            if (i < activeIdx) state = "done";
+            else if (i === activeIdx) state = "active";
+          }
+          items.push({ text: t, state });
+        });
+      } else {
+        for (const raw of rawTodos) {
+          if (!raw || typeof raw !== "object") continue;
+          const o = raw as Record<string, unknown>;
+          const text = typeof o.content === "string" ? o.content : typeof o.text === "string" ? o.text : undefined;
+          if (!text || !text.trim()) continue;
+          items.push({ text: text.trim(), state: stateFromStatus(o.status) });
+        }
+      }
+    } else if (typeof obj.todo === "string" && obj.todo.trim().length > 0) {
+      items.push({ text: obj.todo.trim(), state: stateFromStatus(obj.status) });
+    }
+  }
+
+  if (items.length > 0) return items;
+
+  const fromResult = parseTodoResult(toolResultContent);
+  return fromResult && fromResult.length > 0 ? fromResult : undefined;
+}
+
 export function prettyToolInput(input: unknown): string {
   try {
     return JSON.stringify(input, null, 2);
