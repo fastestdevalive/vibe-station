@@ -1551,3 +1551,80 @@ subfeatures:
       external cause (an actual daemon auto-restart/watchdog mechanism, or
       something outside this feature's worktree entirely) worth
       investigating separately from this port work.
+
+  - id: 11-tauri-cutover
+    origin: planned
+    spawned_from: root
+    mode: implementing
+    last_completed: implement
+    awaiting_phase: verify
+    awaiting_artifact: null
+    phase_chain: [plan, implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: "Dispatch #2 (deleting daemon/+cli/ TS trees) is GATED on
+        Dispatch #1's Gate 2 (a real GUI `pnpm tauri build` + launch on the Rust
+        daemon end-to-end) — which was NOT passed in Dispatch #1, only deferred
+        to a manual user follow-up. Do NOT proceed to Dispatch #2's deletion
+        until that manual GUI launch confirms the desktop app actually runs on
+        Rust end to end. Dispatch #1 did binary-level verification only (see
+        the plan's gate-results block): prep-sidecar.sh now builds the Rust
+        sidecars, tauri.conf.json externalBin still resolves, daemon.rs ready-
+        pattern + VST_DIST_PATH wired, Gate 3 live-verification passed against
+        a copy of the real ~/.vibe-station on port 7390, Gate 4 decision =
+        require system Node."
+      returned_at: null
+      verified_by: "vs-141-a-86e4d5e9 (this dispatch's implementer session) — independently ran prep-sidecar.sh, sha256-verified the produced sidecars are byte-identical to rust/target/release/{vst-daemon,vst-cli}, ran cargo check on the desktop crate (daemon.rs changes compile), and ran the Rust daemon + vst CLI live against a COPY of the real ~/.vibe-station on port 7390 (never 7421, scratch HOME, read-only source, processes killed + scratch removed afterward); confirmed the real ~/.vibe-station config/.daemon.lock mtimes were unchanged (08:07, before this dispatch)."
+    commit: 0af6a24
+    process_note: >
+      This is the actual "task 6" work, finally scoped as its own part per
+      explicit user request (2026-09-16): switch the Tauri desktop app's
+      sidecar build (scripts/prep-sidecar.sh) from packaging the TS daemon
+      via @yao-pkg/pkg to building/bundling the Rust vst-daemon/vst-cli
+      binaries instead, verify end-to-end against a real (backed-up) user
+      home, THEN delete daemon/ and cli/ (TypeScript). See
+      11-tauri-cutover/plan-11-daemon-rust-port-tauri-cutover.md.
+      Finding that motivated splitting this out on its own: prep-sidecar.sh
+      currently still calls build-daemon-binary.sh, which per the
+      10-2 N1/N2 report produces a 75MB packaged binary that DOESN'T EVEN
+      BOOT (pre-existing ESM/CJS bug) — the desktop app has never actually
+      run on Rust, this is real, not-yet-done work, not a formality.
+
+      DISPATCH #1 CLOSED OUT (2026-09-16, this commit) — wire the Rust sidecar +
+      verify live, WITHOUT deleting daemon//cli/ (still in tree, unused by the
+      new sidecar build, as the plan requires):
+      - scripts/prep-sidecar.sh: replaced the TS steps (pnpm --filter
+        @vibestation/cli build; build-daemon-binary.sh; the pkg-based vst sidecar)
+        with `cargo build --release --manifest-path rust/Cargo.toml -p vst-daemon
+        -p vst-cli`, copying rust/target/release/{vst-daemon,vst-cli} →
+        binaries/{vst-daemon,vst}-<triple>. Keeps the `-<triple>` naming externalBin
+        expects. Produces 14M + 3.4M ELF binaries, byte-identical to the release
+        build (sha256 verified). No daemon//cli/ edits.
+      - desktop/src-tauri/tauri.conf.json: NO change — externalBin
+        ["binaries/vst-daemon","binaries/cloudflared","binaries/vst"] still resolves
+        via the triple suffix. Verified, not assumed.
+      - desktop/src-tauri/src/daemon.rs: two desktop-launch-context fixes found by
+        reading how the sidecar is invoked (both needed for the desktop app to run
+        on the Rust daemon): (1) the ready-pattern regex expected
+        "127.0.0.1:<port>" but the Rust daemon prints "0.0.0.0:<port>" — broadened
+        to `[0-9.]+:<port>` so spawn_daemon no longer times out after 30s; (2)
+        VST_DIST_PATH was not set in the spawn env (only VST_CLOUDFLARED_BIN/
+        VST_CLI_BIN/VST_SKILL_PATH were) — now set best-effort to <cwd>/web-ui/dist
+        when it exists, so the daemon can serve the SPA over its own HTTP (tunnel)
+        path. cargo check on the desktop crate passes (only pre-existing warnings).
+      - Gate 1 PASS (prep-sidecar produces the Rust sidecars); Gate 3 PASS
+        (binary-level live verification against a copy of the real ~/.vibe-station
+        on port 7390 — daemon boots/serves /health, real projects/worktrees/sessions
+        list via REST + vst CLI, a rename round-trip confirms the write path; no real
+        agent turn spawned per the plan's relaxation); Gate 4 PASS (decision: require
+        system Node — do NOT bundle a Node sidecar). Gate 2 (full GUI `pnpm tauri
+        build` + launch) and the end-to-end create→agent→terminal→Rich-Chat lifecycle
+        were DEFERRED to a manual user follow-up, NOT claimed as passed — Dispatch #2
+        must wait for that.
+      - Safety: all verification against an isolated scratch HOME + port 7390 (never
+        7421); scratch copy removed and every process killed + confirmed dead. The
+        real ~/.vibe-station was never written (config/.daemon.lock mtimes unchanged
+        at 08:07). The real host daemon on 7421 was observed already down during this
+        dispatch — pre-existing/independent (same phenomenon as the two 10-2
+        occurrences), confirmed not caused by this work; I did not restart it.
