@@ -75,36 +75,36 @@ async function flushWindow(): Promise<void> {
 describe("subagentNotify — waking a parent on a subagent's state change", () => {
   // 1.T1 — only waiting_for_human triggers flush; other states are no-ops
   it("only waiting_for_human triggers a notification (idle/done/exited are suppressed)", async () => {
-    const { deps, pills } = makeDeps({ p1: { channel: "json" }, c1: CHILD() });
+    const { deps, pills, slots } = makeDeps({ p1: { channel: "json" }, c1: CHILD() });
     noteSubagentStateChange("c1", "working", "idle", deps);
     noteSubagentStateChange("c1", "idle", "done", deps);
     noteSubagentStateChange("c1", "done", "exited", deps);
     await flushWindow();
     expect(pills).toHaveLength(0);
+    expect(slots).toHaveLength(0);
 
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    expect(pills).toHaveLength(1);
+    // Under-cap: slot is populated, but no pill from flush() — pill fires later in runNoticeSlotTurn.
+    expect(slots).toHaveLength(1);
+    expect(pills).toHaveLength(0);
   });
 
   it("wakes the parent once, with the child named, on waiting_for_human", async () => {
     const { deps, pills, slots } = makeDeps({ p1: { channel: "json" }, c1: CHILD() });
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
-    expect(pills).toHaveLength(0); // coalescing — nothing yet
+    expect(slots).toHaveLength(0); // coalescing — nothing yet
     await flushWindow();
+    // Under-cap: populateNoticeSlot is called; no pill from flush (pill comes from runNoticeSlotTurn).
     expect(slots).toHaveLength(1);
     expect(slots[0]!.parent).toBe("p1");
     expect(slots[0]!.childId).toBe("c1");
     expect(slots[0]!.childName).toBe("kid");
-    expect(pills).toHaveLength(1);
-    expect(pills[0]!.parent).toBe("p1");
-    expect(pills[0]!.subagentName).toBe("kid");
-    expect(pills[0]!.subagentId).toBe("c1");
-    expect(pills[0]!.subagentState).toBe("waiting_for_human");
+    expect(pills).toHaveLength(0);
   });
 
-  // V1a — slot populated, pill emitted, budget charged once; FIX-E: order is slot→pill→budget
-  it("V1a: populateNoticeSlot called before emitPill, noticeCount charged after pill (R8 ordering)", async () => {
+  // V1a — slot populated first, budget charged after; pill is no longer emitted from flush()
+  it("V1a: populateNoticeSlot called and noticeCount charged; no pill emitted from flush under cap", async () => {
     const order: string[] = [];
     const { deps } = makeDeps({ p1: { channel: "json" }, c1: CHILD() });
     const origPopulate = deps.populateNoticeSlot;
@@ -119,18 +119,16 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
     };
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    // FIX-E: order must be slot → pill (budget is charged internally after pill, not observable here)
-    expect(order).toEqual(["slot", "pill"]);
+    // Under-cap: only slot is populated; pill is NOT emitted from flush()
+    expect(order).toEqual(["slot"]);
   });
 
-  it("calls populateNoticeSlot + emitPill dep on flush", async () => {
+  it("calls populateNoticeSlot on flush (no pill under cap — pill fires in runNoticeSlotTurn)", async () => {
     const { deps, pills, slots } = makeDeps({ p1: { channel: "json" }, c1: CHILD() });
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
     expect(slots).toHaveLength(1);
-    expect(pills).toHaveLength(1);
-    // FIX-B: notification pills now use empty text; frontend composes the readable copy.
-    expect(pills[0]!.text).toBe("");
+    expect(pills).toHaveLength(0);
   });
 
   it("coalesces a chatty child into ONE flush", async () => {
@@ -144,7 +142,7 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
   });
 
   it("reports several children in a single flush, each at their latest state", async () => {
-    const { deps, pills } = makeDeps({
+    const { deps, pills, slots } = makeDeps({
       p1: {},
       c1: CHILD({ name: "one" }),
       c2: CHILD({ name: "two" }),
@@ -152,10 +150,12 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     noteSubagentStateChange("c2", "working", "waiting_for_human", deps);
     await flushWindow();
-    expect(pills.length).toBeGreaterThanOrEqual(1);
-    const names = pills.map((s) => s.subagentName);
+    // Under-cap: both children slotted, no pills from flush
+    expect(slots.length).toBeGreaterThanOrEqual(2);
+    const names = slots.map((s) => s.childName);
     expect(names).toContain("one");
     expect(names).toContain("two");
+    expect(pills).toHaveLength(0);
   });
 
   it("ignores non-edges and uninteresting states (working, idle, done, exited)", async () => {
@@ -198,15 +198,17 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
   });
 
   it("follows a reset parent forward to its live successor", async () => {
-    const { deps, pills } = makeDeps({
+    const { deps, pills, slots } = makeDeps({
       pOld: { supersededBy: "pNew", archivedAt: "2026-01-01T00:00:00Z" },
       pNew: {},
       c1: CHILD({ parentSessionId: "pOld" }),
     });
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    expect(pills).toHaveLength(1);
-    expect(pills[0]!.parent).toBe("pNew");
+    // Under-cap: slot is populated on the live successor, no pill from flush.
+    expect(slots).toHaveLength(1);
+    expect(slots[0]!.parent).toBe("pNew");
+    expect(pills).toHaveLength(0);
   });
 
   it("terminates on a supersededBy cycle instead of hanging", async () => {
@@ -222,62 +224,73 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
 
   it("forgetSubagentNotify drops a deleted session from both roles", async () => {
     const { forgetSubagentNotify } = await import("../services/subagentNotify.js");
-    const { deps, pills } = makeDeps({ p1: {}, c1: CHILD() });
+    const { deps, pills, slots } = makeDeps({ p1: {}, c1: CHILD() });
 
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     forgetSubagentNotify("c1"); // child deleted during the coalescing window
     await flushWindow();
     expect(pills).toHaveLength(0); // its buffered notice went with it
+    expect(slots).toHaveLength(0);
 
     // And a deleted PARENT's budget is released too.
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    expect(pills).toHaveLength(1);
+    // Under-cap: slot populated, no pill from flush
+    expect(slots).toHaveLength(1);
+    expect(pills).toHaveLength(0);
     forgetSubagentNotify("p1");
     noteSubagentStateChange("c1", "waiting_for_human", "working", deps);
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    expect(pills).toHaveLength(2);
+    // Under-cap again after parent budget reset: slot populated, no pill
+    expect(slots).toHaveLength(2);
+    expect(pills).toHaveLength(0);
   });
 
   it("stops after the per-parent budget, and a human turn resets it", async () => {
-    const { deps, pills } = makeDeps({ p1: {}, c1: CHILD() });
+    const { deps, pills, slots } = makeDeps({ p1: {}, c1: CHILD() });
     for (let i = 0; i < 40; i++) {
       noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
       await flushWindow();
       noteSubagentStateChange("c1", "waiting_for_human", "working", deps);
     }
     const capped = pills.length;
-    // FIX-C: 25 normal + 1 notification + 1 warning at first cap, then 1 notification each subsequent cap.
-    // After 40 iters: 25 under-cap + (40-25) at-cap with 1 notif each + 1 warning once = 25 + 15 + 1 = 41
-    expect(capped).toBeGreaterThanOrEqual(25);
-    expect(capped).toBeLessThanOrEqual(42);
+    // Under-cap: no pills from flush (pills fire in runNoticeSlotTurn).
+    // At-cap (iters 25–39): 1 notification pill each + 1 warning on first cap = 15 + 1 = 16 total.
+    expect(capped).toBeGreaterThanOrEqual(15);
+    expect(capped).toBeLessThanOrEqual(17);
+    // All 40 iterations tried to slot (first 25 under-cap, last 15 at-cap with no slot).
+    expect(slots.length).toBeGreaterThanOrEqual(25);
 
+    const pillsBeforeReset = pills.length;
     noteHumanTurn("p1");
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    // After human turn resets budget, the next flush is under-cap: one normal pill.
-    expect(pills.length).toBe(capped + 1);
+    // After human turn resets budget, next flush is under-cap: slot populated, no pill from flush.
+    expect(slots.length).toBeGreaterThan(25);
+    expect(pills.length).toBe(pillsBeforeReset); // no new pill from flush
   });
 
   // V1f — FIX-C (R15): at cap, notification pill ALWAYS emits (not gated by suppressionWarned);
   // warning pill emits on FIRST suppression only; subsequent suppressions emit notification pill only.
+  // Under-cap flushes produce no pills from flush() — pills fire later in runNoticeSlotTurn.
   it("V1f: at cap, notification pill always emits; warning pill only on first suppression", async () => {
-    const { deps, pills } = makeDeps({ p1: {}, c1: CHILD() });
+    const { deps, pills, slots } = makeDeps({ p1: {}, c1: CHILD() });
 
-    // Exhaust the budget (25 flushes).
+    // Exhaust the budget (25 flushes). Under-cap: no pills from flush.
     for (let i = 0; i < 25; i++) {
       noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
       await flushWindow();
       noteSubagentStateChange("c1", "waiting_for_human", "working", deps);
     }
-    expect(pills).toHaveLength(25); // 25 normal pills
+    expect(pills).toHaveLength(0); // Under-cap: no pills from flush
+    expect(slots).toHaveLength(25); // But slots are populated
 
     // 26th flush hits the cap: notification pill + warning pill emitted.
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
-    // Should have: 25 normal + 1 notification + 1 warning = 27 total
-    expect(pills.length).toBeGreaterThanOrEqual(27);
+    // Should have: 0 under-cap + 1 notification + 1 warning = 2 total
+    expect(pills.length).toBeGreaterThanOrEqual(2);
     const warningPill = pills.find((p) => p.text.includes("auto-wake paused"));
     expect(warningPill).toBeDefined();
 
@@ -294,16 +307,16 @@ describe("subagentNotify — waking a parent on a subagent's state change", () =
     expect(warningPills).toHaveLength(1);
   });
 
-  // R8 atomicity: if slot fails, no pill, no budget charge
-  it("R8: if populateNoticeSlot returns true, pill is emitted; if false (first time), only warning pill", async () => {
+  // R8 atomicity: if slot fails, no budget charge; if slot succeeds, budget charged (no pill from flush)
+  it("R8: if populateNoticeSlot returns true, budget is charged; if false, no charge (no pills from flush either way)", async () => {
     const { deps, pills, slots, setSlotReturn } = makeDeps({ p1: {}, c1: CHILD() });
     // First flush: slot succeeds
     setSlotReturn("p1", true);
     noteSubagentStateChange("c1", "working", "waiting_for_human", deps);
     await flushWindow();
     expect(slots).toHaveLength(1);
-    expect(pills).toHaveLength(1);
-    expect(pills[0]!.subagentId).toBe("c1");
+    // Under-cap: slot populated, no pill from flush (pill fires in runNoticeSlotTurn)
+    expect(pills).toHaveLength(0);
   });
 
   // R16 — prune on exit: non-notable exit still calls pruneNoticeSlotChild
