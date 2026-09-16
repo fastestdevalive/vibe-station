@@ -6,7 +6,80 @@ master:
   prd: skipped   # internal engineering rewrite, no user-facing product behavior — see arch doc "PRD: none"
   plan: complete # arch-daemon-rust-port.md reviewed and approved
 
-current_subfeature: 10-parity-cutover
+current_subfeature: null
+
+# ============================================================================
+# 🎉 FEATURE COMPLETE — 2026-09-16 (autonomous overnight run)
+# ============================================================================
+# All 15 parts of daemon-rust-port are done and independently gated, EXCEPT
+# task 6 of part 10 (deleting the old TS daemon/+cli/ trees), which was
+# NEVER ATTEMPTED and remains fully pending an explicit future user request.
+# Do not infer permission to delete anything from this summary.
+#
+# | Part                     | Final commit | Notes                        |
+# |--------------------------|---------------|-------------------------------|
+# | 00-foundation            | d177855       |                               |
+# | 01-storage               | 2a0e4ee       |                               |
+# | 02-process-pty           | 68e23b2       |                               |
+# | 03-git-worktree          | 7570339       |                               |
+# | 04-spike                 | 785aad1       | orchestrator-authored         |
+# | 04a-agent-plugins-core   | 3c87a6b       |                               |
+# | 04b-acp-transport        | 2e12527       |                               |
+# | 04c-json-agent-chat      | c876606       |                               |
+# | 05-lifecycle-status      | 0dfd85a       | see NOTE below                |
+# | 06-ws-realtime           | 302d1c9       |                               |
+# | 07a-rest-routes-core     | ce8a5ff       | 8/8 dispatches, 2 gate fails  |
+# | 07b-rest-routes-misc     | ceefde1       | 2/2 dispatches, 0 gate fails  |
+# | 08-server-bootstrap      | 74b5d27       | Haiku pickup after agy quota  |
+# | 09-cli-port              | 92f14c4       | 4/4 dispatches, 0 gate fails  |
+# | 10-parity-cutover        | 615dde9       | 2/2 dispatches, found 2 real  |
+# |                          |               | F1 bugs + 2 unrelated packaging|
+# |                          |               | bugs (pkg-fetch/esbuild); plus|
+# |                          |               | 2 more real bugs found during |
+# |                          |               | live manual verification (see |
+# |                          |               | 10-parity-cutover's phase brief)|
+#
+# REBASED ONTO main 2026-09-16 (live session, user-directed) — the branch was
+# rebased onto origin/main (8 new commits there: real daemon/ changes to
+# routes/sessions.ts, services/acp/normalize.ts, agent-plugins/claudeImport.ts
+# — no cli/ or skill/ changes). This REWROTE EVERY COMMIT HASH in this
+# branch's history. The hashes above are the POST-REBASE hashes (verified by
+# matching each commit's message before/after, since content is unchanged).
+# Any commit hash cited elsewhere in this file's older process_note prose
+# (dispatch-by-dispatch history written before the rebase) is now STALE and
+# won't resolve via `git show` — the prose narrative itself is still
+# accurate (describes what was verified and how), just the hash pointers
+# predate the rebase. Not worth rewriting every historical citation; this
+# top-level table is the one meant to stay authoritative going forward.
+#
+# NOTE: there is a pre-existing duplicate `05-lifecycle-status` entry further
+# down this file (mode: implementing, commit: null) — this is a leftover
+# artifact from this session's start, NOT something this run created, and
+# NOT a sign of unfinished work. The real, authoritative 05 entry (post-rebase
+# commit 0dfd85a, mode: done) is the one that matters; the duplicate is inert.
+#
+# N1/N2 (arch doc requirements) both HOLD decisively: Rust vst-daemon is
+# 5.7x smaller (14MB vs 75MB packaged Node) and ~5.7x faster cold-start
+# (68ms median vs ~388ms). Full numbers: 10-parity-cutover/
+# report-10-2-n1-n2-baseline.md.
+#
+# Recommended follow-ups for the user (none urgent, none blocking):
+# 1. Live docker-sandbox boot test of the Rust daemon (scripts/dev-sandbox.sh)
+#    — script changes were verified by syntax check only during the
+#    unattended run, not a live boot, to avoid a heavyweight build overnight.
+# 2. UNRESOLVED: two independent real-daemon restarts on port 7421 happened
+#    during this session (once early on, reported by the user; once again
+#    near the end of 10-2's measurements) — root cause unknown, verified
+#    NOT caused by any dispatched agent's work either time (both used
+#    isolated HOME/ports, audited). Worth investigating separately.
+# 3. A cross-session decision is still pending: the sibling orchestrator
+#    session's proposal to drop the edit-a-sent-message/fork path was
+#    already acted on for 07a's route (removed, commit e85365b post-rebase,
+#    was d151c71 pre-rebase) per this
+#    session's own user direction — but confirm this matches what the
+#    sibling session's own arch-doc edit ultimately decided, if it's since
+#    been finalized independently.
+# ============================================================================
 
 model_policy_note: >
   2026-09-15b (user-directed, see ORCHESTRATION-PROMPT.md's "One-off
@@ -1264,15 +1337,33 @@ subfeatures:
   - id: 10-parity-cutover
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: plan
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "TASK 6 (deleting old daemon/+cli/ TS trees) is the ONLY
+        remaining work in this entire feature. Permanently deferred by
+        explicit user direction — never attempted, never even investigated
+        for feasibility. Dispatch only on an explicit future user request.
+        Also unresolved: 2 independent real-daemon-restart incidents this
+        session, root cause unknown, flagged for separate investigation.
+        Recommended manual follow-up: live docker-sandbox boot test
+        (scripts/dev-sandbox.sh) was not run autonomously (too heavyweight
+        for the unattended overnight run)."
+      returned_at: null
+      verified_by: "vs-141-a-8bd3d789 (this session) — independently ran
+        rust-gate.sh across every touched crate (vst-daemon, vst-store,
+        vst-types), directly read the parity harness, regression tests,
+        SQLite compat test, and dev-entrypoint.sh diff rather than trusting
+        commit messages, N6-checked every dispatch, confirmed via `docker
+        ps` no containers left running, independently confirmed the real
+        daemon's health/mtime state matched the report's restart-timing
+        claim."
+    commit: 90e39f7
     process_note: >
       Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
       background). Not a port — no LOC estimate, sized by task instead: (1)
@@ -1299,3 +1390,164 @@ subfeatures:
       #2 = tasks 4-5 (N1/N2 baseline measurement, dev-sandbox/docker-compose/
       package.json script updates — ops/tooling heavy). Phase brief's task
       table, checklist, and hard-stop section all updated to match.
+
+      Dispatch #1 (correctness & parity: tasks 1-3) started on DeepSeek
+      (mode-1785649772352-dlzo2), implementer session vs-141-a-36c93fb5,
+      2026-09-15, per user direction to continue autonomously overnight,
+      coordinating with DeepSeek to completion (task 6 permanently deferred,
+      never dispatched without explicit future request). Resolved the
+      parity-harness daemon-safety design concretely rather than leaving it
+      to the implementer to improvise: (1) old Node daemon spawned as a
+      child process with HOME env var overridden to an isolated tempdir
+      (Node's os.homedir() respects HOME on POSIX — zero code changes
+      needed, no Docker dependency) + a scratch VST_PORT far from 7421; (2)
+      new Rust daemon driven fully in-process via Paths::with_home(tempdir)
+      + build_app() + tower::ServiceExt::oneshot, the same pattern part 08's
+      own auth_middleware.rs tests already use — no real port ever bound on
+      either side. Dispatch prompt sent via --prompt-file (a bare --prompt
+      with backticks in the daemon-safety instructions hit a shell
+      command-substitution parse error — write to a file and use
+      --prompt-file when the message contains backtick-quoted code).
+
+      STEERED (2026-09-15h, autonomous overnight run): DeepSeek got deep
+      into a real but unproductive rabbit hole trying to spawn the Node
+      daemon as an external tsx child process for the parity harness —
+      hit a genuine pnpm-workspace + tsx-ESM module-resolution issue with
+      symlinked node_modules (worktree has none, base repo's don't resolve
+      cleanly via symlink under tsx's realpath-based resolver). No safety
+      violation at any point (never touched port 7421 or the real
+      ~/.vibe-station — it was still working in scratch tempdirs when this
+      was caught), but burning significant effort on environment plumbing
+      unrelated to the actual task. Steered (via vst session send --file to
+      avoid backtick-quoting issues) to abandon the child-process approach
+      entirely and use Fastify's built-in app.inject() for the Node side —
+      the direct equivalent of Rust's tower::ServiceExt::oneshot, no
+      process spawn, no port, no node_modules resolution problem at all.
+      This should have been the first-choice design; noted for future
+      phase-brief writing: prefer in-process test-harness primitives
+      (inject()/oneshot()) over spawning real processes whenever the
+      framework offers one, even for cross-language parity work.
+
+      Dispatch #1 CLOSED OUT (commit 57a13cb, test(10-1)) — high-quality,
+      thorough work across 3 crates (vst-daemon, vst-store, vst-types).
+      **Found and fixed 2 REAL F1 byte-compat bugs**: OrderedList and
+      TunnelStatus wire types used #[skip_serializing_none], silently
+      omitting null fields that the Node/Fastify daemon emits explicitly
+      (updatedAt/tunnelUrl/startedAt) — this is exactly the kind of
+      divergence this whole part exists to catch, found on the very first
+      real dispatch. Confirmed F1's one documented exception:
+      POST /sessions/:id/chat/fork present in Node, gone (404/405) in Rust
+      (07a, d151c71) — asserted explicitly, not skipped. Correctly
+      distinguished deterministic routes (byte-diffed) from environment-
+      dependent ones (/settings, /tailscale/status, /skills — structural-
+      only, status-code match) rather than treating environment variance as
+      a bug. Task 2: referenced existing named regression tests in vst-ws
+      for double-echo/ghost-PTY (did not duplicate), but found the
+      status-writer race only had STRUCTURAL coverage (compile-fail privacy
+      + classify unit tests) — added a genuine new runtime regression test
+      driving both poller write-paths in both orders. Task 3: captured a
+      real SQLite fixture with actual data written through the Node
+      daemon's own HTTP routes (via app.inject, no live process), verified
+      Rust reads it back correctly.
+
+      Independently re-verified, not trusted from the commit message: full
+      `rust-gate.sh --workspace` run — one failure surfaced
+      (vst-git/tests/git_fetch_origin.rs::failing_fetch_clears_in_flight_
+      and_does_not_enter_cooldown), re-ran in isolation and it passed —
+      confirmed PRE-EXISTING FLAKY test (timing/cooldown-window sensitive,
+      part 03/vst-git territory, completely untouched by this dispatch),
+      not a real regression, not this dispatch's responsibility. Gated
+      vst-types/vst-store/vst-daemon individually — all green. Directly ran
+      and read: parity_harness.rs (2/2 pass, including the fork-exception
+      assertion), node_db_compat.rs + project_store.rs (11/11 pass) — read
+      two_axis_status_writers_do_not_clobber_each_other in full: genuinely
+      drives both writer paths in both orders, asserts neither axis
+      clobbers the other, faithful to the exact historical bug documented
+      in AGENTS.md's Status Indicators section. N6 clean vs 57afc5d~1.
+      Confirmed the node_modules symlink (created transiently for vitest to
+      resolve fastify) was correctly excluded from the commit after being
+      flagged — git status clean, no stray files. Confirmed via
+      vst-types/vst-store gate re-runs that no EXISTING test asserted the
+      old (buggy) skip_serializing_none omit-null behavior — the fix was
+      purely additive-correct, nothing to update elsewhere.
+
+      One real design detour handled well: DeepSeek initially tried
+      spawning the Node daemon as an external tsx child process (per the
+      original dispatch instructions), hit a genuine pnpm-workspace/tsx-ESM
+      module-resolution dead end (documented: "Node cannot be spawned as a
+      child process in this checkout... affects even the base repo's own
+      daemon tests" — a real environment constraint, not specific to this
+      dispatch), was steered to Fastify's app.inject() instead, which
+      worked immediately and better matches the Rust side's own
+      tower::ServiceExt::oneshot pattern. No daemon-safety violation at any
+      point — confirmed by grepping the full transcript for port 7421 or
+      ~/.vibe-station, found only mentions in planning/instruction text,
+      never an actual touch.
+
+      Dispatch #2 (measurement & tooling: tasks 4-5, LAST dispatch of the
+      ENTIRE 15-part feature besides the permanently-deferred deletion)
+      started on DeepSeek (mode-1785649772352-dlzo2), implementer session
+      vs-141-a-39ea58d8, 2026-09-15, per user direction to continue
+      autonomously overnight. Sent via --prompt-file (message has no
+      backticks this time but kept the pattern for consistency). Explicitly
+      told: any daemon spawned for cold-start measurement must use an
+      isolated HOME + scratch port, must be verifiably killed afterward
+      (no orphan processes), N1/N2 numbers must be reported plainly even
+      if a regression is found (not buried), and task 6 is permanently out
+      of scope — never attempt or even think about it.
+
+      Dispatch #2 CLOSED OUT (commits 5bcfdb4 task-4, 90e39f7 task-5) — the
+      final dispatch of the entire feature. Both N1 and N2 HOLD decisively:
+      Rust vst-daemon is 5.7x smaller (14MB vs 75MB packaged Node) and
+      ~5.7x faster cold-start (68ms median vs ~388ms). Found 2 real,
+      pre-existing bugs unrelated to this port along the way: (1) the
+      packaged Node daemon binary (@yao-pkg/pkg) cannot actually boot — an
+      ESM/import.meta vs CJS-bundle mismatch in build-daemon-binary.sh
+      (esbuild warns about it, was previously unnoticed since nobody had
+      run/measured the packaged artifact); (2) pkg-fetch's patches.json has
+      no node-24 entry, a version-pinning mismatch in the packaging script.
+      Neither is this feature's bug to fix, both correctly disclosed rather
+      than hidden. Steered away from a live docker-compose build+up for
+      task 5's verification step (too heavyweight for an unattended
+      overnight run) — accepted syntax-check-only verification, documented
+      live boot as a recommended manual follow-up.
+
+      Independently re-verified: N6 clean vs 57afc5d~1 (no .rs files
+      touched in the task-5 commit, confirmed via git show). Directly read
+      dev-entrypoint.sh's diff — correctly guards with -f/-x (regular file
+      + executable), not -e, avoiding Docker's real mount-creates-empty-dir
+      footgun; Node fallback path fully intact and unchanged when Rust
+      binaries aren't present; confirmed via `docker ps` that no containers
+      were left running.
+
+      EXCEPTIONAL FOLLOW-UP: when steered to investigate the tailscale/
+      real-home-read finding from dispatch #2's mid-flight check, DeepSeek
+      went back and precisely root-caused it, CORRECTING its own earlier
+      imprecise framing — the check never touches ~/.vibe-station at all,
+      it shells out to the system `tailscale` CLI for machine-level tailnet
+      state (execFile, no shell string), entirely independent of HOME/
+      VST_HOME. Verdict: not an isolation gap at all, a narrow/safe/
+      non-fatal read-only system check. This is exactly the kind of
+      self-correction under scrutiny this session has tried to model
+      throughout (verify, don't just assert) — DeepSeek did it to its own
+      prior work here, unprompted beyond "investigate and document
+      properly."
+
+      IMPORTANT, FLAGGED FOR HUMAN REVIEW (not an active problem, daemon
+      is healthy): the report's Safety Confirmation section notes the
+      user's REAL daemon on 7421 restarted independently near the end of
+      this dispatch (uptime reset, config.json rewritten, +1 byte) —
+      the SECOND such occurrence this session (the first was reported by
+      the user early on, also never traced to any dispatched agent's
+      action). Independently verified: current real config.json/
+      .daemon.lock mtime is 23:42, current /health uptime ~1561s (~26min),
+      consistent with a restart around that time; the daemon is currently
+      healthy. DeepSeek's own measurement processes were confirmed isolated
+      throughout (HOME=scratch tempdir, VST_PORT 7391-7393, never 7421,
+      never ~/.vibe-station) — this restart was NOT caused by this
+      dispatch, same as the first occurrence wasn't traced to its dispatch
+      either. Root cause of these two independent real-daemon restarts is
+      still UNKNOWN — flagging prominently for the user, this may be an
+      external cause (an actual daemon auto-restart/watchdog mechanism, or
+      something outside this feature's worktree entirely) worth
+      investigating separately from this port work.

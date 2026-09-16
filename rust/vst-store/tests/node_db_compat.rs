@@ -7,6 +7,8 @@
 
 use rusqlite::Connection;
 use vst_store::schema::ensure_schema;
+use vst_store::StoreHandle;
+use vst_types::domain::{LifecycleState, SessionType};
 
 fn fixture_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/db");
@@ -76,4 +78,83 @@ fn node_db_opens_and_can_be_written_to() {
         })
         .unwrap();
     assert_eq!(n, 1);
+}
+
+/// F4 data-level compat (part 10, task 3): a `vibe-station.db` written by the
+/// ACTUAL Node daemon's storage layer through its HTTP routes (project +
+/// worktree + session created via `app.inject()` in the isolated vitest
+/// harness — see `daemon/src/__tests__/parity_db_fixture.test.ts`). This is
+/// distinct from `node-v1.sqlite`, which is schema-only (0 rows).
+///
+/// The Rust `StoreHandle::open` must:
+///   - apply `ensure_schema` as a NO-OP on the Node-created DB (no migration
+///     step silently corrupting or dropping data), and
+///   - read the Node-written project/worktree/session rows back correctly.
+#[test]
+fn store_reads_back_data_written_by_node_daemon() {
+    let dir = fixture_dir();
+    let populated = dir.join("node-populated.sqlite");
+    assert!(
+        populated.exists(),
+        "missing node-populated fixture (regenerate via the vitest harness)"
+    );
+
+    // Open with the real store (schema no-op must not error or drop data).
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("populated.sqlite");
+    std::fs::copy(&populated, &copy).unwrap();
+    let store = StoreHandle::open(&copy).unwrap();
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let project = runtime.block_on(store.get_project("my-repo"));
+
+    let project = project.expect("Node-created project must be readable by the Rust store");
+
+    // Project axis.
+    assert_eq!(project.id, "my-repo");
+    assert_eq!(project.prefix, "mr");
+    assert!(project.is_git);
+    assert_eq!(project.default_branch.as_deref(), Some("main"));
+
+    // Worktree axis — created via POST /worktrees with branch `feat-db`.
+    assert_eq!(
+        project.worktrees.len(),
+        1,
+        "Node wrote exactly one worktree"
+    );
+    let wt = &project.worktrees[0];
+    assert_eq!(wt.id, "mr-1");
+    assert_eq!(wt.branch, "feat-db");
+    assert_eq!(wt.base_branch, "main");
+    assert!(!wt.base_sha.is_empty(), "baseSha must round-trip");
+
+    // Session axis — the main agent session + the terminal session created via
+    // POST /sessions `{ worktreeId, type: "terminal" }`.
+    assert_eq!(
+        wt.sessions.len(),
+        2,
+        "Node wrote a main + a terminal session"
+    );
+
+    let terminal = wt
+        .sessions
+        .iter()
+        .find(|s| s.r#type == SessionType::Terminal)
+        .expect("the terminal session must be present");
+    assert_eq!(terminal.name.as_deref(), Some("Terminal 1"));
+    assert_eq!(terminal.worktree_id.as_deref(), Some("mr-1"));
+    assert_eq!(terminal.project_id, "my-repo");
+
+    let main = wt
+        .sessions
+        .iter()
+        .find(|s| s.is_main)
+        .expect("the main agent session must be present");
+    assert!(main.is_main);
+    assert_eq!(main.mode_id.as_deref(), Some("bugfix"));
+    assert_eq!(main.lifecycle.state, LifecycleState::NotStarted);
+
+    // The two-axis status model survives the transition: PR axis defaults to
+    // none and lifecycle axis is readable independently.
+    assert!(main.pr.is_none());
 }

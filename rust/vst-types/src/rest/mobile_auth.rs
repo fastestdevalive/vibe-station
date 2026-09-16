@@ -23,8 +23,10 @@ pub struct TunnelDisableResult {
     pub enabled: bool,
 }
 
-/// `GET /auth/tunnel/status` response.
-#[skip_serializing_none]
+/// `GET /auth/tunnel/status` response. NOT `skip_serializing_none`: the Node
+/// daemon (Fastify) emits `"tunnelUrl": null` / `"startedAt": null` explicitly,
+/// so F1 byte-compat requires them present as `null` rather than omitted
+/// (parity harness, part 10).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TunnelStatus {

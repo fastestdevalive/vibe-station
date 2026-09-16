@@ -162,8 +162,30 @@ if [ "$VST_SEED_MODE" = "demo" ]; then
   su vst -c 'bash /app/scripts/demo-seed.sh' || echo '[seed] non-fatal seed error — continuing'
 fi
 
+# Prefer the Rust CLI for the `vst` command when the mounted Rust binary is a
+# real file (transition — part 10, task 5). The Dockerfile symlinks
+# /usr/local/bin/vst to the Node CLI (cli/dist/main.js); if a Rust vst-cli is
+# mounted at /usr/local/bin/vst-rust we repoint the symlink at it instead. When
+# the Rust binary isn't present the Node CLI symlink stays — both are drop-in
+# `vst` implementations, so agents' `vst …` calls work either way. Docker
+# creates an EMPTY DIRECTORY at a bind-mount target when the host source is
+# missing, so guard with `-f` (regular file), not `-e`.
+if [ -f /usr/local/bin/vst-rust ] && [ -x /usr/local/bin/vst-rust ]; then
+  ln -sf /usr/local/bin/vst-rust /usr/local/bin/vst
+  echo "[daemon] using Rust vst CLI (/usr/local/bin/vst-rust)"
+fi
+
 rm -f /home/vst/.vibe-station/.daemon.lock
-su vst -c 'node cli/dist/daemon/main.js' &
+if [ -f /usr/local/bin/vst-daemon-rust ] && [ -x /usr/local/bin/vst-daemon-rust ]; then
+  # Rust daemon — requires web-ui/dist for static SPA serving; the Vite dev
+  # server covers the browser, and the Rust daemon degrades gracefully (404s)
+  # if dist isn't built, so VST_DIST_PATH may point at a missing dir.
+  echo "[daemon] using Rust daemon (/usr/local/bin/vst-daemon-rust)"
+  su vst -c '/usr/local/bin/vst-daemon-rust' &
+else
+  echo "[daemon] Rust daemon binary not present — falling back to Node daemon"
+  su vst -c 'node cli/dist/daemon/main.js' &
+fi
 echo 'Waiting for daemon...'
 until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
 echo 'Daemon ready.'

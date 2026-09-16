@@ -365,3 +365,120 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
     assert_eq!(pr.state, PrState::Merged);
     assert_eq!(pr.pr_branch.as_deref(), Some("feature-y"));
 }
+
+/// Two-axis status regression test (AGENTS.md § Status indicators; part 10,
+/// task 2, bug 3). The historical bug: the lifecycle poller and the PR poller
+/// shared ONE `LifecycleState` slot (`needs_review`) with uncoordinated
+/// writers, so a PR write raced with a lifecycle write and silently destroyed
+/// the "PR created" signal (and vice versa).
+///
+/// The fix is the two-axis model: `update_session_lifecycle` (the lifecycle
+/// poller's ONLY write path) touches only `state`/`reason`/`lastTransitionAt`,
+/// and `update_session_pr` (the PR poller's ONLY write path) touches only the
+/// `pr*` columns. This test drives BOTH poller write-paths in sequence and
+/// proves neither clobbers the other — the exact runtime property the shared-
+/// slot bug violated.
+#[tokio::test]
+async fn two_axis_status_writers_do_not_clobber_each_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    store
+        .add_project(project_with_session(
+            "two-axis-proj",
+            "two-axis-wt",
+            "two-axis-sess",
+        ))
+        .await
+        .unwrap();
+
+    // (1) PR poller writes a PR status first.
+    store
+        .update_session_pr(
+            "two-axis-proj",
+            "two-axis-sess",
+            vst_types::PrStatus {
+                state: PrState::Open,
+                number: Some(7),
+                url: Some("https://github.com/acme/widgets/pull/7".into()),
+                checked_at: "2026-01-01T00:00:00.000Z".into(),
+                error: None,
+                pr_branch: Some("feat-two-axis".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    // (2) Lifecycle poller writes a lifecycle state second. If the two shared a
+    // slot (the historical bug), this would overwrite/clear the PR status.
+    store
+        .update_session_lifecycle(
+            "two-axis-proj",
+            "two-axis-sess",
+            vst_types::SessionLifecycle {
+                state: LifecycleState::Working,
+                reason: Some("agent busy".into()),
+                last_transition_at: "2026-01-02T00:00:00.000Z".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let project = store.get_project("two-axis-proj").await.unwrap();
+    let session = &project.worktrees[0].sessions[0];
+
+    // Lifecycle axis intact (the lifecycle write landed).
+    assert_eq!(session.lifecycle.state, LifecycleState::Working);
+    assert_eq!(session.lifecycle.reason.as_deref(), Some("agent busy"));
+
+    // PR axis intact — NOT clobbered by the lifecycle write.
+    let pr = session
+        .pr
+        .clone()
+        .expect("PR status must survive the lifecycle poller's write");
+    assert_eq!(pr.state, PrState::Open);
+    assert_eq!(pr.number, Some(7));
+    assert_eq!(pr.pr_branch.as_deref(), Some("feat-two-axis"));
+
+    // (3) Reverse order: a lifecycle write, then a PR write — the PR write must
+    // not clobber the lifecycle state either.
+    store
+        .update_session_lifecycle(
+            "two-axis-proj",
+            "two-axis-sess",
+            vst_types::SessionLifecycle {
+                state: LifecycleState::Idle,
+                reason: None,
+                last_transition_at: "2026-01-03T00:00:00.000Z".into(),
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .update_session_pr(
+            "two-axis-proj",
+            "two-axis-sess",
+            vst_types::PrStatus {
+                state: PrState::Merged,
+                number: Some(7),
+                url: Some("https://github.com/acme/widgets/pull/7".into()),
+                checked_at: "2026-01-04T00:00:00.000Z".into(),
+                error: None,
+                pr_branch: Some("feat-two-axis".into()),
+            },
+        )
+        .await
+        .unwrap();
+
+    let project = store.get_project("two-axis-proj").await.unwrap();
+    let session = &project.worktrees[0].sessions[0];
+    assert_eq!(
+        session.lifecycle.state,
+        LifecycleState::Idle,
+        "PR write must not clobber the lifecycle state"
+    );
+    assert_eq!(
+        session.pr.as_ref().map(|p| p.state),
+        Some(PrState::Merged),
+        "lifecycle write must not clobber the PR state"
+    );
+}
