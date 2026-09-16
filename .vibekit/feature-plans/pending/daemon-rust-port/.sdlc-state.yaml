@@ -8,6 +8,28 @@ master:
 
 current_subfeature: null
 
+model_policy_note: >
+  2026-09-15b (user-directed, see ORCHESTRATION-PROMPT.md's "One-off
+  model-swap exception #2"): after 07a dispatch #4 (Group C) closes out, the
+  default implementer switches to agy-medium (mode-1784608587031-sd4sy, cli
+  agy, "Gemini 3.5 Flash (Medium)") for the remainder of 07a (dispatches
+  #5-8), all of 07b-rest-routes-misc, and 08-server-bootstrap. agy is
+  terminal-only — dispatch WITHOUT --json (plain tmux channel). agy takes
+  ~5-10s to start and blocks on an initial interactive permission prompt;
+  reply "y" via vst session send before treating early silence as stuck.
+  UPDATED 2026-09-15c (user-directed): agy-medium extended to ALL remaining
+  parts, including 09-cli-port and 10-parity-cutover — the original
+  revert-to-DeepSeek-after-08 plan is superseded. Do not revert to DeepSeek
+  without a fresh, equally explicit user instruction. If agy hits its own
+  usage/rate limit mid-dispatch, switch model WITHIN the same running
+  session via agy's own in-terminal slash command (send
+  "/model gpt oss 120b" via vst session send --no-wait, verify delivery)
+  rather than terminating and redispatching — this is a live fallback for
+  agy's own limit, distinct from the DeepSeek-Haiku escalation ladder in
+  step D. Also: prefer --no-wait over --wait when sending to agy sessions
+  (a --wait send had a delivery hiccup once); poll agy/tmux sessions on a
+  tighter ~8min window, not the ~15min JSON-channel default.
+
 subfeatures:
   - id: root
     origin: planned
@@ -384,34 +406,485 @@ subfeatures:
   - id: 07a-rest-routes-core
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "07b-rest-routes-misc should also use agy-medium per
+        model-swap exception #2; a new phase brief needs writing for it
+        first. Fork-path conflict resolved (2026-09-15, user-directed):
+        chat/fork route removed from vst-routes, commit d151c71."
+      returned_at: null
+      verified_by: "vs-141-a-8bd3d789 (this session) — independently
+        re-ran rust-gate.sh vst-routes after every one of the 8 dispatches,
+        directly read both flagged high-risk invariants (dispatch #2) and
+        every disclosed cross-part gap, caught 2 real gate failures by
+        reading test code (dispatch #6 zero-coverage, dispatch #7 unwrapped
+        matches!()), confirmed both fixes on re-review, N6-checked every
+        dispatch against 57afc5d~1 (07a's true start commit)."
+    commit: 306b6a0
+    process_note: >
+      Measured actual LOC before dispatch: 6045 total (sessions.ts 3009,
+      worktrees.ts 1574, projects.ts 1008, modes.ts 314, open.ts 140) vs. the
+      arch doc's stale ~3.5k estimate. Pre-split per arch doc's own rule
+      (split at plan-write time, not mid-session): 8 sequential dispatch
+      continuations documented in the phase brief (sessions.ts groups
+      A/B1/B2/C/D, then worktrees.ts, projects.ts, modes.ts+open.ts). Group B1
+      (delete/draft/pin) flagged highest-risk: main-session promotion race
+      (check-inside-lock, Gotcha #1 pattern) + draft-promotion HTTP-response
+      self-sufficiency (Gotcha #4). Dispatch #1 (Group A) started on
+      DeepSeek (mode-1785649772352-dlzo2), implementer session
+      vs-141-a-e9693685, dispatched 2026-09-15.
+
+      Dispatch #1 CLOSED OUT (commit 844dedc, feat(07a-1)): ported
+      find_session_context/find_worktree_context, serialize_session/
+      serialize_global_draft, GET /sessions, GET /sessions/:id,
+      GET /sessions/:id/output (json branch), POST /sessions draft branch
+      (global/worktree/direct), the channel-aware spawn jobs, and
+      spawn_session/spawn_direct_session orchestration. Also added
+      vst-routes::modes (mode-resolution helpers only, CRUD deferred to
+      dispatch #8) and a vst-store amendment (global_drafts.rs — part-01 gap,
+      the table existed but had no API). One steering nudge needed (JSON-channel
+      turn boundary mid-clippy-fix, not a real stuck loop — resolved on first
+      nudge). Independently re-verified: rust-gate.sh green for both vst-routes
+      and vst-store (re-ran myself, not just trusted the implementer's log),
+      18 tests / 68 assertions in sessions_group_a.rs read directly — real
+      404/400 error-path + wire-roundtrip coverage, not weakened stubs. N6
+      checked against 57afc5d~1 (07a's true start): rust/Cargo.toml and
+      rust-ci.yml diff empty. No vst-types amendment (rule respected).
+      Cross-part gaps the implementer surfaced (not blockers, noted for
+      integrator): (1) spawnSession/spawnDirectSession orchestration was never
+      ported by 04a/04b/04c as expected — landed in vst-routes here, may want
+      relocating to vst-agents later; (2) direct-pty output-read uses a local
+      HashMap in SessionRoutes pending the real DirectPtyRegistry.get_recent_output
+      (part-03 gap, noted in 03's own closeout); (3) live tmux/pty spawn paths
+      not integration-tested (need real PTYs), only unit-tested at the pure
+      channel-resolution/record-construction layer.
+
+      Dispatch #2 (Group B1 — highest risk) started on DeepSeek
+      (mode-1785649772352-dlzo2), implementer session vs-141-a-110de4b4,
+      dispatched 2026-09-15. Scope: DELETE /sessions/:id, PATCH .../draft,
+      POST .../start (draft promotion), PATCH .../pin|rename|reorder|delink.
+      Steered explicitly on the two known-hard invariants: main-session
+      promotion check must happen inside the locked mutation callback (not
+      split across the lock boundary), and draft-promotion's HTTP response
+      must be built from fully-persisted state before the async spawn fires.
+
+      Dispatch #2 CLOSED OUT (commit acb0eb4, feat(07a-2)): ported
+      DELETE /sessions/:id, PATCH .../draft, POST .../start (draft promotion),
+      PATCH .../pin|rename|reorder|delink, cleanup_direct_session_data_dir,
+      prune_notice_and_forget/forget_subagent_notify. One turn-boundary nudge
+      needed (JSON-channel, not a stuck loop) plus one local shell-quoting
+      glitch on my end sending the nudge (backticks in the message triggered
+      a spurious client-side eval error; message landed anyway, verified by
+      state transitioning back to working then to a real commit).
+      Independently re-verified (not just implementer's log): rust-gate.sh
+      green for vst-routes and vst-store; N6 clean vs 57afc5d~1. Directly READ
+      both risky invariants in the actual code, did not just trust the
+      report's quotes: (1) sessions.rs:1288-1302 has an explicit
+      non-authoritative fast-path pre-check OUTSIDE the lock (pure 400-early
+      optimization, documented as such), the AUTHORITATIVE is-main/sibling
+      re-derivation is at sessions.rs:1310-1344 inside the mutate_project
+      closure; verified mutate_project (vst-store/src/lib.rs:176-199) holds
+      the per-project lock across f() and the persist — same lock-then-decide
+      pattern as Gotcha #1. (2) sessions.rs:1744-1804: mutate_project is
+      awaited to completion before the response's worktree_id/serialized
+      worktree are constructed (from the just-written data, not a re-fetch,
+      but data-identical to it), tokio::spawn for the fire-and-forget spawn
+      happens strictly after, response has no dependency on the spawn.
+      Also fixed a cross-part store bug: vst-store's update_global_draft was
+      writing invalid SQL / NULLing every untouched column instead of a true
+      partial update — fixed in the same commit, exercised by draft PATCH/
+      reorder paths added here. 30/30 Group B1 tests (1 ignored — real git
+      worktree needed), spot-read delete_worktree_main_with_only_drafting_
+      sibling_400 directly: genuinely exercises the in-lock filtering, not
+      just the fast path. No vst-types amendments.
+
+      Dispatch #3 (Group B2) started on DeepSeek (mode-1785649772352-dlzo2),
+      implementer session vs-141-a-3b0a660a, dispatched 2026-09-15. Scope:
+      POST .../done, .../resume, .../reset, .../handoff. Steered explicitly on:
+      resume/reset's high branch count (channel-aware guarded spawn +
+      agentChatId self-healing), reset/handoff's runHandoffTurn bounded-poll
+      pass-through to already-ported vst-lifecycle (05, done) rather than a
+      new raw loop, and resume's two-axis lifecycle reset to `working`.
+
+      Dispatch #3 CLOSED OUT (commit 0c0db4c, feat(07a-3)): ported done/
+      resume/reset/handoff into SessionRoutes, plus spawn_session_from_argv
+      (services/spawn.ts orchestration, needed by resume's restore path;
+      never ported by 04a/b/c, same precedent as dispatch #1 porting the
+      spawn jobs). Independently re-verified: rust-gate.sh green for
+      vst-routes; N6 clean vs 57afc5d~1. Directly read both invariants in
+      the actual code: resume_session sets updated.lifecycle = Working
+      (sessions.rs:2342-2346) before persisting; both run_handoff_turn call
+      sites (sessions.rs:2687, 2926) correctly pass through to the existing
+      vst-lifecycle bounded API, no new raw loop. Spot-read
+      reset_archives_old_and_creates_new_in_worktree directly — genuinely
+      asserts the same-mutate archive invariant (old row archived +
+      isMain cleared + supersededBy set, new row created, exactly 2 sessions,
+      no zero-main window). 71 total vst-routes tests pass (3 new #[ignore]d
+      — need real tmux/pty). No vst-types amendments.
+
+      Real cross-part gaps surfaced (not blockers to this dispatch, flagged
+      for a later reviewer pass — these live in already-"done" parts 05/06,
+      not 07a): (1) vst-lifecycle::handoff::run_handoff_turn (part 05) silently
+      dropped the timeoutMs param — hardcodes 30s poll timeout vs TS's 60s,
+      and polls every 100ms vs TS's 1000ms, and returns Err on delivery
+      failure where TS swallows to false. (2) vst-types::ws's
+      ServerMessage::SessionResumed exists but the internal ServerEvent enum
+      (vst-ws events.rs, part 06) has no matching variant, so resume can only
+      emit SessionState{working} and drops restoredFromHistory on the wire —
+      same gap for SessionCreated's snapshot/parentSessionId fields on reset.
+      (3) forceCloseSessionStreams lives in vst-ws's WsHub, unreachable from
+      vst-routes — reset skips WS-stream teardown, a part-08 wiring concern.
+      None of these block 07a-3's own gate; noted here so whoever revisits
+      05/06/08 doesn't have to rediscover them.
+
+      Dispatch #4 (Group C) started on DeepSeek (mode-1785649772352-dlzo2),
+      implementer session vs-141-a-a6ddb0a0, dispatched 2026-09-15. Scope:
+      send/chat/dismiss-notice/promote-notice/stop/queue-delete/edit/resubmit/
+      promote/fork/chat-model-patch. Briefed to read vst-agents (04c, done)
+      first and treat this as thin route-layer dispatch into
+      JsonAgentSession/jsonAgentRegistry, not new business logic — flag any
+      missing vst-agents API as a cross-part gap rather than reimplementing.
+
+      Dispatch #4 CLOSED OUT (commit 1784b0a, feat(07a-4)): ported send/chat/
+      dismiss-notice/promote-notice/stop/queue-cancel/edit/resubmit/promote/
+      fork/chat-model-patch, all thin route-layer dispatch into already-ported
+      vst-agents (04c) as instructed — no business logic reimplemented.
+      Independently re-verified: rust-gate.sh green for vst-routes; N6 clean
+      vs 57afc5d~1; vst-agents untouched (no amendment needed); no vst-types
+      amendments (all shapes pre-existed). 26 new tests / 25 assertions in
+      sessions_group_c.rs (1 #[ignore]d, needs a live agent process), prior
+      groups' tests still pass. Cross-part gap flagged: no ServerEvent::
+      SessionFork variant (same gap class as dispatch #3's SessionResumed/
+      SessionCreated finding) — fork's broadcast-to-other-tabs mirror is not
+      emitted, only the lifecycle flip is. Also added AttachmentRegistry as a
+      SessionRoutes field (route-layer wiring only).
+
+      IMPORTANT — real cross-session conflict surfaced, not yet resolved:
+      the implementer found an UNCOMMITTED edit to arch-daemon-rust-port.md
+      (made by the sibling orchestrator session vibe-station-a-d64eccd6,
+      "port-rust-master") proposing to drop the edit-a-sent-message/fork path
+      ENTIRELY going forward — retroactively descoping it from 04b (already
+      `done`) and requiring a web-ui change before part 10's cutover. This
+      directly conflicts with 07a's dispatch #4, which just faithfully ported
+      POST /sessions/:id/chat/fork per its brief (the TS source still has it,
+      the brief explicitly scoped it in). The implementer correctly did NOT
+      commit that arch-doc edit (per the standing rule: those files belong to
+      the sibling session) and flagged this instead of guessing. Not resolved
+      by this session — surfaced to the human. If the drop decision lands,
+      07a-4's fork route will need removal in a later pass.
+
+      Dispatch #5 (Group D) started — FIRST agy-medium dispatch per model-swap
+      exception #2, implementer session vs-141-a-25121606, dispatched
+      2026-09-15, cli agy, tmux channel (no --json, terminal-only). Startup
+      took ~12s; sent "y" once at the initial idle-input state (no distinct
+      permission dialog text was visible in the captured scrollback, but the
+      session was waiting_for_human immediately after create — consistent
+      with the documented startup+prompt window) and it resumed working
+      normally afterward. Scope: spawnTtyForAgent helper, PATCH .../channel,
+      GET .../transcript, GET .../meta. Steered explicitly to match
+      resume_session's (dispatch #3) lifecycle-to-working pattern for the
+      channel-toggle handler.
+
+      Dispatch #5 CLOSED OUT (commit ca79f20, feat(07a-5)): ported
+      spawn_tty_for_agent, patch_session_channel (json<->tty toggle),
+      get_session_transcript (all/since/tail variants), get_session_meta. No
+      steering needed — first agy-medium dispatch ran clean end to end after
+      the initial "y". Independently re-verified: rust-gate.sh green for
+      vst-routes (111 total tests across groups A-D, 5 pre-existing ignored);
+      N6 clean vs 57afc5d~1. Directly read patch_session_channel
+      (sessions.rs:3542-...): lifecycle reset to Working is correctly gated
+      on `from_json` (sessions.rs:3677-3688), matching TS's json->tty-only
+      scope, not resume's unconditional reset — implementer correctly adapted
+      the pattern rather than copying it verbatim. 14 new tests / 23
+      assertions in sessions_group_d.rs. No vst-types amendments. Cross-part
+      gap flagged (same class as #3/#4): no ServerEvent::SessionMeta variant
+      (WS-only today) — meta broadcast omitted, route-layer response
+      unaffected. Left .vibekit/ files untouched as instructed.
+
+      Dispatch #6 (worktrees.ts, full file, single-shot) started on
+      agy-medium, implementer session vs-141-a-3e6148b5, dispatched
+      2026-09-15. No permission-prompt reply needed this time (went straight
+      to working). Told it may split by CRUD vs read-only-git-surfaces and
+      commit a partial slice with clear disclosure if it runs low on room,
+      rather than stopping mid-edit with nothing committed. POST /worktrees
+      (~239 lines) flagged as its own sub-effort, same pattern as POST
+      /sessions in dispatch #1.
+
+      Dispatch #6 GATE FAILURE (first failure, corrective feedback sent, not
+      closed out yet): implementer reported commit 7e0a4a4 (feat(07a-6)) with
+      gate green (rust-gate.sh vst-routes independently re-verified — actually
+      green) and a correctly-placed vst-types amendment (FileListResult,
+      clean 9-line addition matching TS's file-list response shape). BUT
+      direct read of the test diff found a real coverage gap: POST /worktrees
+      (create_worktree, the flagged highest-complexity handler, ~239 lines)
+      has ZERO test coverage — no test calls it at all, unlike POST /sessions
+      in dispatch #1 which got thorough create-path coverage as instructed.
+      6 read-only git-surface routes (diff/changed-paths/diffstat/commits/
+      submodules/pr) also untested. Sent corrective feedback to the SAME
+      session (step G first-failure) asking for create_worktree tests
+      (success + naming path + an error case) and either coverage or a
+      disclosed reasoning for the git-surface routes. Re-gating once it
+      reports back.
+
+      Dispatch #6 CLOSED OUT (commits 7e0a4a4 feat + f72f55f test, resolves
+      the gate failure above — first-failure corrective feedback worked,
+      no escalation needed): all 21 worktrees.ts routes ported into
+      vst-routes/src/worktrees.rs, plus a clean vst-types amendment
+      (FileListResult, correctly placed, 9-line addition matching TS's
+      file-list shape). Follow-up commit added real coverage: directly read
+      test_create_worktree_success_and_events — uses an actual git repo
+      (init_git_repo), exercises branch derivation via slugify_prompt,
+      verifies DB persistence, and asserts both WorktreeCreated and
+      SessionCreated broadcast events; test_create_worktree_validation_and_
+      errors covers 5 real error paths (missing projectId/modeId, bad
+      modeId, missing project 404, non-git project 400);
+      test_git_surface_routes_on_real_repo exercises all 6 previously-flagged
+      routes against a real git checkout, not stubs. 10 tests total, 40+
+      assertions. Independently re-verified: rust-gate.sh green; N6 clean vs
+      57afc5d~1. No further gaps flagged beyond the ones already resolved.
+
+      Dispatch #7 (projects.ts, full file, single-shot) started on
+      agy-medium, implementer session vs-141-a-5b7b8f43, dispatched
+      2026-09-15. No permission prompt needed (straight to working). POST
+      /projects/create (~443 lines) flagged as its own sub-effort, AND
+      explicitly required real test coverage up front (dispatch #6's
+      zero-coverage gate failure cited as the lesson to not repeat) rather
+      than discovering the gap at gate review again.
+
+      Dispatch #7 GATE FAILURE #2 (different failure mode than #6 — this
+      time real test COUNT/structure existed, but the assertions themselves
+      were fake): implementer committed 7bd561d (feat(07a-7)), gate green,
+      and DID heed the dispatch #6 lesson on test presence — 12 tests
+      including test_create_new_project_real_git_success (a genuinely real
+      test: creates an actual project dir, checks .git exists, verifies DB
+      persistence, checks ProjectCreated broadcast). BUT direct read found a
+      systemic bug: 17 occurrences of bare `matches!(err, Variant)` across
+      the file with NO `assert!()` wrapper — matches! returns a bool that's
+      silently discarded, so every error-path/validation test in the file
+      does nothing real; it passes regardless of what error (or non-error)
+      actually comes back. Clippy's deny groups don't catch a discarded bare
+      bool the way they'd catch a discarded Result. This is exactly the kind
+      of thing "gate green" cannot surface on its own — caught only by
+      directly reading the test file, per this session's standing rigor.
+      Sent corrective feedback (step G) listing all 17 line numbers, asking
+      for assert!(matches!(...)) wrapping plus a self-check (temporarily
+      break one error path to confirm the fixed assertion actually fails).
+      Re-gating once it reports back. (Side note: first vst session send
+      --wait attempt for this feedback had a delivery hiccup and never
+      reached the terminal; a --no-wait resend landed correctly. For agy/tmux
+      sessions, verify a sent message actually appears in the terminal via a
+      follow-up `vst session output` check rather than trusting --wait's
+      settle signal alone. Also: agy/tmux sessions can complete real work
+      inside a single ~10-15 minute poll window — tighten the poll interval
+      for agy dispatches relative to the 15min default used for DeepSeek's
+      JSON-channel turns, per user feedback mid-session.)
+
+      Dispatch #7 CLOSED OUT (commits 7bd561d feat + 0d97313 test, resolves
+      gate failure #2 above — second first-failure-style corrective round on
+      this dispatch, no escalation needed): all 8 projects.ts routes ported
+      (list/branches/create-register-existing/create-new/patch/delete/tree/
+      file-list/get-file), including the flagged create_new_project
+      (~443-line) sub-effort. No vst-types amendments (all shapes pre-
+      existed). Independently re-verified: grep confirms zero remaining bare
+      matches!() calls in tests/projects.rs, all 17 wrapped in assert!();
+      rust-gate.sh green WITH the real assertions now enforced (meaning the
+      underlying handler logic was actually correct all along, just
+      untested — a good sign, not a coincidence, since a wrong error variant
+      would now genuinely fail); N6 clean vs 57afc5d~1. 11 tests total,
+      including a genuinely real test_create_new_project_real_git_success
+      (real git init, DB persistence check, ProjectCreated broadcast
+      verification) that correctly heeded dispatch #6's coverage lesson —
+      the assert! bug was a separate, distinct failure mode from #6's
+      zero-coverage issue, not a repeat of it.
+
+      Dispatch #8 (modes.ts CRUD + open.ts, FINAL continuation of 07a)
+      started on agy-medium, implementer session vs-141-a-83a6c32d, dispatched
+      2026-09-15. No permission prompt needed. Explicitly briefed on both
+      prior failure modes (#6's zero-coverage, #7's unwrapped matches!) and
+      told to self-grep its own test file for the assert! bug before
+      committing, even though this dispatch is nominally "trivial" scope.
+
+      Dispatch #8 CLOSED OUT (commit 306b6a0, feat(07a-8)) — NO gate failure
+      this time, first-try clean: ported GET /supported-clis, GET
+      /cli-models (10-min TTL cache + in-flight dedup), GET/POST/PUT/DELETE
+      /modes (uniqueness/409, 20-mode cap/400, name/context/model bounds,
+      CLI-change clears saved model), and POST /open (project upsert by
+      path, slug/prefix collision handling, 3s navigate-replay buffer).
+      Independently re-verified: rust-gate.sh green; N6 clean vs 57afc5d~1;
+      programmatically confirmed all 13 matches!() occurrences in
+      modes_and_open.rs are within 3 lines of an assert!() — implementer
+      explicitly self-checked this in its own report, and it was correct.
+      No vst-types amendments (all shapes pre-existed). 6 test functions /
+      68 assertions, no #[ignore]d tests.
+
+      ============================================================
+      07A-REST-ROUTES-CORE — PART COMPLETE (2026-09-15)
+      ============================================================
+      All 8 planned dispatch continuations done and independently gated:
+        #1 Group A (lookup/list/create)        844dedc — clean first try
+        #2 Group B1 (delete/draft/pin, highest- acb0eb4 — clean first try
+           risk: promotion-lock race + draft-
+           response self-sufficiency invariants)
+        #3 Group B2 (done/resume/reset/handoff) 0c0db4c — clean first try
+        #4 Group C (send/chat/queue)            1784b0a — clean first try
+        #5 Group D (channel/transcript/meta)    ca79f20 — clean first try,
+           FIRST agy-medium dispatch (model-swap exception #2)
+        #6 worktrees.ts (21 routes)             7e0a4a4+f72f55f — GATE
+           FAILURE: zero test coverage on flagged POST /worktrees handler,
+           fixed on first corrective round
+        #7 projects.ts (8 routes)               7bd561d+0d97313 — GATE
+           FAILURE: 17 matches!() calls silently discarding their bool
+           result (no assert! wrapper) — real tests existed but their
+           checks were no-ops; fixed on first corrective round
+        #8 modes.ts CRUD + open.ts (FINAL)      306b6a0 — clean first try,
+           explicitly briefed on both prior failure modes, self-verified
+
+      Total: 6/8 clean first-try, 2/8 needed one corrective round each
+      (both resolved without escalating models). Both real gate failures
+      were caught only by directly reading test code after "gate green" —
+      neither would have been caught by clippy/rustfmt/test-count alone.
+      Real cross-part gaps surfaced along the way (not blockers, flagged
+      for later parts to reconcile): vst-lifecycle's run_handoff_turn
+      30s-vs-60s timeout+interval divergence from TS (part 05); missing
+      ServerEvent variants for SessionResumed/SessionCreated-snapshot/
+      SessionFork/SessionMeta that the WS wire type supports but the
+      internal event enum doesn't (part 06); forceCloseSessionStreams
+      unreachable from vst-routes (part 08 wiring); spawnSession/
+      spawnDirectSession/spawnSessionFromArgv orchestration never ported
+      by 04a/b/c as expected, landed in vst-routes instead (04a/b/c or a
+      future refactor may want to relocate it to vst-agents); direct-pty
+      output-read uses a local HashMap pending vst-git's real
+      DirectPtyRegistry.get_recent_output (part-03 gap).
+      RESOLVED (2026-09-15, user-directed): user confirmed the fork drop
+      decision — removed POST /sessions/:id/chat/fork from vst-routes
+      (commit d151c71): fork_session handler, ChatRouteError::UnsupportedFork,
+      the fork_missing_session_404 test, and the ForkBody import. Gate
+      re-verified green, N6 clean. Deliberately left untouched (separate,
+      bigger scope than this route removal): vst-types::rest::sessions::
+      ForkBody and the WS ServerMessage::SessionFork wire variant (shared
+      crate, already-closed part 00/06 territory), and vst-agents' underlying
+      fork_turn/get_fork_command machinery from parts 04a-04c (those parts'
+      own descoping to do, if the sibling session's arch-doc edit lands and
+      wants it followed through). Not this session's call to reach into
+      already-gated crates beyond the actual conflicting route.
+      Model-swap exception #2 in effect: dispatches #5-8 ran on agy-medium
+      (Gemini 3.5 Flash Medium), cleanly, including one live steer to route
+      around a vst session send --wait delivery hiccup (worked fine with
+      --no-wait). 07b-rest-routes-misc and 08-server-bootstrap continue on
+      agy-medium per that same exception; 09/10 revert to DeepSeek.
 
   - id: 07b-rest-routes-misc
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "08-server-bootstrap next (once 09's parallel dispatch is
+        also accounted for) — its phase brief is already pre-written and
+        flags it as the highest integration-risk part so far (main.ts/
+        server.ts wire together every other part's output)."
+      returned_at: null
+      verified_by: "vs-141-a-8bd3d789 (this session) — independently
+        re-ran rust-gate.sh vst-routes after both dispatches, directly read
+        the constant-time HMAC comparison code and its tamper-rejection
+        test rather than trusting the report, audited the full transcript
+        for daemon-touching commands (none found), N6-checked both
+        dispatches against 57afc5d~1."
+    commit: c615154
+    process_note: >
+      Measured actual LOC before dispatch: 1331 total (arch doc's ~3.5k
+      estimate was stale in the OTHER direction from 07a — over-estimated
+      this time). No file exceeds ~350 lines. Pre-split into 2 dispatches by
+      RISK not size: #1 low-risk utility routes (settings/skills/fs/
+      attachments/orderedLists/health, 544 LOC), #2 auth-critical
+      (routes/auth.ts, mobileAuth.ts, tailscale.ts, daemon/src/auth.ts's
+      HMAC-SHA256 token mint/verify with timingSafeEqual, state/auth-state.ts,
+      787 LOC) — flagged explicitly for constant-time comparison in the
+      Rust port (a naive == compare on the HMAC digest would pass every
+      functional test while reintroducing a real timing side-channel).
+      Continuing model-swap exception #2: dispatching on agy-medium.
+
+      Dispatch #1 (low-risk utility routes) started, implementer session
+      vs-141-a-8930cba5, dispatched 2026-09-15. No permission prompt needed.
+      Explicitly briefed on both 07a gate failures (zero-coverage, unwrapped
+      matches!()) upfront.
+
+      Dispatch #1 CLOSED OUT (commit e735d36, feat(07b-1)) — clean first try,
+      no gate failure: ported health.rs, ordered_lists.rs, settings.rs,
+      skills.rs, fs.rs, attachments.rs (1016 LOC), one test function per
+      route file (6 total) in tests/utility_routes.rs, 101 assertions.
+      Independently re-verified: rust-gate.sh green; N6 clean vs 57afc5d~1;
+      programmatically checked all matches!() occurrences — every one is
+      correctly assert!()-wrapped (initial automated scan flagged 14 false
+      positives because it only checked preceding lines, not same-line
+      assert!(matches!(...)) calls — manually confirmed each is genuinely
+      wrapped on direct read). Explicit per-6-file coverage confirmed, not
+      just a test-count check. No vst-types amendments.
+
+      Dispatch #2 (auth-critical: routes/auth.ts, mobileAuth.ts, tailscale.ts,
+      daemon/src/auth.ts HMAC token mint/verify, state/auth-state.ts) started
+      on agy-medium, implementer session vs-141-a-316dfb71, dispatched
+      2026-09-15. No permission prompt needed. Explicitly required a
+      constant-time HMAC comparison (subtle crate or equivalent, never a
+      plain == on the digest) and a test proving a tampered/wrong-signature
+      token is rejected — required the report to state the exact primitive
+      and file/line used.
+
+      Dispatch #2 CLOSED OUT (commit c615154, feat(07b-2)) — clean first
+      try, no gate failure, most rigorously reviewed dispatch of the whole
+      feature so far: ported auth.rs (584L, token mint/verify + auth
+      routes), mobile_auth.rs (615L, rate limiting + OTC + janitor), and
+      tailscale.rs (211L) — 1410L across 3 files plus 410L of tests.
+      Independently verified, NOT taken on the report's word: (1) directly
+      read auth.rs:196-233 — verify_token recomputes the HMAC via ring's
+      hmac::sign, hex-decodes both signatures into fixed-length byte
+      buffers, and compares with subtle::ConstantTimeEq's .ct_eq() — the
+      length pre-check is safe (HMAC-SHA256 digest length isn't secret).
+      Genuinely constant-time, not a dressed-up byte loop. (2) directly
+      read test_token_constant_time_rejects_tampered_signature
+      (auth_routes.rs:67-99+) — mints a REAL valid token, flips one
+      character of the signature, confirms rejection; also tests truncated
+      and non-hex signatures. Real test, not a stub. (3) confirmed
+      mobile_auth's stale-code janitor uses tokio::spawn +
+      tokio::time::interval(60s), per the brief's explicit instruction (not
+      a bounded-retry §9 pattern — nothing waits on it). (4) rust-gate.sh
+      re-run independently, green. (5) N6 clean vs 57afc5d~1 — ring/subtle/
+      base64 added crate-locally to vst-routes/Cargo.toml only. (6)
+      grepped for bare matches!( — zero found, all 15 matches!() calls in
+      auth_routes.rs are assert!()-wrapped. (7) audited the full transcript
+      for any daemon-touching command (cargo run, port 7421, etc.) — none
+      found, only cargo check/test/rust-gate.sh. No vst-types amendments.
+
+      ============================================================
+      07B-REST-ROUTES-MISC — PART COMPLETE (2026-09-15)
+      ============================================================
+      Both dispatches clean first try, 0 gate failures, 0 escalations:
+        #1 low-risk utility routes (health/ordered_lists/settings/skills/
+           fs/attachments, 1016 LOC)          e735d36 — clean first try
+        #2 auth-critical (auth/mobileAuth/    c615154 — clean first try,
+           tailscale + HMAC token mint/verify,   most rigorous review of
+           787 LOC)                              the feature so far
+      Total: 1803 LOC ported, both on agy-medium. No cross-part gaps
+      surfaced this part (unlike 07a's several). Real security property
+      verified by direct code read, not trusted from a claim: constant-time
+      HMAC comparison via subtle::ConstantTimeEq, confirmed correct.
 
   - id: 08-server-bootstrap
     origin: planned
     spawned_from: root
     mode: pending
-    last_completed: null
+    last_completed: plan
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
@@ -419,12 +892,30 @@ subfeatures:
     parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
     commit: null
+    process_note: >
+      Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
+      background, at user's request to save time later). Measured LOC: 710
+      total (server.ts 264, main.ts 295, services/doctor.ts 151) — close to
+      arch doc's ~0.6k estimate. Single dispatch, NOT split further despite
+      small size — flagged as the highest integration-risk part so far since
+      main.ts/server.ts wire together every other part's output; a wiring
+      bug surfaces at runtime, not compile time. Verified one genuine
+      cross-part gap: services/tunnelPort.ts has no Rust port (vst-store's
+      tunnel.rs ports a DIFFERENT file, state/tunnel-store.ts) despite the
+      arch doc listing tunnelPort.ts under part 00's scope. Verified
+      daemonPort.ts's mutable-global pattern was likely already redesigned
+      into explicit daemon_port: u16 parameters threaded through vst-agents
+      (dependency injection replacing the TS global) — probably not a gap,
+      confirm at dispatch time. 4 more untracked-dependency files flagged
+      but not independently re-verified (userSkillCatalog.ts,
+      resolveVstPaths.ts, harnessSkillDirs.ts, project-store.ts's loadAll).
+      Full brief: 08-server-bootstrap/plan-08-daemon-rust-port-server-bootstrap.md.
 
   - id: 09-cli-port
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: null
+    mode: implementing
+    last_completed: plan
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
@@ -432,12 +923,47 @@ subfeatures:
     parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
     commit: null
+    process_note: >
+      Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
+      background). Measured LOC: 2438 across 44 files (arch doc estimated
+      ~3.6k — lower than expected), no file over 201 lines. Provisionally
+      split into 4 dispatches by directory: #1 core plumbing (lib/* +
+      program.ts, ~610 LOC, dispatch first since everything depends on it —
+      flagged sendMessage.ts, 180 lines, as likely the WS steer-a-running-
+      turn logic this feature's own vst skill doc describes, read carefully),
+      #2 session+mode commands (~687), #3 worktree+project+file+daemon
+      commands (~640), #4 top-level standalone commands (doctor/summary/
+      open/status, ~500). Resolved two false ambiguities during this pass:
+      commands/status.ts and commands/daemon/status.ts are genuinely
+      distinct commands (not a path error); commands/doctor.ts (CLI-side,
+      own execFile checks) and services/doctor.ts (part 08, server-side
+      checks needing daemon state) are NOT a simple thin-wrapper split —
+      read both fully before porting either. Flagged this feature's own
+      orchestration process as a de-facto compatibility test for F2 (same
+      JSON output shape) since ORCHESTRATION-PROMPT.md itself jq-parses vst
+      CLI JSON output. Split is provisional, re-verify LOC at actual dispatch
+      time. Full brief: 09-cli-port/plan-09-daemon-rust-port-cli-port.md.
+
+      One-off parallel-dispatch exception #2 (2026-09-15d, user-directed, see
+      ORCHESTRATION-PROMPT.md): dispatch #1 (core plumbing: cli/src/lib/* +
+      program.ts) started on agy-medium IN PARALLEL with 07b dispatch #2
+      (auth-critical, still in flight), implementer session
+      vs-141-a-c580bda3, dispatched 2026-09-15. Zero file overlap (vst-cli
+      vs vst-routes, separate crates). Dispatch prompt explicitly: (1)
+      forbids touching rust/vst-routes/, rust/vst-daemon/, daemon/src/routes/
+      — anything missing from those (being built in parallel) should be
+      noted as a forward dependency, not stubbed; (2) reiterates the
+      daemon-safety rule — cargo check/test/build and rust-gate.sh only,
+      NEVER run the actual vst-cli/vst-daemon binary against a live process,
+      mock the daemon HTTP client at the test level instead of spinning up
+      any real vst-daemon. Not picked up again by the normal serial loop
+      once implementing/done — check this file before redispatching.
 
   - id: 10-parity-cutover
     origin: planned
     spawned_from: root
     mode: pending
-    last_completed: null
+    last_completed: plan
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
@@ -445,3 +971,19 @@ subfeatures:
     parked_reason: null
     handoff: {next_item: null, returned_at: null, verified_by: null}
     commit: null
+    process_note: >
+      Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
+      background). Not a port — no LOC estimate, sized by task instead: (1)
+      black-box parity harness comparing old Node daemon vs new Rust daemon
+      response-for-response, (2) named regression tests for the 3 documented
+      concurrency bugs (double-echo, ghost PTY streams, status-writer races),
+      (3) SQLite schema compat check against a real Node-written DB fixture,
+      (4) N1/N2 baseline measurement (binary size, cold start — baseline
+      doesn't exist yet, measured here for the first time), (5) dev-sandbox/
+      docker-compose/package.json script updates, (6) HARD STOP — delete old
+      TS daemon/+cli/ trees only after explicit human confirmation, per
+      ORCHESTRATION-PROMPT.md's Stop Conditions (never inferred from tasks
+      1-5 passing). Task 1's harness should explicitly assert the fork-path
+      removal (07a, commit d151c71) as F1's one documented exception, not
+      skip testing it. Full brief:
+      10-parity-cutover/plan-10-daemon-rust-port-parity-cutover.md.

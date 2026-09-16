@@ -262,3 +262,12 @@ pub struct OpenFileBody {
 pub struct PendingFileOpens {
     pub paths: Vec<String>,
 }
+
+/// `GET /worktrees/:id/file-list` response.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileListResult {
+    pub files: Vec<String>,
+    pub truncated: bool,
+    pub source: String,
+}
