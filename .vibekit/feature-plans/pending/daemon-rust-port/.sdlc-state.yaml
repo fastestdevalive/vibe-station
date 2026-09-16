@@ -6,7 +6,7 @@ master:
   prd: skipped   # internal engineering rewrite, no user-facing product behavior — see arch doc "PRD: none"
   plan: complete # arch-daemon-rust-port.md reviewed and approved
 
-current_subfeature: 08-server-bootstrap
+current_subfeature: 10-parity-cutover
 
 model_policy_note: >
   2026-09-15b (user-directed, see ORCHESTRATION-PROMPT.md's "One-off
@@ -1009,15 +1009,28 @@ subfeatures:
   - id: 09-cli-port
     origin: planned
     spawned_from: root
-    mode: implementing
-    last_completed: plan
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "10-parity-cutover is the only remaining part. Condensed
+        to 2 dispatches (correctness/parity: tasks 1-3; measurement/
+        tooling: tasks 4-5), deletion of old TS trees (task 6) deferred
+        entirely per user direction — not part of either dispatch, only
+        ever run as its own separate later action on explicit request.
+        Continuing on DeepSeek (free) per user preference, escalate to
+        Haiku only if genuinely stuck."
+      returned_at: null
+      verified_by: "vs-141-a-8bd3d789 (this session) — independently ran
+        the FULL rust-gate.sh vst-cli (meaningful again once 08 committed),
+        N6-checked every dispatch, audited every transcript for daemon-
+        touching commands, directly read spot-checked implementations
+        rather than trusting commit messages."
+    commit: c96a202
     process_note: >
       Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
       background). Measured LOC: 2438 across 44 files (arch doc estimated
@@ -1209,6 +1222,45 @@ subfeatures:
       file/open.ts and daemon/status.ts (confirmed genuinely distinct
       commands, not redundant, during the phase-brief sizing pass).
 
+      Dispatch #4 CLOSED OUT (commit c96a202, feat(09-4)) — clean, no
+      Cargo.lock changes needed (no new deps). Ported doctor.rs (283L,
+      client-side subprocess checks — confirmed NOT a thin wrapper around
+      08's services/doctor.ts, has its own tmux/git/which/tailscale/
+      daemon-url checks), summary.rs (252L), open.rs (229L, launch-and-
+      retry when daemon down), status.rs (118L, documented the
+      LifecycleState idle/running/error mapping mismatch in a doc comment
+      exactly as instructed). Independently re-verified: full `rust-gate.sh
+      vst-cli` now meaningful again (08 committed) — green (104 tests
+      total); N6 clean vs 57afc5d~1; git show --stat confirms only 7
+      rust/vst-cli/ files touched, no Cargo.lock; zero matches!() (34
+      assert!()-wrapped tests, continuing 09-3's cleaner pattern); directly
+      read status.rs's state_icon — the LifecycleState mapping reasoning
+      is documented in a doc comment exactly as asked.
+
+      ============================================================
+      09-CLI-PORT — PART COMPLETE (2026-09-15)
+      ============================================================
+      All 4 dispatches done and independently gated:
+        #1 core plumbing (client/daemon_url/output/etc)     2bd35fd — clean,
+           agy-medium, parallel with 07b-2
+        #2 session+mode commands                            450244f — clean,
+           agy-medium, survived a workspace-wide-fmt false-positive
+        #3 worktree/project/file/daemon commands            f2c7bff — agy
+           hit account-wide quota exhaustion across its ENTIRE fallback
+           chain (agy-medium/gpt-oss-120b-medium/claude-sonnet-4-6/
+           claude-opus-4-6-thinking); user-directed rescue via a fresh
+           DeepSeek session picking up the already-complete uncommitted
+           work — clean
+        #4 top-level standalone commands (FINAL)            c96a202 — clean,
+           DeepSeek (continuing the user-directed temporary switch)
+      Total: 2438 LOC across 44 TS files ported into vst-cli, 104 tests,
+      zero gate failures across all 4 dispatches (unlike 07a's 2 and
+      07b's 0 — 09 had zero code-quality gate failures, only the agy
+      infrastructure/quota incident on dispatch #3, which was an
+      availability problem, not a code problem). No cross-part gaps
+      surfaced. No daemon-touching commands found in any dispatch's
+      transcript, audited every time.
+
   - id: 10-parity-cutover
     origin: planned
     spawned_from: root
@@ -1237,3 +1289,13 @@ subfeatures:
       removal (07a, commit d151c71) as F1's one documented exception, not
       skip testing it. Full brief:
       10-parity-cutover/plan-10-daemon-rust-port-parity-cutover.md.
+
+      UPDATED 2026-09-15g (user-directed): condensed to 2 dispatches instead
+      of 6, task 6 (deletion) pulled out entirely — not part of either
+      dispatch, not attempted or asked about by either, dispatched only as
+      its own separate, later action whenever the human explicitly requests
+      it. Dispatch #1 = tasks 1-3 (parity harness, regression tests, SQLite
+      compat — correctness/parity work, Rust-test-writing heavy). Dispatch
+      #2 = tasks 4-5 (N1/N2 baseline measurement, dev-sandbox/docker-compose/
+      package.json script updates — ops/tooling heavy). Phase brief's task
+      table, checklist, and hard-stop section all updated to match.
