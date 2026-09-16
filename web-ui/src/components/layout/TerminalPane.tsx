@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { useIsTouch } from "@/hooks/useIsTouch";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
 import { attachMobileInputFix } from "@/lib/mobile-input-fix";
@@ -27,6 +28,13 @@ interface TerminalPaneProps {
    * the terminal dock omits it.
    */
   channelToggle?: ReactNode;
+  /**
+   * Whether this pane may steal keyboard focus on mount. Defaults to `true`.
+   * The agent pane sets it to `false` in canvas/workspace mode, where panes are
+   * floating tiles the user navigates between and focus must never be yanked
+   * onto a tile (navigation-focus-change).
+   */
+  focusOnMount?: boolean;
 }
 
 /**
@@ -50,7 +58,7 @@ function isXtermAutoResponse(data: string): boolean {
   /* eslint-enable no-control-regex */
 }
 
-export function TerminalPane({ api, sessionId, session, channelToggle }: TerminalPaneProps) {
+export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMount = true }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -86,6 +94,10 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
   // all and no "Starting…" placeholder — until a full page reload repopulates
   // the map via `syncSessionsFromApi`.
   const lifecycleState = (activeSessionId ? sessionStates[activeSessionId] : undefined) ?? session?.state;
+  // Never steal keyboard focus on a touch-primary device (the soft keyboard /
+  // IME would pop up over the tile for no reason). Reactive to the device's
+  // pointer capability; see `useIsTouch`.
+  const isTouch = useIsTouch();
   const attach = activeSessionId ? sessionAttachState[activeSessionId] : undefined;
 
   const attachPending = attach === "pending";
@@ -223,10 +235,15 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       inputDebug.log({ kind: "fix-config", hasTextarea: !!helperTextarea });
     }
 
-    // Take keyboard focus so the user can start typing immediately when a tab
-    // or worktree is opened. The effect re-runs on activeSessionId change, so
-    // tab switches refocus the new tab's terminal too.
-    term.focus();
+    // Steal keyboard focus on mount only on a non-touch device and when this
+    // pane is allowed to focus (`focusOnMount` — false in canvas mode). On a
+    // touch device we never focus (the soft keyboard / IME would pop up over
+    // the tile); in canvas mode we never focus (tiles are navigated by
+    // clicking). The effect re-runs on activeSessionId change, so tab switches
+    // refocus the new tab's terminal on desktop classic mode.
+    if (focusOnMount && !isTouch) {
+      term.focus();
+    }
     term.attachCustomKeyEventHandler((domEvent) => {
       const mod = domEvent.ctrlKey || domEvent.metaKey;
       if (mod && !domEvent.shiftKey) {
@@ -462,6 +479,11 @@ export function TerminalPane({ api, sessionId, session, channelToggle }: Termina
       termRef.current = null;
       fitRef.current = null;
     };
+    // `focusOnMount` and `isTouch` are deliberately NOT dependencies: they are
+    // mount-time decisions (false in canvas mode / on touch devices). Adding
+    // either would tear down and rebuild the whole xterm the moment it flips —
+    // exactly the remount churn the stable-tree-position rule forbids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, enableCopyModeScroll, api, mountTerminal, markSessionAttachPending]);
 
   useEffect(() => {

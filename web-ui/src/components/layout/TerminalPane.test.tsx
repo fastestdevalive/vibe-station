@@ -127,6 +127,80 @@ describe("TerminalPane", () => {
     expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
   });
 
+  // --- Focus-on-navigation: steal keyboard focus only on a non-touch device,
+  // and only when the pane is allowed to focus (`focusOnMount` — false in
+  // canvas mode). On a touch device we never focus (the soft keyboard / IME
+  // would pop up over the tile). (navigation-focus-change) ---
+  // `useIsTouch` reads `(any-pointer: coarse) and (any-hover: none)`; the test
+  // setup's matchMedia stub returns `matches: false`, so the default is a
+  // non-touch (desktop) device. Override it to simulate a touch device.
+  function setTouch(touch: boolean) {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: touch && query.includes("any-pointer: coarse") && query.includes("any-hover: none"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    return () => {
+      window.matchMedia = original;
+    };
+  }
+
+  it("steals terminal focus on a desktop device (classic mode)", async () => {
+    const { Terminal } = await import("@xterm/xterm");
+    const focusSpy = vi.spyOn(Terminal.prototype, "focus");
+    const open = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "working" },
+      sessionAttachState: {},
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+    await waitFor(() => expect(open).toHaveBeenCalled(), { timeout: 500 });
+    expect(focusSpy).toHaveBeenCalled();
+    focusSpy.mockRestore();
+    open.mockRestore();
+  });
+
+  it("does NOT steal terminal focus on a touch device", async () => {
+    const restore = setTouch(true);
+    try {
+      const { Terminal } = await import("@xterm/xterm");
+      const focusSpy = vi.spyOn(Terminal.prototype, "focus");
+      const open = vi.spyOn(api, "openSession");
+      useWorkspaceStore.setState({
+        sessionStates: { "sess-main": "working" },
+        sessionAttachState: {},
+      });
+      render(<TerminalPane api={api} sessionId="sess-main" />);
+      await waitFor(() => expect(open).toHaveBeenCalled(), { timeout: 500 });
+      expect(focusSpy).not.toHaveBeenCalled();
+      focusSpy.mockRestore();
+      open.mockRestore();
+    } finally {
+      restore();
+    }
+  });
+
+  it("does NOT steal terminal focus in canvas mode (focusOnMount=false) even on desktop", async () => {
+    const { Terminal } = await import("@xterm/xterm");
+    const focusSpy = vi.spyOn(Terminal.prototype, "focus");
+    const open = vi.spyOn(api, "openSession");
+    useWorkspaceStore.setState({
+      sessionStates: { "sess-main": "working" },
+      sessionAttachState: {},
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" focusOnMount={false} />);
+    await waitFor(() => expect(open).toHaveBeenCalled(), { timeout: 500 });
+    expect(focusSpy).not.toHaveBeenCalled();
+    focusSpy.mockRestore();
+    open.mockRestore();
+  });
+
   it("a drafting session mounts no terminal and opens no stream", () => {
     // A draft has no tmux pane / pty at all — the composer is what's rendered
     // in the pane's place, and this pane is still parked in PaneHostLayer's

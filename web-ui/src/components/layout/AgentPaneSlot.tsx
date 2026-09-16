@@ -31,6 +31,15 @@ interface AgentPaneSlotProps {
    * PR was last checked against a branch the worktree has since left.
    */
   pr?: PrStatus | null;
+  /**
+   * True when this slot renders as a floating tile on the workspace canvas
+   * (workspace/workspace-view layoutMode) rather than the classic docked pane.
+   * In canvas mode the panes must NEVER steal keyboard focus on mount — the
+   * user navigates tiles by clicking, and yanking the caret/IME onto a tile is
+   * unwanted (navigation-focus-change). Classic mode focuses on a non-touch
+   * device.
+   */
+  canvasMode?: boolean;
 }
 
 /**
@@ -44,7 +53,7 @@ interface AgentPaneSlotProps {
  * never unmounts the terminal, so it cannot recreate the ghost-stream remount
  * bug fixed in 9dc10ef.
  */
-export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null }: AgentPaneSlotProps) {
+export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null, canvasMode = false }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
   // The channel toggle is handed to `TerminalPane` so a single owner decides its
@@ -109,10 +118,11 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
           sessionId={isJson ? null : sessionId}
           session={isJson ? undefined : session}
           channelToggle={channelToggle}
+          focusOnMount={!canvasMode}
         />
         {terminalLive && session ? <TerminalAttachmentUpload api={api} session={session} /> : null}
       </div>
-      <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} />
+      <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} focusOnMount={!canvasMode} />
     </div>
   );
 }
