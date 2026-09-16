@@ -134,3 +134,35 @@ as a real cross-part gap (same treatment `07a` gave several `vst-agents`/
   `acquireLock()` will fail loud ("Daemon is already running...") rather than
   corrupting or replacing the live one — that error is the correct, safe
   outcome, not something to work around by force.
+
+## Closed out — 08-server-bootstrap complete (2026-09-15)
+
+Started on `agy-medium`, hit an account-wide quota exhaustion across the entire
+fallback chain (`agy-medium` → `gpt-oss-120b-medium` → `claude-sonnet-4-6` →
+`claude-opus-4-6-thinking`) simultaneously with `09` dispatch #3. Per user
+direction, finished on a fresh **Haiku** session picking up the already-
+substantial uncommitted work left on disk — no re-porting from scratch.
+
+- Commit `b0dffd3` (`feat(08)`) — ported `server.rs` (~2778L, full axum
+  assembly + every `06`/`07a`/`07b` route/WS mount + auth middleware),
+  `main.rs`, `doctor.rs`, `env_setup.rs`, plus two well-factored new modules
+  (`lock.rs`, `port.rs`) rather than cramming everything into `main.rs`.
+- All 6 untracked-dependency questions resolved definitively: `tunnelPort.ts`'s
+  real gap absorbed via `VST_TUNNEL_PORT` env handling already in `07b`;
+  `daemonPort.ts` confirmed redesigned as an explicit parameter;
+  `userSkillCatalog.ts` → `vst_agents::user_skill_catalog` (already ported);
+  `project-store.ts`'s `loadAll` → internal to `StoreHandle::open` (already
+  ported); `resolveVstPaths.ts`/`harnessSkillDirs.ts` → `env_setup.rs`;
+  `restore_on_boot` → implemented fresh as `cloudflared_restore_on_boot()`.
+- **Directly read** (not trusted) the auth-middleware test suite — genuine
+  `tower::ServiceExt::oneshot` in-process testing against the real assembled
+  `build_app()`, `tempdir()`-isolated, port `0` (never bound), real token
+  minting, real 401 rejection for unauthenticated + tampered tokens, plus a
+  `/health`-exemption edge case. High-quality, not a checkbox test.
+- Gate re-verified independently, crate-scoped (12/12 tests, clean fmt/clippy).
+  N6 clean. Cargo.lock/Cargo.toml diff confirmed exclusively `vst-daemon`'s
+  own crate-local deps — zero `rust/vst-cli/` overlap.
+- This closes out **the highest-integration-risk part of the entire feature**
+  cleanly.
+
+**Next:** `10-parity-cutover` — the last remaining part.

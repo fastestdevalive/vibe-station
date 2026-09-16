@@ -6,7 +6,7 @@ master:
   prd: skipped   # internal engineering rewrite, no user-facing product behavior — see arch doc "PRD: none"
   plan: complete # arch-daemon-rust-port.md reviewed and approved
 
-current_subfeature: null
+current_subfeature: 08-server-bootstrap
 
 model_policy_note: >
   2026-09-15b (user-directed, see ORCHESTRATION-PROMPT.md's "One-off
@@ -22,11 +22,16 @@ model_policy_note: >
   revert-to-DeepSeek-after-08 plan is superseded. Do not revert to DeepSeek
   without a fresh, equally explicit user instruction. If agy hits its own
   usage/rate limit mid-dispatch, switch model WITHIN the same running
-  session via agy's own in-terminal slash command (send
-  "/model gpt oss 120b" via vst session send --no-wait, verify delivery)
-  rather than terminating and redispatching — this is a live fallback for
-  agy's own limit, distinct from the DeepSeek-Haiku escalation ladder in
-  step D. Also: prefer --no-wait over --wait when sending to agy sessions
+  session via agy's own in-terminal slash command. Exact id is
+  "gpt-oss-120b-medium" (bare "gpt oss 120b" is rejected — the session's own
+  error message lists the valid ids, always confirm from there). If THAT
+  model also returns a transient 503 "no capacity available" (observed,
+  distinct from a quota error), fall further to another listed model
+  (claude-sonnet-4-6 worked once). Send via vst session send --no-wait,
+  verify delivery, rather than terminating and redispatching — this is a
+  live fallback for agy's own limit/capacity, distinct from the
+  DeepSeek-Haiku escalation ladder in step D. Also: prefer --no-wait over
+  --wait when sending to agy sessions
   (a --wait send had a delivery hiccup once); poll agy/tmux sessions on a
   tighter ~8min window, not the ~15min JSON-channel default.
 
@@ -883,15 +888,30 @@ subfeatures:
   - id: 08-server-bootstrap
     origin: planned
     spawned_from: root
-    mode: pending
-    last_completed: plan
+    mode: done
+    last_completed: review
     awaiting_phase: null
     awaiting_artifact: null
     phase_chain: [plan, implement, verify, review]
     superseded_reason: null
     parked_reason: null
-    handoff: {next_item: null, returned_at: null, verified_by: null}
-    commit: null
+    handoff:
+      next_item: "10-parity-cutover is the last remaining part. Needs its
+        own sizing/dispatch-split pass (task-based, not LOC-based — see its
+        pre-written phase brief) and an explicit model-policy decision from
+        the user before dispatch (agy-medium's account-wide quota was
+        exhausted this session; may have reset by the time 10 starts —
+        re-check, don't assume either way)."
+      returned_at: null
+      verified_by: "vs-141-a-8bd3d789 (this session) — independently
+        re-ran cargo fmt/clippy/test scoped to vst-daemon (not the
+        workspace-wide gate script, since vst-cli had concurrent
+        uncommitted work at review time), directly read the
+        auth-middleware-rejection tests and the restore_on_boot
+        implementation rather than trusting the commit message, N6-checked
+        against 57afc5d~1, confirmed the Cargo.lock/Cargo.toml diff is
+        exclusively vst-daemon's own crate-local deps."
+    commit: b0dffd3
     process_note: >
       Pre-sized ahead of dispatch (2026-09-15c, while 07b dispatch #1 ran in
       background, at user's request to save time later). Measured LOC: 710
@@ -910,6 +930,81 @@ subfeatures:
       but not independently re-verified (userSkillCatalog.ts,
       resolveVstPaths.ts, harnessSkillDirs.ts, project-store.ts's loadAll).
       Full brief: 08-server-bootstrap/plan-08-daemon-rust-port-server-bootstrap.md.
+
+      Dispatched (single dispatch, not split) on agy-medium, implementer
+      session vs-141-a-6e1c96ce, 2026-09-15, running IN PARALLEL with 09
+      dispatch #1 (still in flight on rust/vst-cli/, zero overlap with
+      rust/vst-daemon). Required to: resolve all 6 untracked-dependency
+      findings definitively (not just re-flag them), design an isolated-home
+      testing mechanism rather than ever touching the real ~/.vibe-station,
+      prefer axum in-process testing (tower::ServiceExt::oneshot) over
+      binding any real port, and write a real auth-middleware-rejection
+      test against the assembled Router.
+
+      Dispatch on agy-medium hit the SAME account-wide quota exhaustion as
+      09 dispatch #3 (agy-medium -> gpt-oss-120b-medium -> claude-sonnet-
+      4-6 -> claude-opus-4-6-thinking, all exhausted). Real progress made
+      before being stuck: server.rs (~2388L, axum assembly + full route
+      mounting), doctor.rs (~237L), env_setup.rs (~216L, houses
+      setup_vst_environment/patch_shell_configs/install_harness_skill_dirs
+      — resolves 3 of the 6 untracked-dependency questions), main.rs
+      (~573L, mid-edit when interrupted). Confirmed findings before
+      interruption: recover_not_started_sessions/sweep_direct_pty_
+      sessions_on_boot already exist in vst_git::recover; tunnel_port
+      resolved via VST_TUNNEL_PORT env var already handled in 07b's
+      mobile_auth (not a gap); restore_on_boot CONFIRMED GENUINE GAP — only
+      a doc-comment mention in cloudflared, no actual function, needs
+      inline implementation in main.rs (likely what it was mid-writing).
+      userSkillCatalog.ts/project-store.ts's loadAll were NOT resolved
+      before interruption (grep run, result not captured).
+
+      USER-DIRECTED (2026-09-15f): finish 08 using a Haiku subagent
+      instead, same pickup pattern as 09-3's DeepSeek rescue. Terminated
+      the stuck agy session (vs-141-a-6e1c96ce) WITHOUT discarding its
+      uncommitted work. Dispatched a fresh Haiku session
+      (mode-1789474690627-p55ag), implementer session vs-141-a-d634e01b,
+      with full context: what's done, what's confirmed, what's still open
+      (userSkillCatalog/loadAll), explicit instruction to finish
+      restore_on_boot, write the real auth-middleware-rejection test via
+      tower::ServiceExt::oneshot, avoid rust/vst-cli/ (09's concurrent
+      DeepSeek session may still be finishing dispatch #4), and use
+      crate-scoped gate commands only.
+
+      08 CLOSED OUT (commit b0dffd3, feat(08)) — Haiku pickup worked
+      cleanly, resolved all remaining open items: ported server.rs
+      (~2778L, full axum assembly + every 06/07a/07b route/WS mount + auth
+      middleware), main.rs (~489L delta, entry point wiring), doctor.rs
+      (~246L), env_setup.rs (~218L, already-known), plus two NEW small
+      modules the implementer correctly split out rather than cramming into
+      main.rs: lock.rs (safe PID-liveness via /proc/<pid>, no unsafe, no
+      libc dep) and port.rs (bounded find_free_port, 100-port window).
+      Definitively resolved the 2 previously-open untracked-dependency
+      questions: userSkillCatalog.ts -> vst_agents::user_skill_catalog
+      (already ported, set_skill_paths called at startup);
+      project-store.ts's loadAll -> internal to StoreHandle::open (already
+      ported, no separate function needed). restore_on_boot implemented as
+      cloudflared_restore_on_boot() — directly read: genuine, non-stub
+      implementation (sweeps orphan processes via vst-lifecycle's
+      cloudflared::sweep_orphans, re-enables the tunnel via
+      cloudflared::enable if previously enabled, all non-fatal on error).
+      Independently re-verified, not trusted from the commit message:
+      cargo fmt -p vst-daemon --check = 0 diffs; clippy clean (pedantic
+      only); cargo test -p vst-daemon = 12/12 pass; N6 clean vs 57afc5d~1;
+      Cargo.toml diff confirmed entirely vst-daemon's own crate-local deps
+      (axum/tower/tower-http/ring/base64/regex/futures — matches what 09-3's
+      DeepSeek session earlier identified as "not mine" when it deliberately
+      skipped committing Cargo.lock, now consistent); git show --stat
+      confirms ONLY rust/vst-daemon/ + rust/Cargo.lock touched, zero
+      rust/vst-cli/ overlap; zero matches!() in both new test files (not
+      just zero unwrapped). DIRECTLY READ tests/auth_middleware.rs in full:
+      genuinely real tower::ServiceExt::oneshot in-process testing against
+      the actual build_app(), tempdir()-isolated home, port: 0 (never
+      bound), real token minting via 07b's mint_token, asserts real 401
+      rejection for unauthenticated + tampered-token requests, real
+      acceptance for a valid token, a no-auth-mode passthrough case, AND a
+      /health-exemption edge case — this is thorough, high-quality test
+      coverage, not a checkbox test. This closes out the highest-integration-
+      risk part of the entire feature cleanly.
 
   - id: 09-cli-port
     origin: planned
@@ -958,6 +1053,161 @@ subfeatures:
       mock the daemon HTTP client at the test level instead of spinning up
       any real vst-daemon. Not picked up again by the normal serial loop
       once implementing/done — check this file before redispatching.
+
+      Dispatch #1 CLOSED OUT (commit 2bd35fd, feat(09-1)) — clean first try:
+      ported client.rs (HTTP client, Bearer auth), daemon_url.rs (VST_DAEMON_URL
+      + config.json resolution), env.rs, paths.rs, output.rs, preflight.rs,
+      confirm.rs, text_source.rs, send_message.rs (vst session send
+      orchestration incl. multipart upload, queue vs steer, lifecycle
+      polling), program.rs (CLI arg parser/subcommand AST). Independently
+      re-verified: rust-gate.sh green; N6 clean vs 57afc5d~1; confirmed via
+      `git show --stat` that ONLY rust/vst-cli/, rust/Cargo.lock, rust/.gate/
+      were touched — zero overlap with vst-routes/vst-daemon; audited full
+      transcript for any cargo run/real-port command, found none, only
+      cargo check/test/fmt/deny; directly read test_daemon_url_reads_config_file
+      — uses tempdir() with a fake config.json, never the real
+      ~/.vibe-station; directly confirmed the mock-server tests bind
+      127.0.0.1:0 (OS-assigned ephemeral port), never 7421. Zero bare
+      matches!(). 13 tests pass, 0 ignored.
+
+      Dispatch #2 (session+mode commands) started on agy-medium, implementer
+      session vs-141-a-195353f4, 2026-09-15, still running in parallel with
+      08 (vs-141-a-6e1c96ce, rust/vst-daemon, zero overlap). Same
+      scope-isolation and daemon-safety instructions as dispatch #1, plus
+      told to reuse dispatch #1's client.rs/output.rs helpers rather than
+      duplicating.
+
+      Dispatch #2 CLOSED OUT (commit 450244f, feat(09-2)) — clean first
+      try: ported commands/session/* (attach, create, handoff, info, ls,
+      output, rename, reset, restore, send, stop, terminate, transcript)
+      and commands/mode/* (add, ls, rm). Independently re-verified with a
+      real complication: running rust-gate.sh vst-cli directly failed at
+      the fmt step — but `cargo fmt --all --check` is ALWAYS workspace-wide
+      regardless of the crate argument (confirmed by reading rust-gate.sh's
+      source), so it was tripping on 08's concurrent, uncommitted,
+      not-yet-formatted vst-daemon files, not on 09-2's own code. Verified
+      this properly rather than accepting the spurious failure or rejecting
+      the dispatch: `cargo fmt -p vst-cli --check` alone = 0 diffs;
+      `cargo clippy -p vst-cli --all-targets --all-features -- <the same
+      4 deny groups rust-gate.sh uses>` = clean (only informational
+      pedantic warnings, which the gate deliberately allows); `cargo test
+      -p vst-cli` = 26/26 passing (13 from dispatch #1 + 13 new). N6 clean
+      vs 57afc5d~1. `git show --stat` confirms only rust/vst-cli/ and
+      rust/.gate/ touched. No unwrapped matches!(). Audited transcript —
+      no daemon-touching commands. THIS IS A REAL GAP TO FLAG FOR A LATER
+      PART: rust-gate.sh's fmt check cannot be meaningfully run per-crate
+      while another crate has concurrent uncommitted work — the parallel-
+      dispatch pattern this session used twice (05/04c, and now 09/07b+08)
+      works around it by verifying crate-scoped fmt/clippy/test manually
+      when needed, but this should probably be fixed properly in a later
+      pass (e.g. `cargo fmt -p <crate> --check` instead of `--all` when a
+      single crate is named) rather than relying on manual workarounds
+      every time.
+
+      Dispatch #3 (worktree/project/file/daemon commands, ~640 LOC) started
+      on agy-medium, implementer session vs-141-a-62233f9f, 2026-09-15,
+      still running in parallel with 08 (vs-141-a-6e1c96ce). Explicitly
+      pre-briefed on the workspace-wide-fmt-check false-positive from
+      dispatch #2's closeout so it doesn't misdiagnose it as its own
+      failure — told to verify crate-scoped instead.
+
+      Dispatch #3 hit agy-medium's individual usage quota mid-task (no
+      commit yet), ~35 min in. Followed the documented fallback: sent
+      /model gpt-oss-120b-medium (had to discover the exact model id from
+      agy's own error message first — "gpt oss 120b" alone was rejected as
+      invalid). That model then hit a separate, transient 503 "no capacity
+      available" server-side error twice in a row (not a quota issue).
+      Extended the fallback intent (don't let capacity/quota block progress)
+      by switching to a THIRD model available in the same agy session's
+      /model list: claude-sonnet-4-6 (Thinking). This worked — session
+      resumed working immediately. Also hit one `vst session send --no-wait`
+      delivery hiccup (a message needed a second identical resend before it
+      visibly appeared in the terminal) — consistent with the earlier
+      dispatch #2 delivery-hiccup note; always verify via a follow-up output
+      check rather than trusting the send call's silent success.
+
+      08 hit the SAME agy-medium quota limit independently (both agy
+      sessions apparently share one account-level quota bucket — makes
+      sense, same agy-medium mode/account across sessions). Same cascade:
+      /model gpt-oss-120b-medium also hit 503 capacity here, fell to
+      claude-sonnet-4-6, which resumed it successfully. Given BOTH
+      concurrent agy sessions hit the same quota wall around the same time
+      (~35-40 min into their respective dispatches), future agy dispatches
+      in this feature should expect this quota to be a recurring, expected
+      event, not a one-off — the claude-sonnet-4-6 fallback is now the
+      proven, repeatable path when both agy-medium and gpt-oss-120b-medium
+      are unavailable.
+
+      SECOND cascade, same two sessions, shortly after the first: both hit
+      claude-sonnet-4-6's OWN quota too (reset windows ~4h51m, a separate
+      bucket from agy-medium's ~3h43m one). Fell to claude-opus-4-6-thinking
+      for both — worked, both resumed. Real progress made on claude-sonnet-
+      4-6 before this hit: 08 fully resolved all 6 untracked-dependency
+      questions (recover_not_started_sessions/sweep_direct_pty_sessions_
+      on_boot -> vst_git::recover; setup_vst_environment/patch_shell_
+      configs/install_harness_skill_dirs already in vst-daemon/src/
+      env_setup.rs; restore_on_boot doesn't exist anywhere, needs inline
+      implementation in main.rs; tunnel_port read from VST_TUNNEL_PORT env
+      var in mobile_auth) and was mid-write on main.rs. 09-3 got further:
+      clean compile, 44 new tests passing, was about to run clippy when hit.
+      This confirms the fallback CHAIN (agy-medium -> gpt-oss-120b-medium ->
+      claude-sonnet-4-6 -> claude-opus-4-6-thinking) is the right mental
+      model for parallel agy dispatches under heavy concurrent load, not a
+      single fallback — expect to walk further down the list if needed.
+
+      USER-DIRECTED (2026-09-15e): agy-medium's account-wide quota was
+      confirmed exhausted across the ENTIRE fallback chain (agy-medium,
+      gpt-oss-120b-medium, claude-sonnet-4-6, claude-opus-4-6-thinking all
+      hit the same ~4h47-51m reset window) — this is an account-level
+      exhaustion, not per-model, so further model-hopping under the same
+      agy account would not help. User directed: finish 09-cli-port
+      completely using DeepSeek instead (temporary, for 09 only — not a
+      standing policy change to model-swap exception #2, which still
+      applies to 08/10 once revisited). Terminated the stuck agy dispatch
+      #3 session (vs-141-a-62233f9f) WITHOUT discarding its work — its
+      uncommitted files were left on disk in the shared worktree (new files
+      under rust/vst-cli/src/commands/{worktree,project,file,daemon}/,
+      tests/worktree_project_file_daemon_contract.rs, mod.rs/main.rs
+      edits) — and dispatched a fresh DeepSeek session
+      (mode-1785649772352-dlzo2) with explicit instructions to pick up and
+      finish that exact uncommitted state (review, fix any matches!/
+      coverage gaps, verify, commit) rather than re-porting from scratch.
+      Explicitly told NOT to touch rust/vst-daemon/ (08's still-in-progress,
+      also-quota-stuck agy session's uncommitted work in the same shared
+      worktree) and NOT to run the full rust-gate.sh (workspace-wide fmt
+      would false-positive on 08's uncommitted files) — use crate-scoped
+      cargo fmt/clippy/test for vst-cli instead.
+
+      Dispatch #3 CLOSED OUT (commit f2c7bff, feat(09-3)) — DeepSeek pickup
+      worked cleanly: reviewed (did not re-port) the already-complete
+      uncommitted work, confirmed no stubs, confirmed zero matches!() in
+      the new test file (not just zero UNWRAPPED — zero at all, cleaner
+      than dispatch #1/#2's style), ran cargo fmt -p vst-cli (whitespace-
+      only fix), committed only the 20 vst-cli files. **Deliberately did
+      NOT commit rust/Cargo.lock** despite the literal instruction saying
+      to — correctly identified its current diff is entirely 08's
+      in-progress dependency additions (base64/ring/tower/etc from 08's
+      uncommitted vst-daemon/Cargo.toml changes), not anything vst-cli
+      needs (vst-cli's own deps were already locked in dispatch #1). Good
+      independent judgment, matching the task's stronger intent (never
+      touch 08's in-progress state) over its literal wording. Independently
+      re-verified: cargo fmt -p vst-cli --check = 0 diffs; clippy clean
+      (only pedantic warnings); cargo test -p vst-cli = 44/44 new + 13/13
+      existing pass; N6 clean vs 57afc5d~1; directly read
+      worktree/create.rs — real arg parsing (incl. --parent/--no-parent
+      session-context defaulting matching the vst skill's documented CLI
+      behavior), real daemon_post call, real error-code mapping (404->2).
+      Removed a stray REPORT.md the implementer wrote to the repo root
+      (untracked, never staged/committed — harmless but cleaned up).
+
+      Dispatch #4 (FINAL for 09): doctor/summary/top-level-open/top-level-
+      status, ~500 LOC, started on DeepSeek (mode-1785649772352-dlzo2),
+      implementer session vs-141-a-d86504c9, 2026-09-15. Same scope-
+      isolation (forbidden from touching vst-daemon/vst-routes) and
+      crate-scoped-gate instructions as dispatch #3. Told to distinguish
+      top-level open.ts/status.ts from dispatch #3's already-ported
+      file/open.ts and daemon/status.ts (confirmed genuinely distinct
+      commands, not redundant, during the phase-brief sizing pass).
 
   - id: 10-parity-cutover
     origin: planned

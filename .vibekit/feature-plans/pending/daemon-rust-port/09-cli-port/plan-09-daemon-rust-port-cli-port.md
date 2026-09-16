@@ -118,3 +118,25 @@ relevant earlier part, don't invent a CLI-local type to paper over it.
   git-version checks if both files independently do them (verify which one is
   authoritative for shared checks, matching this feature's habit of flagging
   "same logic in two files" as a real risk signal, not assuming it's fine).
+
+## Closed out — dispatches #1-3 complete; #4 remaining
+
+- **#1** (core plumbing) — `2bd35fd`, clean, agy-medium.
+- **#2** (session+mode commands) — `450244f`, clean, agy-medium (survived a
+  workspace-wide-fmt false-positive from concurrent `08` work — verified
+  crate-scoped instead of trusting the raw gate output).
+- **#3** (worktree/project/file/daemon commands) — `f2c7bff`. Started on
+  agy-medium, hit an account-wide quota exhaustion across the ENTIRE fallback
+  chain (agy-medium → gpt-oss-120b-medium → claude-sonnet-4-6 →
+  claude-opus-4-6-thinking, all same reset window) alongside `08` hitting the
+  identical wall simultaneously. Per user direction, finished on `DeepSeek`
+  instead — a fresh session picked up the already-complete, uncommitted work
+  left on disk (never re-ported), reviewed it for real completeness, made one
+  good independent call (deliberately did NOT commit `rust/Cargo.lock` since
+  its diff belonged entirely to `08`'s in-progress, uncommitted work), and
+  committed cleanly. Independently re-verified: crate-scoped fmt/clippy/test
+  all clean, N6 clean, zero `matches!()` in the new tests (not just zero
+  unwrapped), spot-read `worktree/create.rs` — real, complete port.
+- **#4** (top-level standalone commands: doctor/summary/open/status,
+  ~500 LOC) — not yet dispatched, the last one for `09`.
+
