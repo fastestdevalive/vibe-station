@@ -35,6 +35,11 @@ interface ComposerProps {
    *  `undefined` means the catalog hasn't loaded yet — `/` renders as plain
    *  text, no popover, no row (Requirement 11). */
   commands?: Command[];
+  /** Whether to grab keyboard focus (and show the IME) on mount. Defaults to
+   *  `true` for the standalone/first-run case; the hosting pane passes
+   *  `false` in canvas mode or on a touch device, so focus is never yanked
+   *  onto a pane that shouldn't pop the IME. */
+  focusOnMount?: boolean;
 }
 
 /** Message composer: skill-aware editor + send/stop + drag-drop / picker attachments. */
@@ -50,6 +55,7 @@ export function Composer({
   initialAttachments,
   textareaRef,
   commands,
+  focusOnMount = true,
 }: ComposerProps) {
   const commandNames = (commands ?? []).map((c) => c.name);
 
@@ -98,9 +104,19 @@ export function Composer({
 
   // Auto-focus the composer on mount (mirrors term.focus() in TerminalPane).
   // Composer is re-keyed on sessionId in ChatPane so this fires on every
-  // agent/worktree switch, letting the user type immediately without tapping.
+  // agent/worktree switch, letting the user type immediately without tapping —
+  // but ONLY when the hosting pane passed focusOnMount=true (false in canvas
+  // mode or on a touch device). When false we don't steal focus / pop the IME.
   useEffect(() => {
-    internalEditorRef.current?.focus();
+    if (focusOnMount) {
+      internalEditorRef.current?.focus();
+    }
+    // Focus decision is intentionally mount-time only (the component is
+    // re-keyed on sessionId so it remounts on every agent/worktree switch).
+    // It must NOT refocus on a `focusOnMount` flip mid-view (e.g. toggling
+    // into canvas mode while the user is already looking at the pane) — that
+    // would yank the caret away from wherever it is.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleSend(queue: boolean) {
