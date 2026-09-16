@@ -221,11 +221,13 @@ fn claude_adapter_reconstructs_edit_diffs() {
             { "type": "tool_use", "id": "e1", "name": "Edit", "input": { "file_path": "/p/a.ts", "old_string": "a", "new_string": "b" } },
             { "type": "tool_use", "id": "e2", "name": "MultiEdit", "input": { "file_path": "/p/b.ts", "edits": [ { "old_string": "1", "new_string": "2" }, { "old_string": "3", "new_string": "4" } ] } },
             { "type": "tool_use", "id": "e3", "name": "Read", "input": { "file_path": "/p/c.ts" } },
+            { "type": "tool_use", "id": "e4", "name": "Write", "input": { "file_path": "/p/d.ts", "content": "new file content" } },
         ] } }),
         serde_json::json!({ "type": "user", "message": { "role": "user", "content": [
             { "type": "tool_result", "tool_use_id": "e1", "content": "ok" },
             { "type": "tool_result", "tool_use_id": "e2", "content": "ok" },
             { "type": "tool_result", "tool_use_id": "e3", "content": "ok" },
+            { "type": "tool_result", "tool_use_id": "e4", "content": "ok" },
         ] } }),
     ];
     write_claude_store(&projects, "-home-u--wt-proj", CHAT_ID, &lines);
@@ -264,6 +266,16 @@ fn claude_adapter_reconstructs_edit_diffs() {
         ]
     );
     assert!(by_id["e3"].tool_diffs.is_none());
+    // A Write tool call grows a full-file diff with oldText: "".
+    let e4 = by_id["e4"].tool_diffs.clone().unwrap();
+    assert_eq!(
+        e4,
+        vec![vst_types::ToolDiff {
+            path: "/p/d.ts".into(),
+            old_text: Some(String::new()),
+            new_text: "new file content".into()
+        }]
+    );
 }
 
 // ---------------------------------------------------------------------------

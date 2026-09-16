@@ -457,16 +457,76 @@ fn claude_acp_command() -> String {
 }
 
 /// The claude ACP adapter entrypoint (`dist/index.js`). The TS resolves this
-/// via Node's `require.resolve`; Rust cannot, so the path comes from an env
-/// var (`VST_CLAUDE_ACP_ADAPTER`) with a documented fallback to a conventional
-/// npm global location. This is a live-verify item — flagged in the report.
+/// via Node's `require.resolve`; Rust has no equivalent module resolver, so
+/// this shells out to `node -e` once (cached) to run the SAME resolution
+/// node itself would do, inheriting the daemon's own cwd — which is where
+/// `node_modules/@agentclientprotocol/claude-agent-acp` actually lives for
+/// this project's install layout (a pnpm-hoisted symlink under the repo
+/// root/`/app`, the daemon's WORKDIR in the dev-sandbox image).
+///
+/// Confirmed root cause of "agent process failed to spawn: agent connection
+/// closed before initialize completed" for Rich Chat with the `claude` CLI:
+/// the previous fallback returned the BARE npm specifier
+/// (`@agentclientprotocol/claude-agent-acp/dist/index.js`) whenever
+/// `VST_CLAUDE_ACP_ADAPTER` was unset (always, in practice — nothing sets
+/// it). `node <bare-specifier>` does not do module resolution on its
+/// positional script argument; it treats it as a literal path relative to
+/// cwd and fails immediately with `MODULE_NOT_FOUND`, closing stdio before
+/// the ACP `initialize` handshake can even begin — reproduced verbatim
+/// against the dev-sandbox container (`node
+/// '@agentclientprotocol/claude-agent-acp/dist/index.js'` → `Error: Cannot
+/// find module '/app/@agentclientprotocol/claude-agent-acp/dist/index.js'`,
+/// exit 1), while `require.resolve(...)` from the same cwd resolves fine.
+///
+/// `VST_CLAUDE_ACP_ADAPTER` is still honored first, for tests/overrides.
 fn claude_acp_adapter_entry() -> String {
     if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ADAPTER") {
         if !p.is_empty() {
             return p;
         }
     }
-    "@agentclientprotocol/claude-agent-acp/dist/index.js".to_string()
+    static RESOLVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(resolve_claude_acp_adapter_entry_via_node)
+        .clone()
+}
+
+const CLAUDE_ACP_ADAPTER_SPECIFIER: &str = "@agentclientprotocol/claude-agent-acp/dist/index.js";
+
+/// Blocking (one-time, cached by the caller) — spawns `node -e` to resolve
+/// the adapter's real on-disk path via node's own `require.resolve`. Falls
+/// back to the bare specifier (the old, broken-but-at-least-legible
+/// behavior) if node itself is missing or resolution fails, so a caller
+/// still gets SOME argv instead of a panic; the resulting spawn failure
+/// remains diagnosable via the improved error surfaced by `AcpConnection`.
+fn resolve_claude_acp_adapter_entry_via_node() -> String {
+    let script = format!("process.stdout.write(require.resolve('{CLAUDE_ACP_ADAPTER_SPECIFIER}'))");
+    match std::process::Command::new(claude_acp_command())
+        .arg("-e")
+        .arg(&script)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if resolved.is_empty() {
+                CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
+            } else {
+                resolved
+            }
+        }
+        Ok(out) => {
+            eprintln!(
+                "[acp] failed to resolve claude-agent-acp adapter via node -e require.resolve: status={} stderr={}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+            CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
+        }
+        Err(err) => {
+            eprintln!("[acp] failed to spawn node to resolve claude-agent-acp adapter: {err}");
+            CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
+        }
+    }
 }
 
 async fn write_mode_755(path: &PathBuf, content: &str) {

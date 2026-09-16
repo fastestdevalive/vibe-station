@@ -139,8 +139,17 @@ pub struct StartDraftBody {
 #[serde(rename_all = "camelCase")]
 pub struct StartDraftResult {
     pub ok: bool,
-    /// Present when a new worktree was created.
+    /// Present when a new worktree was created, or when promoting into an
+    /// already-existing worktree (entryPoint "tab", or "worktree" with an
+    /// existing choice) — the caller navigates off this response
+    /// synchronously and must not have to wait on the `session:updated`/
+    /// `worktree:created` WS broadcasts to learn which worktree it landed in.
     pub worktree_id: Option<String>,
+    /// The full serialized worktree record, present only when a brand-new
+    /// worktree was created by this call. The web-ui registers it in its
+    /// store immediately off this response rather than depending on the
+    /// `worktree:created` broadcast racing its own navigation.
+    pub worktree: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// `PATCH /sessions/:id/pin` request body.

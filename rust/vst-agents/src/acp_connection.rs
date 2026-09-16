@@ -159,6 +159,17 @@ enum Command {
 struct Inner {
     cmd_tx: mpsc::UnboundedSender<Command>,
     shared: Arc<Shared>,
+    /// `"<command> <args...>"` — captured at construction purely for
+    /// diagnostics: when the actor's `connect_with` background transport
+    /// future fails before `command_loop` ever runs (e.g. the child process
+    /// exits immediately after a bad argv), the `Initialize` command's reply
+    /// sender is dropped without ever being answered, so `initialize()`'s
+    /// `rx.await` only sees a bare `RecvError` — no access to the real
+    /// underlying error. Including the attempted command/args in the
+    /// resulting message is the difference between "connection closed
+    /// before initialize completed" (which command? spawned how?) and
+    /// something a person can actually act on.
+    command_desc: String,
 }
 
 /// The concrete [`AcpTransport`] — one per session, spawn-on-construction.
@@ -178,11 +189,16 @@ impl AcpConnection {
     /// Build a connection handle and spawn its background actor. Must be
     /// called from within a tokio runtime (as all tests and the daemon are).
     pub fn new(spec: AcpLaunchSpec) -> Self {
+        let command_desc = format!("{} {}", spec.command, spec.args.join(" "));
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
         let shared = Arc::new(Shared::new());
         let spec = Arc::new(spec);
         spawn_actor(Arc::clone(&spec), Arc::clone(&shared), cmd_rx);
-        Self(Arc::new(Inner { cmd_tx, shared }))
+        Self(Arc::new(Inner {
+            cmd_tx,
+            shared,
+            command_desc,
+        }))
     }
 
     fn send(&self, cmd: Command) -> bool {
@@ -204,9 +220,10 @@ impl AcpTransport for AcpConnection {
             ));
         }
         rx.await.map_err(|_| {
-            AcpTransportError::SpawnFailed(
-                "agent connection closed before initialize completed".to_string(),
-            )
+            AcpTransportError::SpawnFailed(format!(
+                "agent connection closed before initialize completed (command: {})",
+                self.0.command_desc
+            ))
         })?
     }
 

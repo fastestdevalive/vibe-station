@@ -248,18 +248,31 @@ function DraftComposerInner({
         if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
       }
       base.useTmux = useTmux;
-    } else if (entryPoint === "global") {
+    } else if (entryPoint === "global" || entryPoint === "direct") {
       base.useWorktree = useWorktree;
       if (useWorktree) {
-        if (branch.trim()) base.branch = branch.trim();
-        if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
-      }
-      base.useTmux = useTmux;
-    } else if (entryPoint === "direct") {
-      base.useWorktree = useWorktree;
-      if (useWorktree) {
-        if (branch.trim()) base.branch = branch.trim();
-        if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
+        // BUG FIX: the New/Existing worktree radios and the worktree
+        // `<Select>` render for entryPoint "global"/"direct" too (see the
+        // `entryPoint !== "tab" && useWorktree` guard below), but this
+        // branch used to never serialize `worktreeChoice`/
+        // `existingWorktreeId` — only the `entryPoint === "worktree"`
+        // branch above did. So picking "Existing worktree" + a specific
+        // worktree here was pure unsent React state: `startTier1` posted
+        // `draftConfig: {entryPoint, useWorktree:true, branch?,
+        // baseBranch?}` with no trace of which worktree the user chose,
+        // and both daemons' `/start` handlers treat
+        // `useWorktree === true` with no `worktreeChoice` as "create a
+        // new worktree" — silently ignoring the selection and always
+        // minting a brand-new one. Live-reproduced against :7141 (and
+        // confirmed identical against the TS daemon — this was never a
+        // Rust-port-specific bug).
+        base.worktreeChoice = worktreeChoice;
+        if (worktreeChoice === "existing") {
+          if (existingWorktreeId) base.existingWorktreeId = existingWorktreeId;
+        } else {
+          if (branch.trim()) base.branch = branch.trim();
+          if (baseBranch.trim()) base.baseBranch = baseBranch.trim();
+        }
       }
       base.useTmux = useTmux;
     } else if (entryPoint === "tab") {
@@ -671,8 +684,15 @@ function DraftComposerInner({
           <h2 className="draft-composer__title">{title}</h2>
         </div>
         <div className="draft-composer__fields">
-          {/* Project field */}
-          {(!isTier1 || !session?.projectId) ? (
+          {/* Project field — hidden entirely for entryPoint "tab": the
+              draft was created from the "+" on this worktree's own agent
+              tabs, so its project (and worktree) are already fixed and
+              implicit from where the button lives. Nothing here is ever
+              user-changeable for this entry point (there is no "Use
+              project folder instead" detach button for "tab" either, a few
+              lines below), so showing a fixed, unremovable chip added
+              nothing but visual noise. */}
+          {entryPoint !== "tab" && ((!isTier1 || !session?.projectId) ? (
             <ProjectCombobox
               api={api}
               projects={projects}
@@ -745,7 +765,7 @@ function DraftComposerInner({
                 </button>
               ) : null}
             </>
-          )}
+          ))}
 
           {/* Use worktree checkbox — "global"/"direct" entry points only.
               For entryPoint "worktree" this checkbox would be a no-op:

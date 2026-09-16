@@ -40,12 +40,16 @@ pub async fn handle_session_input(
             entry.stream.write(data);
             return;
         }
-        // No stream — fall back to `tmux send-keys -l`.
-        let escaped = data.replace('\'', "'\\''");
-        match run_tmux(
-            conn,
-            &["send-keys", "-t", &session.tmux_name, "-l", &escaped],
-        ) {
+        // No stream — fall back to `tmux send-keys -l`. `data` is passed
+        // straight through as a single argv element to `Command::args`
+        // (no shell involved), so it must NOT be shell-escaped here. The
+        // `'\\''`-escaping below was carried over from the TS original
+        // (`daemon/src/ws/handlers/sessionInput.ts`), which needed it
+        // because it built a string for `execSync("tmux send-keys ... '...'")`.
+        // Applying that same escaping to an argv element corrupts every
+        // literal `'` the user types (e.g. while responding to an agent's
+        // permission prompt) into four literal characters.
+        match run_tmux(conn, &["send-keys", "-t", &session.tmux_name, "-l", data]) {
             Ok(()) => {}
             Err(msg) => {
                 conn.send(ServerMessage::SessionError {

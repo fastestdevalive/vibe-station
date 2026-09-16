@@ -26,7 +26,7 @@ use vst_routes::sessions::{
     MutateError, SessionContext, SessionRoutes, StartError,
 };
 use vst_store::StoreHandle;
-use vst_types::events::Broadcaster;
+use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::sessions::{
     DelinkResult, PatchDraftBody, PinResult, RenameSessionResult, ReorderSessionResult,
     StartDraftBody, StartDraftResult,
@@ -119,6 +119,9 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         broadcaster: Broadcaster::new(16),
         json_registry: Arc::new(JsonAgentRegistry::new()),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
+        direct_streams: std::sync::Arc::new(
+            std::sync::Mutex::new(std::collections::HashMap::new()),
+        ),
         tmux: vst_proc::tmux::Tmux::new(),
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
@@ -571,7 +574,8 @@ async fn start_direct_entry_promotes_to_direct() {
         res,
         StartDraftResult {
             ok: true,
-            worktree_id: None
+            worktree_id: None,
+            worktree: None,
         }
     );
 
@@ -586,6 +590,48 @@ async fn start_direct_entry_promotes_to_direct() {
 }
 
 #[tokio::test]
+async fn start_direct_entry_broadcasts_session_updated_with_channel() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions
+        .push(drafting_session("s-draft", "p1", None));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
+    let body = StartDraftBody {
+        draft_prompt: "do the thing".into(),
+        draft_config: draft_config(DraftEntryPoint::Direct, "my-mode"),
+        skip_auto_turn: Some(true),
+    };
+    r.start_session("s-draft", &body).await.unwrap();
+
+    // No existing worktree here, so the plain `session:updated` broadcast
+    // must still carry the session's channel (backported from main's TS fix
+    // — DraftComposer needs `channel` on every session:updated, not only the
+    // worktree-attached ones).
+    let mut saw_session_updated_with_channel = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            session_id,
+            worktree_id,
+            channel,
+            ..
+        } = ev
+        {
+            assert_eq!(session_id, "s-draft");
+            assert_eq!(worktree_id, None);
+            assert_eq!(channel, Some(Channel::Json));
+            saw_session_updated_with_channel = true;
+        }
+    }
+    assert!(
+        saw_session_updated_with_channel,
+        "expected a session:updated broadcast carrying the channel"
+    );
+}
+
+#[tokio::test]
 async fn start_tab_entry_promotes_into_worktree() {
     let (_d, store) = store();
     let mut p = make_project("p1");
@@ -595,20 +641,151 @@ async fn start_tab_entry_promotes_into_worktree() {
     add_project(&store, p).await;
 
     let r = routes(store.clone());
+    let mut rx = r.broadcaster.subscribe();
     let body = StartDraftBody {
         draft_prompt: "tab task".into(),
         draft_config: draft_config(DraftEntryPoint::Tab, "my-mode"),
         skip_auto_turn: Some(true),
     };
     let res = r.start_session("s-tab", &body).await.unwrap();
-    assert_eq!(res.worktree_id, None);
+    let mut saw_channel = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let ServerEvent::SessionUpdated {
+            worktree_id,
+            channel,
+            ..
+        } = ev
+        {
+            assert_eq!(worktree_id.as_deref(), Some("w1"));
+            assert_eq!(channel, Some(Channel::Json));
+            saw_channel = true;
+        }
+    }
+    assert!(saw_channel, "expected session:updated to carry the channel");
+    // The HTTP response must report worktreeId even though the worktree
+    // already existed — the web-ui navigates off this response synchronously
+    // and previously fell back to `undefined`/`None` here, which routed the
+    // just-started agent to the direct-session `/session/:id` URL instead of
+    // `/worktree/:id` (backported from main's TS fix for the same bug).
+    assert_eq!(res.worktree_id.as_deref(), Some("w1"));
+    assert_eq!(res.worktree, None);
 
     let project = store.get_project("p1").await.unwrap();
+    assert_eq!(
+        project.worktrees[0].sessions.len(),
+        1,
+        "must not duplicate the session inside the worktree"
+    );
     let s = &project.worktrees[0].sessions[0];
     assert_eq!(s.id, "s-tab");
     assert_eq!(s.worktree_id.as_deref(), Some("w1"));
     assert_eq!(s.lifecycle.state, LifecycleState::NotStarted);
     assert!(!s.is_main);
+}
+
+#[tokio::test]
+async fn start_global_entry_existing_worktree_promotes_into_selected_worktree() {
+    // Regression test for a live-reproduced bug (against :7141, confirmed
+    // identical on the TS daemon — not Rust-port-specific): the global
+    // composer's New/Existing worktree radios (rendered whenever
+    // `useWorktree` is checked, same UI as entryPoint "worktree") used to be
+    // pure unsent state server-side — `is_worktree_new` only checked
+    // `entry_point == Global && use_worktree == Some(true)`, with no
+    // `worktree_choice` branch at all, so picking a specific existing
+    // worktree here always minted a brand-new one instead.
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let w = make_worktree("w1");
+    p.worktrees.push(w);
+    p.direct_sessions
+        .push(drafting_session("s-draft", "p1", None));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut cfg = draft_config(DraftEntryPoint::Global, "my-mode");
+    cfg.use_worktree = Some(true);
+    cfg.worktree_choice = Some(WorktreeChoice::Existing);
+    cfg.existing_worktree_id = Some("w1".into());
+    let body = StartDraftBody {
+        draft_prompt: "use the worktree I picked".into(),
+        draft_config: cfg,
+        skip_auto_turn: Some(true),
+    };
+    let res = r.start_session("s-draft", &body).await.unwrap();
+
+    // Must land in the SELECTED worktree, not a new one — and the response
+    // must say so (same self-sufficient-response invariant as the tab case).
+    assert_eq!(res.worktree_id.as_deref(), Some("w1"));
+    assert_eq!(res.worktree, None, "no NEW worktree was created");
+
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(project.worktrees.len(), 1, "no second worktree was minted");
+    assert_eq!(project.worktrees[0].sessions.len(), 1);
+    assert_eq!(project.worktrees[0].sessions[0].id, "s-draft");
+    assert!(project.direct_sessions.is_empty());
+}
+
+#[tokio::test]
+async fn start_global_entry_no_worktree_opinion_is_still_unknown_400() {
+    // Guards the fix above against over-widening: entryPoint "global" with
+    // `useWorktree` genuinely unset must remain neither direct nor
+    // worktree-new — this is `start_unknown_entry_point_400`'s exact
+    // construction, duplicated here as an explicit regression pin so a
+    // future edit to the `is_direct`/`wants_new_worktree` conditions can't
+    // silently swallow this case again (an earlier draft of this very fix
+    // did exactly that, changing `use_worktree == Some(false)` to
+    // `use_worktree != Some(true)` for the "global" `is_direct` arm, which
+    // made `None` match too).
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions
+        .push(drafting_session("s-draft", "p1", None));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut cfg = draft_config(DraftEntryPoint::Global, "m");
+    cfg.use_worktree = None;
+    let body = StartDraftBody {
+        draft_prompt: "x".into(),
+        draft_config: cfg,
+        skip_auto_turn: Some(true),
+    };
+    let err = r.start_session("s-draft", &body).await.unwrap_err();
+    assert!(matches!(err, StartError::Validation(_)));
+}
+
+#[tokio::test]
+async fn start_direct_entry_existing_worktree_promotes_into_selected_worktree() {
+    // Regression test: entryPoint "direct" used to ignore `useWorktree`
+    // entirely (`is_direct` matched `entry_point == Direct` unconditionally)
+    // — the composer renders the "Use worktree" checkbox for this entry
+    // point too, so checking it and picking an existing worktree was a
+    // silently-dead control.
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let w = make_worktree("w1");
+    p.worktrees.push(w);
+    p.direct_sessions
+        .push(drafting_session("s-draft", "p1", None));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut cfg = draft_config(DraftEntryPoint::Direct, "my-mode");
+    cfg.use_worktree = Some(true);
+    cfg.worktree_choice = Some(WorktreeChoice::Existing);
+    cfg.existing_worktree_id = Some("w1".into());
+    let body = StartDraftBody {
+        draft_prompt: "actually put this in w1".into(),
+        draft_config: cfg,
+        skip_auto_turn: Some(true),
+    };
+    let res = r.start_session("s-draft", &body).await.unwrap();
+
+    assert_eq!(res.worktree_id.as_deref(), Some("w1"));
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(project.worktrees[0].sessions.len(), 1);
+    assert_eq!(project.worktrees[0].sessions[0].id, "s-draft");
+    assert!(project.direct_sessions.is_empty());
 }
 
 #[tokio::test]
@@ -650,6 +827,18 @@ async fn start_worktree_new_promotes_into_new_worktree() {
     };
     let res = r.start_session("s-draft", &body).await.unwrap();
     assert!(res.worktree_id.is_some());
+    // The response must carry the full serialized worktree — the web-ui
+    // registers it in its store synchronously off this response — with
+    // mainSessionId resolving to the just-promoted session, not null.
+    let worktree = res.worktree.expect("worktree present in response");
+    assert_eq!(
+        worktree.get("id").and_then(|v| v.as_str()),
+        res.worktree_id.as_deref()
+    );
+    assert_eq!(
+        worktree.get("mainSessionId").and_then(|v| v.as_str()),
+        Some("s-draft")
+    );
 
     let project = store.get_project("p1").await.unwrap();
     assert_eq!(project.worktrees.len(), 1);

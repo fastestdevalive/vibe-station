@@ -133,6 +133,9 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         broadcaster: Broadcaster::new(16),
         json_registry: Arc::new(JsonAgentRegistry::new()),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
+        direct_streams: std::sync::Arc::new(
+            std::sync::Mutex::new(std::collections::HashMap::new()),
+        ),
         tmux: vst_proc::tmux::Tmux::new(),
         daemon_port: 3999,
         json_unsupported: Arc::new(|_| None),
