@@ -58,6 +58,20 @@ fn should_skip(session: &SessionRecord) -> bool {
             | LifecycleState::Exited
             | LifecycleState::Drafting
     ) || session.channel == Some(Channel::Json)
+        // Direct-pty ("plain terminal", useTmux: false) sessions have no tmux
+        // pane at all — their `tmux_name` is a synthetic label that never
+        // appears in `tmux list-sessions`. Without this guard, the very first
+        // poll tick after creation/reattach found the name "missing" from the
+        // tmux liveness snapshot below and immediately called
+        // `mark_session_exited`, killing perfectly live plain terminals within
+        // ~1s of open (surfaced as "terminal closes right after tap", since a
+        // tap is roughly when the UI re-syncs and the frontend first notices
+        // the already-stale `exited` state). Mirrors `daemon/src/services/
+        // lifecycle.ts`'s `if (session.useTmux === false) { ... }` branch,
+        // which never falls through to the tmux-liveness check at all. Exit
+        // for direct-pty sessions is meant to be event-driven (PTY exit),
+        // not detected by this poller.
+        || !session.use_tmux
 }
 
 /// Private (this module only) lifecycle-state setter.
@@ -258,5 +272,91 @@ impl LifecyclePollerHandle {
                 self.run_poll_once().await;
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod should_skip_tests {
+    use super::should_skip;
+    use vst_types::domain::{
+        Channel, LifecycleState, SessionLifecycle, SessionRecord, SessionType,
+    };
+
+    fn base_session() -> SessionRecord {
+        SessionRecord {
+            id: "proj-1-t-11112222".into(),
+            worktree_id: None,
+            project_id: "proj-1".into(),
+            is_main: false,
+            sort_order: 0.0,
+            r#type: SessionType::Terminal,
+            mode_id: None,
+            name: None,
+            name_source: None,
+            tmux_name: "__direct__-proj-1-t-11112222".into(),
+            use_tmux: true,
+            channel: None,
+            lifecycle: SessionLifecycle {
+                state: LifecycleState::Working,
+                reason: None,
+                last_transition_at: "2024-01-01T00:00:00.000Z".into(),
+            },
+            transcript_ref: None,
+            agent_chat_id: None,
+            acp_session_id: None,
+            model_override: None,
+            pinned_at: None,
+            initial_prompt: None,
+            archived_at: None,
+            handoff_summary: None,
+            draft_prompt: None,
+            draft_config: None,
+            parent_session_id: None,
+            superseded_by: None,
+            pr: None,
+        }
+    }
+
+    #[test]
+    fn tmux_backed_working_session_is_not_skipped() {
+        let session = base_session();
+        assert!(!should_skip(&session));
+    }
+
+    #[test]
+    fn json_channel_session_is_skipped() {
+        let mut session = base_session();
+        session.channel = Some(Channel::Json);
+        assert!(should_skip(&session));
+    }
+
+    #[test]
+    fn exited_session_is_skipped() {
+        let mut session = base_session();
+        session.lifecycle.state = LifecycleState::Exited;
+        assert!(should_skip(&session));
+    }
+
+    /// Regression test for the "plain terminal closes right after tap" bug:
+    /// a direct-pty (`useTmux: false`) session's `tmux_name` is a synthetic
+    /// label that never appears in a real `tmux list-sessions` snapshot, so
+    /// without this guard `run_poll_once` treated every such session as dead
+    /// on its very first poll tick and called `mark_session_exited` on a
+    /// perfectly live terminal. Mirrors `daemon/src/services/lifecycle.ts`'s
+    /// `if (session.useTmux === false) { ... }` branch, which never falls
+    /// through to the tmux-liveness check either.
+    #[test]
+    fn direct_pty_working_session_is_skipped_even_though_tmux_name_is_synthetic() {
+        let mut session = base_session();
+        session.use_tmux = false;
+        assert!(should_skip(&session));
+    }
+
+    #[test]
+    fn direct_pty_waiting_for_human_session_is_still_skipped() {
+        let mut session = base_session();
+        session.use_tmux = false;
+        session.lifecycle.state = LifecycleState::WaitingForHuman;
+        assert!(should_skip(&session));
     }
 }

@@ -130,6 +130,59 @@ fn tool_call_with_diff_content_populates_tool_diffs() {
 }
 
 #[test]
+fn tool_call_with_write_tool_input_populates_tool_diffs_with_empty_old_text() {
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-3", "Write").raw_input(
+            serde_json::json!({ "file_path": "/src/index.ts", "content": "console.log('hello');" }),
+        ),
+    ))
+    .expect("tool_call with a write-shaped input maps to tool_use");
+    let diffs = ev
+        .tool_diffs
+        .expect("toolDiffs populated from raw_input fallback");
+    assert_eq!(diffs.len(), 1);
+    assert_eq!(diffs[0].path, "/src/index.ts");
+    assert_eq!(diffs[0].old_text.as_deref(), Some(""));
+    assert_eq!(diffs[0].new_text, "console.log('hello');");
+}
+
+#[test]
+fn tool_call_edit_kind_without_edit_shaped_input_is_treated_as_a_write() {
+    // Some ACP agents send `kind: "edit"` with a create/write-shaped raw
+    // input (no old_string/oldText/edits) instead of a claude-style write
+    // tool name — the TS fallback treats that as a write too.
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-4", "apply_patch")
+            .kind(agent_client_protocol::schema::v1::ToolKind::Edit)
+            .raw_input(serde_json::json!({ "path": "/b.ts", "text": "whole file" })),
+    ))
+    .expect("tool_call maps to tool_use");
+    let diffs = ev.tool_diffs.expect("toolDiffs populated");
+    assert_eq!(diffs[0].path, "/b.ts");
+    assert_eq!(diffs[0].old_text.as_deref(), Some(""));
+    assert_eq!(diffs[0].new_text, "whole file");
+}
+
+#[test]
+fn tool_call_edit_kind_with_old_string_input_is_not_treated_as_a_write() {
+    // `kind: "edit"` with an edit-shaped input (has old_string/new_string)
+    // must NOT be reinterpreted by the write fallback — the `hasEdit` guard
+    // exists precisely to keep real edits from being misdetected as writes.
+    let ev = norm(SessionUpdate::ToolCall(
+        ToolCall::new("tc-5", "apply_patch")
+            .kind(agent_client_protocol::schema::v1::ToolKind::Edit)
+            .raw_input(
+                serde_json::json!({ "file_path": "/c.ts", "old_string": "a", "new_string": "b" }),
+            ),
+    ))
+    .expect("tool_call maps to tool_use");
+    assert!(
+        ev.tool_diffs.is_none(),
+        "an edit-kind tool call with edit-shaped input must not synthesize a write diff"
+    );
+}
+
+#[test]
 fn current_mode_update_maps_to_mode_update() {
     let ev = norm(SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new(
         "build",

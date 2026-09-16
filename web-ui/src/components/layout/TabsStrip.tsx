@@ -806,7 +806,20 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   type: "agent",
                   draftConfig: { entryPoint: "tab" },
                 })
-                .then((s) => setActiveSession(s.id))
+                .then((s) => {
+                  // Register the full HTTP response (includes `draftConfig`)
+                  // BEFORE the `session:created` WS broadcast's narrower
+                  // snapshot can arrive — every other draft-creation call
+                  // site does this (`LeftSidebar.tsx`, `DraftComposer.tsx`),
+                  // this one didn't. Without it, `DraftComposer`'s
+                  // `entryPoint = session?.draftConfig?.entryPoint ??
+                  // "direct"` fallback fired (the store had never learned
+                  // `draftConfig` at all), rendering the wrong composer UI
+                  // for a worktree-tab draft and breaking post-submit
+                  // navigation.
+                  useServerStore.getState().applySessionCreated(s);
+                  setActiveSession(s.id);
+                })
                 .catch(() => {
                   /* surface later */
                 });

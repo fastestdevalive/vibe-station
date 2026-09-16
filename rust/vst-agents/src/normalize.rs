@@ -162,6 +162,96 @@ fn tool_diffs_from_content(content: &[ToolCallContent]) -> Option<Vec<ToolDiff>>
     }
 }
 
+const WRITE_TOOL_NAMES: &[&str] = &[
+    "write",
+    "writefile",
+    "write_file",
+    "writetofile",
+    "write_to_file",
+    "create_file",
+    "new_file",
+];
+
+/// True iff `name` (lowercased, non-alphanumeric stripped) names a
+/// "write a whole file" tool — either an exact match in [`WRITE_TOOL_NAMES`]
+/// or a `write_*`/`*_write` shape.
+fn is_write_tool_name(name: &str) -> bool {
+    let lower: String = name
+        .chars()
+        .filter_map(|c| {
+            let l = c.to_ascii_lowercase();
+            (l.is_ascii_lowercase() || l.is_ascii_digit() || l == '_').then_some(l)
+        })
+        .collect();
+    WRITE_TOOL_NAMES.contains(&lower.as_str())
+        || lower.starts_with("write_")
+        || lower.ends_with("_write")
+}
+
+/// Fallback tool-diff extraction from a tool's raw/refined `input` object
+/// (rather than its `content` array) — some ACP-speaking agents (not
+/// claude-code) never emit a `{type:"diff"}` content entry for a full-file
+/// write, only the raw tool call input. Ports `toolDiffsFromInput`.
+fn tool_diffs_from_input(
+    title: Option<&str>,
+    input: Option<&serde_json::Value>,
+    kind: Option<&ToolKind>,
+    locations: Option<&[ToolLocation]>,
+) -> Option<Vec<ToolDiff>> {
+    let obj = input?.as_object()?;
+    let name = title.unwrap_or("");
+    let has_edit = matches!(obj.get("old_string"), Some(serde_json::Value::String(_)))
+        || matches!(obj.get("oldText"), Some(serde_json::Value::String(_)))
+        || matches!(obj.get("edits"), Some(serde_json::Value::Array(_)));
+    let is_write = is_write_tool_name(name) || (matches!(kind, Some(ToolKind::Edit)) && !has_edit);
+    if !is_write {
+        return None;
+    }
+
+    let path = [
+        "file_path",
+        "filePath",
+        "path",
+        "TargetFile",
+        "targetFile",
+        "target_file",
+        "file",
+        "filename",
+    ]
+    .iter()
+    .find_map(|key| match obj.get(*key) {
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        _ => None,
+    })
+    .or_else(|| {
+        locations
+            .and_then(|locs| locs.first())
+            .map(|l| l.path.clone())
+    })?;
+
+    let content = [
+        "content",
+        "CodeContent",
+        "codeContent",
+        "code_content",
+        "contents",
+        "text",
+        "file_content",
+        "fileContent",
+    ]
+    .iter()
+    .find_map(|key| match obj.get(*key) {
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        _ => None,
+    })?;
+
+    Some(vec![ToolDiff {
+        path,
+        old_text: Some(String::new()),
+        new_text: content,
+    }])
+}
+
 /// Extract text blocks from a `tool_call`/`tool_call_update.content` array
 /// (existing behavior).
 fn text_from_tool_call_content(content: &[ToolCallContent]) -> Option<String> {
@@ -290,14 +380,22 @@ pub fn normalize_session_update(
             } else {
                 None
             };
+            let tool_locations = tool_locations_from(locations);
             let mut ev = NormalizedEvent::default();
             ev.role = Some(Role::Assistant);
             ev.tool_id = Some(tool_call_id.to_string());
-            ev.tool_name = tool_name;
+            ev.tool_name = tool_name.clone();
             ev.tool_input = raw_input.clone();
-            ev.tool_locations = tool_locations_from(locations);
+            ev.tool_locations = tool_locations.clone();
             ev.tool_kind = tool_kind_from(kind);
-            ev.tool_diffs = tool_diffs_from_content(content);
+            ev.tool_diffs = tool_diffs_from_content(content).or_else(|| {
+                tool_diffs_from_input(
+                    tool_name.as_deref(),
+                    raw_input.as_ref(),
+                    Some(kind),
+                    tool_locations.as_deref(),
+                )
+            });
             ev.tool_status = tool_status_from(status);
             base = Some(stamp(NormalizedEventKind::ToolUse, ev));
         }
@@ -316,14 +414,25 @@ pub fn normalize_session_update(
                 content: text.clone(),
                 is_error: Some(fields.status.as_ref() == Some(&ToolCallStatus::Failed)),
             });
+            let tool_locations =
+                tool_locations_from(fields.locations.as_deref().unwrap_or_default());
             let mut ev = NormalizedEvent::default();
             ev.tool_id = Some(tool_call_id.to_string());
-            ev.tool_input = refined_input;
+            ev.tool_input = refined_input.clone();
             ev.tool_result = tool_result;
             ev.tool_status = status;
-            ev.tool_diffs = tool_diffs_from_content(fields.content.as_deref().unwrap_or_default());
-            ev.tool_locations =
-                tool_locations_from(fields.locations.as_deref().unwrap_or_default());
+            ev.tool_diffs = tool_diffs_from_content(fields.content.as_deref().unwrap_or_default())
+                .or_else(|| {
+                    refined_input.as_ref().and_then(|input| {
+                        tool_diffs_from_input(
+                            fields.title.as_deref(),
+                            Some(input),
+                            fields.kind.as_ref(),
+                            tool_locations.as_deref(),
+                        )
+                    })
+                });
+            ev.tool_locations = tool_locations;
             ev.tool_kind = fields.kind.as_ref().and_then(tool_kind_from);
             base = Some(stamp(NormalizedEventKind::ToolResult, ev));
         }

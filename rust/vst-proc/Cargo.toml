@@ -12,6 +12,11 @@ tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 portable-pty = "0.9"
+# Crate-local, not the workspace table (see N6 in AGENTS.md) — the raw
+# `write(2)` syscall wrapper in `raw_fd_write.rs`, this crate's one
+# documented `unsafe` FFI boundary (see its module doc comment). Already
+# resolved transitively at 0.2.189 via portable-pty; pinned to match.
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

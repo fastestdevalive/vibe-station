@@ -25,7 +25,15 @@ const SKIP_TYPES: &[&str] = &[
     "queue-operation",
     "attachment",
 ];
-const DIFF_TOOL_NAMES: &[&str] = &["Edit", "MultiEdit"];
+const DIFF_TOOL_NAMES: &[&str] = &["Edit", "MultiEdit", "Write"];
+
+/// `input.file_path ?? input.path` — some claude tool-input shapes use
+/// `path` instead of `file_path`; check both in that order.
+fn file_path_from(obj: &Map<String, Value>) -> Option<&str> {
+    obj.get("file_path")
+        .and_then(|p| p.as_str())
+        .or_else(|| obj.get("path").and_then(|p| p.as_str()))
+}
 const BASE64_PLACEHOLDER: &str = "[base64 <media> stripped: <N> chars]";
 
 /// Recursively replace inline base64 image sources with a placeholder
@@ -237,16 +245,23 @@ pub fn parse_claude_native_history(
                                         .and_then(|v| v.as_str())
                                         .unwrap()
                                         .to_string();
-                                    let path = input
-                                        .get("file_path")
-                                        .and_then(|p| p.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
+                                    let path = file_path_from(&input).unwrap_or("").to_string();
                                     tool_diffs = Some(vec![ToolDiff {
                                         path,
                                         old_text: Some(old_string),
                                         new_text: new_string,
                                     }]);
+                                } else if name == "Write" {
+                                    if let Some(content) =
+                                        input.get("content").and_then(|v| v.as_str())
+                                    {
+                                        let path = file_path_from(&input).unwrap_or("").to_string();
+                                        tool_diffs = Some(vec![ToolDiff {
+                                            path,
+                                            old_text: Some(String::new()),
+                                            new_text: content.to_string(),
+                                        }]);
+                                    }
                                 } else if name == "MultiEdit" {
                                     let mut diffs: Vec<ToolDiff> = Vec::new();
                                     if let Some(Value::Array(edits)) = input.get("edits") {
@@ -272,11 +287,7 @@ pub fn parse_claude_native_history(
                                                     let path = e
                                                         .get("file_path")
                                                         .and_then(|p| p.as_str())
-                                                        .or_else(|| {
-                                                            input
-                                                                .get("file_path")
-                                                                .and_then(|p| p.as_str())
-                                                        })
+                                                        .or_else(|| file_path_from(&input))
                                                         .unwrap_or("")
                                                         .to_string();
                                                     diffs.push(ToolDiff {

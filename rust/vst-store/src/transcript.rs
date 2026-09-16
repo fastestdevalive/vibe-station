@@ -263,9 +263,26 @@ impl TranscriptStore {
             result
         };
         if !cols.iter().any(|c| c == "superseded") {
-            conn.execute_batch(
+            match conn.execute_batch(
                 "ALTER TABLE message ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0",
-            )?;
+            ) {
+                Ok(()) => {}
+                // Two `TranscriptStore::new` calls can race to open the same
+                // brand-new session's messages.db concurrently (e.g. a
+                // freshly-created direct-agent session's `chat:open` racing
+                // its own auto-enqueued turn-1) — both see the column
+                // missing via the PRAGMA check above, both attempt the
+                // ALTER, and the loser hits this exact SQLite error. That is
+                // benign: the column now exists (the winner just added it),
+                // which is exactly the postcondition this migration wants.
+                // Live-reproduced: this used to propagate all the way to
+                // `open_transcript_store`'s `.expect()` and abort the whole
+                // daemon process on ONE session's race, taking down every
+                // other user's session with it.
+                Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                    if msg.contains("duplicate column name") => {}
+                Err(e) => return Err(e),
+            }
         }
 
         if let Some(jsonl) = jsonl_path {

@@ -46,6 +46,41 @@ impl<T> JsonAgentRegistry<T> {
         self.inner.lock().unwrap().insert(session_id, session);
     }
 
+    /// Atomic "get existing, or construct-and-register a new one" — the
+    /// registry's mutex is held across BOTH the lookup and the insert, so
+    /// two concurrent callers for the same `session_id` can never both
+    /// observe an empty slot and both construct+register their own `T`.
+    ///
+    /// This exists because `get_or_create_json_agent_session`'s prior
+    /// shape — a separate `get()` then `set()`, with an `.await` in
+    /// between (in its caller, `resolve_json_agent`) — was a check-then-act
+    /// race: two resolvers for a freshly-created direct-agent session (its
+    /// `chat:open` racing its own auto-enqueued turn-1, both landing on a
+    /// multithreaded runtime) could both see nothing registered, each build
+    /// its own `JsonAgentSession` with its own independent
+    /// `JsonAgentStream`, and the second `set()` would silently evict the
+    /// first. Live-reproduced: the turn ran on the discarded instance, so
+    /// nobody's `chat:open` listeners ever saw it — the Rich Chat pane
+    /// stayed empty until a refresh re-read the (correctly persisted)
+    /// history from SQLite. The two racing constructors additionally
+    /// opened the same session's transcript DB concurrently, which is the
+    /// separate bug fixed in `vst-store`'s `TranscriptStore::new` (the
+    /// `ALTER TABLE ... ADD COLUMN` idempotency race that used to abort the
+    /// whole daemon process).
+    ///
+    /// `create` must be cheap enough to run while holding the lock (no
+    /// `.await`, no blocking I/O) — exactly the case for
+    /// `JsonAgentSession::new`, which only constructs in-memory state.
+    pub fn get_or_insert_with(&self, session_id: &str, create: impl FnOnce() -> T) -> Arc<T> {
+        let mut guard = self.inner.lock().unwrap();
+        if let Some(existing) = guard.get(session_id) {
+            return existing.clone();
+        }
+        let created = Arc::new(create());
+        guard.insert(session_id.to_string(), created.clone());
+        created
+    }
+
     /// Remove the session for `session_id`, returning the prior value if present.
     pub fn remove(&self, session_id: &str) -> Option<Arc<T>> {
         self.inner.lock().unwrap().remove(session_id)

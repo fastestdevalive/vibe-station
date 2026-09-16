@@ -385,15 +385,68 @@ impl AgentPlugin for OpencodePlugin {
     }
 
     fn list_models(&self) -> AsyncResult<ListModelsResult> {
-        // opencode's TS `listModels` shells out to `opencode models`; per this
-        // part's "no live process" rule that call is not made here.
+        // Mirrors TS `daemon/src/agent-plugins/opencode.ts`'s `listModels()`:
+        // shell out to `opencode models` and split stdout into one model id
+        // per line. This was previously stubbed to always return an empty
+        // list + generic error (an earlier phase's "no live process" rule,
+        // never wired up to a real subprocess afterward) — that stub is the
+        // confirmed cause of "opencode is not showing any models".
         Box::pin(async move {
-            ListModelsResult {
-                models: vec![],
-                error: Some(
-                    "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
-                        .to_string(),
-                ),
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                tokio::process::Command::new("opencode")
+                    .arg("models")
+                    .output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let models: Vec<String> = stdout
+                        .lines()
+                        .map(|l| l.trim().to_string())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    ListModelsResult {
+                        models,
+                        error: None,
+                    }
+                }
+                Ok(Ok(output)) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!(
+                        "[cli-models] opencode fetch failed: status={} stderr={}",
+                        output.status,
+                        stderr.trim()
+                    );
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
+                Ok(Err(err)) => {
+                    eprintln!("[cli-models] opencode fetch failed to spawn: {err}");
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
+                Err(_timeout) => {
+                    eprintln!("[cli-models] opencode fetch timed out after 15s");
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
             }
         })
     }

@@ -28,6 +28,19 @@ pub enum ServerEvent {
         session_type: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         mode: Option<String>,
+        /// The full serialized session, mirroring TS's `snapshot:
+        /// serializeSession(...)` on every `session:created` broadcast.
+        /// Every frontend listener (`TabsStrip.tsx`, `useServerSync.ts`)
+        /// gates on `if (!ev.snapshot) return`, so a `None` here makes the
+        /// event a silent no-op client-side — this was the root cause of
+        /// "draft tabs created in an already-open worktree don't appear
+        /// until refresh" (bug #3, live-reproduced against :7141: the
+        /// draft POST succeeded but zero WS frames reached the page).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        snapshot: Option<crate::ws::SessionCreatedSnapshot>,
+        /// Present (as JSON null) even when unset, matching
+        /// `ServerMessage::SessionCreated`'s field of the same name.
+        parent_session_id: Option<String>,
     },
     /// A session's lifecycle state changed.
     #[serde(rename = "session:state", rename_all = "camelCase")]

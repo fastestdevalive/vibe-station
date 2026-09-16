@@ -275,4 +275,92 @@ describe("POST /sessions/:id/start — draft-promotion broadcasts", () => {
     expect(stateCall).toBeDefined();
     expect(stateCall![0]).toMatchObject({ type: "session:state", sessionId: draftId, state: "not_started" });
   });
+
+  it("1.T4 — a GLOBAL draft with useWorktree:true + worktreeChoice:existing promotes into the SELECTED worktree, not a new one", async () => {
+    // Regression test: the global composer's New/Existing worktree radios
+    // (rendered whenever `useWorktree` is checked, same as entryPoint
+    // "worktree") used to be pure unsent React state — `isWorktreeNew` only
+    // checked `entryPoint === "global" && useWorktree === true`, with no
+    // `worktreeChoice` branch at all, so picking a specific existing
+    // worktree here always minted a brand-new one instead (live-reproduced
+    // against a real browser; confirmed identical on this TS daemon, not a
+    // Rust-port-only bug).
+    const draftId = await createDirectDraft();
+    vi.mocked(broadcasterNs.broadcastAll).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${draftId}/start`,
+      payload: {
+        draftPrompt: "use the worktree I picked",
+        draftConfig: {
+          entryPoint: "global",
+          useWorktree: true,
+          worktreeChoice: "existing",
+          existingWorktreeId: worktreeId,
+          modeId: "bug-fix",
+          channel: "json",
+        },
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    // Must land in the SELECTED worktree, and the response must say so
+    // (same self-sufficient-response invariant as the other cases here).
+    expect(res.json()).toMatchObject({ ok: true, worktreeId });
+
+    const broadcastAll = vi.mocked(broadcasterNs.broadcastAll);
+    const worktreeCreated = broadcastAll.mock.calls.find(
+      ([msg]) => (msg as { type: string }).type === "worktree:created",
+    );
+    expect(worktreeCreated).toBeUndefined();
+
+    const updatedCall = broadcastAll.mock.calls.find(
+      ([msg]) => (msg as { type: string }).type === "session:updated",
+    );
+    expect(updatedCall).toBeDefined();
+    expect(updatedCall![0]).toMatchObject({
+      type: "session:updated",
+      sessionId: draftId,
+      worktreeId,
+    });
+  });
+
+  it("1.T5 — a DIRECT-entryPoint draft with useWorktree:true + worktreeChoice:new spawns a new worktree instead of staying direct", async () => {
+    // Regression test: entryPoint "direct" used to be unconditionally
+    // `isDirect` regardless of `useWorktree` — the composer renders the
+    // "Use worktree" checkbox for this entryPoint too, but checking it (and
+    // picking "new") was a silently-dead control: submit always took the
+    // direct/in-place path no matter what.
+    const draftId = await createDirectDraft();
+    vi.mocked(broadcasterNs.broadcastAll).mockClear();
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/sessions/${draftId}/start`,
+      payload: {
+        draftPrompt: "actually give this its own worktree",
+        draftConfig: {
+          entryPoint: "direct",
+          useWorktree: true,
+          worktreeChoice: "new",
+          modeId: "bug-fix",
+          channel: "json",
+          branch: "direct-to-new-branch",
+          baseBranch: "main",
+        },
+        skipAutoTurn: true,
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ ok: true; worktreeId: string }>();
+    expect(body.worktreeId).toBeDefined();
+    expect(body.worktreeId).not.toBe(worktreeId);
+
+    const broadcastAll = vi.mocked(broadcasterNs.broadcastAll);
+    const worktreeCreated = broadcastAll.mock.calls.find(
+      ([msg]) => (msg as { type: string }).type === "worktree:created",
+    );
+    expect(worktreeCreated).toBeDefined();
+  });
 });

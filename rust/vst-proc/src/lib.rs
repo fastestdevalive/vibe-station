@@ -19,6 +19,7 @@
 pub mod child_stdio;
 pub mod error;
 pub mod pty;
+pub mod raw_fd_write;
 pub mod resolve_use_tmux;
 pub mod shell;
 pub mod tmux;
@@ -29,6 +30,7 @@ pub use pty::{
     spawn_child, spawn_tmux, NativePtyBackend, PtyBackend, PtyHandle, SpawnChildOptions,
     TmuxSpawnOptions,
 };
+pub use raw_fd_write::write_borrowed_fd;
 pub use resolve_use_tmux::resolve_use_tmux;
 pub use shell::sq;
 pub use tmux::{ListErrorClass, NewSessionOptions, Tmux};

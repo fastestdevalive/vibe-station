@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use vst_types::rest::sessions::EnqueueChatResult;
 use vst_types::rest::shared::{GlobalDraft, Mode, Project, Session, Worktree};
-use vst_types::ws::{ClientMessage, ServerMessage};
+use vst_types::ws::{ClientMessage, ServerMessage, SessionCreatedSnapshot};
 
 fn load_fixture(name: &str) -> Value {
     let path = format!("{}/tests/fixtures/wire/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -44,6 +44,39 @@ fn session_fixture_roundtrips() {
 #[test]
 fn global_draft_fixture_roundtrips() {
     assert_roundtrip::<GlobalDraft>("global-draft.json");
+}
+
+/// Regression test for a live-reproduced bug: `SessionCreatedSnapshot` used
+/// to omit `sortOrder` (and several other fields) entirely, even though the
+/// client's type for `session:created`'s `snapshot` field is the FULL
+/// `Session` type (`web-ui/src/api/types.ts`'s `snapshot?: Session`) and TS's
+/// real wire object is `serializeSession(...)`'s complete output — TS's
+/// narrower `protocol.ts` zod schema was never actually enforced on the send
+/// path, so it silently passed extra fields through, while Rust's
+/// struct-based serialization cannot emit a field the struct doesn't
+/// declare. `TabsStrip.tsx` sorts its local tab list by
+/// `a.sortOrder ?? 0`, so a missing `sortOrder` defaulted new tabs to `0`,
+/// sorting them before every real session and landing them at the far LEFT
+/// of the tab strip instead of the right (next to the "+" button that
+/// created them).
+#[test]
+fn session_created_snapshot_from_session_preserves_sort_order() {
+    let value = load_fixture("session.json");
+    let session: Session = serde_json::from_value(value).unwrap();
+    assert_eq!(session.sort_order, 1.0, "fixture sanity check");
+
+    let snapshot: SessionCreatedSnapshot = (&session).into();
+    let json = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        json.get("sortOrder").and_then(Value::as_f64),
+        Some(1.0),
+        "sortOrder must survive the Session -> SessionCreatedSnapshot conversion, \
+         or a client sorting its local tab/session list by this field on a \
+         session:created broadcast puts new items first instead of last"
+    );
+    // A few other fields from the same widening fix, spot-checked.
+    assert_eq!(json.get("nameSource").and_then(Value::as_str), Some("auto"));
+    assert!(json.get("pr").is_some_and(|v| !v.is_null()));
 }
 
 #[test]

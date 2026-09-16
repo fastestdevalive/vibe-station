@@ -99,8 +99,19 @@ export const useServerStore = create<ServerData>((set) => ({
     set((s) => {
       const existing = s.sessions.findIndex((x) => x.id === sess.id);
       if (existing === -1) return { sessions: [...s.sessions, sess] };
+      // Merge, don't replace: a `session:created` WS broadcast's snapshot
+      // (`SessionCreatedSnapshot`, both daemons) is a fixed, narrower field
+      // set than the full `Session` record a draft-creation call site
+      // already registered here via its own HTTP response (e.g.
+      // `draftConfig` isn't carried on the snapshot at all). Replacing
+      // wholesale let a same-id snapshot arriving after the real record —
+      // entirely possible once broadcasts are correctly delivered — silently
+      // erase fields the snapshot never had an opinion on, which fed
+      // `DraftComposer`'s `entryPoint = session?.draftConfig?.entryPoint ??
+      // "direct"` fallback and made a worktree-tab draft render as a
+      // "direct" one (wrong composer UI, no navigation on submit).
       const next = s.sessions.slice();
-      next[existing] = sess;
+      next[existing] = { ...s.sessions[existing], ...sess };
       return { sessions: next };
     }),
 

@@ -125,14 +125,16 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             project_id,
             session_type,
             mode,
+            snapshot,
+            parent_session_id,
         } => ServerMessage::SessionCreated {
             session_id,
             worktree_id,
             project_id,
             session_type,
             mode,
-            snapshot: None,
-            parent_session_id: None,
+            snapshot,
+            parent_session_id,
         },
         ServerEvent::SessionState {
             session_id,
@@ -201,8 +203,25 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
 }
 
 /// Spawn the receiver-side fan-out: subscribe to `broadcaster`, convert each
-/// `ServerEvent` to a `ServerMessage`, and route it to the connections that
-/// care (session events → subscribers; project/worktree/mode → all).
+/// `ServerEvent` to a `ServerMessage`, and broadcast it to every connected
+/// client.
+///
+/// This USED to special-case `SessionCreated`/`SessionState`/
+/// `SessionUpdated`/`SessionDeleted` and route them only to connections that
+/// had previously sent an explicit `subscribe` for that exact session id
+/// (via `hub.notify_session`). That's wrong: `daemon/src/broadcaster.ts`
+/// sends every single one of these through unconditional `broadcastAll`
+/// (verified — grep shows zero TS call sites using `notifySession`, which
+/// exists in `broadcaster.ts` but is never invoked anywhere in the
+/// codebase). A **brand-new** session id can never be in any connection's
+/// subscription set, so under the old routing a `session:created` for a
+/// freshly-created draft reached ZERO clients — live-reproduced against the
+/// :7141 sandbox (WS tap showed zero frames for a draft-tab creation whose
+/// REST call itself returned 200). This was bug #3: "draft tabs created in
+/// an already-open worktree don't appear until refresh". Matching TS exactly
+/// by always broadcasting fixes it, and also fixes the same silent-drop for
+/// `session:updated` (draft prompt/name edits) and `session:deleted` against
+/// any connection that hadn't subscribed.
 pub fn spawn_event_fanout(
     hub: Arc<WsHub>,
     broadcaster: Broadcaster,
@@ -215,35 +234,8 @@ pub fn spawn_event_fanout(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            let is_session_event = matches!(
-                event,
-                ServerEvent::SessionCreated { .. }
-                    | ServerEvent::SessionState { .. }
-                    | ServerEvent::SessionUpdated { .. }
-                    | ServerEvent::SessionDeleted { .. }
-            );
             let msg: ServerMessage = server_event_to_message(event);
-            if is_session_event {
-                // Session events route to the session's subscribers.
-                let session_id = session_id_of(&msg);
-                if let Some(sid) = session_id {
-                    hub.notify_session(&sid, &msg);
-                } else {
-                    hub.broadcast_all(&msg);
-                }
-            } else {
-                hub.broadcast_all(&msg);
-            }
+            hub.broadcast_all(&msg);
         }
     })
-}
-
-fn session_id_of(msg: &ServerMessage) -> Option<String> {
-    match msg {
-        ServerMessage::SessionCreated { session_id, .. }
-        | ServerMessage::SessionState { session_id, .. }
-        | ServerMessage::SessionUpdated { session_id, .. }
-        | ServerMessage::SessionDeleted { session_id, .. } => Some(session_id.clone()),
-        _ => None,
-    }
 }

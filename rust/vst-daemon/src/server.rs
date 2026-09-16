@@ -237,11 +237,19 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
     let attachment_registry = vst_ws::state::attachment_registry::AttachmentRegistry::new();
     let json_unsupported = Arc::new(json_unsupported_cli);
 
+    // Shared with the WS `DispatchContext` below (same `Arc`) — `spawn_terminal`
+    // (and any other `use_tmux: false` spawn path) populates this from here, and
+    // `session:open`'s WS handler reads it from there. Without sharing the SAME
+    // instance, a plain ("useTmux" unchecked) terminal session can never attach.
+    let direct_streams: DirectStreamRegistry =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+
     let session_routes = SessionRoutes {
         store: opts.store.clone(),
         broadcaster: opts.broadcaster.clone(),
         json_registry: opts.json_registry.clone(),
         direct_ptys: std::sync::RwLock::new(std::collections::HashMap::new()),
+        direct_streams: direct_streams.clone(),
         tmux: opts.tmux.clone(),
         daemon_port: opts.port,
         json_unsupported,
@@ -297,8 +305,6 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         None
     });
 
-    let direct_streams: DirectStreamRegistry =
-        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
     let watchers: WatcherRegistry =
         Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
@@ -308,7 +314,8 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         json_registry: opts.json_registry.clone(),
         broadcaster: opts.broadcaster.clone(),
         daemon_port: opts.port,
-        direct_streams,
+        // SAME `Arc` as `session_routes.direct_streams` above — see its comment.
+        direct_streams: direct_streams.clone(),
         watchers,
         resolve_worktree_root: worktree_path_resolver,
     };
@@ -872,11 +879,22 @@ async fn handle_socket(
                 match serde_json::from_str::<serde_json::Value>(&text) {
                     Ok(val) => match serde_json::from_value::<ClientMessage>(val) {
                         Ok(client_msg) => {
-                            let c = conn_clone.clone();
-                            let ctx = ctx_clone.clone();
-                            tokio::spawn(async move {
-                                dispatch(&c, &ctx, &client_msg).await;
-                            });
+                            // IMPORTANT: dispatch is awaited inline, in arrival order.
+                            // The TS original (daemon/src/ws/server.ts) processes
+                            // `socket.on("message", async ...)` handlers starting
+                            // synchronously in arrival order, which is what lets
+                            // `WSConnection.withSessionLock` (AGENTS.md: "WebSocket
+                            // — serialize session:open / session:close") preserve
+                            // FIFO ordering per (connection, sessionId). Previously
+                            // this spawned an unordered `tokio::spawn` per message,
+                            // so a session:close immediately followed by a
+                            // session:open (a terminal remount / rapid tap) could
+                            // have their dispatches start in either order or
+                            // interleave, racing the DirectStreamRegistry/tmux
+                            // attach-detach and losing session:input keystrokes.
+                            // Do NOT reintroduce a per-message tokio::spawn here
+                            // without an ordered per-connection queue to replace it.
+                            dispatch(&conn_clone, &ctx_clone, &client_msg).await;
                         }
                         Err(_) => send_parse_error(&conn_clone, false),
                     },
@@ -991,12 +1009,14 @@ async fn handle_patch_project(
 async fn handle_delete_project(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 200 {"ok":true}, not bare 204 — see `handle_delete_session`'s comment;
+    // `web-ui/src/api/client.ts:387` unconditionally `.json()`s this response.
     state
         .project_routes
         .delete_project(&id)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|_| Json(serde_json::json!({ "ok": true })))
         .map_err(project_err_to_response)
 }
 
@@ -1206,12 +1226,14 @@ async fn handle_delete_worktree(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
     Query(q): Query<DeleteWorktreeQuery>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 200 {"ok":true}, not bare 204 — see `handle_delete_session`'s comment;
+    // `web-ui/src/api/client.ts:451` unconditionally `.json()`s this response.
     state
         .worktree_routes
         .delete_worktree(&id, q.enforce_done.unwrap_or(false))
         .await
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|_| Json(serde_json::json!({ "ok": true })))
         .map_err(worktree_err_to_response)
 }
 
@@ -1398,12 +1420,14 @@ async fn handle_worktree_get_pending_file_opens(
 async fn handle_worktree_delete_pending_file_opens(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    // 200 {"ok":true}, not bare 204 — see `handle_delete_session`'s comment;
+    // `web-ui/src/api/client.ts:466` unconditionally `.json()`s this response.
     state
         .worktree_routes
         .delete_pending_file_opens(&id)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
+        .map(|_| Json(serde_json::json!({ "ok": true })))
         .map_err(worktree_err_to_response)
 }
 
@@ -1537,12 +1561,22 @@ async fn handle_create_session(
 async fn handle_delete_session(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     state
         .session_routes
         .delete_session(&id)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
+        // TS (`daemon/src/routes/sessions.ts`) sends `200 {"ok":true}` with a
+        // JSON content-type on every successful delete/discard branch. This
+        // previously returned bare `StatusCode::NO_CONTENT` (204, empty
+        // body, no Content-Type), which is valid HTTP but breaks every
+        // client caller — `web-ui/src/api/client.ts`'s `terminateSession`
+        // unconditionally calls `res.json()` on any 2xx response via
+        // `parseJson`, so discarding a draft (or deleting any session)
+        // always threw `SyntaxError: Unexpected end of JSON input` even
+        // though the delete itself succeeded. Live-reproduced against the
+        // :7141 sandbox with the exact same error text the user reported.
+        .map(|_| Json(serde_json::json!({ "ok": true })))
         .map_err(|e| match e {
             DeleteError::NotFound(m) => (
                 StatusCode::NOT_FOUND,
