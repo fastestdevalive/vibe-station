@@ -120,6 +120,10 @@ impl StreamState {
     }
 
     /// Current ring contents, decoded lossily (matches the TS `.toString("utf8")`).
+    ///
+    /// Concatenates the wraparound halves into one contiguous buffer before
+    /// decoding once — decoding each half separately would corrupt any
+    /// multi-byte character that happens to straddle `ring_pos`.
     fn ring_contents(&self) -> String {
         if self.ring_len == 0 {
             return String::new();
@@ -127,10 +131,10 @@ impl StreamState {
         if self.ring_len < RING_CAPACITY {
             String::from_utf8_lossy(&self.ring[..self.ring_len]).into_owned()
         } else {
-            let mut s = String::with_capacity(RING_CAPACITY);
-            s.push_str(&String::from_utf8_lossy(&self.ring[self.ring_pos..]));
-            s.push_str(&String::from_utf8_lossy(&self.ring[..self.ring_pos]));
-            s
+            let mut bytes = Vec::with_capacity(RING_CAPACITY);
+            bytes.extend_from_slice(&self.ring[self.ring_pos..]);
+            bytes.extend_from_slice(&self.ring[..self.ring_pos]);
+            String::from_utf8_lossy(&bytes).into_owned()
         }
     }
 }
@@ -498,18 +502,69 @@ pub fn spawn_child(opts: SpawnChildOptions) -> Result<PtyHandle, ProcError> {
     {
         let weak = Arc::downgrade(&inner);
         std::thread::spawn(move || {
+            // `pending` carries any UTF-8 sequence left incomplete at the
+            // tail of a 4096-byte read across to the next one, instead of
+            // lossily decoding per-read (which reliably shredded characters
+            // that straddled a read boundary into `�`). See the matching
+            // comment in `vst-ws`'s `tmux_output.rs` reader thread.
             let mut buf = [0u8; 4096];
+            let mut pending: Vec<u8> = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if let Some(inner) = weak.upgrade() {
-                            let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                            inner.handle_chunk(&chunk);
+                        pending.extend_from_slice(&buf[..n]);
+                        loop {
+                            match std::str::from_utf8(&pending) {
+                                Ok(s) => {
+                                    if let Some(inner) = weak.upgrade() {
+                                        inner.handle_chunk(s);
+                                    }
+                                    pending.clear();
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid_up_to = e.valid_up_to();
+                                    match e.error_len() {
+                                        None => {
+                                            if valid_up_to > 0 {
+                                                if let Some(inner) = weak.upgrade() {
+                                                    let s = std::str::from_utf8(
+                                                        &pending[..valid_up_to],
+                                                    )
+                                                    .expect("validated prefix");
+                                                    inner.handle_chunk(s);
+                                                }
+                                            }
+                                            pending.drain(..valid_up_to);
+                                            break;
+                                        }
+                                        Some(bad_len) => {
+                                            let end = valid_up_to + bad_len;
+                                            if let Some(inner) = weak.upgrade() {
+                                                let mut s = std::str::from_utf8(
+                                                    &pending[..valid_up_to],
+                                                )
+                                                .expect("validated prefix")
+                                                .to_owned();
+                                                s.push('\u{FFFD}');
+                                                inner.handle_chunk(&s);
+                                            }
+                                            pending.drain(..end);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
+                }
+            }
+            if !pending.is_empty() {
+                if let Some(inner) = weak.upgrade() {
+                    let s = String::from_utf8_lossy(&pending).into_owned();
+                    inner.handle_chunk(&s);
                 }
             }
             if let Some(inner) = weak.upgrade() {
