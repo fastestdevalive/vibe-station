@@ -37,6 +37,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Ensure cargo is on PATH (not always set in GUI/shell-launched envs).
+# shellcheck source=/dev/null
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+
 # --seed=<mode> and --port=N can appear anywhere in argv; strip them out
 # first so the remaining positional args parse cleanly. --seed defaults to an
 # inherited VST_SEED_MODE, falling back to "demo". --port defaults to an
@@ -104,18 +108,52 @@ case "$CMD" in
     export VST_SEED_MODE="$SEED_MODE"
 
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
-    # Transition (part 10, task 5): the sandbox mounts the host Rust release
-    # binaries and dev-entrypoint.sh prefers them, falling back to Node. Tell
-    # the user which daemon this sandbox will actually boot so a missing Rust
-    # build doesn't silently fall back to Node. The compose default paths are
-    # ./rust/target/release/{vst-daemon,vst-cli}; VST_RUST_DAEMON_BIN /
-    # VST_RUST_CLI_BIN override them.
-    RUST_DAEMON_BIN="${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}"
-    if [ -x "$RUST_DAEMON_BIN" ]; then
-      echo "    daemon: RUST ($RUST_DAEMON_BIN)"
+    # The dev sandbox mounts host Rust binaries (vst-daemon, vst-cli).
+    # Prefer pre-built container-matching binaries (target-docker), then host release or debug:
+    if [ -n "${VST_RUST_DAEMON_BIN:-}" ] && [ -x "$VST_RUST_DAEMON_BIN" ]; then
+      RUST_DAEMON_BIN="$VST_RUST_DAEMON_BIN"
+    elif [ -x "./rust/target-docker/debug/vst-daemon" ]; then
+      RUST_DAEMON_BIN="./rust/target-docker/debug/vst-daemon"
+    elif [ -x "./rust/target-docker/release/vst-daemon" ]; then
+      RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
+    elif [ -x "./rust/target/release/vst-daemon" ]; then
+      RUST_DAEMON_BIN="./rust/target/release/vst-daemon"
+    elif [ -x "./rust/target/debug/vst-daemon" ]; then
+      RUST_DAEMON_BIN="./rust/target/debug/vst-daemon"
     else
-      echo "    daemon: NODE (fallback) — Rust binary not found at $RUST_DAEMON_BIN; run 'pnpm build:rust' to boot the Rust daemon"
+      RUST_DAEMON_BIN=""
     fi
+
+    if [ -n "${VST_RUST_CLI_BIN:-}" ] && [ -x "$VST_RUST_CLI_BIN" ]; then
+      RUST_CLI_BIN="$VST_RUST_CLI_BIN"
+    elif [ -x "./rust/target-docker/debug/vst-cli" ]; then
+      RUST_CLI_BIN="./rust/target-docker/debug/vst-cli"
+    elif [ -x "./rust/target-docker/release/vst-cli" ]; then
+      RUST_CLI_BIN="./rust/target-docker/release/vst-cli"
+    elif [ -x "./rust/target/release/vst-cli" ]; then
+      RUST_CLI_BIN="./rust/target/release/vst-cli"
+    elif [ -x "./rust/target/debug/vst-cli" ]; then
+      RUST_CLI_BIN="./rust/target/debug/vst-cli"
+    else
+      RUST_CLI_BIN=""
+    fi
+
+    if [ -z "$RUST_DAEMON_BIN" ] || [ -z "$RUST_CLI_BIN" ]; then
+      echo "Host Rust binaries not found. Building debug binaries ('cargo build -p vst-daemon -p vst-cli')..."
+      cargo build --manifest-path rust/Cargo.toml -p vst-daemon -p vst-cli
+      RUST_DAEMON_BIN="./rust/target/debug/vst-daemon"
+      RUST_CLI_BIN="./rust/target/debug/vst-cli"
+    fi
+
+    if [ ! -x "$RUST_DAEMON_BIN" ] || [ ! -x "$RUST_CLI_BIN" ]; then
+      echo "error: expected Rust binaries at $RUST_DAEMON_BIN and $RUST_CLI_BIN." >&2
+      exit 1
+    fi
+
+    export VST_RUST_DAEMON_BIN="$RUST_DAEMON_BIN"
+    export VST_RUST_CLI_BIN="$RUST_CLI_BIN"
+    echo "    daemon: RUST ($RUST_DAEMON_BIN)"
+    echo "    cli:    RUST ($RUST_CLI_BIN)"
     # demo-seed.sh and seed-file-search-demo.sh guard themselves
     # independently (a $VST/.seeded marker vs. a project-registration check)
     # — neither knows about the other, so switching --seed on a worktree-name

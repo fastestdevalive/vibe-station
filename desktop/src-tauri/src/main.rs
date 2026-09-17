@@ -60,7 +60,28 @@ fn main() {
                 })
                 .unwrap_or_else(|| PathBuf::from("SKILL.md"));
 
-            let daemon_info = match daemon::detect_running_daemon() {
+            // In dev mode the daemon starts via beforeDevCommand concurrently with
+            // Vite; Tauri opens the window as soon as Vite is ready, which can race
+            // the daemon's startup. Retry for up to 30s so the desktop self-heals
+            // instead of immediately falling through to the (stub) sidecar path.
+            #[cfg(debug_assertions)]
+            let detect_result = {
+                let mut found = daemon::detect_running_daemon();
+                if found.is_none() {
+                    println!("[vst] daemon not in config.json yet — waiting up to 30s...");
+                    let deadline = std::time::Instant::now()
+                        + std::time::Duration::from_secs(30);
+                    while found.is_none() && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        found = daemon::detect_running_daemon();
+                    }
+                }
+                found
+            };
+            #[cfg(not(debug_assertions))]
+            let detect_result = daemon::detect_running_daemon();
+
+            let daemon_info = match detect_result {
                 Some(info) => {
                     println!("[vst] found running daemon on port {}", info.port);
                     info

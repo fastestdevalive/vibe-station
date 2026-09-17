@@ -367,9 +367,11 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
-    Router::new()
-        // Health
-        .route("/health", get(handle_health))
+    // All REST API routes live under /api so every client — Tauri (absolute
+    // URL), browser via Vite proxy (no rewrite needed), Tailscale/LAN/prod
+    // (relative /api/…) — uses the same path convention without any
+    // prefix-stripping tricks.
+    let api = Router::new()
         // Open
         .route("/open", post(handle_open))
         // Projects
@@ -514,7 +516,6 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/auth/tunnel/status", get(handle_auth_tunnel_status))
         .route("/auth/local-qr", post(handle_auth_local_qr))
         .route("/auth/mobile-qr", post(handle_auth_mobile_qr))
-        .route("/mobile-auth", get(handle_mobile_auth))
         // Tailscale
         .route("/tailscale/status", get(handle_tailscale_status))
         .route(
@@ -526,9 +527,15 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             post(handle_tailscale_serve_disable),
         )
         .route("/tailscale/up", post(handle_tailscale_up))
-        .route("/tailscale/qr", post(handle_tailscale_qr))
-        // WebSocket
+        .route("/tailscale/qr", get(handle_tailscale_qr));
+
+    Router::new()
+        // Utility & protocol routes stay at root (not under /api)
+        .route("/health", get(handle_health))
+        .route("/mobile-auth", get(handle_mobile_auth))
         .route("/ws", get(handle_ws_upgrade))
+        // All REST API routes under /api
+        .nest("/api", api)
         // Fallback for static SPA / dist
         .fallback(handle_fallback)
         .layer(axum::middleware::from_fn_with_state(
@@ -654,11 +661,11 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Exempt routes
+    // Exempt routes (health, ws, mobile-auth stay at root; auth/logout is under /api)
     let key = format!("{} {}", method, path);
     if key == "GET /health"
         || key == "GET /ws"
-        || key == "POST /auth/logout"
+        || key == "POST /api/auth/logout"
         || key == "GET /mobile-auth"
     {
         return next.run(req).await;

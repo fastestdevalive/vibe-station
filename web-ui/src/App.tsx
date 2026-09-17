@@ -12,6 +12,14 @@ function AppShell() {
   const { authed, loading, onLoginSuccess } = useAuth();
   const navigate = useNavigate();
 
+  // Start the WS connection immediately on app mount, before auth resolves.
+  // Without this, the WS only starts inside Workspace (which only renders when
+  // authed=true), creating a deadlock: auth retry needs ws:open, ws:open needs
+  // Workspace, Workspace needs authed. Calling it here breaks the cycle.
+  useEffect(() => {
+    api.startConnection();
+  }, []);
+
   // Handle `navigate` WS events emitted by POST /open (vst open <path>).
   useEffect(() => {
     return api.on("navigate", (ev) => {

@@ -20,7 +20,6 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://127.0.0.1:7421",
-        rewrite: (p) => p.replace(/^\/api/, ""),
         changeOrigin: true, // ensures Cookie / Set-Cookie headers flow correctly
         xfwd: true, // forward real client IP in X-Forwarded-For
       },

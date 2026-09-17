@@ -64,10 +64,7 @@ impl TailscaleRoutes {
                 },
                 ServiceStatus::ConnectedNoServe => TailscaleStatus::ConnectedNoServe {
                     https_url: String::new(),
-                    setup_command: format!(
-                        "tailscale serve --bg --yes --https=443 http://127.0.0.1:{}",
-                        self.port
-                    ),
+                    setup_command: format!("tailscale serve --bg --yes {}", self.port),
                 },
                 ServiceStatus::ServeActive { url } => {
                     TailscaleStatus::ServeActive { https_url: url }
@@ -75,10 +72,7 @@ impl TailscaleRoutes {
                 ServiceStatus::PortMismatch { expected, actual } => TailscaleStatus::PortMismatch {
                     expected_port: expected as i64,
                     actual_port: actual as i64,
-                    fix_command: format!(
-                        "tailscale serve --bg --yes --https=443 http://127.0.0.1:{}",
-                        self.port
-                    ),
+                    fix_command: format!("tailscale serve --bg --yes {}", self.port),
                 },
                 ServiceStatus::Error { message } => TailscaleStatus::Error { message },
             },

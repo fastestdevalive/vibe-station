@@ -99,25 +99,29 @@ pub async fn get_status(port: u16) -> TailscaleResult<TailscaleStatus> {
     let serve_json: serde_json::Value =
         serde_json::from_slice(&serve_output.stdout).unwrap_or(serde_json::Value::Null);
 
-    // Check if there's a serve rule for our port.
-    let our_path = format!("localhost:{port}");
-    let tcp = serve_json.get("TCP");
-    if let Some(tcp_obj) = tcp.and_then(|t| t.as_object()) {
-        for (_, v) in tcp_obj {
-            if let Some(dest) = v.get("TCPForwardTarget").and_then(|d| d.as_str()) {
-                if dest.contains(&our_path) || dest.contains(&format!(":{port}")) {
-                    if let Some(https_urls) = serve_json
-                        .pointer("/Web/https/Handlers")
-                        .and_then(|h| h.as_object())
-                    {
-                        if let Some((_, handler)) = https_urls.iter().next() {
-                            let url = handler
-                                .get("Domain")
-                                .and_then(|d| d.as_str())
-                                .map(|d| format!("https://{d}"))
-                                .unwrap_or_default();
-                            return Ok(TailscaleStatus::ServeActive { url });
-                        }
+    // Modern Tailscale serve status JSON (v1.60+):
+    //   { "TCP": {"443": {"HTTPS": true}}, "Web": {"<domain>:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:<port>"}}}}}
+    // Iterate the Web object and look for a handler proxying to our port.
+    let our_proxy = format!(":{port}");
+    if let Some(web_obj) = serve_json.get("Web").and_then(|w| w.as_object()) {
+        for (vhost_key, vhost_val) in web_obj {
+            if let Some(handlers) = vhost_val
+                .get("Handlers")
+                .and_then(|h| h.as_object())
+            {
+                for (_, handler) in handlers {
+                    let proxy = handler
+                        .get("Proxy")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("");
+                    if proxy.contains(&our_proxy) {
+                        // vhost_key is e.g. "machine.tailnet.ts.net:443" — strip the :port
+                        let domain = vhost_key
+                            .split(':')
+                            .next()
+                            .unwrap_or(vhost_key.as_str());
+                        let url = format!("https://{domain}");
+                        return Ok(TailscaleStatus::ServeActive { url });
                     }
                 }
             }
@@ -130,7 +134,7 @@ pub async fn get_status(port: u16) -> TailscaleResult<TailscaleStatus> {
 /// Enable Tailscale HTTPS serve for the given port.
 pub async fn enable_serve(port: u16) -> TailscaleResult<String> {
     let port_str = port.to_string();
-    let output = run_tailscale(&["serve", "https", &port_str]).await?;
+    let output = run_tailscale(&["serve", "--bg", "--yes", &port_str]).await?;
     if !output.status.success() {
         let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
         if msg.to_ascii_lowercase().contains("operator") {
@@ -146,14 +150,12 @@ pub async fn enable_serve(port: u16) -> TailscaleResult<String> {
 }
 
 /// Disable Tailscale HTTPS serve for the given port.
-pub async fn disable_serve(port: u16) -> TailscaleResult<()> {
-    let port_str = port.to_string();
-    let output = run_tailscale(&["serve", "https", "--remove", &port_str]).await?;
+pub async fn disable_serve(_port: u16) -> TailscaleResult<()> {
+    // `tailscale serve reset` clears all serve config; simpler and version-stable
+    // vs the old `serve https --remove <port>` which was removed in v1.60+.
+    let output = run_tailscale(&["serve", "reset"]).await?;
     if !output.status.success() {
         let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if msg.contains("rule not found") {
-            return Ok(()); // already removed
-        }
         return Err(TailscaleError::Command(msg));
     }
     Ok(())
