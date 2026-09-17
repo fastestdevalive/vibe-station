@@ -40,7 +40,10 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/vst-daemon", "binaries/cloudflared", "binaries/vst"],
-    "resources": ["../../skill/SKILL.md"],
+    "resources": {
+      "../../skill/SKILL.md": "SKILL.md",
+      "../../web-ui/dist": "web-ui/dist"
+    },
     "macOS": {
       "entitlements": "entitlements.mac.plist",
       "frameworks": [],
