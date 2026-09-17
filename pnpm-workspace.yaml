@@ -1,4 +1,3 @@
 packages:
-  - "cli"
   - "web-ui"
   - "desktop"
