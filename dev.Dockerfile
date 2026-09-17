@@ -65,29 +65,19 @@ RUN chmod +x /app/scripts/dev-entrypoint.sh
 # its build output will actually run/be owned at runtime). apt-get/npm -g
 # above still ran as root — that's normal, they install system packages.
 USER vst
-RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @vibestation/cli build
+RUN pnpm install --no-frozen-lockfile
 
-# agy's ACP path (`daemon/src/agent-plugins/agy.ts`) spawns the third-party
-# `antigravity-acp` adapter via `bunx` — Bun is a hard runtime dependency of
-# that one plugin, not otherwise needed by this project. Installed as `vst`
-# (not root) so it lands under $HOME/.bun, matching how the daemon itself
-# runs `bunx` at spawn time.
+# agy's ACP path spawns the third-party `antigravity-acp` adapter via `bunx` —
+# Bun is a hard runtime dependency of that one plugin, not otherwise needed
+# by this project. Installed as `vst` (not root) so it lands under $HOME/.bun,
+# matching how the daemon itself runs `bunx` at spawn time.
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/vst/.bun/bin:${PATH}"
 
+# The Rust CLI binary is mounted from the host at /usr/local/bin/vst-rust by
+# docker-compose.dev.yml, and scripts/dev-entrypoint.sh symlinks it to
+# /usr/local/bin/vst on startup.
 USER root
-
-# Put the built CLI on PATH as `vst`. Every agent's system prompt
-# (daemon/src/assets/agent-system-prompt.md) instructs it to run `vst session
-# create` / `vst worktree create` / `vst send`, so without this the sandbox
-# silently lacks the one command those instructions depend on — an agent here
-# gets "vst: not found" and no session-spawning flow can be tested at all.
-# `cli/package.json` already declares the `vst` bin and the built entrypoint
-# carries a `#!/usr/bin/env node` shebang, but tsc emits it without the
-# executable bit, so a bare symlink alone would fail with EACCES.
-RUN chmod +x /app/cli/dist/main.js \
-    && ln -sf /app/cli/dist/main.js /usr/local/bin/vst
 
 EXPOSE 5173
 

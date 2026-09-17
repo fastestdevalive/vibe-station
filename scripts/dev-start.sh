@@ -64,15 +64,15 @@ pnpm --filter @vibestation/web build
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '
   TS=$(date -Iseconds)
   echo "[dev-start] $TS — SIGTERM received by dev-start.sh (pid $$)"
-  if pgrep -x vibe-station-desktop > /dev/null 2>&1; then
+  if pgrep -f vibe-station-desktop > /dev/null 2>&1; then
     echo "[dev-start] $TS — Tauri window is STILL ALIVE (something else sent SIGTERM)"
-    pgrep -la vibe-station-desktop
+    pgrep -fa vibe-station-desktop
   else
     echo "[dev-start] $TS — Tauri window is GONE (Tauri closed and killed its process group)"
   fi

@@ -14,6 +14,7 @@
 # Rust build artifacts — never needed in the image; the dev sandbox mounts
 # pre-built release binaries from the host (see docker-compose.dev.yml).
 rust/target/
+rust/target-docker/
 
 # Reinstalled fresh inside the container (dev.Dockerfile's pnpm install
 # step) — copying the host's node_modules in is wasted transfer at best,

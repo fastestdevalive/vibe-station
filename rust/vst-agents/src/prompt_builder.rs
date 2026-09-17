@@ -1,22 +1,23 @@
 //! 3-layer prompt builder per HIGH-LEVEL-DESIGN.md §4 (ports
 //! `services/promptBuilder.ts`).
 //!
-//! L1 — base: `daemon/src/assets/agent-system-prompt.md` (embedded at compile
+//! L1 — base: `assets/agent-system-prompt.md` (embedded at compile
 //! time, cached) + the Rich-Chat-only subagent fragment when `rich_chat`.
 //! L2 — context: project + worktree + mode context.
 //! L3 — rules: `<project>/AGENTS.md` or `<project>/.vibe-station/rules.md`.
 //!
 //! The L1/subagent assets are embedded via `include_str!` so the crate is
-//! self-contained and tests are deterministic, while keeping the daemon's
-//! asset files the single source of truth.
+//! self-contained and tests are deterministic. They previously lived under
+//! the now-removed Node `daemon/src/assets/`; moved into this crate's own
+//! `assets/` directory (source of truth) when the Node daemon was hard-removed.
 
 use std::sync::Mutex;
 
 use vst_types::{LifecycleState, ProjectRecord, SessionType, WorktreeRecord};
 
-// The daemon asset files, embedded once at compile time.
-const SKILL_MD: &str = include_str!("../../../daemon/src/assets/agent-system-prompt.md");
-const SUBAGENT_MD: &str = include_str!("../../../daemon/src/assets/agent-subagent-richchat.md");
+// The agent prompt asset files, embedded once at compile time.
+const SKILL_MD: &str = include_str!("../assets/agent-system-prompt.md");
+const SUBAGENT_MD: &str = include_str!("../assets/agent-subagent-richchat.md");
 
 static CACHED_SKILL_MD: Mutex<Option<String>> = Mutex::new(None);
 static CACHED_SUBAGENT_MD: Mutex<Option<String>> = Mutex::new(None);

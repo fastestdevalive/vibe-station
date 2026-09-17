@@ -20,26 +20,31 @@ export function useAuth(): AuthState {
   const [loading, setLoading] = useState(true);
   const checkedRef = useRef(false);
 
+  const runCheck = useCallback(async () => {
+    const ok = await api.checkAuth();
+    setAuthed(ok);
+    setLoading(false);
+    return ok;
+  }, []);
+
   useEffect(() => {
     if (checkedRef.current) return;
     checkedRef.current = true;
+    // In the Tauri desktop shell the token is injected before page JS runs.
+    // /auth/check passes for loopback callers — daemon grants access automatically.
+    void runCheck();
+  }, [runCheck]);
 
-    void (async () => {
-      // In the Tauri desktop shell the token is injected before page JS runs.
-      // /auth/check passes for loopback callers — daemon grants access automatically.
-      const injectedToken = (window as unknown as Record<string, unknown>).__VST_TOKEN__;
-      if (typeof injectedToken === "string" && injectedToken.length > 0) {
-        const ok = await api.checkAuth();
-        setAuthed(ok);
-        setLoading(false);
-        return;
+  // When the WS comes online the daemon is definitely up — retry a failed auth
+  // check so a race between Tauri window open and daemon startup self-heals
+  // instead of leaving the user stuck on the LoginScreen until they reload.
+  useEffect(() => {
+    return api.on("ws:open" as Parameters<typeof api.on>[0], () => {
+      if (!authed) {
+        void runCheck();
       }
-
-      const ok = await api.checkAuth();
-      setAuthed(ok);
-      setLoading(false);
-    })();
-  }, []);
+    });
+  }, [authed, runCheck]);
 
   // Listen for WS 4401 close — session expired mid-use
   useEffect(() => {

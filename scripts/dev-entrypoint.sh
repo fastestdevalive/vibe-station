@@ -168,16 +168,31 @@ fi
 if [ -f /usr/local/bin/vst-rust ] && [ -x /usr/local/bin/vst-rust ]; then
   ln -sf /usr/local/bin/vst-rust /usr/local/bin/vst
   echo "[daemon] using Rust vst CLI (/usr/local/bin/vst-rust)"
+else
+  echo "[daemon] WARNING: /usr/local/bin/vst-rust not found or not executable" >&2
 fi
 
 rm -f /home/vst/.vibe-station/.daemon.lock
 # Rust daemon — requires web-ui/dist for static SPA serving; the Vite dev
 # server covers the browser, and the Rust daemon degrades gracefully (404s)
 # if dist isn't built, so VST_DIST_PATH may point at a missing dir.
+if [ ! -f /usr/local/bin/vst-daemon-rust ] || [ ! -x /usr/local/bin/vst-daemon-rust ]; then
+  echo "[daemon] FATAL: /usr/local/bin/vst-daemon-rust not found or not executable. Ensure 'pnpm build:rust' was run on the host before starting the sandbox." >&2
+  exit 1
+fi
+
 echo "[daemon] starting Rust daemon (/usr/local/bin/vst-daemon-rust)"
 su vst -c '/usr/local/bin/vst-daemon-rust' &
 echo 'Waiting for daemon...'
-until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done
+timeout=60
+while ! curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do
+  if [ "$timeout" -le 0 ]; then
+    echo "[daemon] FATAL: daemon failed to respond to /health within 30s." >&2
+    exit 1
+  fi
+  sleep 0.5
+  timeout=$((timeout - 1))
+done
 echo 'Daemon ready.'
 
 if [ "$VST_SEED_MODE" != "demo" ]; then
