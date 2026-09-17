@@ -37,6 +37,38 @@ if [[ -z "$TRIPLE" ]]; then
 fi
 echo "    Triple: $TRIPLE"
 
+# Windows cargo binaries carry a .exe suffix; Tauri's externalBin resolution
+# expects the bundled sidecar filename to match, i.e. `vst-daemon-<triple>.exe`.
+# The old pkg-based script never needed this (pkg's own --target flag picked
+# the right OS ext internally); a bare `cp` here would silently produce a
+# sidecar with the wrong name on Windows.
+EXE_SUFFIX=""
+case "$TRIPLE" in
+  *windows*) EXE_SUFFIX=".exe" ;;
+esac
+
+# `tauri build --target universal-apple-darwin` (the normal macOS release
+# target) needs a `vst-daemon-universal-apple-darwin`/`vst-universal-apple-darwin`
+# binary — a fat/universal (arm64+x86_64) binary produced via `lipo`, built
+# from TWO separate `cargo build --target aarch64-apple-darwin`/
+# `--target x86_64-apple-darwin` runs. This script only ever builds for the
+# HOST triple (`rustc -vV`), so it cannot produce that on its own. Warn loudly
+# rather than silently shipping a single-arch binary under the universal name
+# (which would run on the build machine's own arch but fail to launch on the
+# other one) — same spirit as the old script's graceful, visible skip for an
+# unsupported vst-CLI pkg target.
+if [[ "$TRIPLE" == *-apple-darwin ]]; then
+  echo "" >&2
+  echo "WARNING: building for host triple $TRIPLE only. If this build is" >&2
+  echo "  packaged with 'tauri build --target universal-apple-darwin', you" >&2
+  echo "  must separately build BOTH aarch64-apple-darwin and" >&2
+  echo "  x86_64-apple-darwin release binaries and lipo them together into" >&2
+  echo "  desktop/src-tauri/binaries/{vst-daemon,vst}-universal-apple-darwin" >&2
+  echo "  BEFORE the Tauri bundling step — this script does not do that for" >&2
+  echo "  you, and a single-arch binary under the universal name will fail" >&2
+  echo "  to launch on the architecture it wasn't built for." >&2
+fi
+
 BINARIES_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
@@ -48,8 +80,8 @@ cargo build --release --manifest-path "$REPO_ROOT/rust/Cargo.toml" -p vst-daemon
 
 # ── Step 3: copy vst-daemon binary to binaries/ ──────────────────────────────
 
-SRC_DAEMON="$REPO_ROOT/rust/target/release/vst-daemon"
-DEST_DAEMON="$BINARIES_DIR/vst-daemon-$TRIPLE"
+SRC_DAEMON="$REPO_ROOT/rust/target/release/vst-daemon$EXE_SUFFIX"
+DEST_DAEMON="$BINARIES_DIR/vst-daemon-$TRIPLE$EXE_SUFFIX"
 
 if [[ ! -f "$SRC_DAEMON" ]]; then
   echo "Error: expected daemon binary at $SRC_DAEMON — build may have failed." >&2
@@ -64,8 +96,8 @@ echo "    $(du -h "$DEST_DAEMON" | cut -f1)  $DEST_DAEMON"
 
 # ── Step 4: copy vst CLI binary to binaries/ ─────────────────────────────────
 
-SRC_CLI="$REPO_ROOT/rust/target/release/vst-cli"
-DEST_CLI="$BINARIES_DIR/vst-$TRIPLE"
+SRC_CLI="$REPO_ROOT/rust/target/release/vst-cli$EXE_SUFFIX"
+DEST_CLI="$BINARIES_DIR/vst-$TRIPLE$EXE_SUFFIX"
 
 if [[ ! -f "$SRC_CLI" ]]; then
   echo "Error: expected vst CLI binary at $SRC_CLI — build may have failed." >&2

@@ -225,3 +225,61 @@ mechanical (build-script rewiring + deletion), not a TS→Rust logic port, so it
 should be comfortably in scope for either model — the live-verification step in
 dispatch #1 is the part that needs care, since it's the first real test of an
 integration path nothing else in this feature has touched.
+
+## Post-dispatch-#1 Opus review — findings + adjustments applied (2026-09-16)
+
+An independent Opus review of `4717ccf` found 4 real issues beyond the
+already-known Node/ACP packaging gap (see below). Adjustments made in the
+immediate follow-up commit:
+
+1. **`VST_DIST_PATH` never actually fired (fixed).** It was resolved from
+   `std::env::current_dir()`, which is `desktop/src-tauri` under `tauri dev`
+   (so `<cwd>/web-ui/dist` never existed) and an arbitrary GUI-launcher
+   directory in a packaged app (so it never existed there either) — worse, in
+   the pathological case where cwd DID happen to contain a `web-ui/dist` (e.g.
+   launched from the repo root), it would have pointed the daemon at a
+   foreign/stale SPA build. Fixed to resolve via
+   `app_handle.path().resource_dir()`, the same pattern already used for
+   `cloudflared_bin`/`vst_bin`/`skill_path`. Also added `web-ui/dist` to
+   `tauri.conf.json`'s `resources` (converted from array to object form so the
+   directory lands at `web-ui/dist` inside the resource dir, matching the
+   Rust-side join) — without this it wouldn't exist in a packaged app at all.
+2. **Orphaned daemon process on the 30s ready-timeout (fixed).** The spawned
+   child was discarded (`_child`) and never killed if `spawn_daemon` gave up
+   waiting for the ready line — it would keep running indefinitely,
+   unsupervised. Now killed on that specific timeout path. Deliberately NOT
+   killed on the separate "config.json not updated within 5s of ready signal"
+   path, since by that point the daemon has already printed ready and is
+   genuinely serving — killing it there would tear down a working daemon over
+   a slow config write, which is worse. That path's interaction with the
+   caller's release-mode fallback behavior (in `main.rs`) is a separate, not
+   fully diagnosed, known follow-up — not fixed here.
+3. **`prep-sidecar.sh` had no Windows (`.exe`) or universal-macOS handling
+   (partially fixed).** Added `.exe` suffix handling for Windows triples
+   (source/dest binary paths). Universal-macOS (`tauri build --target
+   universal-apple-darwin`, the normal macOS release target) genuinely can't
+   be produced by this script alone — it needs two separate host-triple builds
+   lipo'd together — so this only adds a loud, visible warning rather than
+   attempting it; a real fix needs its own follow-up when macOS release
+   packaging is actually exercised.
+4. **Commit message / code comment factually wrong about the regex rationale
+   (fixed, comment only).** Claimed the old `127\.0\.0\.1` regex matched the
+   Node daemon; it didn't — `daemon/src/main.ts` also binds `0.0.0.0`. This
+   means the desktop sidecar spawn path apparently never worked end-to-end
+   against EITHER daemon before this change, which is a stronger reason to
+   treat Gate 2 (the still-pending manual GUI launch) as load-bearing, not a
+   formality.
+
+**Not fixed in this pass, by design — the Node/ACP packaging gap**, discussed
+with the user separately: in a genuinely installed desktop app, Claude-mode
+agents will likely fail, because `tauri.conf.json`'s resources bundle nothing
+from `node_modules`, and the sidecar's `node -e "require.resolve(...)"` call
+(in `vst-agents/src/claude.rs`) searches `node_modules` by walking up from the
+spawned process's CWD — which, in an installed app, has no repo checkout
+anywhere in its ancestry. This is EXPLICITLY tracked as a blocker that must be
+resolved (or consciously accepted with a documented workaround, e.g.
+requiring a global npm install) before the pending manual GUI verification,
+and definitely before Dispatch #2's deletion. Not attempted blind in this
+session because it can't be verified without a real GUI/display environment,
+which this sandbox doesn't have — a half-tested bundling mechanism would be
+worse than a clearly-flagged known gap.
