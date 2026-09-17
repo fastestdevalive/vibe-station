@@ -15,8 +15,19 @@
 //! Terminal + § WebSocket: killing the PTY (SIGHUP) detaches this client
 //! without touching the underlying tmux session — the session keeps running for
 //! the next attach.
+//!
+//! `detach()` must actually kill the `tmux attach-session` child (mirroring
+//! Node's `pty.kill()`), not just drop Rust-side state: the PTY master here is
+//! obtained via `try_clone_reader()` (a `dup`), so dropping `master` does NOT
+//! close the underlying fd or send the child EOF/SIGHUP — the reader thread's
+//! own clone keeps it open. Without an explicit kill, the `attach-session`
+//! child (and thus its tmux *client*, not the session) lives forever, and
+//! every close→open remount (worktree switch, layout toggle) leaves one more
+//! phantom client permanently attached, mirroring the shell's keystroke echo
+//! to every leaked client — this is what turns "s" into "ss", "sss", etc.
+//! Killing the client here is exactly tmux's normal detach (`Ctrl-b d`
+//! semantics): the session and its pane process are never touched.
 
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -35,6 +46,11 @@ struct Inner {
     opened_tx: tokio::sync::broadcast::Sender<()>,
     error_tx: tokio::sync::broadcast::Sender<String>,
     master: std::sync::Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>,
+    /// Split out from the `Child` so it can be signalled independently of the
+    /// reap thread blocked in `.wait()`. `None` until `attach()` has spawned
+    /// the child; `detach()` uses this to actually terminate the
+    /// `tmux attach-session` client (SIGHUP on unix — see module doc).
+    killer: std::sync::Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
 }
 
 /// A tmux `attach-session` PTY stream. Single-subscriber per instance (one per
@@ -59,21 +75,62 @@ impl TmuxOutputStream {
                 opened_tx,
                 error_tx,
                 master: std::sync::Mutex::new(None),
+                killer: std::sync::Mutex::new(None),
             }),
         }
     }
 
-    fn tmux_command(&self) -> Command {
-        let mut cmd = Command::new("tmux");
+    // ── Async variants used by `attach()` ────────────────────────────────────
+    // These use `tokio::process::Command` so they yield back to the runtime
+    // instead of blocking a tokio worker thread while waiting for the tmux
+    // subprocess to reply.
+
+    async fn run_async(&self, args: &[&str]) -> Result<(), Error> {
+        let mut cmd = tokio::process::Command::new("tmux");
         if let Some(sock) = &self.inner.socket {
             cmd.arg("-L").arg(sock);
         }
-        cmd
+        cmd.args(args);
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| Error::Stream(format!("io: {e}")))?;
+        if !out.status.success() {
+            return Err(Error::Stream(
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ));
+        }
+        Ok(())
     }
 
-    fn run(&self, args: &[&str]) -> Result<(), Error> {
-        let out = self
-            .tmux_command()
+    async fn has_session_async(&self) -> bool {
+        self.run_async(&["has-session", "-t", &self.inner.tmux_name])
+            .await
+            .is_ok()
+    }
+
+    async fn force_window_size_async(&self, cols: i64, rows: i64) {
+        let _ = self
+            .run_async(&[
+                "resize-window",
+                "-t",
+                &self.inner.tmux_name,
+                "-x",
+                &cols.to_string(),
+                "-y",
+                &rows.to_string(),
+            ])
+            .await;
+    }
+
+    // ── Sync variants kept for `resize()` (called on user resize events) ─────
+
+    fn run_sync(&self, args: &[&str]) -> Result<(), Error> {
+        let mut cmd = std::process::Command::new("tmux");
+        if let Some(sock) = &self.inner.socket {
+            cmd.arg("-L").arg(sock);
+        }
+        let out = cmd
             .args(args)
             .output()
             .map_err(|e| Error::Stream(format!("io: {e}")))?;
@@ -85,13 +142,8 @@ impl TmuxOutputStream {
         Ok(())
     }
 
-    fn has_session(&self) -> bool {
-        self.run(&["has-session", "-t", &self.inner.tmux_name])
-            .is_ok()
-    }
-
-    fn force_window_size(&self, cols: i64, rows: i64) {
-        let _ = self.run(&[
+    fn force_window_size_sync(&self, cols: i64, rows: i64) {
+        let _ = self.run_sync(&[
             "resize-window",
             "-t",
             &self.inner.tmux_name,
@@ -110,11 +162,9 @@ impl SessionStream for TmuxOutputStream {
             return Ok(());
         }
 
-        // Pre-flight: confirm the tmux session exists. Without this check, a
-        // missing/dead session causes `tmux attach-session` to print "can't
-        // find session" into the pty before exiting non-zero — which lands as
-        // garbage in the user's viewport.
-        if !self.has_session() {
+        // Pre-flight: confirm the tmux session exists. Uses tokio::process so
+        // it yields instead of blocking a worker thread.
+        if !self.has_session_async().await {
             self.inner.closed.store(true, Ordering::SeqCst);
             let _ = self
                 .inner
@@ -123,64 +173,160 @@ impl SessionStream for TmuxOutputStream {
             return Ok(());
         }
 
-        // Best-effort: hide the status bar + enable mouse mode.
-        let _ = self.run(&["set-option", "-t", &self.inner.tmux_name, "status", "off"]);
-        let _ = self.run(&["set-option", "-t", &self.inner.tmux_name, "mouse", "on"]);
-        self.force_window_size(cols, rows);
+        // Best-effort: hide the status bar + enable mouse mode. Non-fatal.
+        let _ = self
+            .run_async(&["set-option", "-t", &self.inner.tmux_name, "status", "off"])
+            .await;
+        let _ = self
+            .run_async(&["set-option", "-t", &self.inner.tmux_name, "mouse", "on"])
+            .await;
+        self.force_window_size_async(cols, rows).await;
 
-        // Spawn `tmux attach-session` in a PTY.
-        let pty_system = portable_pty::native_pty_system();
-        let pair = pty_system
-            .openpty(portable_pty::PtySize {
-                rows: rows as u16,
-                cols: cols as u16,
-                pixel_width: 0,
-                pixel_height: 0,
+        // Spawn `tmux attach-session` in a PTY. `portable_pty` has no async
+        // API so we move the blocking openpty + spawn_command + try_clone_reader
+        // calls into spawn_blocking to keep the worker free.
+        let tmux_name = self.inner.tmux_name.clone();
+        let socket = self.inner.socket.clone();
+        let (master, reader, mut child, killer) =
+            tokio::task::spawn_blocking(move || -> Result<_, Error> {
+                let pty_system = portable_pty::native_pty_system();
+                let pair = pty_system
+                    .openpty(portable_pty::PtySize {
+                        rows: rows as u16,
+                        cols: cols as u16,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|e| Error::Stream(format!("openpty: {e}")))?;
+
+                let mut cmd = portable_pty::CommandBuilder::new("tmux");
+                let mut argv: Vec<String> = vec![];
+                if let Some(sock) = &socket {
+                    argv.push("-L".to_string());
+                    argv.push(sock.clone());
+                }
+                argv.push("attach-session".to_string());
+                argv.push("-t".to_string());
+                argv.push(tmux_name);
+                cmd.args(&argv);
+                cmd.env("TERM", "xterm-256color");
+
+                let child = pair
+                    .slave
+                    .spawn_command(cmd)
+                    .map_err(|e| Error::Stream(format!("spawn attach-session: {e}")))?;
+                drop(pair.slave);
+
+                // Split out before `child` moves into the reap thread — this
+                // is what lets `detach()` signal the client independently of
+                // the thread blocked in `child.wait()`.
+                let killer = child.clone_killer();
+
+                let reader = pair
+                    .master
+                    .try_clone_reader()
+                    .map_err(|e| Error::Stream(format!("clone reader: {e}")))?;
+
+                Ok((pair.master, reader, child, killer))
             })
-            .map_err(|e| Error::Stream(format!("openpty: {e}")))?;
+            .await
+            .map_err(|e| Error::Stream(format!("spawn_blocking: {e}")))??;
 
-        let mut cmd = portable_pty::CommandBuilder::new("tmux");
-        let mut argv: Vec<String> = vec![];
-        if let Some(sock) = &self.inner.socket {
-            argv.push("-L".to_string());
-            argv.push(sock.clone());
-        }
-        argv.push("attach-session".to_string());
-        argv.push("-t".to_string());
-        argv.push(self.inner.tmux_name.clone());
-        cmd.args(&argv);
-        cmd.env("TERM", "xterm-256color");
-
-        let mut child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| Error::Stream(format!("spawn attach-session: {e}")))?;
-        drop(pair.slave);
-
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| Error::Stream(format!("clone reader: {e}")))?;
-
-        *self.inner.master.lock().unwrap() = Some(pair.master);
+        *self.inner.master.lock().unwrap() = Some(master);
+        *self.inner.killer.lock().unwrap() = Some(killer);
         let _ = self.inner.opened_tx.send(());
 
         let chunk_tx = self.inner.chunk_tx.clone();
         let close_tx = self.inner.close_tx.clone();
 
         // Reader thread: drain master output until EOF, forwarding chunks.
+        // Uses a dedicated OS thread (not a tokio task) because the read is a
+        // blocking PTY read that parks in the kernel until data arrives.
+        //
+        // `pending` carries any UTF-8 sequence left incomplete at the tail of
+        // a 4096-byte read across to the next one, instead of lossily
+        // decoding per-read. A `read()` on a PTY has no notion of character
+        // boundaries, and tmux/agent TUIs are UTF-8-heavy (box-drawing,
+        // spinners); a scroll-triggered full-screen repaint spans many read
+        // boundaries, so decoding each read in isolation reliably shredded
+        // some characters into `�` (U+FFFD) on scroll. node-pty's default
+        // `StringDecoder`-backed 'utf8' encoding did this buffering for the
+        // old Node daemon; this reproduces the same semantics.
+        let mut reader = reader;
+        // Cloned so the reader can check `closed` (set synchronously by
+        // `detach()`, before the kill signal has necessarily taken effect)
+        // and stop publishing immediately rather than racing the child's
+        // actual exit — ports Node's `if (this.closed) return` guard in its
+        // `onData` handler.
+        let inner_for_reader = self.inner.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
+            let mut pending: Vec<u8> = Vec::new();
             loop {
+                if inner_for_reader.closed.load(Ordering::SeqCst) {
+                    break;
+                }
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let chunk = String::from_utf8_lossy(&buf[..n]).into_owned();
-                        let _ = chunk_tx.send(chunk);
+                        if inner_for_reader.closed.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        pending.extend_from_slice(&buf[..n]);
+                        loop {
+                            match std::str::from_utf8(&pending) {
+                                Ok(s) => {
+                                    let _ = chunk_tx.send(s.to_owned());
+                                    pending.clear();
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid_up_to = e.valid_up_to();
+                                    match e.error_len() {
+                                        // Tail sequence is incomplete (not
+                                        // invalid) — hold it back for the
+                                        // next read.
+                                        None => {
+                                            if valid_up_to > 0 {
+                                                let s = std::str::from_utf8(&pending[..valid_up_to])
+                                                    .expect("validated prefix")
+                                                    .to_owned();
+                                                let _ = chunk_tx.send(s);
+                                            }
+                                            pending.drain(..valid_up_to);
+                                            break;
+                                        }
+                                        // Genuinely invalid bytes (not a
+                                        // boundary split) — emit the valid
+                                        // prefix plus one replacement char,
+                                        // skip past them, keep decoding the
+                                        // rest of `pending`.
+                                        Some(bad_len) => {
+                                            let end = valid_up_to + bad_len;
+                                            let mut s =
+                                                std::str::from_utf8(&pending[..valid_up_to])
+                                                    .expect("validated prefix")
+                                                    .to_owned();
+                                            s.push('\u{FFFD}');
+                                            let _ = chunk_tx.send(s);
+                                            pending.drain(..end);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 }
+            }
+            // Flush any bytes still pending (e.g. a trailing partial
+            // sequence right at EOF) lossily rather than dropping them —
+            // unless this reader was stopped by `detach()` rather than a
+            // real EOF, in which case the bytes belong to a dead client and
+            // must not be forwarded.
+            if !pending.is_empty() && !inner_for_reader.closed.load(Ordering::SeqCst) {
+                let _ = chunk_tx.send(String::from_utf8_lossy(&pending).into_owned());
             }
             // A clean EOF on `tmux attach-session` means the client detached —
             // the session itself is fine. Signal `close`.
@@ -258,7 +404,7 @@ impl SessionStream for TmuxOutputStream {
                 pixel_height: 0,
             });
         }
-        self.force_window_size(cols, rows);
+        self.force_window_size_sync(cols, rows);
     }
 
     async fn detach(&self, _subscriber_id: &str) -> Result<(), Error> {
@@ -266,6 +412,21 @@ impl SessionStream for TmuxOutputStream {
             return Ok(());
         }
         self.inner.closed.store(true, Ordering::SeqCst);
+        // Actually terminate the `tmux attach-session` client — SIGHUP on
+        // unix (see `ChildKiller::kill` in portable-pty), the same signal a
+        // real terminal sends on hangup. This ONLY detaches this client from
+        // the tmux session; the session and its pane process are untouched
+        // and stay running for the next attach (identical to `Ctrl-b d`).
+        // Fire-and-forget and non-blocking: this must not `.await` the
+        // child's actual exit, since `detach()` runs inside
+        // `WsConnection::with_session_lock` and blocking the lock on a
+        // process-death round-trip is exactly the kind of stall the
+        // tokio::process/spawn_blocking migration in `attach()` was meant to
+        // eliminate. The existing reap thread (spawned in `attach()`) absorbs
+        // the `wait()` once the signal lands.
+        if let Some(killer) = self.inner.killer.lock().unwrap().as_mut() {
+            let _ = killer.kill();
+        }
         *self.inner.master.lock().unwrap() = None;
         let _ = self.inner.close_tx.send(());
         Ok(())

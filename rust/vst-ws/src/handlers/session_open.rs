@@ -121,11 +121,21 @@ async fn open_session_locked(
         let c = conn.clone();
         let sid = session_id.to_string();
         tokio::spawn(async move {
-            while let Ok(chunk) = chunk_rx.recv().await {
-                c.send(ServerMessage::SessionOutput {
-                    session_id: sid.clone(),
-                    chunk,
-                });
+            use tokio::sync::broadcast::error::RecvError;
+            loop {
+                match chunk_rx.recv().await {
+                    Ok(chunk) => {
+                        c.send(ServerMessage::SessionOutput {
+                            session_id: sid.clone(),
+                            chunk,
+                        });
+                    }
+                    // The receiver fell behind the sender — catch up and keep
+                    // going. Without this, `while let Ok(...)` would treat
+                    // Lagged as a break condition and silently kill forwarding.
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
+                }
             }
         });
     }
@@ -156,11 +166,22 @@ async fn open_session_locked(
     {
         let c = conn.clone();
         let sid = session_id.to_string();
+        // Captured for identity comparison below — `subscriber_id` is the
+        // same string for every open of this session on this connection, so
+        // it can't distinguish "this task's own stream generation" from a
+        // newer one that has already replaced it in the registry. Only an
+        // Arc-identity check on `stream` (this generation's own PTY handle)
+        // tells the two apart. Without this, a stream that dies
+        // asynchronously (PTY/tmux crash) racing a fresh session:open can
+        // unregister the NEW live entry, orphaning its tmux attach client —
+        // which stays subscribed and keeps echoing input, compounding into
+        // multiplied keystrokes ("s" -> "ss" -> "sss") on repeated
+        // close/open remounts (e.g. worktree switches).
+        let this_stream = stream.clone();
         tokio::spawn(async move {
             while close_rx.recv().await.is_ok() {
-                // Unregister only if the entry still points at THIS stream.
                 if let Some(entry) = c.open_stream_entry(&sid) {
-                    if entry.subscriber_id == format!("{}:{sid}", c.id()) {
+                    if Arc::ptr_eq(&entry.stream, &this_stream) {
                         c.unregister_open_stream(&sid);
                     }
                 }
