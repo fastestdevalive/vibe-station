@@ -3,13 +3,11 @@
 #
 # 1. Creates a stub sidecar binary so Tauri's build.rs resource-path check
 #    passes at compile time. The stub is never actually invoked in dev because
-#    detect_running_daemon() finds the tsx-launched daemon in config.json first.
-# 2. Builds web-ui/dist, which the daemon serves (via fastify-static) to any
-#    client that isn't the desktop window itself — LAN/tunnel clients, and
-#    `curl` against the daemon port. The desktop window always loads Vite
-#    directly instead, so it never needed this, but without it those other
-#    clients get whatever dist was last built for, however stale.
-# 3. Runs the daemon (tsx watch) and Vite dev server concurrently.
+#    detect_running_daemon() finds the already-running Rust daemon in config.json.
+# 2. Builds web-ui/dist, which the daemon serves to non-Vite clients (LAN/tunnel,
+#    curl). The desktop window loads Vite directly and never needs this, but
+#    other clients get a stale dist without it.
+# 3. Runs the Rust daemon and Vite dev server concurrently.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
 # CWD when invoked: desktop/ (where `tauri dev` is run)
@@ -61,12 +59,12 @@ fi
 echo "[dev-start] building web-ui/dist..."
 pnpm --filter @vibestation/web build
 
-# Launch daemon (tsx watch) + Vite dev server concurrently.
+# Launch Rust daemon + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "tsx watch --tsconfig '$REPO_ROOT/daemon/tsconfig.json' '$REPO_ROOT/daemon/src/main.ts'" &
+  "cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

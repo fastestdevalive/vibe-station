@@ -8,6 +8,17 @@
 #   pnpm tsx scripts/take-screenshots.ts
 #   docker compose -f docker-compose.screenshots.yml down
 
+# Stage 1: build the Rust daemon binary
+FROM rust:slim AS rust-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY rust/ rust/
+COPY Cargo.toml Cargo.lock* ./
+RUN cargo build --release --manifest-path rust/Cargo.toml -p vst-daemon
+
+# Stage 2: Node image with the Rust binary baked in
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,12 +34,15 @@ RUN printf '#!/usr/bin/env bash\nexec sleep infinity\n' > /usr/local/bin/claude 
  && printf '#!/usr/bin/env bash\nexec sleep infinity\n' > /usr/local/bin/cursor-agent  \
  && chmod +x /usr/local/bin/claude /usr/local/bin/cursor-agent
 
+COPY --from=rust-builder /build/rust/target/release/vst-daemon /usr/local/bin/vst-daemon-rust
+COPY --from=rust-builder /build/rust/target/release/vst-cli /usr/local/bin/vst
+
 WORKDIR /app
 
 COPY . .
 
 RUN pnpm install --frozen-lockfile
-RUN pnpm --filter @vibestation/cli build
+RUN pnpm --filter @vibestation/web build
 
 ENV HOME=/home/vst
 RUN mkdir -p /home/vst /home/vst/.vibe-station
@@ -43,7 +57,7 @@ EXPOSE 5173
 CMD ["sh", "-c", "\
   bash /app/scripts/demo-seed.sh && \
   rm -f /home/vst/.vibe-station/.daemon.lock && \
-  node /app/cli/dist/daemon/main.js & \
+  /usr/local/bin/vst-daemon-rust & \
   echo 'Waiting for daemon...' && \
   until curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do sleep 0.5; done && \
   echo 'Daemon ready.' && \

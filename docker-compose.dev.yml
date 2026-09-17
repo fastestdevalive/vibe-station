@@ -138,15 +138,11 @@ services:
       - ${OPENCODE_DATA_HOME:-${HOME}/.local/share/opencode}:/seed/opencode-data:ro
       - ${OPENCODE_CONFIG_HOME:-${HOME}/.config/opencode}:/seed/opencode-config:ro
 
-      # Rust daemon/CLI binaries (transition toward the Rust port — part 10,
-      # task 5). Mount the host's pre-built release binaries read-only so the
-      # sandbox can boot the Rust daemon instead of the Node one. Build them
-      # with `pnpm build:rust` (or `cargo build --release -p vst-daemon -p
-      # vst-cli` from rust/). Override the paths with VST_RUST_DAEMON_BIN /
-      # VST_RUST_CLI_BIN if yours differ. dev-entrypoint.sh prefers these when
-      # present and falls back to the Node daemon/CLI otherwise, so a sandbox
-      # still boots cleanly if the Rust binaries haven't been built yet (or
-      # during the pre-deletion transition window).
+      # Rust daemon/CLI binaries. Mount the host's pre-built release binaries
+      # read-only. Build them with `pnpm build:rust` (or
+      # `cargo build --release -p vst-daemon -p vst-cli` from rust/).
+      # Override the paths with VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN if
+      # yours differ.
       - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
       - ${VST_RUST_CLI_BIN:-./rust/target/release/vst-cli}:/usr/local/bin/vst-rust:ro
 
