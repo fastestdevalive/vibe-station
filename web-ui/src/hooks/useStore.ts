@@ -5,9 +5,9 @@ import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tilin
 import { randomId } from "@/lib/uuid";
 
 /** Tools hosted by the right-side tool panel (one visible at a time). */
-export type ToolTab = "files" | "devices" | "artifacts" | "vcs";
+export type ToolTab = "files" | "devices" | "artifacts" | "vcs" | "search";
 
-export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs"];
+export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs", "search"];
 
 /**
  * Per-worktree workspace layout.
@@ -163,6 +163,8 @@ export interface WorkspaceState {
   /** Active *terminal* session shown in the bottom terminal dock. */
   activeTerminalSessionId: string | null;
   activeFilePath: string | null;
+  /** Pending line number to scroll to in FilePreviewPane after file load (transient). */
+  pendingFileLine: number | null;
   /** Open file tabs per worktree/direct-context (keyed by layout key). */
   openFileTabsByWorktree: Record<string, string[]>;
   /** Active tab index per worktree/direct-context; -1 means none active. */
@@ -252,6 +254,10 @@ export interface WorkspaceState {
   setActiveFile: (path: string | null) => void;
   /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
   openFileTabNew: (worktreeId: string, path: string) => void;
+  /** Open path in a new tab and set the pending line number to scroll to (search/navigation intent). */
+  setActiveFilePathAtLine: (worktreeId: string, path: string, line: number) => void;
+  /** Clear the pending line flag after scrolling (transient state cleanup). */
+  clearPendingFileLine: () => void;
   /** Close the tab at index idx; adjacent tab becomes active. Updates lastFileByWorktree. */
   closeFileTab: (worktreeId: string, idx: number) => void;
   /** Switch to existing tab at index idx. Updates lastFileByWorktree. */
@@ -606,6 +612,7 @@ const initial = {
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
+  pendingFileLine: null as number | null,
   openFileTabsByWorktree: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
@@ -895,6 +902,29 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
             };
           }),
+        setActiveFilePathAtLine: (worktreeId, path, line) =>
+          set((s) => {
+            const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
+            const existingIdx = tabs.indexOf(path);
+            if (existingIdx >= 0) {
+              return {
+                activeFilePath: path,
+                activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
+                lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+                pendingFileLine: line,
+              };
+            }
+            const nextTabs = [...tabs, path];
+            const nextIdx = nextTabs.length - 1;
+            return {
+              activeFilePath: path,
+              openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
+              activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
+              lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+              pendingFileLine: line,
+            };
+          }),
+        clearPendingFileLine: () => set({ pendingFileLine: null }),
         closeFileTab: (worktreeId, idx) =>
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];

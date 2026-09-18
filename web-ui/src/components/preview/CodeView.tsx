@@ -13,9 +13,11 @@ interface CodeViewProps {
   themeMode?: "dark" | "light";
   /** When true, renders without gutter (e.g. inside a markdown code block) */
   noGutter?: boolean;
+  /** Git gutter marks: added/modified/deleted line annotations. No-op when noGutter is true. */
+  gutterMarks?: Map<number, "added" | "modified" | "deleted">;
 }
 
-export function CodeView({ code, language: languageProp, filePath, themeMode, noGutter }: CodeViewProps) {
+export function CodeView({ code, language: languageProp, filePath, themeMode, noGutter, gutterMarks }: CodeViewProps) {
   // `themeId` (the full 14-way value from the shared store) resolves to the
   // theme's Shiki id via the registry so syntax highlighting follows the theme.
   const { theme, themeId } = useTheme();
@@ -59,23 +61,28 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
 
   return (
     <pre className="workspace-code-viewer workspace-code-viewer--shiki">
-      {lines.map((line, i) => (
-        <div key={i} className="workspace-code-line">
-          {!noGutter && (
-            <span className="workspace-code-gutter" style={{ minWidth: `${gutterWidth + 2}ch` }}>
-              {i + 1}
-            </span>
-          )}
-          {highlightedLines ? (
-            <span
-              className="workspace-code-content workspace-code-content--shiki"
-              dangerouslySetInnerHTML={{ __html: highlightedLines[i] ?? escapeHtml(line) }}
-            />
-          ) : (
-            <span className="workspace-code-content">{line}</span>
-          )}
-        </div>
-      ))}
+      {lines.map((line, i) => {
+        const lineNum = i + 1;
+        const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
+        const modifierClass = gutterMark ? ` workspace-code-line--${gutterMark}` : "";
+        return (
+          <div key={i} className={`workspace-code-line${modifierClass}`}>
+            {!noGutter && (
+              <span className="workspace-code-gutter" style={{ minWidth: `${gutterWidth + 2}ch` }}>
+                {lineNum}
+              </span>
+            )}
+            {highlightedLines ? (
+              <span
+                className="workspace-code-content workspace-code-content--shiki"
+                dangerouslySetInnerHTML={{ __html: highlightedLines[i] ?? escapeHtml(line) }}
+              />
+            ) : (
+              <span className="workspace-code-content">{line}</span>
+            )}
+          </div>
+        );
+      })}
     </pre>
   );
 }
