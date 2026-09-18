@@ -577,146 +577,176 @@ impl ProjectRoutes {
             let use_worktree = start_agent.use_worktree.unwrap_or(false);
 
             if use_worktree {
-                let fresh_project = self.store.get_project(&id).await.unwrap_or(record.clone());
+                // Reserve the worktree number atomically INSIDE a single mutate_project
+                // call, before any I/O — matches `create_worktree_record`'s safe pattern
+                // (`worktree_service.rs`). The previous code read a snapshot via
+                // `get_project`, reserved a number outside any lock, did slow
+                // `worktree_add` I/O, and only bumped `next_worktree_num` at the very
+                // end using that stale captured number — a classic TOCTOU race: a
+                // concurrent worktree creation on this project (from any code path)
+                // between the snapshot read and the final bump could have already
+                // moved `next_worktree_num` forward, and this handler's stale bump
+                // would silently regress it backward, corrupting the counter for every
+                // future create on this project (eventually producing exactly the
+                // `worktrees.id` UNIQUE constraint failure this counter exists to
+                // prevent). `mutate_project` takes a per-project lock and re-reads the
+                // current record inside it, so reserving there is race-free.
                 let paths_clone = self.paths.clone();
                 let id_clone = id.clone();
                 let dir_exists =
                     move |name: &str| paths_clone.worktree_path(&id_clone, name).exists();
-                let wt_num = reserve_next_worktree_num(&fresh_project, &dir_exists);
-                let wt_id = format!("{}-{wt_num}", fresh_project.prefix);
-                let wt_path_buf = self.paths.worktree_path(&id, &wt_id);
-                let wt_path = wt_path_buf.to_string_lossy().to_string();
+                let wt_num_cell = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+                let wt_num_cell_closure = wt_num_cell.clone();
+                let reserve_result = self
+                    .store
+                    .mutate_project(&id, move |p| {
+                        let n = reserve_next_worktree_num(p, &dir_exists);
+                        wt_num_cell_closure.store(n, std::sync::atomic::Ordering::SeqCst);
+                        p.next_worktree_num = Some(n + 1);
+                        Ok(p.clone())
+                    })
+                    .await;
 
-                let use_tmux = resolve_use_tmux(None);
-                let base_sha = rev_parse(&project_path, &default_branch)
-                    .await
-                    .unwrap_or_default();
-
-                if let Err(e) =
-                    worktree_add(&project_path, &wt_path, &branch, &default_branch).await
-                {
-                    warning = Some(format!("Failed to create worktree: {e}"));
+                if let Err(e) = reserve_result {
+                    warning = Some(format!("Failed to reserve worktree number: {e}"));
                 } else {
-                    let main_session_id = generate_session_id(&wt_id, SessionType::Agent);
-                    let main_tmux_name = if use_tmux {
-                        tmux_name_for_session(&main_session_id)
+                    let fresh_project = reserve_result.unwrap();
+                    let wt_num = wt_num_cell.load(std::sync::atomic::Ordering::SeqCst);
+                    let wt_id = format!("{}-{wt_num}", record.prefix);
+                    let wt_path_buf = self.paths.worktree_path(&id, &wt_id);
+                    let wt_path = wt_path_buf.to_string_lossy().to_string();
+
+                    let use_tmux = resolve_use_tmux(None);
+                    let base_sha = rev_parse(&project_path, &default_branch)
+                        .await
+                        .unwrap_or_default();
+
+                    if let Err(e) =
+                        worktree_add(&project_path, &wt_path, &branch, &default_branch).await
+                    {
+                        warning = Some(format!("Failed to create worktree: {e}"));
                     } else {
-                        format!("__direct__-{main_session_id}")
-                    };
-                    let wt_name = prompt.as_deref().and_then(|p| {
-                        let s = slugify_prompt(p);
-                        if s.is_empty() {
-                            None
+                        let main_session_id = generate_session_id(&wt_id, SessionType::Agent);
+                        let main_tmux_name = if use_tmux {
+                            tmux_name_for_session(&main_session_id)
                         } else {
-                            Some(s)
-                        }
-                    });
+                            format!("__direct__-{main_session_id}")
+                        };
+                        let wt_name = prompt.as_deref().and_then(|p| {
+                            let s = slugify_prompt(p);
+                            if s.is_empty() {
+                                None
+                            } else {
+                                Some(s)
+                            }
+                        });
 
-                    let created_at = now_iso();
-                    let main_session = SessionRecord {
-                        id: main_session_id.clone(),
-                        worktree_id: Some(wt_id.clone()),
-                        project_id: id.clone(),
-                        is_main: true,
-                        sort_order: 0.0,
-                        r#type: SessionType::Agent,
-                        mode_id: Some(resolved_mode_id.clone()),
-                        name: wt_name.clone(),
-                        name_source: wt_name
-                            .as_ref()
-                            .map(|_| vst_types::domain::SessionNameSource::Auto),
-                        tmux_name: main_tmux_name,
-                        use_tmux,
-                        channel: Some(Channel::Tmux),
-                        transcript_ref: None,
-                        lifecycle: SessionLifecycle {
-                            state: LifecycleState::NotStarted,
-                            reason: None,
-                            last_transition_at: created_at.clone(),
-                        },
-                        draft_prompt: None,
-                        draft_config: None,
-                        initial_prompt: prompt.clone(),
-                        parent_session_id: None,
-                        archived_at: None,
-                        handoff_summary: None,
-                        agent_chat_id: None,
-                        acp_session_id: None,
-                        model_override: None,
-                        pinned_at: None,
-                        superseded_by: None,
-                        pr: None,
-                    };
+                        let created_at = now_iso();
+                        let main_session = SessionRecord {
+                            id: main_session_id.clone(),
+                            worktree_id: Some(wt_id.clone()),
+                            project_id: id.clone(),
+                            is_main: true,
+                            sort_order: 0.0,
+                            r#type: SessionType::Agent,
+                            mode_id: Some(resolved_mode_id.clone()),
+                            name: wt_name.clone(),
+                            name_source: wt_name
+                                .as_ref()
+                                .map(|_| vst_types::domain::SessionNameSource::Auto),
+                            tmux_name: main_tmux_name,
+                            use_tmux,
+                            channel: Some(Channel::Tmux),
+                            transcript_ref: None,
+                            lifecycle: SessionLifecycle {
+                                state: LifecycleState::NotStarted,
+                                reason: None,
+                                last_transition_at: created_at.clone(),
+                            },
+                            draft_prompt: None,
+                            draft_config: None,
+                            initial_prompt: prompt.clone(),
+                            parent_session_id: None,
+                            archived_at: None,
+                            handoff_summary: None,
+                            agent_chat_id: None,
+                            acp_session_id: None,
+                            model_override: None,
+                            pinned_at: None,
+                            superseded_by: None,
+                            pr: None,
+                        };
 
-                    let worktree_record = WorktreeRecord {
-                        id: wt_id.clone(),
-                        name: wt_name,
-                        branch: branch.clone(),
-                        branch_is_placeholder: Some(false),
-                        base_branch: default_branch.clone(),
-                        base_sha: base_sha.clone(),
-                        created_at: created_at.clone(),
-                        pinned_at: None,
-                        hidden_at: None,
-                        sort_order: ms_now() as f64,
-                        terminal_seq: Some(0),
-                        agent_seq: Some(1),
-                        sessions: vec![main_session.clone()],
-                    };
+                        let worktree_record = WorktreeRecord {
+                            id: wt_id.clone(),
+                            name: wt_name,
+                            branch: branch.clone(),
+                            branch_is_placeholder: Some(false),
+                            base_branch: default_branch.clone(),
+                            base_sha: base_sha.clone(),
+                            created_at: created_at.clone(),
+                            pinned_at: None,
+                            hidden_at: None,
+                            sort_order: ms_now() as f64,
+                            terminal_seq: Some(0),
+                            agent_seq: Some(1),
+                            sessions: vec![main_session.clone()],
+                        };
 
-                    let wt_rec_clone = worktree_record.clone();
-                    let wt_num_val = wt_num;
-                    let _ = self
-                        .store
-                        .mutate_project(&id, move |p| {
-                            p.next_worktree_num = Some(wt_num_val + 1);
-                            p.worktrees.push(wt_rec_clone.clone());
-                            Ok(p.clone())
-                        })
-                        .await;
-
-                    let api_wt = serialize_worktree(&id, &worktree_record);
-                    if let Ok(val) = serde_json::to_value(&api_wt) {
-                        if let Some(map) = val.as_object() {
-                            self.broadcaster.send(ServerEvent::WorktreeCreated {
-                                worktree: map.clone(),
-                            });
-                        }
-                    }
-
-                    let main_session_serialized =
-                        serialize_session(Some(&wt_id), &id, &main_session);
-                    self.broadcaster.send(ServerEvent::SessionCreated {
-                        session_id: main_session_id.clone(),
-                        worktree_id: Some(wt_id.clone()),
-                        project_id: Some(id.clone()),
-                        session_type: "agent".to_string(),
-                        mode: Some(resolved_mode_id.clone()),
-                        snapshot: Some((&main_session_serialized).into()),
-                        parent_session_id: main_session.parent_session_id.clone(),
-                    });
-
-                    // Background spawn
-                    let routes = self.clone();
-                    let project_for_spawn = fresh_project.clone();
-                    let wt_for_spawn = worktree_record.clone();
-                    let ms_for_spawn = main_session.clone();
-                    let mode_for_spawn = find_mode(&resolved_mode_id);
-                    let prompt_for_spawn = prompt.clone();
-                    tokio::spawn(async move {
-                        routes
-                            .run_worktree_agent_spawn(
-                                project_for_spawn,
-                                wt_for_spawn,
-                                ms_for_spawn,
-                                mode_for_spawn,
-                                prompt_for_spawn,
-                            )
+                        // `next_worktree_num` is already correctly bumped by the reservation
+                        // mutate above — don't touch it here, just push the finished record.
+                        let wt_rec_clone = worktree_record.clone();
+                        let _ = self
+                            .store
+                            .mutate_project(&id, move |p| {
+                                p.worktrees.push(wt_rec_clone.clone());
+                                Ok(p.clone())
+                            })
                             .await;
-                    });
 
-                    result_worktree = Some(api_wt);
-                    result_session = Some(main_session_serialized);
+                        let api_wt = serialize_worktree(&id, &worktree_record);
+                        if let Ok(val) = serde_json::to_value(&api_wt) {
+                            if let Some(map) = val.as_object() {
+                                self.broadcaster.send(ServerEvent::WorktreeCreated {
+                                    worktree: map.clone(),
+                                });
+                            }
+                        }
+
+                        let main_session_serialized =
+                            serialize_session(Some(&wt_id), &id, &main_session);
+                        self.broadcaster.send(ServerEvent::SessionCreated {
+                            session_id: main_session_id.clone(),
+                            worktree_id: Some(wt_id.clone()),
+                            project_id: Some(id.clone()),
+                            session_type: "agent".to_string(),
+                            mode: Some(resolved_mode_id.clone()),
+                            snapshot: Some((&main_session_serialized).into()),
+                            parent_session_id: main_session.parent_session_id.clone(),
+                        });
+
+                        // Background spawn
+                        let routes = self.clone();
+                        let project_for_spawn = fresh_project.clone();
+                        let wt_for_spawn = worktree_record.clone();
+                        let ms_for_spawn = main_session.clone();
+                        let mode_for_spawn = find_mode(&resolved_mode_id);
+                        let prompt_for_spawn = prompt.clone();
+                        tokio::spawn(async move {
+                            routes
+                                .run_worktree_agent_spawn(
+                                    project_for_spawn,
+                                    wt_for_spawn,
+                                    ms_for_spawn,
+                                    mode_for_spawn,
+                                    prompt_for_spawn,
+                                )
+                                .await;
+                        });
+
+                        result_worktree = Some(api_wt);
+                        result_session = Some(main_session_serialized);
+                    }
                 }
             } else {
                 // Direct session
