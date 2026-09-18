@@ -458,3 +458,73 @@ describe("useServerSync — worktree:deleted tools-tile cleanup", () => {
   });
 });
 
+// --- Item 5a: `session:error{reason:"gone"}` → "exited" must fire globally,
+// not only when a TerminalPane happens to be mounted for that session. ---
+describe("useServerSync — session:error gone translation", () => {
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useWorkspaceStore.setState({ sessionStates: {} });
+  });
+
+  it('marks the session exited on reason "gone" with no pane mounted', async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:error",
+        sessionId: "sess-main",
+        message: "session not found",
+        reason: "gone",
+      });
+    });
+
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().sessionStates["sess-main"]).toBe("exited");
+      expect(useServerStore.getState().sessions.find((s) => s.id === "sess-main")?.state).toBe("exited");
+    });
+  });
+
+  it("ignores a transient error and an unclassified error", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    act(() => {
+      useWorkspaceStore.getState().patchSessionState("sess-main", "working");
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "session:error",
+        sessionId: "sess-main",
+        message: "stream hiccup",
+        reason: "transient",
+      });
+      api.__test.emit({ type: "session:error", sessionId: "sess-main", message: "who knows" });
+    });
+
+    expect(useWorkspaceStore.getState().sessionStates["sess-main"]).toBe("working");
+  });
+
+  it("does not flip a session still in the not_started spawn window", async () => {
+    const api = createMockApi();
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+    act(() => {
+      useWorkspaceStore.getState().patchSessionState("sess-main", "not_started");
+    });
+
+    act(() => {
+      api.__test.emit({
+        type: "session:error",
+        sessionId: "sess-main",
+        message: "not running",
+        reason: "gone",
+      });
+    });
+
+    expect(useWorkspaceStore.getState().sessionStates["sess-main"]).toBe("not_started");
+  });
+});
+

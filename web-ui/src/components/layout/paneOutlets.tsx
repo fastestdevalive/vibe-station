@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -46,6 +47,21 @@ interface RegistryValue {
   unregister: (key: string, token: OutletToken) => void;
   getOutlet: (key: string) => HTMLElement | null;
   subscribe: (key: string, listener: Listener) => () => void;
+  /**
+   * Every paneKey that currently has at least one live `<PaneOutlet>`, i.e.
+   * every pane that is visible somewhere RIGHT NOW: the active tab in classic
+   * mode, all N tiles in canvas/workspace-tiled mode, or the detached
+   * workspace view's tiles. Returns a cached, referentially-stable snapshot
+   * (safe for `useSyncExternalStore`) that only changes identity when the set
+   * of claimed keys actually changes.
+   *
+   * This is deliberately registry-level rather than the per-key `subscribe`
+   * above: `PaneHostLayer` needs to learn that a key it is NOT yet rendering
+   * just became visible (that is the lazy-mount trigger), and a per-key
+   * subscription can only ever watch keys it already renders.
+   */
+  getClaimedKeys: () => readonly string[];
+  subscribeClaimedKeys: (listener: Listener) => () => void;
 }
 
 const PaneOutletRegistryContext = createContext<RegistryValue | null>(null);
@@ -63,6 +79,30 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
 
   const createToken = useCallback(() => ({ id: nextTokenId.current++ }), []);
 
+  // Cached snapshot of "which keys are claimed right now". Recomputed only
+  // when membership actually changes, so `useSyncExternalStore` consumers get
+  // a stable reference and don't re-render on every register/unregister that
+  // leaves the key set unchanged (e.g. one of two outlets sharing a key).
+  const claimedKeysRef = useRef<readonly string[]>([]);
+  const claimedListenersRef = useRef<Set<Listener>>(new Set());
+
+  const refreshClaimedKeys = useCallback(() => {
+    const next = Array.from(outletsRef.current.keys()).sort();
+    const prev = claimedKeysRef.current;
+    if (prev.length === next.length && prev.every((k, i) => k === next[i])) return;
+    claimedKeysRef.current = next;
+    for (const listener of claimedListenersRef.current) listener();
+  }, []);
+
+  const getClaimedKeys = useCallback(() => claimedKeysRef.current, []);
+
+  const subscribeClaimedKeys = useCallback((listener: Listener) => {
+    claimedListenersRef.current.add(listener);
+    return () => {
+      claimedListenersRef.current.delete(listener);
+    };
+  }, []);
+
   const register = useCallback(
     (key: string, token: OutletToken, el: HTMLElement | null) => {
       const list = outletsRef.current.get(key) ?? [];
@@ -70,9 +110,10 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
       if (el) next.push({ token, el });
       if (next.length > 0) outletsRef.current.set(key, next);
       else outletsRef.current.delete(key);
+      refreshClaimedKeys();
       notify(key);
     },
-    [notify],
+    [notify, refreshClaimedKeys],
   );
 
   const unregister = useCallback(
@@ -84,9 +125,10 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
       // Only clear the key once no live instance still claims it.
       if (next.length > 0) outletsRef.current.set(key, next);
       else outletsRef.current.delete(key);
+      refreshClaimedKeys();
       notify(key);
     },
-    [notify],
+    [notify, refreshClaimedKeys],
   );
 
   // Most recently registered live entry wins.
@@ -110,8 +152,24 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<RegistryValue>(
-    () => ({ createToken, register, unregister, getOutlet, subscribe }),
-    [createToken, register, unregister, getOutlet, subscribe],
+    () => ({
+      createToken,
+      register,
+      unregister,
+      getOutlet,
+      subscribe,
+      getClaimedKeys,
+      subscribeClaimedKeys,
+    }),
+    [
+      createToken,
+      register,
+      unregister,
+      getOutlet,
+      subscribe,
+      getClaimedKeys,
+      subscribeClaimedKeys,
+    ],
   );
 
   return (
@@ -212,6 +270,22 @@ export function ToolbarOutlet({ paneKey }: { paneKey: string }) {
       style={{ display: "flex", alignItems: "center", minWidth: 0 }}
     />
   );
+}
+
+/**
+ * Every paneKey currently claimed by a live `<PaneOutlet>` — i.e. every pane
+ * that is visible somewhere right now. Re-renders the caller whenever that set
+ * changes.
+ *
+ * `PaneHostLayer` uses this to mount panes lazily: claiming an outlet IS the
+ * mount trigger, which covers classic mode's single active tab, canvas mode's
+ * N simultaneous tiles and the detached workspace view through one mechanism,
+ * with no separate "deferred schedule" that a becoming-visible pane would have
+ * to preempt.
+ */
+export function useClaimedPaneKeys(): readonly string[] {
+  const { getClaimedKeys, subscribeClaimedKeys } = useRegistry();
+  return useSyncExternalStore(subscribeClaimedKeys, getClaimedKeys, getClaimedKeys);
 }
 
 /** Returns the current outlet DOM node for `paneKey`, or null if none is mounted. */
