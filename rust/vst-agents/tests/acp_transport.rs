@@ -254,6 +254,65 @@ async fn prompt_times_out_with_clear_error_instead_of_hanging() {
     conn.dispose().await;
 }
 
+/// `prompt_timeout_ms` is an IDLE timeout, not a cap on total turn duration:
+/// each `session/update` notification resets the clock, so a turn that keeps
+/// streaming activity survives well past the configured window — it only
+/// times out once the agent goes fully silent for that long.
+#[tokio::test]
+async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent() {
+    let mut env = HashMap::new();
+    env.insert("FAKE_ACP_MODE".to_string(), "prompt_stream_then_hang".to_string());
+    env.insert("PROMPT_STREAM_INTERVAL_MS".to_string(), "30".to_string());
+    env.insert("PROMPT_STREAM_COUNT".to_string(), "5".to_string());
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "node".to_string(),
+        args: vec![fake_agent()],
+        cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        env,
+        initialize_timeout_ms: None,
+        // Shorter than the ~150ms it takes to stream all 5 updates: a flat
+        // (non-idle) timeout would fire well before streaming finishes.
+        prompt_timeout_ms: Some(100),
+    });
+    conn.initialize().await.expect("initialize");
+    let session_id = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session");
+    let start = std::time::Instant::now();
+    let turn = conn.send_prompt(
+        &session_id,
+        vec![ContentBlock::Text(TextContent::new("hi"))],
+    );
+    // Drain updates concurrently with awaiting the result — the sender stays
+    // open (and thus `recv()` would otherwise block) until `do_send_prompt`
+    // resolves and clears the sink, which only happens once the idle timeout
+    // itself fires.
+    let mut updates_rx = turn.updates;
+    let drain_task = tokio::spawn(async move { drain_updates(&mut updates_rx).await });
+    let err = turn
+        .result
+        .await
+        .expect("result resolves")
+        .expect_err("must eventually time out once streaming stops");
+    let elapsed = start.elapsed();
+    let updates = drain_task.await.expect("drain task completes");
+    assert!(matches!(err, AcpTransportError::RequestFailed(_)));
+    assert_eq!(updates.len(), 5, "all streamed updates must have been delivered");
+    assert!(
+        elapsed >= Duration::from_millis(130),
+        "must survive past the flat {}ms window while updates are streaming, took {:?}",
+        100,
+        elapsed
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "must still time out promptly once the agent goes silent, took {:?}",
+        elapsed
+    );
+    conn.dispose().await;
+}
+
 // --- 5.T1 / 5.T2 — steering (`supports_steering` / `steer`) ---
 
 /// `supports_steering` is true when the `initialize` response carries

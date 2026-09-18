@@ -37,7 +37,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, CreateTerminalRequest, CreateTerminalResponse,
@@ -73,12 +73,27 @@ pub struct AcpLaunchSpec {
     pub env: std::collections::HashMap<String, String>,
     /// ms to wait for `initialize` to resolve before failing.
     pub initialize_timeout_ms: Option<u64>,
-    /// ms to wait for a `session/prompt` response before it is rejected.
+    /// ms of *inactivity* (no `session/update` notification received) before
+    /// an in-flight `session/prompt` is rejected. This is an IDLE timeout, not
+    /// a cap on total turn duration — each `session/update` notification
+    /// resets the clock, so a turn that is actively streaming (tool calls,
+    /// thinking chunks, diffs, …) can run indefinitely; only an agent that
+    /// goes fully silent for this long is killed. See `do_send_prompt`.
     pub prompt_timeout_ms: Option<u64>,
 }
 
 const DEFAULT_INITIALIZE_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 20 * 60 * 1000;
+/// Default idle window for `session/prompt` — see the doc comment on
+/// `AcpLaunchSpec::prompt_timeout_ms`. 60 minutes of *silence* (not total
+/// turn time) is generous for a stalled agent/process — including a single
+/// long-running tool call that emits no `session/update` output for a
+/// while — while still failing fast on a genuinely hung connection.
+const DEFAULT_PROMPT_TIMEOUT_MS: u64 = 60 * 60 * 1000;
+/// How often `do_send_prompt` wakes up to check the idle clock while a
+/// `session/prompt` request is in flight. Small relative to the timeout so
+/// the idle check is timely, but never larger than the timeout itself (tests
+/// use sub-second `prompt_timeout_ms` overrides).
+const IDLE_POLL_INTERVAL_MS: u64 = 5_000;
 
 /// Custom `_session/steering` request (ACP steering extension) — not a built-in
 /// `agent_client_protocol` schema type, so defined here with the crate's derive
@@ -111,6 +126,11 @@ struct Shared {
     /// True iff the `initialize` response's `_meta.steering.supported === true`.
     steering_supported: AtomicBool,
     disposed: AtomicBool,
+    /// Timestamp of the most recent `session/update` notification (any
+    /// session), used by `do_send_prompt` to implement an IDLE timeout rather
+    /// than a flat cap on total turn duration. Reset whenever a notification
+    /// arrives, regardless of whether a sink is currently attached.
+    last_activity: Mutex<Instant>,
 }
 
 impl Shared {
@@ -121,6 +141,7 @@ impl Shared {
             load_session_supported: AtomicBool::new(false),
             steering_supported: AtomicBool::new(false),
             disposed: AtomicBool::new(false),
+            last_activity: Mutex::new(Instant::now()),
         }
     }
 }
@@ -372,6 +393,11 @@ fn spawn_actor(
         // Notification handler: route session/update to the active prompt sink.
         let notif_shared = Arc::clone(&shared);
         let notif_handler = async move |notification: SessionNotification, _cx| {
+            // Any inbound notification counts as activity for the idle-timeout
+            // clock in `do_send_prompt`, whether or not a sink is currently
+            // attached (a sink is only attached while a prompt is in flight,
+            // which is exactly when this matters).
+            *notif_shared.last_activity.lock().unwrap() = Instant::now();
             if let Some(tx) = notif_shared.active_update.lock().unwrap().as_ref() {
                 let _ = tx.send(notification.update);
             }
@@ -712,28 +738,50 @@ async fn do_load_session(
     Ok(())
 }
 
+/// Sends `session/prompt` and waits for its response, enforcing an IDLE
+/// timeout rather than a flat cap on total turn duration: the clock resets on
+/// every `session/update` notification (see `notif_handler` in
+/// `spawn_actor`), so a turn that keeps streaming activity can run
+/// indefinitely — only an agent that goes fully silent for `timeout_ms`
+/// (default `DEFAULT_PROMPT_TIMEOUT_MS`) is rejected.
 async fn do_send_prompt(
     cx: &ConnectionTo<Agent>,
-    _shared: &Arc<Shared>,
+    shared: &Arc<Shared>,
     session_id: &str,
     prompt: Vec<ContentBlock>,
     timeout_ms: Option<u64>,
 ) -> Result<StopReason, AcpTransportError> {
-    let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS));
+    let idle_timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS));
+    // Reset the clock right before issuing the request so a notification left
+    // over from a previous turn (or from `initialize`/`new_session`) can't
+    // pre-arm — or falsely extend — this turn's idle window.
+    *shared.last_activity.lock().unwrap() = Instant::now();
+
     let future = cx
         .send_request(PromptRequest::new(session_id.to_string(), prompt))
         .block_task();
-    let response: Result<PromptResponse, _> = match tokio::time::timeout(timeout, future).await {
-        Ok(r) => r,
-        Err(_) => {
-            return Err(AcpTransportError::RequestFailed(format!(
-                "session/prompt timed out after {}ms",
-                timeout.as_millis()
-            )));
+    tokio::pin!(future);
+
+    let poll_interval = Duration::from_millis(IDLE_POLL_INTERVAL_MS).min(idle_timeout);
+    loop {
+        match tokio::time::timeout(poll_interval, &mut future).await {
+            Ok(response) => {
+                let response: PromptResponse =
+                    response.map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
+                return Ok(response.stop_reason);
+            }
+            Err(_) => {
+                let idle_for = shared.last_activity.lock().unwrap().elapsed();
+                if idle_for >= idle_timeout {
+                    return Err(AcpTransportError::RequestFailed(format!(
+                        "session/prompt idle-timed out after {}ms with no session/update activity",
+                        idle_timeout.as_millis()
+                    )));
+                }
+                // Still receiving activity within the window — keep waiting.
+            }
         }
-    };
-    let response = response.map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
-    Ok(response.stop_reason)
+    }
 }
 
 fn do_cancel(cx: &ConnectionTo<Agent>, shared: &Arc<Shared>) {
