@@ -7,6 +7,7 @@ import type {
   Channel,
   CliId,
   CommitLogEntry,
+  GutterResult,
   LocalQrResponse,
   MobileQrResponse,
   PrInfo,
@@ -30,6 +31,7 @@ import type {
   Project,
   ProjectBranchesResponse,
   SendChatResponse,
+  SearchResult,
   Session,
   SessionMeta,
   Settings,
@@ -829,6 +831,33 @@ export function createClientApi() {
     ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
       const res = await apiFetch(`${fileBase(scope, worktreeId)}/file-list`, { signal });
       return parseJson<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }>(res);
+    },
+
+    async search(
+      worktreeId: string,
+      opts: { q: string; re?: boolean; case?: boolean; word?: boolean; glob?: string; limit?: number },
+      signal?: AbortSignal,
+      scope: FileScope = "worktree",
+    ): Promise<SearchResult> {
+      const q = new URLSearchParams({ q: opts.q });
+      if (opts.re) q.set("re", "true");
+      if (opts.case) q.set("case", "true");
+      if (opts.word) q.set("word", "true");
+      if (opts.glob) q.set("glob", opts.glob);
+      if (opts.limit != null) q.set("limit", String(opts.limit));
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/search?${q}`, { signal });
+      return parseJson<SearchResult>(res);
+    },
+
+    async getGutter(
+      worktreeId: string,
+      path: string,
+      signal?: AbortSignal,
+      scope: FileScope = "worktree",
+    ): Promise<GutterResult> {
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const res = await apiFetch(`${fileBase(scope, worktreeId)}/gutter/${encodedPath}`, { signal });
+      return parseJson<GutterResult>(res);
     },
 
     async listChangedPaths(

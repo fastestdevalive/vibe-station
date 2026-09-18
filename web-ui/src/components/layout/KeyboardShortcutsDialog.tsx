@@ -47,7 +47,7 @@ const GROUPS: ShortcutGroup[] = [
     title: "Navigation",
     shortcuts: [
       { keys: ["Ctrl+P"], action: "Quick-open files" },
-      { keys: ["Ctrl+Shift+F"], action: "Files tab" },
+      { keys: ["Ctrl+Shift+F"], action: "Search tab" },
     ],
   },
   {

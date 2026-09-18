@@ -745,6 +745,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
             }}
           >
             <div ref={hostRef} className="terminal-host" />
+            {lifecycleState === "waiting_for_human" && !showBanner ? (
+              <div className="terminal-waiting-hint">Waiting for your input</div>
+            ) : null}
           </div>
         ) : null}
       </div>

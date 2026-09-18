@@ -941,7 +941,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
                 width: `${progress}%`,
                 background: isWarning
                   ? "var(--fg-danger, #ef4444)"
-                  : "var(--accent-color, var(--fg-primary))",
+                  : "var(--accent-color, var(--accent))",
                 transition: "width 0.5s linear, background 0.3s ease",
               }}
             />
