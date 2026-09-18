@@ -520,6 +520,7 @@ export function Workspace() {
             sessionId={id}
             session={sessions.find((s) => s.id === id)}
             focusOnMount={!inWorkspaceCanvas}
+            themed={false}
           />
         );
       }
@@ -709,7 +710,7 @@ export function Workspace() {
   const directTerminalDock = directSessionProject ? (
     <div className="pane-stack">
       <TabsStrip api={api} worktreeId={directSessionProject.id} kind="terminal" scope="project" />
-      <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} />
+      <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} themed={false} />
     </div>
   ) : null;
 

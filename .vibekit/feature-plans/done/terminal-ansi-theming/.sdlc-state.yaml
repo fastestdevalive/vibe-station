@@ -1,0 +1,13 @@
+feature: terminal-ansi-theming
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-152
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: "2.5"
+    awaiting_phase: null
+    awaiting_artifact: null
