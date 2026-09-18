@@ -97,6 +97,10 @@ impl JsonAgentSession {
                 a
             };
             if aborted {
+                let has_queue = !self.0.state.lock().unwrap().queue.is_empty();
+                if has_queue {
+                    continue;
+                }
                 broke_for_abort = true;
                 break;
             }
@@ -112,7 +116,9 @@ impl JsonAgentSession {
         {
             let mut s = self.0.state.lock().unwrap();
             s.running = false;
-            if s.turn_state != TurnState::Error {
+            if !s.queue.is_empty() {
+                s.turn_state = TurnState::Queued;
+            } else if s.turn_state != TurnState::Error {
                 s.turn_state = TurnState::Idle;
             }
         }
@@ -130,8 +136,12 @@ impl JsonAgentSession {
         // awaiting persistLifecycle, re-kick drain. FIX-G2: only if we did NOT
         // break for an abort — otherwise the slot waits for the next
         // user interaction, defeating FIX-G.
-        let still_has_notice = self.0.state.lock().unwrap().notice_slot.is_some();
-        if still_has_notice && !broke_for_abort {
+        // Also re-kick drain if human queue has turns (prevent queue starvation).
+        let (has_queue, still_has_notice) = {
+            let s = self.0.state.lock().unwrap();
+            (!s.queue.is_empty(), s.notice_slot.is_some())
+        };
+        if has_queue || (still_has_notice && !broke_for_abort) {
             self.kick_drain();
         }
     }
@@ -146,8 +156,8 @@ impl JsonAgentSession {
                 "Plugin '{}' does not support the JSON channel",
                 "unknown" // plugin name not exposed as a trait method
             ));
-            let ev = self.new_event(NormalizedEventKind::Error, &mut ev);
-            self.persist_event(&ev);
+            let mut ev = self.new_event(NormalizedEventKind::Error, &mut ev);
+            self.persist_event(&mut ev);
             self.0.stream.emit_message(&ev);
             {
                 let mut s = self.0.state.lock().unwrap();
@@ -409,8 +419,8 @@ impl JsonAgentSession {
         let mut ev = NormalizedEvent::default();
         ev.turn_id = Some(turn_id.to_string());
         ev.text = Some("Turn stopped".to_string());
-        let ev = self.new_event(NormalizedEventKind::Status, &mut ev);
-        self.persist_event(&ev);
+        let mut ev = self.new_event(NormalizedEventKind::Status, &mut ev);
+        self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
     }
 

@@ -156,7 +156,7 @@ fn send_snapshot(
             session_id: session_id.to_string(),
             events: page.events,
             oldest_seq: None,
-            has_more: Some(page.has_more),
+            has_more: None,
             next_seq: page.next_seq,
         });
     } else {
