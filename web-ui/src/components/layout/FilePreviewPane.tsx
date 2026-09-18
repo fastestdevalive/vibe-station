@@ -319,9 +319,34 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (saved != null) bodyRef.current.scrollTop = saved;
   }, [fileBody, diffBody, scrollKey, pendingFileLine]);
 
-  // Scroll to the pending line if set, then clear it.
+  // Path the currently-pending scroll-to-line request was made for —
+  // captured the moment `pendingFileLine` transitions to a new value, so the
+  // effect below can tell "stale, the user moved to a different file" apart
+  // from "this file hasn't rendered a matching line yet" (e.g. a Markdown
+  // file renders MarkdownView — no `.workspace-code-line` elements — until
+  // the user toggles to raw/source view).
+  const pendingLineForPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (pendingFileLine === null || !bodyRef.current || !fileBody) return;
+    if (pendingFileLine !== null) pendingLineForPathRef.current = path;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- capture `path` at the moment `pendingFileLine` is (re)set, not on every path change
+  }, [pendingFileLine]);
+
+  // Scroll to the pending line once its target line element exists, then
+  // clear it. Deliberately does NOT clear on a "not found YET" outcome for
+  // the same file/path — only on an actual scroll, or on discovering the
+  // active file has moved on to a different path than this request was for
+  // (stale — clearing here also prevents it from coincidentally matching an
+  // unrelated file's line numbers). `rawMarkdown`/`scope` are dependencies
+  // so toggling into a view that DOES render `.workspace-code-line`s (e.g.
+  // Markdown → raw/source) gives this effect another chance instead of the
+  // jump-to-line intent being silently and permanently dropped.
+  useEffect(() => {
+    if (pendingFileLine === null || !bodyRef.current) return;
+    if (path !== pendingLineForPathRef.current) {
+      clearPendingFileLine();
+      return;
+    }
+    if (!fileBody) return; // still loading this file's content
     // Find the line element with the matching line number in the gutter.
     const lineElements = bodyRef.current.querySelectorAll<HTMLElement>(".workspace-code-line");
     let targetElement: HTMLElement | null = null;
@@ -334,10 +359,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     }
     if (targetElement) {
       targetElement.scrollIntoView({ block: "center" });
+      clearPendingFileLine();
     }
-    // Clear the pending line flag now that we've scrolled.
-    clearPendingFileLine();
-  }, [pendingFileLine, fileBody, clearPendingFileLine]);
+    // else: leave pendingFileLine set — no matching line element exists in
+    // the CURRENT render (e.g. Markdown pretty-view), but one may appear on
+    // a later render of this same file (raw-markdown toggle, etc.).
+  }, [pendingFileLine, fileBody, path, rawMarkdown, scope, clearPendingFileLine]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
