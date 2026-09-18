@@ -7,6 +7,7 @@ import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
 import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
+import { SearchPanel } from "@/components/tools/SearchPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 
 interface ToolPanelProps {
@@ -54,6 +55,7 @@ const TABS: { id: ToolTab; label: string }[] = [
   { id: "devices", label: "Devices" },
   { id: "artifacts", label: "Artifacts" },
   { id: "vcs", label: "VCS" },
+  { id: "search", label: "Search" },
 ];
 
 /**
@@ -132,6 +134,9 @@ export function ToolPanel({
             {toolPanelTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
             {toolPanelTab === "vcs" ? (
               <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} />
+            ) : null}
+            {toolPanelTab === "search" ? (
+              <SearchPanel api={api} worktreeId={worktreeId} scope={scope} />
             ) : null}
           </>
         )}

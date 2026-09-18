@@ -481,6 +481,30 @@ export interface TreeEntry {
   type: "file" | "dir";
 }
 
+export interface SearchMatch {
+  line: number;
+  pre: string;
+  mid: string;
+  post: string;
+}
+
+export interface SearchFileMatches {
+  path: string;
+  matches: SearchMatch[];
+}
+
+export interface SearchResult {
+  files: SearchFileMatches[];
+  truncated: boolean;
+  totalMatches: number;
+}
+
+export interface GutterResult {
+  added: number[];
+  deleted: number[];
+  modified: number[];
+}
+
 export type WSEvent =
   | {
       type: "session:created";
@@ -935,6 +959,10 @@ export interface Settings {
   /** Markdown per-element styling overrides (see `MarkdownStyle`). Absent →
    *  the active theme's defaults. */
   markdownStyle?: MarkdownStyle;
+  /** Sticky content-search toggle state (Search tab) — persisted across sessions. */
+  searchCaseSensitive?: boolean;
+  searchRegex?: boolean;
+  searchWholeWord?: boolean;
 }
 
 /** A directory-scanned skill catalog entry from GET /skills (Settings panel only). */

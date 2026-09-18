@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
 /**
- * ⌘/Ctrl+Shift+F → Files tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
+ * ⌘/Ctrl+Shift+F → Search tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
  * ⌘/Ctrl+P quick-open files; ⌘/Ctrl+\ or ⌘/Ctrl+B → toggle tool pane;
  * ⌘/Ctrl+Shift+G → new agent in current worktree;
  * ⌘/Ctrl+Shift+M → new worktree in the current project;
@@ -125,7 +125,7 @@ export function useWorkspaceKeyboardShortcuts(
         const k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
         if (k === "F") {
           e.preventDefault();
-          setToolPanelTab("files");
+          setToolPanelTab("search");
         } else if (k === "Z") {
           e.preventDefault();
           if (!canvasMode) toggleTerminalDock();

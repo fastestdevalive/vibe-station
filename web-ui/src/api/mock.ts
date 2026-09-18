@@ -27,10 +27,12 @@ import type {
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
+  GutterResult,
   HealthResponse,
   Mode,
   Project,
   ProjectBranchesResponse,
+  SearchResult,
   SendChatResponse,
   Session,
   SessionMeta,
@@ -967,6 +969,24 @@ export function createMockApi() {
       };
       walk("");
       return { files: out, truncated: false, source: "node" };
+    },
+
+    async search(
+      _worktreeId: string,
+      _opts: { q: string; re?: boolean; case?: boolean; word?: boolean; glob?: string; limit?: number },
+      _signal?: AbortSignal,
+      _scope: FileScope = "worktree",
+    ): Promise<SearchResult> {
+      return { files: [], truncated: false, totalMatches: 0 };
+    },
+
+    async getGutter(
+      _worktreeId: string,
+      _path: string,
+      _signal?: AbortSignal,
+      _scope: FileScope = "worktree",
+    ): Promise<GutterResult> {
+      return { added: [], deleted: [], modified: [] };
     },
 
     async listChangedPaths(

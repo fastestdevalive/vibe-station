@@ -39,6 +39,8 @@ interface FilePreviewPaneProps {
 
 export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
   const storePath = useWorkspaceStore((s) => s.activeFilePath);
+  const pendingFileLine = useWorkspaceStore((s) => s.pendingFileLine);
+  const clearPendingFileLine = useWorkspaceStore((s) => s.clearPendingFileLine);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
   );
@@ -89,6 +91,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const [imageBlob, setImageBlob] = useState<{ key: string; url: string } | null>(null);
   const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
   const [imageFullscreen, setImageFullscreen] = useState(false);
+  const [rawMarkdown, setRawMarkdown] = useState(false);
+  const [gutterMarks, setGutterMarks] = useState<Map<number, "added" | "modified" | "deleted"> | null>(null);
   const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
   // watchFile() watches the parent dir): a tree-level change to this
@@ -215,6 +219,48 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     };
   }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged]);
 
+  // Fetch gutter marks (git add/modify/delete annotations) when viewing a plain
+  // file in working-tree scope. Only scope="none" supports gutter marks; other
+  // scopes show a diff view which already has its own add/remove line coloring.
+  useEffect(() => {
+    if (!worktreeId || !path || scope !== "none") {
+      setGutterMarks(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.getGutter(worktreeId, path, undefined, fileScope);
+        if (cancelled) return;
+        const marks = new Map<number, "added" | "modified" | "deleted">();
+        // Added lines: directly map each line number
+        for (const lineNum of result.added) {
+          marks.set(lineNum, "added");
+        }
+        // Modified lines: directly map each line number
+        for (const lineNum of result.modified) {
+          marks.set(lineNum, "modified");
+        }
+        // Deleted lines: map each line number to the "deleted" wedge. `0` is
+        // the backend's sentinel for "deletion occurred before line 1" (see
+        // Decision 3) — CodeView only ever renders lines 1..N, so a bare `0`
+        // would never match any line and the marker would silently vanish.
+        // Fold it onto line 1 so the indicator still renders (not pixel-
+        // perfect against "top edge of line 1", but never dropped).
+        for (const lineNum of result.deleted) {
+          marks.set(lineNum === 0 ? 1 : lineNum, "deleted");
+        }
+        setGutterMarks(marks);
+      } catch {
+        // Silently ignore errors (e.g., file not tracked, permission denied)
+        setGutterMarks(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged]);
+
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
   // pane between two parents in the layout tree (Panel ↔ fullscreenOverlay),
@@ -226,15 +272,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
 
   // Restore scroll the instant the body element mounts. Stored value comes
   // from the global store, kept fresh by the rAF-throttled onScroll handler.
+  // Skip restore if pendingFileLine is set — that takes precedence.
   const setBodyRef = useCallback(
     (el: HTMLDivElement | null) => {
       bodyRef.current = el;
-      if (el && scrollKey) {
+      if (el && scrollKey && pendingFileLine === null) {
         const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
         if (saved != null) el.scrollTop = saved;
       }
     },
-    [scrollKey],
+    [scrollKey, pendingFileLine],
   );
 
   // rAF-throttle persistence so a fast scroll doesn't fire setFileScroll
@@ -267,10 +314,30 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // pre-content-load scrollTop assignment in setBodyRef gets clamped against
   // the OLD content's scrollHeight.
   useEffect(() => {
-    if (!bodyRef.current || !scrollKey) return;
+    if (!bodyRef.current || !scrollKey || pendingFileLine !== null) return;
     const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
     if (saved != null) bodyRef.current.scrollTop = saved;
-  }, [fileBody, diffBody, scrollKey]);
+  }, [fileBody, diffBody, scrollKey, pendingFileLine]);
+
+  // Scroll to the pending line if set, then clear it.
+  useEffect(() => {
+    if (pendingFileLine === null || !bodyRef.current || !fileBody) return;
+    // Find the line element with the matching line number in the gutter.
+    const lineElements = bodyRef.current.querySelectorAll<HTMLElement>(".workspace-code-line");
+    let targetElement: HTMLElement | null = null;
+    for (const lineEl of lineElements) {
+      const gutterText = lineEl.querySelector<HTMLElement>(".workspace-code-gutter")?.textContent?.trim();
+      if (gutterText === String(pendingFileLine)) {
+        targetElement = lineEl;
+        break;
+      }
+    }
+    if (targetElement) {
+      targetElement.scrollIntoView({ block: "center" });
+    }
+    // Clear the pending line flag now that we've scrolled.
+    clearPendingFileLine();
+  }, [pendingFileLine, fileBody, clearPendingFileLine]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -391,7 +458,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (!fileBody) {
       return <div className="empty-state">Loading…</div>;
     }
-    if (isMd) {
+    if (isMd && !rawMarkdown) {
       const segments = segmentMarkdownWithMermaid(fileBody);
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
@@ -405,10 +472,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         </div>
       );
     }
-    return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} />;
+    return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} gutterMarks={gutterMarks ?? undefined} />;
   })();
 
-  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && !isImage && scope === "none");
+  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || ((!isMd || rawMarkdown) && !isImage && scope === "none");
 
   const bump = (delta: number) => {
     if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
@@ -422,6 +489,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
         <Plus size={11} />
       </button>
+      {isMd && scope === "none" && (
+        <button
+          type="button"
+          className="preview-font-overlay__btn"
+          aria-label={rawMarkdown ? "View rendered markdown" : "View source"}
+          onClick={() => setRawMarkdown(!rawMarkdown)}
+        >
+          {rawMarkdown ? "Formatted" : "Source"}
+        </button>
+      )}
     </div>
   );
 

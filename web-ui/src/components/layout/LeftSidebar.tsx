@@ -1647,7 +1647,7 @@ export function LeftSidebar({
                 <Filter
                   size={13}
                   fill={hideInactiveWorktrees ? "currentColor" : "none"}
-                  color={hideInactiveWorktrees ? "var(--accent-color, var(--fg-primary))" : undefined}
+                  color={hideInactiveWorktrees ? "var(--accent-color, var(--accent))" : undefined}
                 />
               </button>
               <button
