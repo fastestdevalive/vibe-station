@@ -96,7 +96,7 @@ echo "    $(du -h "$DEST_DAEMON" | cut -f1)  $DEST_DAEMON"
 
 # ── Step 4: copy vst CLI binary to binaries/ ─────────────────────────────────
 
-SRC_CLI="$REPO_ROOT/rust/target/release/vst-cli$EXE_SUFFIX"
+SRC_CLI="$REPO_ROOT/rust/target/release/vst$EXE_SUFFIX"
 DEST_CLI="$BINARIES_DIR/vst-$TRIPLE$EXE_SUFFIX"
 
 if [[ ! -f "$SRC_CLI" ]]; then

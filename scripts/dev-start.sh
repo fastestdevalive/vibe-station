@@ -63,7 +63,7 @@ fi
 # vst-cli would be missing on a fresh checkout or after `cargo clean`.
 echo "[dev-start] building vst-cli (debug)..."
 cargo build --manifest-path "$REPO_ROOT/rust/Cargo.toml" -p vst-cli
-VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst-cli"
+VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst"
 
 # Build web-ui/dist so the daemon serves current UI to non-Vite clients from
 # the moment it starts, instead of a build left over from a previous session.

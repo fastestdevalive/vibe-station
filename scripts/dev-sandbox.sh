@@ -108,7 +108,7 @@ case "$CMD" in
     export VST_SEED_MODE="$SEED_MODE"
 
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
-    # The dev sandbox mounts host Rust binaries (vst-daemon, vst-cli).
+    # The dev sandbox mounts host Rust binaries (vst-daemon, vst).
     # Prefer pre-built container-matching binaries (target-docker), then host release or debug:
     if [ -n "${VST_RUST_DAEMON_BIN:-}" ] && [ -x "$VST_RUST_DAEMON_BIN" ]; then
       RUST_DAEMON_BIN="$VST_RUST_DAEMON_BIN"
@@ -126,14 +126,14 @@ case "$CMD" in
 
     if [ -n "${VST_RUST_CLI_BIN:-}" ] && [ -x "$VST_RUST_CLI_BIN" ]; then
       RUST_CLI_BIN="$VST_RUST_CLI_BIN"
-    elif [ -x "./rust/target-docker/debug/vst-cli" ]; then
-      RUST_CLI_BIN="./rust/target-docker/debug/vst-cli"
-    elif [ -x "./rust/target-docker/release/vst-cli" ]; then
-      RUST_CLI_BIN="./rust/target-docker/release/vst-cli"
-    elif [ -x "./rust/target/release/vst-cli" ]; then
-      RUST_CLI_BIN="./rust/target/release/vst-cli"
-    elif [ -x "./rust/target/debug/vst-cli" ]; then
-      RUST_CLI_BIN="./rust/target/debug/vst-cli"
+    elif [ -x "./rust/target-docker/debug/vst" ]; then
+      RUST_CLI_BIN="./rust/target-docker/debug/vst"
+    elif [ -x "./rust/target-docker/release/vst" ]; then
+      RUST_CLI_BIN="./rust/target-docker/release/vst"
+    elif [ -x "./rust/target/release/vst" ]; then
+      RUST_CLI_BIN="./rust/target/release/vst"
+    elif [ -x "./rust/target/debug/vst" ]; then
+      RUST_CLI_BIN="./rust/target/debug/vst"
     else
       RUST_CLI_BIN=""
     fi
@@ -142,7 +142,7 @@ case "$CMD" in
       echo "Host Rust binaries not found. Building debug binaries ('cargo build -p vst-daemon -p vst-cli')..."
       cargo build --manifest-path rust/Cargo.toml -p vst-daemon -p vst-cli
       RUST_DAEMON_BIN="./rust/target/debug/vst-daemon"
-      RUST_CLI_BIN="./rust/target/debug/vst-cli"
+      RUST_CLI_BIN="./rust/target/debug/vst"
     fi
 
     if [ ! -x "$RUST_DAEMON_BIN" ] || [ ! -x "$RUST_CLI_BIN" ]; then

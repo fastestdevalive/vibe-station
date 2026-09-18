@@ -144,7 +144,7 @@ services:
       # Override the paths with VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN if
       # yours differ.
       - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
-      - ${VST_RUST_CLI_BIN:-./rust/target/release/vst-cli}:/usr/local/bin/vst-rust:ro
+      - ${VST_RUST_CLI_BIN:-./rust/target/release/vst}:/usr/local/bin/vst-rust:ro
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)
