@@ -14,6 +14,7 @@ use vst_types::ws::{ClientMessage, ServerMessage, SessionErrorReason};
 use super::session_lookup::{find_session_record, SessionLookup};
 use crate::connection::{OpenStreamEntry, SessionStream, WsConnection};
 use crate::streams::tmux_output::TmuxOutputStream;
+use crate::Error;
 
 /// Registry of live direct-PTY streams keyed by session id.
 ///
@@ -191,10 +192,20 @@ async fn open_session_locked(
 
     // Start attachment — the park point INSIDE the session lock.
     if let Err(e) = stream.attach(cols, rows, &subscriber_id).await {
+        // A stream that reports the session itself is gone is terminal: no
+        // `session:opened` will ever follow, so it must be classified `gone`
+        // (same as the not-running direct-pty branch above) rather than
+        // `transient` — a transient error leaves the client's spawning overlay
+        // waiting on an attach that can never happen. Everything else is a
+        // stream hiccup and stays `transient`.
+        let (message, reason) = match e {
+            Error::SessionNotFound(message) => (message, SessionErrorReason::Gone),
+            other => (other.to_string(), SessionErrorReason::Transient),
+        };
         conn.send(ServerMessage::SessionError {
             session_id: session_id.to_string(),
-            message: e.to_string(),
-            reason: Some(SessionErrorReason::Transient),
+            message,
+            reason: Some(reason),
         });
     }
 }

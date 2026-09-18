@@ -12,7 +12,14 @@ use crate::streams::file_watcher::{FileWatcher, WatcherCallbacks, WatcherHandle}
 use super::file_watch::{WatcherRegistry, WorktreePathResolver};
 
 /// Handle `tree:watch`: start watching a directory tree for changes.
-pub fn handle_tree_watch(
+///
+/// The watch registration itself (a pruned directory walk plus one inotify
+/// watch per directory — see `streams::file_watcher`) is filesystem-bound
+/// blocking work, so it runs on a blocking thread. It is still **awaited**: the
+/// caller must learn whether the watch was established, and a failure has to
+/// surface as the same `system:error` frame (and the same registry rollback) as
+/// before.
+pub async fn handle_tree_watch(
     conn: &WsConnection,
     registry: &WatcherRegistry,
     resolve_root: &WorktreePathResolver,
@@ -97,7 +104,16 @@ pub fn handle_tree_watch(
         .unwrap()
         .insert(watch_key.clone(), watcher.clone());
 
-    if let Err(e) = watcher.spawn(abs_path.to_str().unwrap_or("")) {
+    let spawn_result = {
+        let watcher = watcher.clone();
+        let path = abs_path.to_string_lossy().into_owned();
+        match tokio::task::spawn_blocking(move || watcher.spawn(&path)).await {
+            Ok(res) => res.map_err(|e| e.to_string()),
+            Err(join_err) => Err(join_err.to_string()),
+        }
+    };
+
+    if let Err(e) = spawn_result {
         conn.send(ServerMessage::SystemError {
             message: format!(
                 "Failed to watch tree at {}: {e}",
@@ -125,8 +141,12 @@ pub async fn handle_tree_unwatch(
     let tree_path = path.clone().unwrap_or_default();
     let watch_key = format!("tree:{worktree_id}:{tree_path}");
     if let Some(_released) = conn.release_tree_watcher(&watch_key) {
-        if let Some(watcher) = registry.lock().unwrap().remove(&watch_key) {
-            watcher.close();
+        let watcher = registry.lock().unwrap().remove(&watch_key);
+        if let Some(watcher) = watcher {
+            // Tearing down thousands of inotify watches is blocking work too
+            // (it drops the `notify` watcher and joins its own thread), so keep
+            // it off the calling task.
+            let _ = tokio::task::spawn_blocking(move || watcher.close()).await;
         }
     }
 }

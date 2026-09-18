@@ -53,6 +53,17 @@ struct Inner {
     killer: std::sync::Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
 }
 
+/// Outcome of a `tmux has-session` probe.
+enum SessionProbe {
+    /// The session is there.
+    Exists,
+    /// tmux answered, and its answer was "no such session".
+    Missing,
+    /// tmux could not be asked (spawn failed, no server, socket error). Says
+    /// nothing about whether the session is alive.
+    Unreachable(String),
+}
+
 /// A tmux `attach-session` PTY stream. Single-subscriber per instance (one per
 /// connection).
 pub struct TmuxOutputStream {
@@ -103,25 +114,46 @@ impl TmuxOutputStream {
         Ok(())
     }
 
-    async fn has_session_async(&self) -> bool {
-        self.run_async(&["has-session", "-t", &self.inner.tmux_name])
-            .await
-            .is_ok()
+    /// Run `has-session` and report which of the three distinguishable outcomes
+    /// it was.
+    ///
+    /// A plain `bool` collapsed "this session does not exist" together with
+    /// "tmux could not be reached at all" (spawn failure, no server, a broken
+    /// socket). Those must NOT be reported the same way: the first is terminal
+    /// and classified `gone`, which the web UI treats as an exit (Resume
+    /// banner, and a resume can re-spawn a session that is actually still
+    /// alive), while the second is a transient failure to talk to tmux.
+    async fn probe_session(&self) -> SessionProbe {
+        let mut cmd = tokio::process::Command::new("tmux");
+        if let Some(sock) = &self.inner.socket {
+            cmd.arg("-L").arg(sock);
+        }
+        cmd.args(["has-session", "-t", &self.inner.tmux_name]);
+        match cmd.output().await {
+            Err(e) => SessionProbe::Unreachable(format!("io: {e}")),
+            Ok(out) if out.status.success() => SessionProbe::Exists,
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                // Only tmux's own "this session is not here" wording means
+                // gone. Anything else (e.g. "no server running on ...", a
+                // permission error) is a connectivity problem, not proof that
+                // the session died.
+                let lowered = stderr.to_ascii_lowercase();
+                if lowered.contains("can't find session")
+                    || lowered.contains("cant find session")
+                    || lowered.contains("session not found")
+                    || lowered.contains("no such session")
+                {
+                    SessionProbe::Missing
+                } else {
+                    SessionProbe::Unreachable(stderr)
+                }
+            }
+        }
     }
 
-    async fn force_window_size_async(&self, cols: i64, rows: i64) {
-        let _ = self
-            .run_async(&[
-                "resize-window",
-                "-t",
-                &self.inner.tmux_name,
-                "-x",
-                &cols.to_string(),
-                "-y",
-                &rows.to_string(),
-            ])
-            .await;
-    }
+    // (`resize-window` on attach is chained into the single pre-flight
+    // invocation in `attach()`; `resize()` uses the sync variant below.)
 
     // ── Sync variants kept for `resize()` (called on user resize events) ─────
 
@@ -162,25 +194,91 @@ impl SessionStream for TmuxOutputStream {
             return Ok(());
         }
 
-        // Pre-flight: confirm the tmux session exists. Uses tokio::process so
-        // it yields instead of blocking a worker thread.
-        if !self.has_session_async().await {
-            self.inner.closed.store(true, Ordering::SeqCst);
-            let _ = self
-                .inner
-                .error_tx
-                .send(format!("Session '{}' not running", self.inner.tmux_name));
-            return Ok(());
+        // Pre-flight, in ONE tmux invocation: confirm the session exists, hide
+        // the status bar, enable mouse mode, and force the window size. These
+        // used to be four separate `tmux` processes, i.e. four sequential
+        // round-trips to the single-threaded tmux server — which during a
+        // worktree switch is simultaneously repainting every other pane being
+        // attached, so each round-trip is pure added latency before the client's
+        // `session:opened` (and its spawning overlay) can clear. tmux's own
+        // command separator is a literal `;` argument (no shell involved here —
+        // these are argv elements).
+        //
+        // `has-session` stays as the first command in the chain so a
+        // missing/dead session still fails fast: without it a bare
+        // `tmux attach-session` prints "can't find session" INTO the pty before
+        // exiting non-zero, which lands as garbage in the user's viewport.
+        //
+        // Order matters: tmux ABORTS a command list at the first failing
+        // command, so `resize-window` — the one whose effect the user actually
+        // sees — runs before the two best-effort `set-option`s, which are the
+        // ones that could plausibly be rejected (older tmux, unknown option)
+        // and take the rest of the chain down with them.
+        let name = self.inner.tmux_name.clone();
+        let cols_s = cols.to_string();
+        let rows_s = rows.to_string();
+        let preflight: Vec<&str> = vec![
+            "has-session",
+            "-t",
+            &name,
+            ";",
+            "resize-window",
+            "-t",
+            &name,
+            "-x",
+            &cols_s,
+            "-y",
+            &rows_s,
+            ";",
+            "set-option",
+            "-t",
+            &name,
+            "status",
+            "off",
+            ";",
+            "set-option",
+            "-t",
+            &name,
+            "mouse",
+            "on",
+        ];
+        if self.run_async(&preflight).await.is_err() {
+            // The chain as a whole is best-effort: the option sets and
+            // `resize-window` were always allowed to fail, and one failing
+            // command fails the whole invocation. So re-ask specifically about
+            // the session before giving up — one extra round-trip on the error
+            // path only, never on the happy path.
+            match self.probe_session().await {
+                // Only an option/resize rejection: attach anyway, exactly as
+                // the four independent best-effort calls used to.
+                SessionProbe::Exists => {}
+                SessionProbe::Missing => {
+                    self.inner.closed.store(true, Ordering::SeqCst);
+                    // Terminal, not transient: there is nothing to attach to
+                    // and no `opened` will ever follow, so it must NOT be
+                    // reported via `error_tx` (which `session_open` classifies
+                    // as `transient`, leaving the client waiting on
+                    // `session:opened` forever). `SessionNotFound` is what
+                    // `session_open` maps to the `gone` reason it already sends
+                    // for a not-running direct-pty session.
+                    return Err(Error::SessionNotFound(format!(
+                        "Session '{}' not running",
+                        self.inner.tmux_name
+                    )));
+                }
+                SessionProbe::Unreachable(detail) => {
+                    self.inner.closed.store(true, Ordering::SeqCst);
+                    // We could not reach tmux, which is NOT evidence the
+                    // session died — `Error::Stream` keeps this `transient` so
+                    // the client does not flip a possibly-live session to
+                    // "exited" (and offer a Resume that would re-spawn it).
+                    return Err(Error::Stream(format!(
+                        "Could not reach tmux while attaching to '{}': {detail}",
+                        self.inner.tmux_name
+                    )));
+                }
+            }
         }
-
-        // Best-effort: hide the status bar + enable mouse mode. Non-fatal.
-        let _ = self
-            .run_async(&["set-option", "-t", &self.inner.tmux_name, "status", "off"])
-            .await;
-        let _ = self
-            .run_async(&["set-option", "-t", &self.inner.tmux_name, "mouse", "on"])
-            .await;
-        self.force_window_size_async(cols, rows).await;
 
         // Spawn `tmux attach-session` in a PTY. `portable_pty` has no async
         // API so we move the blocking openpty + spawn_command + try_clone_reader
@@ -206,6 +304,25 @@ impl SessionStream for TmuxOutputStream {
                     argv.push(sock.clone());
                 }
                 argv.push("attach-session".to_string());
+                // -d: force-detach any other client already attached to this
+                // session. Our own close/detach path SIGHUPs the previous
+                // client but deliberately doesn't wait for it to exit (see
+                // `detach()` below), so a fast-enough close+open (worktree
+                // switch, rapid remounts) can otherwise attach a second live
+                // client before the first is gone — tmux would then mirror
+                // output to both, doubling every echoed keystroke. `-d` makes
+                // tmux itself enforce "at most one client" regardless of that
+                // timing.
+                // -d: force-detach any other client already attached to this
+                // session. Our own close/detach path SIGHUPs the previous
+                // client but deliberately doesn't wait for it to exit (see
+                // `detach()` below), so a fast-enough close+open (worktree
+                // switch, rapid remounts) can otherwise attach a second live
+                // client before the first is gone — tmux would then mirror
+                // output to both, doubling every echoed keystroke. `-d` makes
+                // tmux itself enforce "at most one client" regardless of that
+                // timing.
+                argv.push("-d".to_string());
                 argv.push("-t".to_string());
                 argv.push(tmux_name);
                 cmd.args(&argv);
@@ -390,6 +507,13 @@ impl SessionStream for TmuxOutputStream {
         // its module doc comment for why this must not go through
         // `MasterPty::take_writer()`.
         vst_proc::write_borrowed_fd(fd, data.as_bytes());
+    }
+
+    /// True once `attach()` has installed the PTY master, i.e. once `write()`
+    /// has somewhere to write. False in the window between the stream entry
+    /// being registered and the attach completing (and again after `detach()`).
+    fn is_attached(&self) -> bool {
+        self.inner.master.lock().unwrap().is_some()
     }
 
     fn resize(&self, cols: i64, rows: i64, _subscriber_id: Option<&str>) {
