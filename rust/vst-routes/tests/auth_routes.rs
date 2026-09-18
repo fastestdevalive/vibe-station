@@ -284,6 +284,27 @@ async fn test_auth_routes_endpoints() {
     assert_eq!(res_bump.browser_epoch, 2);
     assert_eq!(epoch_tracker.load(Ordering::SeqCst), 2);
     assert_eq!(auth_state.browser_epoch(), 2);
+
+    // Sessions with live WS hub containing Tauri and Browser connections
+    let hub = Arc::new(vst_ws::broadcaster::WsHub::new());
+    let tauri_conn = vst_ws::connection::WsConnection::new(vst_ws::connection::WsSinkHandle::mock(0));
+    tauri_conn.set_token_id(Some("tauri-token-123".into()));
+    tauri_conn.set_scope(Some(TokenScope::Tauri));
+    hub.register_connection(&tauri_conn);
+
+    let browser_conn = vst_ws::connection::WsConnection::new(vst_ws::connection::WsSinkHandle::mock(0));
+    browser_conn.set_token_id(Some("browser-token-456".into()));
+    browser_conn.set_scope(Some(TokenScope::Browser));
+    hub.register_connection(&browser_conn);
+
+    let routes_with_hub = routes.with_ws_hub(hub);
+    let sessions_hub_res = routes_with_hub.sessions(None, Some("tauri-token-123".into())).await;
+    assert!(sessions_hub_res.is_desktop);
+    assert_eq!(sessions_hub_res.current_token_id, None);
+    // Only the browser connection is in the remote sessions list, NOT the tauri connection
+    assert_eq!(sessions_hub_res.sessions.len(), 1);
+    assert_eq!(sessions_hub_res.sessions[0].token_id, "browser-token-456");
+    assert_eq!(sessions_hub_res.sessions[0].scope, "browser");
 }
 
 #[tokio::test]

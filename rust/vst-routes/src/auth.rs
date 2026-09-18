@@ -461,6 +461,14 @@ impl AuthRoutes {
         // Merge live WS connections if hub is available
         if let Some(hub) = &self.ws_hub {
             hub.for_each_connection(|conn| {
+                // Only remote scopes (browser / mobile) are tracked in the remote sessions list.
+                // Desktop (Tauri) and CLI callers are local and represented separately.
+                if !matches!(
+                    conn.scope(),
+                    Some(TokenScope::Browser) | Some(TokenScope::Mobile)
+                ) {
+                    return;
+                }
                 if let Some(tid) = conn.token_id() {
                     let exp = conn.token_expires_at();
                     if exp.map_or(false, |e| e <= now) {
@@ -471,12 +479,11 @@ impl AuthRoutes {
                         existing.connections += 1;
                         existing.last_seen_at = conn.last_seen_at() as i64;
                     } else {
-                        let scope_str = conn.scope().map_or("browser".to_string(), |sc| match sc {
-                            TokenScope::Cli => "cli".to_string(),
-                            TokenScope::Tauri => "tauri".to_string(),
-                            TokenScope::Browser => "browser".to_string(),
-                            TokenScope::Mobile => "mobile".to_string(),
-                        });
+                        let scope_str = match conn.scope() {
+                            Some(TokenScope::Mobile) => "mobile",
+                            _ => "browser",
+                        }
+                        .to_string();
                         map.insert(
                             tid.clone(),
                             TokenSession {
@@ -496,6 +503,8 @@ impl AuthRoutes {
 
         let mut sessions: Vec<TokenSession> = session_map.into_inner().into_values().collect();
         sessions.sort_by_key(|s| std::cmp::Reverse(s.issued_at));
+
+        let current_token_id = if is_desktop { None } else { current_token_id };
 
         AuthSessionsResult {
             sessions,
