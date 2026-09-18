@@ -10,7 +10,7 @@ name = "vst_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "vst-cli"
+name = "vst"
 path = "src/main.rs"
 
 [dependencies]
