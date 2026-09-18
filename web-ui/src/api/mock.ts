@@ -1116,11 +1116,17 @@ export function createMockApi() {
         return {
           models: [
             "sonnet",
+            "sonnet[1m]",
             "opus",
+            "opus[1m]",
             "haiku",
+            "fable",
             "claude-opus-4-5",
+            "claude-opus-4-5[1m]",
             "claude-sonnet-4-5",
+            "claude-sonnet-4-5[1m]",
             "claude-haiku-4-5",
+            "claude-fable-5",
           ],
         };
       }
