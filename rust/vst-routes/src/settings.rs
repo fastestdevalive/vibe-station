@@ -140,6 +140,16 @@ impl SettingsRoutes {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        let search_case_sensitive = raw
+            .get("searchCaseSensitive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let search_regex = raw.get("searchRegex").and_then(|v| v.as_bool()).unwrap_or(false);
+        let search_whole_word = raw
+            .get("searchWholeWord")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         Settings {
             default_projects_dir: Some(default_projects_dir),
             skill_paths: Some(skill_paths),
@@ -152,6 +162,9 @@ impl SettingsRoutes {
             browser_epoch,
             started_at,
             home_dir: home_dir().to_string_lossy().to_string(),
+            search_case_sensitive: Some(search_case_sensitive),
+            search_regex: Some(search_regex),
+            search_whole_word: Some(search_whole_word),
         }
     }
 
@@ -233,6 +246,16 @@ impl SettingsRoutes {
         } else {
             pre_apply_markdown_style
         };
+
+        if let Some(v) = body.search_case_sensitive {
+            raw["searchCaseSensitive"] = serde_json::Value::Bool(v);
+        }
+        if let Some(v) = body.search_regex {
+            raw["searchRegex"] = serde_json::Value::Bool(v);
+        }
+        if let Some(v) = body.search_whole_word {
+            raw["searchWholeWord"] = serde_json::Value::Bool(v);
+        }
 
         let vst_home = self.paths.vst_home();
         tokio::fs::create_dir_all(vst_home)

@@ -11,8 +11,8 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// The result of a file listing.
 #[derive(Debug, Clone, PartialEq)]
@@ -130,73 +130,100 @@ impl FileList {
     }
 
     async fn list_files_with_node(&self, wt_path: &PathBuf) -> FileListResult {
+        let wt_path = wt_path.clone();
         let max = self.effective_max();
-        let mut files: Vec<String> = Vec::new();
-        let mut truncated = false;
 
-        let ig = std::fs::read_to_string(wt_path.join(".gitignore"))
-            .ok()
-            .and_then(|contents| {
-                let mut b = ignore::gitignore::GitignoreBuilder::new(wt_path);
-                for line in contents.lines() {
-                    let _ = b.add_line(None, line);
-                }
-                b.build().ok()
+        let result = tokio::task::spawn_blocking(move || {
+            let files = Arc::new(Mutex::new(Vec::new()));
+            let file_count = Arc::new(AtomicUsize::new(0));
+            let truncated = Arc::new(AtomicBool::new(false));
+
+            // Build ignore matcher that respects nested .gitignore files.
+            // `.require_git(false)` matters: WalkBuilder's gitignore support is
+            // otherwise gated on finding an actual `.git` directory, so a plain
+            // directory with only a `.gitignore` (no `.git`) would silently
+            // ignore nothing at all without this.
+            let walker = ignore::WalkBuilder::new(&wt_path)
+                .hidden(false)
+                .git_ignore(true)
+                .require_git(false)
+                .filter_entry(|e| {
+                    let name = e.file_name().to_string_lossy();
+                    name != ".git" && name != "node_modules"
+                })
+                .build_parallel();
+
+            walker.run(|| {
+                let files = Arc::clone(&files);
+                let file_count = Arc::clone(&file_count);
+                let truncated = Arc::clone(&truncated);
+                let wt_path = wt_path.clone();
+
+                Box::new(move |entry| {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(_) => return ignore::WalkState::Continue,
+                    };
+
+                    // Skip if we've already hit the limit
+                    if file_count.load(Ordering::Relaxed) >= max {
+                        truncated.store(true, Ordering::Relaxed);
+                        return ignore::WalkState::Quit;
+                    }
+
+                    // Only process files, not directories. Gitignore filtering
+                    // (including nested .gitignore files) is already handled by
+                    // WalkBuilder itself via `.git_ignore(true)` above — entries
+                    // reaching this callback are never gitignored, so there is
+                    // no need to re-check that here. (A prior version of this
+                    // code rebuilt a full GitignoreBuilder from every parent
+                    // .gitignore, from scratch, for every single file — O(N*D)
+                    // extra I/O per walk, entirely redundant with WalkBuilder's
+                    // own filtering, and a severe perf regression that defeated
+                    // the whole point of this phase. Removed.)
+                    if let Some(file_type) = entry.file_type() {
+                        if file_type.is_file() {
+                            let entry_path = entry.path();
+                            if let Ok(rel_path) = entry_path.strip_prefix(&wt_path) {
+                                let posix_path = to_posix(&rel_path.to_string_lossy());
+
+                                // Atomically check and increment count before adding to list
+                                let current_count = file_count.fetch_add(1, Ordering::SeqCst);
+                                if current_count < max {
+                                    if let Ok(mut files_guard) = files.lock() {
+                                        files_guard.push(posix_path);
+                                    }
+                                } else {
+                                    // We've exceeded the limit, set truncated flag
+                                    truncated.store(true, Ordering::SeqCst);
+                                    return ignore::WalkState::Quit;
+                                }
+                            }
+                        }
+                    }
+
+                    ignore::WalkState::Continue
+                })
             });
 
-        let mut stack = vec![wt_path.clone()];
-        while let Some(dir) = stack.pop() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            for entry in entries.flatten() {
-                let file_type = match entry.file_type() {
-                    Ok(ft) => ft,
-                    Err(_) => continue,
-                };
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name == ".git" || name == "node_modules" {
-                    continue;
-                }
-                let abs = entry.path();
-                let rel = abs
-                    .strip_prefix(wt_path)
-                    .map(|r| to_posix(&r.to_string_lossy()))
-                    .unwrap_or_default();
-                if let Some(ig) = &ig {
-                    if ig
-                        .matched_path_or_any_parents(std::path::Path::new(&rel), file_type.is_dir())
-                        .is_ignore()
-                    {
-                        continue;
-                    }
-                }
-                let is_dir = if file_type.is_symlink() {
-                    std::fs::metadata(&abs).map(|m| m.is_dir()).unwrap_or(false)
-                } else {
-                    file_type.is_dir()
-                };
-                if is_dir {
-                    stack.push(abs);
-                } else {
-                    if files.len() >= max {
-                        truncated = true;
-                        break;
-                    }
-                    files.push(rel);
-                }
-            }
-            if truncated {
-                break;
-            }
-        }
+            // Extract results and sort for determinism
+            let mut collected_files = files.lock().unwrap().clone();
+            collected_files.sort();
+            let was_truncated = truncated.load(Ordering::Relaxed);
 
-        FileListResult {
-            files,
-            truncated,
+            FileListResult {
+                files: collected_files,
+                truncated: was_truncated,
+                source: "node".into(),
+            }
+        })
+        .await;
+
+        result.unwrap_or_else(|_| FileListResult {
+            files: vec![],
+            truncated: false,
             source: "node".into(),
-        }
+        })
     }
 }
 

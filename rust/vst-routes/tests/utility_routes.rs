@@ -159,6 +159,10 @@ async fn test_settings_get_patch_and_validation() {
     assert_eq!(s.default_projects_dir, Some(default_projects_dir()));
     assert_eq!(s.skill_paths, Some(default_skill_paths()));
     assert!(!s.home_dir.is_empty());
+    // Sticky search-toggle prefs default to false when never set.
+    assert_eq!(s.search_case_sensitive, Some(false));
+    assert_eq!(s.search_regex, Some(false));
+    assert_eq!(s.search_whole_word, Some(false));
 
     // PATCH validation: relative defaultProjectsDir rejected
     let err = routes
@@ -168,6 +172,9 @@ async fn test_settings_get_patch_and_validation() {
             theme_id: None,
             markdown_style: None,
             reset_markdown_style: None,
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap_err();
@@ -185,6 +192,9 @@ async fn test_settings_get_patch_and_validation() {
             theme_id: None,
             markdown_style: None,
             reset_markdown_style: None,
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap_err();
@@ -209,7 +219,8 @@ async fn test_settings_get_patch_and_validation() {
     .await
     .unwrap();
 
-    // PATCH with valid fields and deduplication in skillPaths
+    // PATCH with valid fields and deduplication in skillPaths, plus sticky
+    // search-toggle prefs.
     let patch_res = routes
         .patch_settings(PatchSettingsBody {
             default_projects_dir: Some("/abs/projects".into()),
@@ -221,6 +232,9 @@ async fn test_settings_get_patch_and_validation() {
             theme_id: None,
             markdown_style: None,
             reset_markdown_style: None,
+            search_case_sensitive: Some(true),
+            search_regex: Some(true),
+            search_whole_word: None,
         })
         .await
         .unwrap();
@@ -234,6 +248,10 @@ async fn test_settings_get_patch_and_validation() {
         Some(vec!["/path/one".into(), "/path/two".into()])
     );
     assert_eq!(updated.pid, Some(12345));
+    // Patched fields persist; the untouched one (wholeWord) stays default.
+    assert_eq!(updated.search_case_sensitive, Some(true));
+    assert_eq!(updated.search_regex, Some(true));
+    assert_eq!(updated.search_whole_word, Some(false));
     assert_eq!(updated.port, Some(9999));
     assert_eq!(updated.cli_token, Some("cli-tok".into()));
     assert_eq!(updated.tauri_token, Some("tauri-tok".into()));
@@ -287,6 +305,9 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
                 }),
             }),
             reset_markdown_style: None,
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap_err();
@@ -338,6 +359,9 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             theme_id: Some("dracula".into()),
             markdown_style: Some(style.clone()),
             reset_markdown_style: None,
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap();
@@ -369,6 +393,9 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             theme_id: None,
             markdown_style: None,
             reset_markdown_style: Some(true),
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap();
@@ -405,6 +432,9 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             theme_id: None,
             markdown_style: Some(re_set.clone()),
             reset_markdown_style: Some(true),
+            search_case_sensitive: None,
+            search_regex: None,
+            search_whole_word: None,
         })
         .await
         .unwrap();

@@ -63,10 +63,11 @@ use vst_types::rest::projects::{TreeEntry, TreeEntryType};
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
-    DiskUsage, FileListResult, OpenFileBody, PatchWorktreeResult, PatchWorktreeToggleBody,
-    PendingFileOpens, PrInfo, PrInfoState, PrLookupResult, RenameWorktreeBody,
-    RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult, SubmoduleInfo,
-    SubmoduleStatus, SubmodulesResult, WorktreeDoneResult, WorktreeUsage,
+    DiskUsage, FileListResult, GutterResult, OpenFileBody, PatchWorktreeResult,
+    PatchWorktreeToggleBody, PendingFileOpens, PrInfo, PrInfoState, PrLookupResult,
+    RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
+    SearchFileMatches, SearchMatch, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
+    WorktreeDoneResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
@@ -1244,6 +1245,163 @@ impl WorktreeRoutes {
         })
     }
 
+    // --- 11b. GET /worktrees/:id/search ---
+    pub async fn search(
+        &self,
+        wt_id: &str,
+        q: &str,
+        re: bool,
+        case: bool,
+        word: bool,
+        glob: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<SearchResult, WorktreeRouteError> {
+        if q.is_empty() {
+            return Err(WorktreeRouteError::Validation("q is required".into()));
+        }
+
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let limit = limit.unwrap_or(2000);
+
+        let mut argv = vec![
+            "--json".to_string(),
+            "--hidden".to_string(),
+            "--glob".to_string(),
+            "!.git".to_string(),
+            "--glob".to_string(),
+            "!.git/**".to_string(),
+        ];
+
+        if !re {
+            argv.push("--fixed-strings".into());
+        }
+        if case {
+            argv.push("--case-sensitive".into());
+        } else {
+            argv.push("--ignore-case".into());
+        }
+        if word {
+            argv.push("--word-regexp".into());
+        }
+        if let Some(g) = glob {
+            argv.push("--glob".into());
+            argv.push(g.to_string());
+        }
+        argv.push("--".into());
+        argv.push(q.to_string());
+
+        let mut child = Command::new("rg")
+            .args(&argv)
+            .current_dir(&wt_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    WorktreeRouteError::ServiceUnavailable("ripgrep_unavailable".into())
+                } else {
+                    WorktreeRouteError::Internal(format!("Failed to spawn rg: {e}"))
+                }
+            })?;
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            WorktreeRouteError::Internal("Failed to capture rg stdout".into())
+        })?;
+
+        let reader = tokio::io::BufReader::new(stdout);
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = reader.lines();
+
+        // Group matches by file path, preserving first-seen order.
+        let mut files: Vec<SearchFileMatches> = Vec::new();
+        let mut file_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut total_matches: usize = 0;
+        let mut truncated = false;
+
+        while let Some(line) = lines.next_line().await.unwrap_or(None) {
+            let parsed: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if parsed.get("type").and_then(|t| t.as_str()) != Some("match") {
+                continue;
+            }
+
+            let data = match parsed.get("data") {
+                Some(d) => d,
+                None => continue,
+            };
+
+            let path = data
+                .pointer("/path/text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let line_number = data
+                .pointer("/line_number")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let lines_text = data
+                .pointer("/lines/text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let submatches = match data.get("submatches").and_then(|v| v.as_array()) {
+                Some(a) => a,
+                None => continue,
+            };
+
+            for sm in submatches {
+                let start = sm.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let end = sm.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+
+                let (pre, mid, post) = truncate_snippet(lines_text, start, end);
+
+                let m = SearchMatch {
+                    line: line_number,
+                    pre,
+                    mid,
+                    post,
+                };
+
+                let idx = if let Some(&i) = file_index.get(&path) {
+                    i
+                } else {
+                    let i = files.len();
+                    file_index.insert(path.clone(), i);
+                    files.push(SearchFileMatches {
+                        path: path.clone(),
+                        matches: Vec::new(),
+                    });
+                    i
+                };
+                files[idx].matches.push(m);
+                total_matches += 1;
+
+                if total_matches >= limit {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if truncated {
+                break;
+            }
+        }
+
+        // Kill the child if we stopped early (truncated) or just let it finish.
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+
+        Ok(SearchResult {
+            files,
+            truncated,
+            total_matches,
+        })
+    }
+
     // --- 12. GET /worktrees/:id/files/* ---
     pub async fn get_file(
         &self,
@@ -1787,6 +1945,96 @@ impl WorktreeRoutes {
         Ok(())
     }
 
+    // --- 22. GET /worktrees/:id/gutter/* ---
+    pub async fn gutter(
+        &self,
+        wt_id: &str,
+        file_path: &str,
+    ) -> Result<GutterResult, WorktreeRouteError> {
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let abs_path = resolve_inside_worktree(&wt_path, file_path)?;
+
+        // Compute relative path for git commands
+        let rel_path = abs_path
+            .strip_prefix(&wt_path)
+            .map_err(|_| {
+                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        // Check if file is tracked with git ls-files --error-unmatch
+        let check_tracked = Command::new("git")
+            .args(["ls-files", "--error-unmatch", "--", &rel_path])
+            .current_dir(&wt_path)
+            .output()
+            .await
+            .map_err(|e| WorktreeRouteError::Internal(format!("Failed to run git ls-files: {e}")))?;
+
+        if !check_tracked.status.success() {
+            // File is untracked — read its contents
+            match tokio::fs::read(&abs_path).await {
+                Ok(content) => {
+                    // Try to decode as UTF-8
+                    if let Ok(text) = String::from_utf8(content) {
+                        let line_count = text.lines().count() as u32;
+                        if line_count > 0 {
+                            let added = (1..=line_count).collect();
+                            return Ok(GutterResult {
+                                added,
+                                deleted: vec![],
+                                modified: vec![],
+                            });
+                        } else {
+                            // Empty file
+                            return Ok(GutterResult::default());
+                        }
+                    } else {
+                        // Binary file — return empty gutter
+                        return Ok(GutterResult::default());
+                    }
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        return Err(WorktreeRouteError::NotFound(format!(
+                            "File not found: {file_path}"
+                        )));
+                    } else {
+                        return Err(WorktreeRouteError::Unprocessable(e.to_string()));
+                    }
+                }
+            }
+        }
+
+        // File is tracked — run git diff HEAD
+        let diff_output = Command::new("git")
+            .current_dir(&wt_path)
+            .args([
+                "-c",
+                "color.diff=false",
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-color",
+                "HEAD",
+                "--",
+                &rel_path,
+            ])
+            .output()
+            .await
+            .map_err(|e| WorktreeRouteError::Internal(format!("Failed to run git diff: {e}")))?;
+
+        if !diff_output.status.success() && diff_output.status.code() != Some(1) {
+            return Err(WorktreeRouteError::Internal(
+                "git diff failed".to_string(),
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&diff_output.stdout);
+        Ok(parse_diff_hunk(&stdout))
+    }
+
     // Helper: locate project containing worktree
     async fn find_project_for_worktree(
         &self,
@@ -1813,6 +2061,97 @@ impl WorktreeRoutes {
     }
 }
 
+/// Parse unified diff output into line-level gutter marks.
+/// Implements the block-flush algorithm: accumulate additions and deletions,
+/// flush on context lines or new hunks, classifying blocks as added/deleted/modified.
+pub fn parse_diff_hunk(diff_stdout: &str) -> GutterResult {
+    let mut added = Vec::new();
+    let mut deleted = Vec::new();
+    let mut modified = Vec::new();
+
+    let mut new_line: u32 = 0;
+    let mut in_hunk: bool = false;
+    let mut dels: u32 = 0;
+    let mut adds: Vec<u32> = Vec::new();
+    let mut block_start: u32 = 0;
+
+    for line in diff_stdout.lines() {
+        if line.starts_with("@@") {
+            // Flush accumulated changes at hunk boundary
+            flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+            in_hunk = true;
+            new_line = parse_new_start(line);
+        } else if !in_hunk || line.starts_with('\\') {
+            // Skip pre-hunk lines and "\ No newline at end of file"
+            continue;
+        } else if line.starts_with('+') {
+            if dels == 0 && adds.is_empty() {
+                block_start = new_line;
+            }
+            adds.push(new_line);
+            new_line += 1;
+        } else if line.starts_with('-') {
+            if dels == 0 && adds.is_empty() {
+                block_start = new_line;
+            }
+            dels += 1;
+            // new_line is NOT advanced for a deletion
+        } else {
+            // Context line or other
+            flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+            new_line += 1;
+        }
+    }
+
+    // Final flush in case diff ends mid-block
+    flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+
+    GutterResult {
+        added,
+        deleted,
+        modified,
+    }
+}
+
+/// Helper function to flush accumulated change blocks.
+fn flush_block(
+    dels: &mut u32,
+    adds: &mut Vec<u32>,
+    modified: &mut Vec<u32>,
+    added: &mut Vec<u32>,
+    deleted: &mut Vec<u32>,
+    block_start: u32,
+) {
+    if *dels > 0 && !adds.is_empty() {
+        // Replacement block: both adds and dels
+        modified.extend(adds.iter());
+    } else if !adds.is_empty() {
+        // Pure insertion
+        added.extend(adds.iter());
+    } else if *dels > 0 {
+        // Pure deletion
+        deleted.push(block_start.saturating_sub(1));
+    }
+    *dels = 0;
+    adds.clear();
+}
+
+/// Parse the "new" line number from a hunk header: `@@ -a,b +c,d @@`
+/// Returns the line number after `+`, or 1 if parsing fails.
+pub fn parse_new_start(hunk_line: &str) -> u32 {
+    // Find the substring starting after '+' up to the next ',' or ' '
+    if let Some(plus_pos) = hunk_line.find('+') {
+        let after_plus = &hunk_line[plus_pos + 1..];
+        let end_pos = after_plus
+            .find(|c: char| c == ',' || c == ' ')
+            .unwrap_or(after_plus.len());
+        if let Ok(num) = after_plus[..end_pos].parse::<u32>() {
+            return num;
+        }
+    }
+    1 // Default to 1 on parse failure
+}
+
 #[derive(Debug)]
 pub enum FileResponse {
     Text { etag: String, content: String },
@@ -1823,6 +2162,51 @@ pub enum FileResponse {
 pub struct DiffResponse {
     pub etag: String,
     pub content: String,
+}
+
+/// Split `line` at byte offsets `start..end` into `(pre, mid, post)`,
+/// then truncate the three fragments so the combined char-count stays
+/// within `SNIP_MAX` (240). Public for unit-testing.
+pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String, String) {
+    const SNIP_LEAD: usize = 32;
+    const SNIP_KEEP: usize = 16;
+    const SNIP_MAX: usize = 240;
+
+    // Byte-offset split — clamp to line length to avoid panic.
+    let start = start.min(line.len());
+    let end = end.min(line.len()).max(start);
+    let raw_pre = &line[..start];
+    let raw_mid = &line[start..end];
+    let raw_post = &line[end..];
+
+    // --- pre ---
+    let mut pre: String = raw_pre.trim_start_matches([' ', '\t']).to_string();
+    if pre.chars().count() > SNIP_LEAD {
+        let keep: String = pre.chars().rev().take(SNIP_KEEP).collect::<Vec<_>>().into_iter().rev().collect();
+        pre = format!("…{keep}");
+    }
+
+    // --- mid ---
+    let mut mid: String = raw_mid.to_string();
+    if mid.chars().count() > SNIP_MAX {
+        mid = mid.chars().take(SNIP_MAX).collect::<String>() + "…";
+    }
+
+    // --- post ---
+    let budget = SNIP_MAX.saturating_sub(pre.chars().count()).saturating_sub(mid.chars().count());
+    let mut post: String = if budget > 0 {
+        let p = raw_post.to_string();
+        if p.chars().count() > budget {
+            p.chars().take(budget).collect::<String>() + "…"
+        } else {
+            p
+        }
+    } else {
+        String::new()
+    };
+    post = post.trim_end_matches([' ', '\t']).to_string();
+
+    (pre, mid, post)
 }
 
 fn serialize_worktree_json(
