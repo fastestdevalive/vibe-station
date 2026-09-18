@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Channel, LifecycleState, NormalizedEvent, PrStatus, SessionMeta};
+use crate::rest::settings::MarkdownStyle;
 
 /// Client-to-server message. Tagged on `type`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,6 +202,25 @@ pub enum ServerMessage {
     },
     #[serde(rename = "mode:deleted", rename_all = "camelCase")]
     ModeDeleted { mode_id: String },
+    /// The user's theme / markdown style changed. Narrow payload — never the
+    /// full `Settings` struct (which carries `cliToken`/`tauriToken`).
+    ///
+    /// `markdown_style` deliberately has NO `skip_serializing_if`: the client
+    /// (`useMarkdownStyle.ts`'s `boot()`) distinguishes "field present" (a
+    /// real value, including a `null` reset echo) from "field absent" (a
+    /// theme-only change that didn't touch markdown_style) via `"markdownStyle"
+    /// in ev`. Skipping serialization on `None` would omit the field on a
+    /// reset exactly the same way as an unrelated theme-only change, so a
+    /// "Reset to theme" commit's own echo — and any other open tab's live
+    /// sync — would silently fail to clear the override. `theme_id` keeps
+    /// `skip_serializing_if` since it's always `Some` in practice (the
+    /// config always has a themeId after first boot) and has no reset case.
+    #[serde(rename = "settings:updated", rename_all = "camelCase")]
+    SettingsThemeUpdated {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        theme_id: Option<String>,
+        markdown_style: Option<MarkdownStyle>,
+    },
     #[serde(rename = "chat:replay", rename_all = "camelCase")]
     ChatReplay {
         session_id: String,

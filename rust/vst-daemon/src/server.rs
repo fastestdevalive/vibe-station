@@ -261,7 +261,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         AttachmentRoutes::new(opts.store.clone(), opts.paths.clone(), attachment_registry);
     let mode_routes = ModeRoutes::new(opts.store.clone(), opts.broadcaster.clone())
         .with_paths(opts.paths.clone());
-    let settings_routes = SettingsRoutes::new(opts.paths.clone());
+    let settings_routes = SettingsRoutes::new(opts.paths.clone(), opts.broadcaster.clone());
     let default_skills = vst_routes::settings::default_skill_paths()
         .into_iter()
         .map(PathBuf::from)
@@ -2476,7 +2476,8 @@ async fn handle_patch_settings(
         .map(Json)
         .map_err(|e| match e {
             SettingsRouteError::DefaultProjectsDirNotAbsolute
-            | SettingsRouteError::SkillPathsNotAbsolute => (
+            | SettingsRouteError::SkillPathsNotAbsolute
+            | SettingsRouteError::InvalidMarkdownStyle => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": e.to_string() })),
             ),
