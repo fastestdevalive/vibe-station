@@ -125,7 +125,15 @@ struct Inner {
     debounce_ms: AtomicU64,
     closed: AtomicBool,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
-    pending: Mutex<HashMap<String, tokio::task::AbortHandle>>,
+    // Keyed by path. Each slot carries a generation number alongside the
+    // abort handle so a timer that wakes up past its own cancellation point
+    // (see `schedule_debounced`) can tell whether IT still owns the slot
+    // before touching it — `AbortHandle::abort()` is a no-op once the task
+    // has passed its last await point, so a bare `remove(&key)` in the
+    // timer's post-sleep tail would delete (and let fire) a newer timer's
+    // entry for the same path instead of its own.
+    pending: Mutex<HashMap<String, (u64, tokio::task::AbortHandle)>>,
+    next_gen: AtomicU64,
 }
 
 /// A file/tree watcher backed by `notify`.
@@ -143,9 +151,28 @@ fn schedule_debounced(inner: &Arc<Inner>, abs: String, deleted: bool) {
     let key = abs.clone();
     let cb_path = abs.clone();
     let debounce_ms = inner.debounce_ms.load(Ordering::SeqCst);
+    // Claim this timer's generation BEFORE spawning so the spawned task can
+    // prove, after waking, that it still owns the `pending` slot for `key`
+    // (see the struct-level doc comment on `pending`).
+    let my_gen = inner.next_gen.fetch_add(1, Ordering::SeqCst);
     let handle = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
-        inner2.pending.lock().unwrap().remove(&key);
+        {
+            let mut pending = inner2.pending.lock().unwrap();
+            match pending.get(&key) {
+                Some((gen, _)) if *gen == my_gen => {
+                    pending.remove(&key);
+                }
+                _ => {
+                    // Superseded: a newer timer (or a close()) already owns
+                    // or has cleared this slot. `abort()` on us raced past
+                    // its cancellation point, so we're still running this
+                    // tail — but we must neither remove the newer entry nor
+                    // fire a duplicate/late callback for stale state.
+                    return;
+                }
+            }
+        }
         if deleted {
             (inner2.callbacks.on_deleted)(cb_path);
         } else {
@@ -154,7 +181,12 @@ fn schedule_debounced(inner: &Arc<Inner>, abs: String, deleted: bool) {
     });
     // Synchronous insert on the CALLING task — this must happen before
     // returning, so it can never race the timer task's own removal above.
-    if let Some(old) = inner.pending.lock().unwrap().insert(abs, handle.abort_handle()) {
+    if let Some((_, old)) = inner
+        .pending
+        .lock()
+        .unwrap()
+        .insert(abs, (my_gen, handle.abort_handle()))
+    {
         old.abort(); // a still-pending timer for this same path — superseded, not fired
     }
 }
@@ -170,6 +202,7 @@ impl FileWatcher {
                 closed: AtomicBool::new(false),
                 watcher: Mutex::new(None),
                 pending: Mutex::new(HashMap::new()),
+                next_gen: AtomicU64::new(0),
             }),
         }
     }
@@ -264,7 +297,10 @@ impl WatcherHandle for FileWatcher {
     fn close(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         // Abort every pending debounce timer so no callback fires after close.
-        for (_, h) in self.inner.pending.lock().unwrap().drain() {
+        // Draining the map also removes each slot, so even a timer that
+        // raced past its own abort() (see `schedule_debounced`) will find
+        // its generation gone from `pending` and bail out without firing.
+        for (_, (_, h)) in self.inner.pending.lock().unwrap().drain() {
             h.abort();
         }
         // Drop the notify watcher (releases inotify handles).

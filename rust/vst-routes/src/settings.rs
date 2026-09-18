@@ -8,6 +8,7 @@
 //! Preserves transient main config fields on update.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use vst_agents::home::home_dir;
 use vst_git::paths::Paths;
 use vst_types::events::{Broadcaster, ServerEvent};
@@ -71,6 +72,12 @@ pub fn default_theme_id() -> String {
 pub struct SettingsRoutes {
     paths: Paths,
     broadcaster: Broadcaster,
+    // Serializes `patch_settings`'s read-modify-write of config.json. Shared
+    // across every clone of `SettingsRoutes` (Axum clones the handler state
+    // per request) via the Arc, so two concurrent PATCHes (e.g. clicking two
+    // search toggles in quick succession) can't both read the pre-mutation
+    // JSON and have the second write silently discard the first's field.
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SettingsRoutes {
@@ -78,6 +85,7 @@ impl SettingsRoutes {
         Self {
             paths,
             broadcaster,
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -196,6 +204,11 @@ impl SettingsRoutes {
         if let Some(ref style) = body.markdown_style {
             validate_markdown_style(style)?;
         }
+
+        // Hold the write lock across the whole read-modify-write cycle (see
+        // the field doc on `write_lock`) — released when `_guard` drops at
+        // function end.
+        let _guard = self.write_lock.lock().await;
 
         let mut raw = self.read_raw_config().await;
         if !raw.is_object() {
