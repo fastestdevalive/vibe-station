@@ -397,21 +397,27 @@
 }
 
 
+/* VS Code status-bar style: a thin, full-width strip -- not the tall,
+   stacked footer this used to be. */
 .left-sidebar__footer {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-1);
-  padding: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  padding: 0 var(--space-1);
   border-top: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
+  /* Same dark tone as the rest of the primary sidebar (inherits --bg-sidebar
+     from .pane-left-inner already, but pinned explicitly so a future parent
+     restructure can't accidentally lighten just this strip). */
+  background: var(--bg-sidebar);
 }
 
 .left-sidebar__brand {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: var(--space-1) var(--space-1) var(--space-4);
-  pointer-events: none;
   user-select: none;
 }
 
@@ -419,13 +425,12 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  opacity: 0.38;
 }
 
 .left-sidebar__brand-name {
   font-size: 0.7rem;
   font-weight: 600;
-  color: var(--text-1);
+  color: var(--fg-muted);
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -433,9 +438,24 @@
 .left-sidebar__brand-version {
   font-size: 0.6rem;
   font-weight: 400;
-  color: var(--text-1);
-  opacity: 0.7;
+  color: var(--fg-muted);
   white-space: nowrap;
+}
+
+.left-sidebar__brand-github {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Extra offset on top of the row's uniform 4px gap -- keeps the GitHub
+     link visually separated from the version text instead of reading as
+     just another tightly-packed brand-row item. */
+  margin-left: var(--space-2);
+  color: var(--fg-muted);
+  transition: color var(--transition-fast);
+}
+
+.left-sidebar__brand-github:hover {
+  color: var(--fg-primary);
 }
 
 .left-sidebar__nav-item {
@@ -476,9 +496,131 @@
 
 .left-sidebar__icon-row {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
-  gap: var(--space-1);
+  gap: 2px;
+  min-width: 0;
+}
+
+/* Right-hand group (shortcuts/settings) -- doesn't need to grow to fill the
+   row the way the left group's theme-picker does, so it stays auto-width and
+   sticks to the far edge via the footer's own `justify-content: space-between`. */
+.left-sidebar__icon-row--end {
+  flex-shrink: 0;
+}
+
+/* Compact, status-bar-sized icon buttons for the thin footer strip only --
+   .icon-btn itself stays 36px everywhere else it's used. One extra pixel of
+   breathing room top/bottom around the (slightly shrunk) glyph, bar height
+   unchanged. */
+.left-sidebar__footer .icon-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scoped to .left-sidebar__footer so this beats the generic
+   `.left-sidebar__footer .icon-btn` width:22px rule above (same specificity,
+   later wins) -- without it the theme button was squashed into a 22px square
+   and its appearance icon was clipped down to ~5px wide. The button also gets
+   a permanent (not just on-hover) border + tinted background so the swatch
+   dot and appearance icon read as one grouped "chip" control, distinct from
+   the plain transparent icon buttons (font/shortcuts/settings) beside it. */
+.left-sidebar__footer .left-sidebar__theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: 22px;
+  padding: 0 7px;
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sidebar-secondary);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.left-sidebar__theme-btn:hover,
+.left-sidebar__theme-btn[aria-expanded="true"] {
+  background: var(--bg-hover);
+  border-color: var(--fg-muted);
+  color: var(--fg-primary);
+}
+
+.left-sidebar__theme-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid;
+}
+
+/* ── Theme quick-picker popover (opens upward from the footer strip) ────── */
+
+.theme-quick-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-1);
+}
+
+.theme-quick-popover__group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  padding: var(--space-1) var(--space-2) 2px;
+}
+
+.theme-quick-popover__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.theme-quick-popover__row:hover,
+.theme-quick-popover__row:focus-visible {
+  background: var(--bg-hover);
+}
+
+.theme-quick-popover__dot {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid;
+}
+
+.theme-quick-popover__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.theme-quick-popover__check {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 
 
@@ -1905,16 +2047,16 @@
   margin-bottom: var(--space-1);
 }
 
-[data-theme="light"] .tree-row--git-M .tree-row__label {
+[data-appearance="light"] .tree-row--git-M .tree-row__label {
   color: #b45309;
 }
 
-[data-theme="light"] .tree-row--git-U .tree-row__label,
-[data-theme="light"] .tree-row--git-A .tree-row__label {
+[data-appearance="light"] .tree-row--git-U .tree-row__label,
+[data-appearance="light"] .tree-row--git-A .tree-row__label {
   color: #15803d;
 }
 
-[data-theme="light"] .tree-row--git-D .tree-row__label {
+[data-appearance="light"] .tree-row--git-D .tree-row__label {
   color: #dc2626;
 }
 
@@ -2308,6 +2450,15 @@
   flex-direction: column;
 }
 
+/* Secondary sidebar tone (a little lighter than --bg-sidebar, still darker
+   than the main content/preview area) for the tree/list side of every
+   MasterDetailShell instance -- the Files tab's file tree and the VCS tab's
+   commit-view file tree both land here (leftPane is always wrapped in
+   .pane-fill-host; rightPane, the preview side, is deliberately excluded). */
+.pane-fill-host .pane {
+  background: var(--bg-sidebar-secondary);
+}
+
 .pane-split-placeholder {
   flex: 1;
   min-height: 0;
@@ -2606,51 +2757,51 @@
 }
 
 /* Light-mode token overrides */
-[data-theme="light"] .hljs-keyword,
-[data-theme="light"] .hljs-selector-tag,
-[data-theme="light"] .hljs-literal,
-[data-theme="light"] .hljs-variable.language_ {
+[data-appearance="light"] .hljs-keyword,
+[data-appearance="light"] .hljs-selector-tag,
+[data-appearance="light"] .hljs-literal,
+[data-appearance="light"] .hljs-variable.language_ {
   color: #7c3aed;
 }
 
-[data-theme="light"] .hljs-string,
-[data-theme="light"] .hljs-regexp,
-[data-theme="light"] .hljs-char.escape_ {
+[data-appearance="light"] .hljs-string,
+[data-appearance="light"] .hljs-regexp,
+[data-appearance="light"] .hljs-char.escape_ {
   color: #16a34a;
 }
 
-[data-theme="light"] .hljs-number,
-[data-theme="light"] .hljs-symbol,
-[data-theme="light"] .hljs-bullet,
-[data-theme="light"] .hljs-template-variable,
-[data-theme="light"] .hljs-template-tag {
+[data-appearance="light"] .hljs-number,
+[data-appearance="light"] .hljs-symbol,
+[data-appearance="light"] .hljs-bullet,
+[data-appearance="light"] .hljs-template-variable,
+[data-appearance="light"] .hljs-template-tag {
   color: #ea580c;
 }
 
-[data-theme="light"] .hljs-type,
-[data-theme="light"] .hljs-built_in,
-[data-theme="light"] .hljs-title.class_,
-[data-theme="light"] .hljs-title.class_.inherited__ {
+[data-appearance="light"] .hljs-type,
+[data-appearance="light"] .hljs-built_in,
+[data-appearance="light"] .hljs-title.class_,
+[data-appearance="light"] .hljs-title.class_.inherited__ {
   color: #b45309;
 }
 
-[data-theme="light"] .hljs-function .hljs-title,
-[data-theme="light"] .hljs-title,
-[data-theme="light"] .hljs-title.function_,
-[data-theme="light"] .hljs-title.function_.invoke__ {
+[data-appearance="light"] .hljs-function .hljs-title,
+[data-appearance="light"] .hljs-title,
+[data-appearance="light"] .hljs-title.function_,
+[data-appearance="light"] .hljs-title.function_.invoke__ {
   color: var(--accent, #5c64b5);
 }
 
-[data-theme="light"] .hljs-name,
-[data-theme="light"] .hljs-tag,
-[data-theme="light"] .hljs-selector-id,
-[data-theme="light"] .hljs-selector-class {
+[data-appearance="light"] .hljs-name,
+[data-appearance="light"] .hljs-tag,
+[data-appearance="light"] .hljs-selector-id,
+[data-appearance="light"] .hljs-selector-class {
   color: #dc2626;
 }
 
-[data-theme="light"] .hljs-comment,
-[data-theme="light"] .hljs-quote,
-[data-theme="light"] .hljs-doctag {
+[data-appearance="light"] .hljs-comment,
+[data-appearance="light"] .hljs-quote,
+[data-appearance="light"] .hljs-doctag {
   color: var(--fg-muted);
 }
 
@@ -2659,9 +2810,9 @@
 .workspace-md-code-block {
   margin: 14px 0;
   border-radius: 6px;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--md-code-block-border);
   overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--md-code-block-bg);
 }
 
 .workspace-md-code-block > pre {
@@ -2672,7 +2823,7 @@
   overflow-x: auto;
   line-height: 1.5;
   font-size: inherit;
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font-family);
 }
 
 .workspace-md-code-block-header {
@@ -2740,9 +2891,9 @@
 }
 
 .workspace-markdown-preview h1 {
-  font-size: 2.14em;
-  font-weight: 700;
-  color: var(--fg-primary);
+  font-size: var(--md-h1-size);
+  font-weight: var(--md-h1-weight);
+  color: var(--md-h1-color);
   margin: 24px 0 14px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-default);
@@ -2750,33 +2901,33 @@
 }
 
 .workspace-markdown-preview h2 {
-  font-size: 1.57em;
-  font-weight: 650;
-  color: color-mix(in srgb, var(--fg-primary) 88%, var(--fg-secondary));
+  font-size: var(--md-h2-size);
+  font-weight: var(--md-h2-weight);
+  color: var(--md-h2-color);
   margin: 20px 0 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .workspace-markdown-preview h3 {
-  font-size: 1.29em;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--fg-primary) 70%, var(--fg-secondary));
+  font-size: var(--md-h3-size);
+  font-weight: var(--md-h3-weight);
+  color: var(--md-h3-color);
   margin: 16px 0 8px;
 }
 
 .workspace-markdown-preview h4 {
-  font-size: 1.07em;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--fg-primary) 50%, var(--fg-secondary));
+  font-size: var(--md-h4-size);
+  font-weight: var(--md-h4-weight);
+  color: var(--md-h4-color);
   margin: 14px 0 6px;
 }
 
 .workspace-markdown-preview h5,
 .workspace-markdown-preview h6 {
-  font-size: 0.86em;
-  font-weight: 600;
-  color: var(--fg-secondary);
+  font-size: var(--md-h5-size);
+  font-weight: var(--md-h5-weight);
+  color: var(--md-h5-color);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin: 12px 0 6px;
@@ -2789,7 +2940,7 @@
 }
 
 .workspace-markdown-preview a {
-  color: var(--accent, #5c64b5);
+  color: var(--md-link-color);
   text-decoration: none;
 }
 
@@ -2917,8 +3068,8 @@
 }
 
 .workspace-markdown-preview strong {
-  color: var(--fg-primary);
-  font-weight: 700;
+  color: var(--md-bold-color);
+  font-weight: var(--md-bold-weight);
   background: color-mix(in srgb, var(--fg-primary) 8%, transparent);
   padding: 0 3px;
   margin: 0 -1px;
@@ -2926,30 +3077,30 @@
 }
 
 .workspace-markdown-preview em {
-  color: var(--fg-secondary);
-  font-style: italic;
+  color: var(--md-italic-color);
+  font-style: var(--md-italic-style);
 }
 
 .workspace-markdown-preview :not(pre) > code {
-  background: var(--bg-elevated);
+  background: var(--md-inline-code-bg);
   padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid var(--border-subtle);
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font-family);
   font-size: 0.9em;
-  color: var(--fg-primary);
+  color: var(--md-inline-code-color);
 }
 
 .workspace-markdown-preview pre:not(.workspace-md-code-block > pre) {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
+  background: var(--md-code-block-bg);
+  border: 1px solid var(--md-code-block-border);
   padding: 14px 16px;
   border-radius: 6px;
   overflow-x: auto;
   margin: 0;
   line-height: 1.5;
   font-size: inherit;
-  font-family: var(--font-mono);
+  font-family: var(--md-code-font-family);
 }
 
 .workspace-markdown-preview pre code {
@@ -2957,21 +3108,21 @@
   padding: 0;
   border: none;
   border-radius: 0;
-  color: var(--fg-primary);
-  font-family: var(--font-mono);
+  color: var(--md-code-block-color);
+  font-family: var(--md-code-font-family);
 }
 
 .workspace-markdown-preview blockquote {
   margin: 12px 0;
   padding: 8px 16px;
-  border-left: 3px solid var(--border-default);
+  border-left: 3px solid var(--md-blockquote-border);
   background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  color: var(--fg-secondary);
+  color: var(--md-blockquote-color);
   border-radius: 0 4px 4px 0;
 }
 
 .workspace-markdown-preview blockquote p {
-  color: var(--fg-secondary);
+  color: var(--md-blockquote-color);
 }
 
 .workspace-markdown-preview ul,
@@ -3047,15 +3198,15 @@
   border-radius: 4px;
 }
 
-[data-theme="dark"] .workspace-markdown-preview,
-[data-theme="dark"] .workspace-markdown-preview p,
-[data-theme="dark"] .workspace-markdown-preview li,
-[data-theme="dark"] .workspace-markdown-preview table td {
+[data-appearance="dark"] .workspace-markdown-preview,
+[data-appearance="dark"] .workspace-markdown-preview p,
+[data-appearance="dark"] .workspace-markdown-preview li,
+[data-appearance="dark"] .workspace-markdown-preview table td {
   color: var(--fg-secondary);
 }
 
-[data-theme="dark"] .workspace-markdown-preview h5,
-[data-theme="dark"] .workspace-markdown-preview h6 {
+[data-appearance="dark"] .workspace-markdown-preview h5,
+[data-appearance="dark"] .workspace-markdown-preview h6 {
   color: color-mix(in srgb, var(--fg-primary) 38%, var(--fg-secondary));
 }
 
@@ -4244,7 +4395,9 @@ a.dashboard-card.dashboard-card--session {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
+  /* This tab's own body IS a file tree (the changed-file list) -- secondary
+     sidebar tone, same as .pane-fill-host .pane / .artifacts-list. */
+  background: var(--bg-sidebar-secondary);
 }
 
 .vcs-panel__bar {
@@ -4770,6 +4923,8 @@ a.dashboard-card.dashboard-card--session {
   height: 100%;
   overflow: auto;
   border-right: var(--border-width) solid var(--border-default);
+  /* Secondary sidebar tone -- see .pane-fill-host .pane's comment. */
+  background: var(--bg-sidebar-secondary);
 }
 
 .artifacts-list__row {

@@ -5,6 +5,7 @@ import type { ApiInstance } from "@/api";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { ModesSetting } from "./ModesSetting";
 import { AppearanceSetting } from "./AppearanceSetting";
+import { MarkdownStyleSetting } from "./MarkdownStyleSetting";
 import { ProjectsSetting } from "./ProjectsSetting";
 import { SkillsSetting } from "./SkillsSetting";
 import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
@@ -30,6 +31,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const sections: Section[] = [
     { id: "modes", label: "Modes", content: <ModesSetting api={api} /> },
     { id: "appearance", label: "Appearance", content: <AppearanceSetting /> },
+    { id: "markdown", label: "Markdown", content: <MarkdownStyleSetting /> },
     { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },
     { id: "skills", label: "Skills", content: <SkillsSetting api={api} /> },
     { id: "hidden-projects", label: "Hidden projects", content: <HiddenProjectsSetting api={api} /> },
@@ -110,6 +112,12 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   }
 
   // ── Desktop: side nav + content ──────────────────────────────────────────
+  // The nav sits flush against the panel's own left/top/bottom edges (no
+  // outer padding of its own) so it reads as a natural secondary-sidebar
+  // region -- same as every other tree panel that uses --bg-sidebar-secondary
+  // (Files tree, VCS panel, Artifacts list) -- rather than a padded, floating
+  // box with rounded corners on all four sides. Only the content column gets
+  // its own padding; a border (not a grid gap) separates the two.
   return (
     <div
       className="settings-panel"
@@ -117,8 +125,6 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         height: "100%",
         display: "grid",
         gridTemplateColumns: "200px 1fr",
-        gap: "var(--space-5)",
-        padding: "var(--space-5)",
         boxSizing: "border-box",
         overflow: "hidden",
       }}
@@ -127,8 +133,12 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         className="settings-nav"
         aria-label="Settings sections"
         style={{
+          // Secondary sidebar tone -- same as the Files/VCS/Artifacts tree
+          // panels (.pane-fill-host .pane, .artifacts-list, .vcs-panel).
+          background: "var(--bg-sidebar-secondary)",
           borderRight: "var(--border-width) solid var(--border-default)",
-          paddingRight: "var(--space-4)",
+          padding: "var(--space-4) var(--space-3)",
+          overflow: "auto",
         }}
       >
         <div
@@ -181,7 +191,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
         ))}
       </nav>
 
-      <div className="settings-content" style={{ overflow: "auto", minHeight: 0 }}>
+      <div className="settings-content" style={{ overflow: "auto", minHeight: 0, padding: "var(--space-5)" }}>
         {activeSection.content}
       </div>
     </div>

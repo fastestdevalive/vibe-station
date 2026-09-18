@@ -4,6 +4,7 @@ import { parseUnifiedDiff, syntheticUntrackedHunks } from "@/preview/diffParser"
 import { diffLinesToHunks } from "@/preview/diffFromTexts";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
+import { themeById } from "@/theme/registry";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import { MarkdownView } from "./MarkdownView";
@@ -65,9 +66,19 @@ export function DiffView({
   worktreeId,
   scope,
 }: DiffViewProps) {
-  const { theme } = useTheme();
+  // `themeId` (the full 14-way value from the shared store) resolves to the
+  // theme's Shiki id via the registry so syntax highlighting follows the theme.
+  const { theme, themeId } = useTheme();
   const mode = themeMode ?? theme;
-  const themeId: "dark-plus" | "light-plus" = mode === "light" ? "light-plus" : "dark-plus";
+  // An explicit `themeMode` that differs from the active appearance is a
+  // deliberate appearance-only override (e.g. the Settings hover-preview),
+  // which carries no full themeId — fall back to the classic dark/light pair.
+  const overridden = themeMode !== undefined && themeMode !== theme;
+  const shikiThemeId: string = overridden
+    ? mode === "light"
+      ? "light-plus"
+      : "dark-plus"
+    : themeById[themeId]?.shikiThemeId ?? (mode === "light" ? "light-plus" : "dark-plus");
 
   // Item 8: `.md` files get a Source/Rendered toggle, anchored to the same
   // base-branch/fork-base concept `scope === "branch"` already uses — the
@@ -109,7 +120,7 @@ export function DiffView({
     void (async () => {
       const entries = await Promise.all(
         flatRows.map(async (row) => {
-          const html = await highlightLineHtml(row.content, shikiLang, themeId);
+          const html = await highlightLineHtml(row.content, shikiLang, shikiThemeId);
           return [row.key, html] as const;
         }),
       );
@@ -121,7 +132,7 @@ export function DiffView({
     return () => {
       cancelled = true;
     };
-  }, [flatRows, shikiLang, themeId]);
+  }, [flatRows, shikiLang, shikiThemeId]);
 
   const toggle = canRenderMarkdown ? (
     <div className="preview-diff-mode-toggle" role="group" aria-label="Diff display mode">

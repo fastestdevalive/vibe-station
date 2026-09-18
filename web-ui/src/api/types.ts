@@ -674,6 +674,15 @@ export type WSEvent =
       modeId: string;
     }
   | {
+      /** Broadcast after a successful `PATCH /settings` (themes/markdown —
+       *  narrow payload, never the full `Settings` struct, which carries
+       *  tokens). `themeId`/`markdownStyle` are the same camelCase wire shape
+       *  as `GET /settings`. Either field may be absent (unchanged). */
+      type: "settings:updated";
+      themeId?: string;
+      markdownStyle?: MarkdownStyle;
+    }
+  | {
       type: "pong";
     }
   | {
@@ -889,6 +898,29 @@ export interface TerminalApi {
   sendDebug?: (entries: Record<string, unknown>[]) => Promise<void>;
 }
 
+/**
+ * Markdown per-element styling overrides (mirror of the Rust `MarkdownStyle`),
+ * stored server-side in `~/.vibe-station/config.json`. Only overrides are
+ * stored — an absent/empty value means "use the active theme's defaults".
+ * Every field maps to a `--md-*` CSS custom property (see the Phase 2 theme
+ * blocks and Phase 5's consumer).
+ */
+export interface MarkdownStyle {
+  h1?: { size?: string; color?: string; weight?: number };
+  h2?: { size?: string; color?: string; weight?: number };
+  h3?: { size?: string; color?: string; weight?: number };
+  h4?: { size?: string; color?: string; weight?: number };
+  h5?: { size?: string; color?: string; weight?: number };
+  h6?: { size?: string; color?: string; weight?: number };
+  bold?: { weight?: number; color?: string };
+  italic?: { style?: string; color?: string };
+  inlineCode?: { bg?: string; color?: string };
+  codeBlock?: { bg?: string; color?: string; border?: string };
+  codeFontFamily?: string;
+  blockquote?: { border?: string; color?: string };
+  link?: { color?: string };
+}
+
 /** User-configurable settings from GET/PATCH /settings */
 export interface Settings {
   defaultProjectsDir: string;
@@ -896,6 +928,13 @@ export interface Settings {
   homeDir?: string;
   /** Directories scanned for `<dir>/*\/SKILL.md` user skills (Decision 11). */
   skillPaths?: string[];
+  /** Selected 14-way theme id (see `web-ui/src/theme/registry.ts`). Opaque
+   *  string, not validated against the registry server-side. Absent → default
+   *  `"vibestation-dark"`. */
+  themeId?: string;
+  /** Markdown per-element styling overrides (see `MarkdownStyle`). Absent →
+   *  the active theme's defaults. */
+  markdownStyle?: MarkdownStyle;
 }
 
 /** A directory-scanned skill catalog entry from GET /skills (Settings panel only). */

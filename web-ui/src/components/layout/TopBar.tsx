@@ -3,7 +3,6 @@ import {
   ChevronDown,
   ChevronUp,
   Columns2,
-  Keyboard,
   LayoutGrid,
   MoreHorizontal,
   PanelLeft,
@@ -11,11 +10,9 @@ import {
   PanelTop,
   Rows2,
   Search,
-  Settings,
   SquareTerminal,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useLayout } from "@/hooks/useLayout";
 import type { Project, Session, Worktree } from "@/api/types";
 import { sessionLabel } from "@/lib/sessionLabel";
@@ -131,7 +128,6 @@ export function TopBar({
   const project = projects.find((p) => p.id === activeProjectId);
   const wt = worktrees.find((w) => w.id === activeWorktreeId);
 
-  const navigate = useNavigate();
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -319,31 +315,6 @@ export function TopBar({
           <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
         ) : null}
         <ConnectionStatus />
-        {layoutMode !== "workspace" && layoutMode !== "direct-session" ? (
-          <>
-            {onOpenShortcuts ? (
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Keyboard shortcuts"
-                title="Keyboard shortcuts"
-                onClick={onOpenShortcuts}
-              >
-                <Keyboard size={18} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="icon-btn"
-              aria-label="Settings"
-              title="Settings"
-              aria-current={layoutMode === "settings" ? "page" : undefined}
-              onClick={() => navigate("/settings")}
-            >
-              <Settings size={18} />
-            </button>
-          </>
-        ) : null}
         {layoutMode === "workspace" || layoutMode === "direct-session" ? (
           <>
             <button
@@ -438,30 +409,6 @@ export function TopBar({
                     <SquareTerminal size={14} />
                     <span>Terminal</span>
                     {paneLayoutMode !== "workspace" ? <span className="top-bar__overflow-kbd">{hints.terminal}</span> : null}
-                  </button>
-                  <button
-                    type="button"
-                    className="top-bar__overflow-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setOverflowOpen(false);
-                      onOpenShortcuts?.();
-                    }}
-                  >
-                    <Keyboard size={14} />
-                    <span>Keyboard shortcuts</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="top-bar__overflow-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setOverflowOpen(false);
-                      navigate("/settings");
-                    }}
-                  >
-                    <Settings size={14} />
-                    <span>Settings</span>
                   </button>
                 </div>
               ) : null}

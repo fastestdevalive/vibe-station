@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "@shikijs/themes": "3.23.0",
     "@types/node": "20",
     "concurrently": "^9.1.0",
     "esbuild": "^0.28.2",

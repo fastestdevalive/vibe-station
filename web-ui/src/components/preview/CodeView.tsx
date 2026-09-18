@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
+import { themeById } from "@/theme/registry";
 import { languageForFilePath } from "./codeHighlight";
 import { pickShikiLang } from "./previewLang";
 import { escapeHtml, highlightDocumentLines } from "./shikiHighlighter";
@@ -15,9 +16,19 @@ interface CodeViewProps {
 }
 
 export function CodeView({ code, language: languageProp, filePath, themeMode, noGutter }: CodeViewProps) {
-  const { theme } = useTheme();
+  // `themeId` (the full 14-way value from the shared store) resolves to the
+  // theme's Shiki id via the registry so syntax highlighting follows the theme.
+  const { theme, themeId } = useTheme();
   const mode = themeMode ?? theme;
-  const themeId = mode === "light" ? "light-plus" : "dark-plus";
+  // An explicit `themeMode` that differs from the active appearance is a
+  // deliberate appearance-only override (e.g. the Settings hover-preview),
+  // which carries no full themeId — fall back to the classic dark/light pair.
+  const overridden = themeMode !== undefined && themeMode !== theme;
+  const shikiThemeId = overridden
+    ? mode === "light"
+      ? "light-plus"
+      : "dark-plus"
+    : themeById[themeId]?.shikiThemeId ?? (mode === "light" ? "light-plus" : "dark-plus");
 
   const language = languageProp ?? (filePath ? languageForFilePath(filePath) : undefined);
   const shikiLang = language ? pickShikiLang(filePath, language) : "plaintext";
@@ -35,7 +46,7 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
     let cancelled = false;
     void (async () => {
       try {
-        const out = await highlightDocumentLines(code, shikiLang, themeId);
+        const out = await highlightDocumentLines(code, shikiLang, shikiThemeId);
         if (!cancelled) setHighlightedLines(out);
       } catch {
         if (!cancelled) setHighlightedLines(null);
@@ -44,7 +55,7 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
     return () => {
       cancelled = true;
     };
-  }, [code, language, shikiLang, themeId]);
+  }, [code, language, shikiLang, shikiThemeId]);
 
   return (
     <pre className="workspace-code-viewer workspace-code-viewer--shiki">

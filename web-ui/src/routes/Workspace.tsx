@@ -776,6 +776,7 @@ export function Workspace() {
               if (isMobile) setMobileSidebarOpen(false);
               if (isDashboard || isSettings || isDirectSession || isWorkspaceView || isDraft) navigate(`/worktree/${wtId}`);
             }}
+            onOpenShortcuts={() => setShortcutsOpen(true)}
           />
         }
         dashboardPane={
