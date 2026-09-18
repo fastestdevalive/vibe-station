@@ -184,5 +184,5 @@ pub async fn set_model(&self, override_model: Option<String>, mode_default: Opti
 
 ### Phase 3: Verification & Dev Sandbox
 - [x] 3.1 Run `VS_REPO_ROOT=/home/gb/code/fastestdevalive/vibe-station node scripts/test-1m-context-beta.mjs` to verify 1M context.
-- [ ] 3.2 Commit 1 (Daemon) and Commit 2 (UI).
-- [ ] 3.3 Boot dev sandbox via `scripts/dev-sandbox.sh up`.
+- [x] 3.2 Commit 1 (Daemon) and Commit 2 (UI).
+- [ ] 3.3 Boot dev sandbox via `scripts/dev-sandbox.sh up`. **BLOCKED — environment, not code:** host Rust binaries (host glibc 2.39) can't load inside the `node:24-slim` container (glibc 2.36): `vst-daemon-rust: /lib/x86_64-linux-gnu/libc.so.6: version GLIBC_2.39 not found`. Affects all worktrees on this host (vs-152's `target-docker` build needs only glibc 2.34) — a stale host-toolchain mismatch, unrelated to this feature. Fix = rebuild `target-docker` container-matching binaries.
