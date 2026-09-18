@@ -33,8 +33,18 @@ pub fn reserve_next_worktree_num(
         .unwrap_or(0);
     let seed = max_num + 1;
     let mut n = project.next_worktree_num.unwrap_or(seed);
-    // Paranoia guard: never land on a stray on-disk dir (old non-purge orphans).
-    while dir_exists(&format!("{}-{}", project.prefix, n)) {
+    // Paranoia guard: never land on a stray on-disk dir (old non-purge orphans)
+    // OR an id that's already a live worktree record. `next_worktree_num` is a
+    // persisted high-water counter that can drift below the actual max (seed
+    // data, manual DB edits, or any bug in whatever last bumped it) — when it
+    // does, checking only the filesystem still reuses an existing worktree's
+    // id and the insert fails on the `worktrees.id` UNIQUE constraint.
+    while dir_exists(&format!("{}-{}", project.prefix, n))
+        || project
+            .worktrees
+            .iter()
+            .any(|w| w.id == format!("{}-{}", project.prefix, n))
+    {
         n += 1;
     }
     n

@@ -95,6 +95,24 @@ fn skips_a_stray_on_disk_directory_left_by_a_non_purge_delete() {
 }
 
 #[test]
+fn skips_a_persisted_counter_that_drifted_onto_an_existing_worktree() {
+    // `next_worktree_num` is a high-water counter that can drift below the
+    // actual max (stale seed data, manual DB edits, or any bug in whatever
+    // last bumped it). Reproduces the UNIQUE-constraint failure a stale
+    // counter causes: worktrees vs-1..vs-4 exist, but the counter says 4.
+    let project = make_project(
+        vec![
+            make_worktree("vs-1"),
+            make_worktree("vs-2"),
+            make_worktree("vs-3"),
+            make_worktree("vs-4"),
+        ],
+        Some(4),
+    );
+    assert_eq!(reserve_next_worktree_num(&project, &|_| false), 5);
+}
+
+#[test]
 fn generates_distinct_ids_across_calls_for_same_scope_and_type() {
     let mut ids = HashSet::new();
     for _ in 0..50 {
