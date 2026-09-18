@@ -263,7 +263,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/modes",
+            "/api/modes",
             get(|| async {
                 Json(json!([
                     {
@@ -296,7 +296,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/modes/:id",
+            "/api/modes/:id",
             delete(|Path(id): Path<String>| async move {
                 if id == "not-found" {
                     (
@@ -312,7 +312,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions",
+            "/api/sessions",
             get(|Query(params): Query<HashMap<String, String>>| async move {
                 let wt = params.get("worktree").map(String::as_str);
                 let all = vec![
@@ -386,7 +386,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id",
+            "/api/sessions/:id",
             get(|Path(id): Path<String>| async move {
                 if id == "not-found" {
                     (
@@ -429,7 +429,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/output",
+            "/api/sessions/:id/output",
             get(|Path(id): Path<String>| async move {
                 Json(json!({
                     "id": id,
@@ -438,7 +438,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/transcript",
+            "/api/sessions/:id/transcript",
             get(|Path(id): Path<String>| async move {
                 Json(json!({
                     "events": [
@@ -456,7 +456,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/reset",
+            "/api/sessions/:id/reset",
             post(|Path(id): Path<String>| async move {
                 Json(json!({
                     "ok": true,
@@ -466,7 +466,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/handoff",
+            "/api/sessions/:id/handoff",
             post(|Path(_id): Path<String>| async move {
                 Json(json!({
                     "ok": true,
@@ -475,7 +475,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/rename",
+            "/api/sessions/:id/rename",
             patch(|Path(_id): Path<String>, Json(body): Json<serde_json::Value>| async move {
                 let name = body.get("name").and_then(|v| v.as_str()).map(ToString::to_string);
                 Json(json!({
@@ -485,13 +485,13 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
             }),
         )
         .route(
-            "/sessions/:id/chat/stop",
+            "/api/sessions/:id/chat/stop",
             post(|Path(_id): Path<String>| async move {
                 Json(json!({ "ok": true }))
             }),
         )
         .route(
-            "/sessions/:id/resume",
+            "/api/sessions/:id/resume",
             post(|Path(_id): Path<String>| async move {
                 Json(json!({ "ok": true }))
             }),

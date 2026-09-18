@@ -399,7 +399,7 @@ async fn test_post_open_success_returns_project_id() {
     use serde_json::Value;
 
     let router = Router::new().route(
-        "/open",
+        "/api/open",
         post(|AxumJson(body): AxumJson<Value>| async move {
             let path = body["path"].as_str().expect("path field");
             assert!(path.starts_with('/'), "should be absolute: {path}");
@@ -425,7 +425,7 @@ async fn test_post_open_error_surfaces_server_message() {
     use vst_cli::commands::open::OpenFailure;
 
     let router = Router::new().route(
-        "/open",
+        "/api/open",
         post(|AxumJson(_): AxumJson<Value>| async {
             (
                 StatusCode::BAD_REQUEST,
@@ -499,7 +499,7 @@ async fn test_status_sessions_query() {
     use vst_types::rest::sessions::SessionOrDraft;
 
     let router = Router::new().route(
-        "/sessions",
+        "/api/sessions",
         get(|Query(params): Query<HashMap<String, String>>| async move {
             let project = params.get("project").cloned().unwrap_or_default();
             assert_eq!(project, "p1");
@@ -573,7 +573,7 @@ async fn test_summary_fetches_worktrees_and_sessions() {
 
     let router = Router::new()
         .route(
-            "/worktrees",
+            "/api/worktrees",
             get(|| async {
                 (
                     StatusCode::OK,
@@ -595,7 +595,7 @@ async fn test_summary_fetches_worktrees_and_sessions() {
             }),
         )
         .route(
-            "/sessions",
+            "/api/sessions",
             get(|| async {
                 (
                     StatusCode::OK,

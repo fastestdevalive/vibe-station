@@ -440,7 +440,7 @@ async fn test_run_worktree_ls_uses_project_query() {
     use vst_types::rest::shared::Worktree;
 
     let router = Router::new().route(
-        "/worktrees",
+        "/api/worktrees",
         get(|Query(params): Query<HashMap<String, String>>| async move {
             let project = params.get("project").cloned().unwrap_or_default();
             assert_eq!(project, "my-project");
@@ -493,7 +493,7 @@ async fn test_run_project_add_409_returns_conflict_with() {
     use vst_types::rest::shared::Project;
 
     let router = Router::new().route(
-        "/projects",
+        "/api/projects",
         post(|| async {
             (
                 StatusCode::CONFLICT,
@@ -536,7 +536,7 @@ async fn test_run_worktree_rename_patch_endpoint() {
     use vst_types::rest::worktrees::RenameWorktreeResult;
 
     let router = Router::new().route(
-        "/worktrees/:id/rename",
+        "/api/worktrees/:id/rename",
         patch(
             |Path(id): Path<String>, Json(body): Json<serde_json::Value>| async move {
                 assert_eq!(id, "wt-42");
@@ -575,7 +575,7 @@ async fn test_run_worktree_done_post_endpoint() {
     use vst_types::rest::worktrees::WorktreeDoneResult;
 
     let router = Router::new().route(
-        "/worktrees/:id/done",
+        "/api/worktrees/:id/done",
         post(|Path(id): Path<String>| async move {
             assert_eq!(id, "wt-done-1");
             (
@@ -613,7 +613,7 @@ async fn test_run_file_open_post_endpoint() {
     use vst_cli::client::daemon_request_with_base;
 
     let router = Router::new().route(
-        "/worktrees/:id/open-file",
+        "/api/worktrees/:id/open-file",
         post(
             |Path(id): Path<String>, Json(body): Json<serde_json::Value>| async move {
                 assert_eq!(id, "wt-99");
@@ -647,7 +647,7 @@ async fn test_run_project_info_404_returns_code_2() {
     use vst_types::rest::shared::Project;
 
     let router = Router::new().route(
-        "/projects/:id",
+        "/api/projects/:id",
         get(|| async { (StatusCode::NOT_FOUND, Json(json!({ "error": "Not found" }))) }),
     );
     let addr = spawn_mock_server(router).await;
@@ -673,7 +673,7 @@ async fn test_run_project_rm_delete_endpoint() {
     use vst_cli::client::daemon_request_with_base;
 
     let router = Router::new().route(
-        "/projects/:id",
+        "/api/projects/:id",
         delete(|Path(id): Path<String>| async move {
             assert_eq!(id, "proj-del-1");
             StatusCode::NO_CONTENT
