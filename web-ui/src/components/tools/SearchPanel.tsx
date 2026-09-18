@@ -56,20 +56,38 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
   // Debounced search
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // Guards setState calls below against a request that resolves/rejects
+  // after the panel has unmounted (e.g. the user switched Search tabs while
+  // a search was still in flight) — ToolPanel mounts one tab at a time, so
+  // that unmount doesn't otherwise cancel anything on its own.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Abort any in-flight request on unmount too — this also lets the
+      // daemon's `kill_on_drop`-backed rg process die immediately instead of
+      // running to completion for a result nobody can see anymore.
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const performSearch = useCallback(
     async (q: string) => {
       if (!worktreeId || !q.trim()) {
+        // Also cancel whatever is still in flight — an empty/cleared query
+        // means no result from it should ever land.
+        abortControllerRef.current?.abort();
+        abortControllerRef.current = null;
         setResults(null);
         setError(null);
         return;
       }
 
       // Cancel previous search
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-      abortControllerRef.current = new AbortController();
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       setLoading(true);
       setError(null);
@@ -83,11 +101,23 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
             word: wordCheck || undefined,
             glob: globField || undefined,
           },
-          abortControllerRef.current.signal,
+          controller.signal,
           scope,
         );
+        // Only a request that is STILL the current one (not superseded by a
+        // newer keystroke, and not orphaned by an unmount) may touch state —
+        // an aborted request's promise can still resolve/reject afterward.
+        if (abortControllerRef.current !== controller || !isMountedRef.current) return;
         setResults(result);
       } catch (e) {
+        if (abortControllerRef.current !== controller || !isMountedRef.current) {
+          // Superseded-by-a-newer-search or unmounted: this request's own
+          // AbortError (or any other rejection racing a fresher request) is
+          // not a real error to surface, and clearing `results`/`loading`
+          // here would incorrectly clobber the newer request's own state
+          // (e.g. flashing "No matches found" mid-typing).
+          return;
+        }
         if (e instanceof ApiError && e.status === 503) {
           setError("ripgrep not found — content search unavailable");
         } else if (e instanceof Error && e.name !== "AbortError") {
@@ -95,7 +125,9 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
         }
         setResults(null);
       } finally {
-        setLoading(false);
+        if (abortControllerRef.current === controller && isMountedRef.current) {
+          setLoading(false);
+        }
       }
     },
     [api, worktreeId, scope, caseCheck, regexCheck, wordCheck, globField],
