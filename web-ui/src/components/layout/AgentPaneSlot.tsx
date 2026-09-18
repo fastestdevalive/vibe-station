@@ -5,6 +5,7 @@ import { TerminalPane } from "./TerminalPane";
 import { TerminalChannelToggle } from "./TerminalChannelToggle";
 import { TerminalAttachmentUpload } from "./TerminalAttachmentUpload";
 import { ChatPane } from "./ChatPane";
+import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass } from "@/lib/statusColor";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -56,30 +57,13 @@ interface AgentPaneSlotProps {
 export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = null, canvasMode = false }: AgentPaneSlotProps) {
   const isJson = session?.channel === "json";
   const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
-  // The channel toggle is handed to `TerminalPane` so a single owner decides its
-  // placement: a top-right overlay while the terminal is live, but rendered
-  // in-flow BELOW the "Session exited / Resume" banner once the session exits
-  // (json-mode-followups item 4). Driving that off `TerminalPane`'s own banner
-  // state — instead of second-guessing it here — is why the toggle can no longer
-  // land on top of the banner and swallow clicks meant for Resume.
-  // Font size buttons are co-located with the toggle for discoverability.
-  const channelToggle =
-    !isJson && session ? (
-      <div className="terminal-font-overlay">
-        <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease agent font" onClick={() => bumpTerminalFont(-0.05)}>
-          <Minus size={11} />
-        </button>
-        <button type="button" className="terminal-font-overlay__btn" aria-label="Increase agent font" onClick={() => bumpTerminalFont(0.05)}>
-          <Plus size={11} />
-        </button>
-        <TerminalChannelToggle api={api} session={session} />
-      </div>
-    ) : null;
-  // The attachment-upload overlay is still a plain top-corner overlay that only
-  // makes sense on a live terminal, so keep gating it out once the pane exits.
-  // `done` releases the pane exactly like `exited` does (the daemon kills the
-  // tmux/pty process), so the upload overlay — which only makes sense against a
-  // live terminal — is hidden for both.
+  const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
+  const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
+  const insertTileIntoWorkspaceDoc = useWorkspaceStore((s) => s.insertTileIntoWorkspaceDoc);
+  const insertTileIntoScratchCanvas = useWorkspaceStore((s) => s.insertTileIntoScratchCanvas);
+  const setActiveSession = useWorkspaceStore((s) => s.setActiveSession);
+  const setActiveTerminalSession = useWorkspaceStore((s) => s.setActiveTerminalSession);
+
   // `session.state` (not `.lifecycleState`) — the live `session:state` WS
   // handler (useServerSync.ts) only patches `.state` on the session object;
   // `.lifecycleState` is only ever set from the initial REST fetch (or by the
@@ -88,7 +72,23 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
   // color below and this terminal-live check permanently stuck on whatever
   // value the session had on page load. WorkspaceCanvas.tsx already reads
   // `.state` for the same reason — match it.
-  const terminalLive = !isJson && session?.state !== "exited" && session?.state !== "done";
+  const isTerminal = !isJson && !!session;
+  const terminalLive = isTerminal && session!.state !== "exited" && session!.state !== "done";
+  // The font-size buttons and terminal→Rich Chat toggle for exited sessions.
+  // When the session exits, these are handed to `TerminalPane`, which renders
+  // them in-flow BELOW its "Session exited / Resume" banner.
+  const exitedControls = isTerminal && !terminalLive ? (
+    <div className="terminal-font-overlay">
+      <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease agent font" onClick={() => bumpTerminalFont(-0.05)}>
+        <Minus size={11} />
+      </button>
+      <button type="button" className="terminal-font-overlay__btn" aria-label="Increase agent font" onClick={() => bumpTerminalFont(0.05)}>
+        <Plus size={11} />
+      </button>
+      <TerminalChannelToggle api={api} session={session!} />
+    </div>
+  ) : undefined;
+
   // Same colored-rectangle treatment as a workspace tile (WorkspaceCanvas.tsx's
   // `.workspace-canvas__tile--<status>`), on the pane's own chrome — this
   // component is shared by the classic single-agent-pane view AND direct
@@ -111,16 +111,59 @@ export function AgentPaneSlot({ api, sessionId, session, branch = null, pr = nul
     <div className={`agent-pane-slot${status ? ` agent-pane-slot--${status}` : ""}`}>
       <div
         className="agent-pane-slot__terminal"
-        style={isJson ? { display: "none" } : { flex: 1, minHeight: 0, display: "flex" }}
+        style={isJson ? { display: "none" } : { flex: 1, minHeight: 0, display: "flex", position: "relative" }}
       >
         <TerminalPane
           api={api}
           sessionId={isJson ? null : sessionId}
           session={isJson ? undefined : session}
-          channelToggle={channelToggle}
+          channelToggle={exitedControls}
           focusOnMount={!canvasMode}
         />
-        {terminalLive && session ? <TerminalAttachmentUpload api={api} session={session} /> : null}
+        {isTerminal && terminalLive ? (
+          <div className="agent-pane-header agent-pane-header--overlay">
+            <div className="agent-pane-header__left">
+              <TerminalAttachmentUpload api={api} session={session!} />
+              <div className="agent-pane-header__subagents">
+                <SubagentRow
+                  session={session!}
+                  api={api}
+                  onOpen={(target) =>
+                    openSubagentSession(target, session!, {
+                      layoutByWorktree,
+                      workspaceDocs,
+                      insertTileIntoWorkspaceDoc,
+                      insertTileIntoScratchCanvas,
+                      setActiveSession,
+                      setActiveTerminalSession,
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className="agent-pane-header__controls">
+              <div className="terminal-font-overlay__btns">
+                <button
+                  type="button"
+                  className="terminal-font-overlay__btn"
+                  aria-label="Decrease agent font"
+                  onClick={() => bumpTerminalFont(-0.05)}
+                >
+                  <Minus size={11} />
+                </button>
+                <button
+                  type="button"
+                  className="terminal-font-overlay__btn"
+                  aria-label="Increase agent font"
+                  onClick={() => bumpTerminalFont(0.05)}
+                >
+                  <Plus size={11} />
+                </button>
+              </div>
+              <TerminalChannelToggle api={api} session={session!} />
+            </div>
+          </div>
+        ) : null}
       </div>
       <ChatPane api={api} session={isJson ? session : undefined} visible={!!isJson} focusOnMount={!canvasMode} />
     </div>

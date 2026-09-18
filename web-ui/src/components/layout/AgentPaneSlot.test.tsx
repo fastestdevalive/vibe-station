@@ -123,6 +123,24 @@ describe("AgentPaneSlot remount invariant (4.T5 / Decision 14)", () => {
     expect(container.querySelector('[data-testid="attachment-upload"]')).not.toBeNull();
   });
 
+  it("renders the SubagentRow header for a terminal agent session", () => {
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="tty1" session={session("tty1", "tmux")} />,
+    );
+    const header = container.querySelector(".agent-pane-header");
+    expect(header).not.toBeNull();
+    // The SubagentRow (chips) slot is left-aligned; it lives in the header for
+    // terminal agents.
+    expect(header?.querySelector(".agent-pane-header__subagents")).not.toBeNull();
+  });
+
+  it("does not render the SubagentRow header for a JSON (Rich Chat) session", () => {
+    const { container } = render(
+      <AgentPaneSlot api={api} sessionId="js1" session={session("js1", "json")} />,
+    );
+    expect(container.querySelector(".agent-pane-header")).toBeNull();
+  });
+
   it("3.T3 — hides the upload overlay for a session marked done (its pane is released)", () => {
     // "Mark as done" kills the tmux/pty process just like an exit does, so the
     // live-terminal-only upload overlay must be gated for `done` too.
