@@ -4,10 +4,14 @@
 # 1. Creates a stub sidecar binary so Tauri's build.rs resource-path check
 #    passes at compile time. The stub is never actually invoked in dev because
 #    detect_running_daemon() finds the already-running Rust daemon in config.json.
-# 2. Builds web-ui/dist, which the daemon serves to non-Vite clients (LAN/tunnel,
+# 2. Builds vst-cli (debug) so the daemon can write the ~/.vibe-station/bin/vst
+#    shim. `cargo run -p vst-daemon` only compiles vst-daemon, so vst-cli would
+#    be absent on a fresh checkout or after `cargo clean`.
+# 3. Builds web-ui/dist, which the daemon serves to non-Vite clients (LAN/tunnel,
 #    curl). The desktop window loads Vite directly and never needs this, but
 #    other clients get a stale dist without it.
-# 3. Runs the Rust daemon and Vite dev server concurrently.
+# 4. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
+#    so the daemon writes the shim on first boot.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
 # CWD when invoked: desktop/ (where `tauri dev` is run)
@@ -54,6 +58,13 @@ if [[ ! -f "$VST_STUB" ]]; then
   echo "[dev-start] created vst stub: $VST_STUB"
 fi
 
+# Build vst-cli so the daemon can write the ~/.vibe-station/bin/vst shim pointing
+# at the real Rust binary. `cargo run -p vst-daemon` only compiles vst-daemon, so
+# vst-cli would be missing on a fresh checkout or after `cargo clean`.
+echo "[dev-start] building vst-cli (debug)..."
+cargo build --manifest-path "$REPO_ROOT/rust/Cargo.toml" -p vst-cli
+VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst-cli"
+
 # Build web-ui/dist so the daemon serves current UI to non-Vite clients from
 # the moment it starts, instead of a build left over from a previous session.
 echo "[dev-start] building web-ui/dist..."
@@ -64,7 +75,7 @@ pnpm --filter @vibestation/web build
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

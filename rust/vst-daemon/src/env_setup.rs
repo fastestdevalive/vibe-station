@@ -54,9 +54,11 @@ pub fn resolve_vst_cli_bin_source() -> Option<PathBuf> {
     // Try relative to current executable or workspace dev fallback
     if let Ok(exe) = std::env::current_exe() {
         let dir = exe.parent()?;
-        let candidate = dir.join("vst");
-        if candidate.exists() {
-            return Some(candidate);
+        for name in &["vst", "vst-cli"] {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
     }
 
