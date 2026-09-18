@@ -94,7 +94,7 @@ impl JsonAgentSession {
         }
 
         cap_tool_result_content(&mut ev);
-        self.persist_event(&ev);
+        self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
 
         // commands_update can arrive out-of-band — capture + broadcast.
@@ -147,8 +147,8 @@ impl JsonAgentSession {
         if opts.silent {
             ev.silent = Some(true);
         }
-        let ev = self.new_event(NormalizedEventKind::User, &mut ev);
-        self.persist_event(&ev);
+        let mut ev = self.new_event(NormalizedEventKind::User, &mut ev);
+        self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
     }
 
