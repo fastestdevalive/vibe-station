@@ -199,6 +199,13 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             ServerMessage::FileOpen { worktree_id, path }
         }
         ServerEvent::Navigate { project_id } => ServerMessage::Navigate { project_id },
+        ServerEvent::SettingsThemeUpdated {
+            theme_id,
+            markdown_style,
+        } => ServerMessage::SettingsThemeUpdated {
+            theme_id,
+            markdown_style,
+        },
     }
 }
 

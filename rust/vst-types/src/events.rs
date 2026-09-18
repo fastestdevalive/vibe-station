@@ -13,6 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{LifecycleState, PrStatus};
+use crate::rest::settings::MarkdownStyle;
 
 /// A broadcastable daemon event. This is the *internal* event the daemon
 /// fans out; `vst-ws` maps it to `crate::ws::ServerMessage` for the wire.
@@ -137,6 +138,18 @@ pub enum ServerEvent {
     /// Navigate to a project (vst open).
     #[serde(rename = "navigate", rename_all = "camelCase")]
     Navigate { project_id: String },
+    /// The user's theme / markdown style changed.
+    ///
+    /// Narrow payload only — deliberately NOT the full `Settings` struct,
+    /// which carries `cli_token`/`tauri_token`/`pid`/`port` that must never
+    /// reach every connected (possibly remote, token-scoped) client.
+    #[serde(rename = "settings:updated", rename_all = "camelCase")]
+    SettingsThemeUpdated {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        theme_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        markdown_style: Option<MarkdownStyle>,
+    },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.
