@@ -28,7 +28,8 @@ use vst_types::domain::{
 };
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::ordered_lists::{PutOrderedListBody, PINNED_ALL};
-use vst_types::rest::settings::PatchSettingsBody;
+use vst_types::rest::settings::{MarkdownStyle, PatchSettingsBody};
+use vst_types::ws::ServerMessage;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
 fn init_git_repo(path: &Path) {
@@ -150,7 +151,8 @@ async fn test_ordered_lists_get_put_validation_and_broadcast() {
 async fn test_settings_get_patch_and_validation() {
     let tmp = tempdir().unwrap();
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));
-    let routes = SettingsRoutes::new(paths.clone());
+    let broadcaster = Broadcaster::new(32);
+    let routes = SettingsRoutes::new(paths.clone(), broadcaster);
 
     // GET with no config file -> defaults
     let s = routes.get_settings().await;
@@ -163,6 +165,9 @@ async fn test_settings_get_patch_and_validation() {
         .patch_settings(PatchSettingsBody {
             default_projects_dir: Some("relative/path".into()),
             skill_paths: None,
+            theme_id: None,
+            markdown_style: None,
+            reset_markdown_style: None,
         })
         .await
         .unwrap_err();
@@ -177,6 +182,9 @@ async fn test_settings_get_patch_and_validation() {
         .patch_settings(PatchSettingsBody {
             default_projects_dir: None,
             skill_paths: Some(vec!["/valid/abs".into(), "relative/skill".into()]),
+            theme_id: None,
+            markdown_style: None,
+            reset_markdown_style: None,
         })
         .await
         .unwrap_err();
@@ -210,6 +218,9 @@ async fn test_settings_get_patch_and_validation() {
                 "/path/two".into(),
                 "/path/one".into(),
             ]),
+            theme_id: None,
+            markdown_style: None,
+            reset_markdown_style: None,
         })
         .await
         .unwrap();
@@ -228,6 +239,9 @@ async fn test_settings_get_patch_and_validation() {
     assert_eq!(updated.tauri_token, Some("tauri-tok".into()));
     assert_eq!(updated.browser_epoch, Some(3));
     assert_eq!(updated.started_at, Some("2026-01-01T00:00:00Z".into()));
+    // theme/markdown not touched by this PATCH -> defaults
+    assert_eq!(updated.theme_id, Some("vibestation-dark".into()));
+    assert_eq!(updated.markdown_style, None);
 
     #[cfg(unix)]
     {
@@ -235,6 +249,168 @@ async fn test_settings_get_patch_and_validation() {
         let meta = std::fs::metadata(&cfg_path).unwrap();
         assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings Theme / Markdown Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_settings_theme_markdown_validation_and_broadcast() {
+    let tmp = tempdir().unwrap();
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let broadcaster = Broadcaster::new(32);
+    let mut rx = broadcaster.subscribe();
+    let routes = SettingsRoutes::new(paths.clone(), broadcaster);
+
+    // PATCH with a bad markdown_style shape (invalid color) -> validation_error
+    let err = routes
+        .patch_settings(PatchSettingsBody {
+            default_projects_dir: None,
+            skill_paths: None,
+            theme_id: None,
+            markdown_style: Some(MarkdownStyle {
+                h1: None,
+                h2: None,
+                h3: None,
+                h4: None,
+                h5: None,
+                h6: None,
+                bold: None,
+                italic: None,
+                inline_code: None,
+                code_block: None,
+                code_font_family: None,
+                blockquote: None,
+                link: Some(vst_types::rest::settings::LinkStyle {
+                    color: Some("not-a-color!!".into()),
+                }),
+            }),
+            reset_markdown_style: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_code(), "validation_error");
+    assert!(matches!(err, SettingsRouteError::InvalidMarkdownStyle));
+
+    // PATCH valid theme_id + markdown_style -> 200 + GET reflects it
+    let style = MarkdownStyle {
+        h1: Some(vst_types::rest::settings::HeadingStyle {
+            size: Some("2.5em".into()),
+            color: Some("#ff0000".into()),
+            weight: Some(700),
+        }),
+        h2: None,
+        h3: None,
+        h4: None,
+        h5: None,
+        h6: None,
+        bold: Some(vst_types::rest::settings::BoldStyle {
+            weight: Some(800),
+            color: Some("#00ff00".into()),
+        }),
+        italic: Some(vst_types::rest::settings::ItalicStyle {
+            style: Some("oblique".into()),
+            color: Some("blue".into()),
+        }),
+        inline_code: Some(vst_types::rest::settings::InlineCodeStyle {
+            bg: Some("rgb(0,0,0)".into()),
+            color: Some("#fff".into()),
+        }),
+        code_block: Some(vst_types::rest::settings::CodeBlockStyle {
+            bg: Some("#111".into()),
+            color: Some("#eee".into()),
+            border: Some("#333".into()),
+        }),
+        code_font_family: Some("JetBrains Mono".into()),
+        blockquote: Some(vst_types::rest::settings::BlockquoteStyle {
+            border: Some("#999".into()),
+            color: Some("gray".into()),
+        }),
+        link: Some(vst_types::rest::settings::LinkStyle {
+            color: Some("#0af".into()),
+        }),
+    };
+    let patch_res = routes
+        .patch_settings(PatchSettingsBody {
+            default_projects_dir: None,
+            skill_paths: None,
+            theme_id: Some("dracula".into()),
+            markdown_style: Some(style.clone()),
+            reset_markdown_style: None,
+        })
+        .await
+        .unwrap();
+    assert!(patch_res.ok);
+
+    let updated = routes.get_settings().await;
+    assert_eq!(updated.theme_id, Some("dracula".into()));
+    assert_eq!(updated.markdown_style, Some(style.clone()));
+
+    // WS client receives settings:updated with only themeId/markdownStyle, never tokens
+    let ev = rx.try_recv().unwrap();
+    let msg = vst_ws::broadcaster::server_event_to_message(ev);
+    match msg {
+        ServerMessage::SettingsThemeUpdated {
+            theme_id,
+            markdown_style,
+        } => {
+            assert_eq!(theme_id, Some("dracula".into()));
+            assert_eq!(markdown_style, Some(style));
+        }
+        other => panic!("expected settings:updated, got {:?}", other),
+    }
+
+    // resetMarkdownStyle: true clears a previously-set markdown_style
+    let reset_res = routes
+        .patch_settings(PatchSettingsBody {
+            default_projects_dir: None,
+            skill_paths: None,
+            theme_id: None,
+            markdown_style: None,
+            reset_markdown_style: Some(true),
+        })
+        .await
+        .unwrap();
+    assert!(reset_res.ok);
+
+    let cleared = routes.get_settings().await;
+    assert_eq!(cleared.theme_id, Some("dracula".into()));
+    assert_eq!(cleared.markdown_style, None);
+
+    // reset + same-request markdown_style re-sets it
+    let re_set = MarkdownStyle {
+        h1: Some(vst_types::rest::settings::HeadingStyle {
+            size: Some("3em".into()),
+            color: Some("#123456".into()),
+            weight: None,
+        }),
+        h2: None,
+        h3: None,
+        h4: None,
+        h5: None,
+        h6: None,
+        bold: None,
+        italic: None,
+        inline_code: None,
+        code_block: None,
+        code_font_family: None,
+        blockquote: None,
+        link: None,
+    };
+    let both_res = routes
+        .patch_settings(PatchSettingsBody {
+            default_projects_dir: None,
+            skill_paths: None,
+            theme_id: None,
+            markdown_style: Some(re_set.clone()),
+            reset_markdown_style: Some(true),
+        })
+        .await
+        .unwrap();
+    assert!(both_res.ok);
+    let after_both = routes.get_settings().await;
+    assert_eq!(after_both.markdown_style, Some(re_set));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
