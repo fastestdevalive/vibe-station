@@ -78,6 +78,11 @@ use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 
 pub const MAX_DIFF_BYTES: usize = 512 * 1024;
 pub const COMMIT_SHA_RE: &str = "^[0-9a-fA-F]{7,40}$";
+/// Cap on the number of "added" line markers `gutter()` returns for a large
+/// untracked file — that branch previously had no limit at all (unlike
+/// `search()`'s explicit match cap), so a huge untracked/generated file
+/// produced an unbounded response on every open or debounced re-fetch.
+pub const GUTTER_MAX_LINES: u32 = 20_000;
 
 /// Checks if string matches COMMIT_SHA_RE (7-40 hex chars).
 pub fn is_valid_commit_sha(s: &str) -> bool {
@@ -1296,6 +1301,12 @@ impl WorktreeRoutes {
             .current_dir(&wt_path)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
+            // The caller (Axum handler future) can be dropped mid-stream —
+            // e.g. the browser aborts a superseded search request while this
+            // is still awaiting `lines.next_line()`. Without this, dropping
+            // the future orphans the `rg` process instead of terminating it;
+            // `kill_on_drop` makes tokio kill it as part of dropping `child`.
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
@@ -1964,50 +1975,16 @@ impl WorktreeRoutes {
             .to_string_lossy()
             .to_string();
 
-        // Check if file is tracked with git ls-files --error-unmatch
-        let check_tracked = Command::new("git")
-            .args(["ls-files", "--error-unmatch", "--", &rel_path])
-            .current_dir(&wt_path)
-            .output()
-            .await
-            .map_err(|e| WorktreeRouteError::Internal(format!("Failed to run git ls-files: {e}")))?;
-
-        if !check_tracked.status.success() {
-            // File is untracked — read its contents
-            match tokio::fs::read(&abs_path).await {
-                Ok(content) => {
-                    // Try to decode as UTF-8
-                    if let Ok(text) = String::from_utf8(content) {
-                        let line_count = text.lines().count() as u32;
-                        if line_count > 0 {
-                            let added = (1..=line_count).collect();
-                            return Ok(GutterResult {
-                                added,
-                                deleted: vec![],
-                                modified: vec![],
-                            });
-                        } else {
-                            // Empty file
-                            return Ok(GutterResult::default());
-                        }
-                    } else {
-                        // Binary file — return empty gutter
-                        return Ok(GutterResult::default());
-                    }
-                }
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        return Err(WorktreeRouteError::NotFound(format!(
-                            "File not found: {file_path}"
-                        )));
-                    } else {
-                        return Err(WorktreeRouteError::Unprocessable(e.to_string()));
-                    }
-                }
-            }
-        }
-
-        // File is tracked — run git diff HEAD
+        // Run `git diff HEAD` FIRST, before checking trackedness — this alone
+        // correctly resolves the common, latency-sensitive case (a TRACKED
+        // file with actual uncommitted changes, re-fetched on every
+        // debounced edit while the user is actively typing) with a single
+        // subprocess spawn instead of two sequential ones. `git diff HEAD`
+        // silently produces no output for an untracked path (it only
+        // compares tracked content against HEAD), so an empty result here is
+        // ambiguous between "tracked, no changes" and "untracked" — that
+        // ambiguity is the ONLY case that pays for a second subprocess call
+        // below, via `git ls-files --error-unmatch`.
         let diff_output = Command::new("git")
             .current_dir(&wt_path)
             .args([
@@ -2031,8 +2008,64 @@ impl WorktreeRoutes {
             ));
         }
 
-        let stdout = String::from_utf8_lossy(&diff_output.stdout);
-        Ok(parse_diff_hunk(&stdout))
+        let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
+        if stdout_for_ambiguity_check.trim().is_empty() {
+            // Disambiguate: tracked-with-no-changes (truly empty gutter) vs.
+            // untracked (whole file should render as added).
+            let check_tracked = Command::new("git")
+                .args(["ls-files", "--error-unmatch", "--", &rel_path])
+                .current_dir(&wt_path)
+                .output()
+                .await
+                .map_err(|e| {
+                    WorktreeRouteError::Internal(format!("Failed to run git ls-files: {e}"))
+                })?;
+
+            if !check_tracked.status.success() {
+                // File is untracked — read its contents.
+                return match tokio::fs::read(&abs_path).await {
+                    Ok(content) => {
+                        // Try to decode as UTF-8.
+                        if let Ok(text) = String::from_utf8(content) {
+                            let line_count = text.lines().count() as u32;
+                            if line_count > 0 {
+                                // Capped — unlike search()'s explicit match
+                                // limit, this endpoint had no cap at all, so
+                                // a large untracked (e.g. vendored/generated)
+                                // file produced an unbounded response on
+                                // every open or debounced re-fetch.
+                                let capped = line_count.min(GUTTER_MAX_LINES);
+                                let added = (1..=capped).collect();
+                                Ok(GutterResult {
+                                    added,
+                                    deleted: vec![],
+                                    modified: vec![],
+                                })
+                            } else {
+                                // Empty file.
+                                Ok(GutterResult::default())
+                            }
+                        } else {
+                            // Binary file — return empty gutter.
+                            Ok(GutterResult::default())
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            Err(WorktreeRouteError::NotFound(format!(
+                                "File not found: {file_path}"
+                            )))
+                        } else {
+                            Err(WorktreeRouteError::Unprocessable(e.to_string()))
+                        }
+                    }
+                };
+            }
+            // Tracked, genuinely no changes.
+            return Ok(GutterResult::default());
+        }
+
+        Ok(parse_diff_hunk(&stdout_for_ambiguity_check))
     }
 
     // Helper: locate project containing worktree
@@ -2187,9 +2220,17 @@ pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String
     }
 
     // --- mid ---
+    // Capped relative to what `pre` already used, not a flat SNIP_MAX — a
+    // flat cap here let pre+mid together exceed SNIP_MAX whenever pre was
+    // non-empty (pre is capped to SNIP_LEAD=32, well under SNIP_MAX=240, so
+    // "both individually under 240" doesn't imply "combined under 240").
     let mut mid: String = raw_mid.to_string();
-    if mid.chars().count() > SNIP_MAX {
-        mid = mid.chars().take(SNIP_MAX).collect::<String>() + "…";
+    let mid_budget = SNIP_MAX.saturating_sub(pre.chars().count());
+    if mid.chars().count() > mid_budget {
+        // Reserve 1 char of the budget for the "…" itself, so the truncated
+        // `mid` (kept chars + ellipsis) lands AT mid_budget, not budget + 1.
+        let keep = mid_budget.saturating_sub(1);
+        mid = mid.chars().take(keep).collect::<String>() + "…";
     }
 
     // --- post ---

@@ -778,6 +778,30 @@ fn test_search_snippet_truncation_240() {
     assert_eq!(pre.chars().count(), 17); // "…" (1 char) + 16 kept
 }
 
+/// 2.T3 (regression): a match spanning most of a long line — `pre` under the
+/// SNIP_LEAD(32) elision threshold, `mid` under the flat SNIP_MAX(240) cap on
+/// its own — used to slip past both individual caps while pre+mid combined
+/// still exceeded 240, since `mid`'s cap wasn't reduced by `pre`'s length.
+#[test]
+fn test_search_snippet_pre_plus_mid_stays_within_240() {
+    let pre_src = "a".repeat(30); // under SNIP_LEAD(32) — untouched
+    let matched = "M".repeat(235); // under flat SNIP_MAX(240) — used to ship untouched
+    let line = format!("{pre_src}{matched}");
+
+    let start = pre_src.len();
+    let end = start + matched.len();
+    let (pre, mid, post) = truncate_snippet(&line, start, end);
+
+    let total = pre.chars().count() + mid.chars().count() + post.chars().count();
+    assert!(
+        total <= 240,
+        "combined length {total} > 240 (pre={}, mid={}, post={})",
+        pre.chars().count(),
+        mid.chars().count(),
+        post.chars().count()
+    );
+}
+
 /// 2.T3: Integration test — tempdir fixture repo, real `rg` on PATH.
 #[tokio::test]
 async fn test_search_integration_real_rg() {
