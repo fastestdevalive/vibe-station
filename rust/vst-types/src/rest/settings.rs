@@ -20,6 +20,12 @@ pub struct Settings {
     pub browser_epoch: Option<i64>,
     pub started_at: Option<String>,
     pub home_dir: String,
+    /// Sticky content-search toggle state (Search tab, F1.1) — persisted across
+    /// sessions so the user doesn't have to re-enable case/regex/word-match
+    /// every time they open Search. Defaults to `false` when never set.
+    pub search_case_sensitive: Option<bool>,
+    pub search_regex: Option<bool>,
+    pub search_whole_word: Option<bool>,
 }
 
 /// `PATCH /settings` request body (all optional).
@@ -34,6 +40,9 @@ pub struct PatchSettingsBody {
     /// Request-only: when `true`, clears `markdown_style` to `None` on write.
     /// Never persisted into `Settings`/a `GET /settings` response.
     pub reset_markdown_style: Option<bool>,
+    pub search_case_sensitive: Option<bool>,
+    pub search_regex: Option<bool>,
+    pub search_whole_word: Option<bool>,
 }
 
 /// User-configurable Markdown overrides layered on top of the active theme's

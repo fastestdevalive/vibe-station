@@ -271,3 +271,39 @@ pub struct FileListResult {
     pub truncated: bool,
     pub source: String,
 }
+
+/// One submatch hit within a search result line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMatch {
+    pub line: u32,
+    pub pre: String,
+    pub mid: String,
+    pub post: String,
+}
+
+/// All matches for a single file in the search results.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchFileMatches {
+    pub path: String,
+    pub matches: Vec<SearchMatch>,
+}
+
+/// `GET /worktrees/:id/search` response.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub files: Vec<SearchFileMatches>,
+    pub truncated: bool,
+    pub total_matches: usize,
+}
+
+/// `GET /worktrees/:id/gutter/*path` response — line-level git diff annotations.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GutterResult {
+    pub added: Vec<u32>,
+    pub deleted: Vec<u32>,
+    pub modified: Vec<u32>,
+}
