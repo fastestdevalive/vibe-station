@@ -147,6 +147,13 @@ impl FileList {
                 .hidden(false)
                 .git_ignore(true)
                 .require_git(false)
+                // `ignore`/`walkdir` default this to false, unlike the old
+                // sequential walk (`std::fs::metadata`, which resolves
+                // symlinks by default) — without it, a symlinked file's own
+                // entry.file_type() reports neither is_file() nor is_dir(),
+                // so it's silently skipped, and a symlinked directory is
+                // never descended into at all.
+                .follow_links(true)
                 .filter_entry(|e| {
                     let name = e.file_name().to_string_lossy();
                     name != ".git" && name != "node_modules"
@@ -219,10 +226,21 @@ impl FileList {
         })
         .await;
 
-        result.unwrap_or_else(|_| FileListResult {
-            files: vec![],
-            truncated: false,
-            source: "node".into(),
+        result.unwrap_or_else(|join_err| {
+            // A JoinError here means the blocking closure PANICKED (e.g. a
+            // poisoned `files`/`truncated` mutex from another walker worker
+            // thread's own panic) — not "this worktree has zero files".
+            // Log it loudly instead of returning an indistinguishable empty,
+            // non-truncated result that reads as a legitimately empty repo.
+            tracing::error!(
+                error = %join_err,
+                "file_list: parallel walk panicked; returning empty result"
+            );
+            FileListResult {
+                files: vec![],
+                truncated: false,
+                source: "node".into(),
+            }
         })
     }
 }
