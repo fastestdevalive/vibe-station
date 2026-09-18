@@ -1,0 +1,21 @@
+feature: themes-ides-markdown
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-140
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: "6.D"
+    impl_turn: {phase: 6, of: 6}
+    awaiting_phase: null
+    awaiting_artifact: null
+    commits:
+      - {phase: 1, sha: "0f2cbf8", verified_by: "cargo test -p vst-routes -p vst-types -p vst-ws -p vst-daemon"}
+      - {phase: 2, sha: "de2dd6c", verified_by: "pnpm --filter @vibestation/web typecheck; vitest run (registry.test.ts + full-suite regression diff vs phase-1 baseline)"}
+      - {phase: 3, sha: "1ddb24c", verified_by: "pnpm --filter @vibestation/web typecheck; vitest run (3.T1-3.T4 + full-suite regression diff vs phase-2 baseline)"}
+      - {phase: 4, sha: "dbdb8d5", verified_by: "pnpm --filter @vibestation/web typecheck; vitest run (4.T1-4.T2 + full-suite regression diff vs phase-3 baseline)"}
+      - {phase: 5, sha: "38e6ee4", verified_by: "pnpm --filter @vibestation/web typecheck; vitest run (5.T1-5.T5 + full-suite regression diff vs phase-4 baseline)"}
+      - {phase: 6, sha: "bc7f9ab, cd4513c", verified_by: "live browser verification against a real vst-daemon in docker sandbox; 5 bugs found+fixed+re-verified live; orchestrator re-ran cargo test + typecheck + vitest full-suite regression diff vs phase-5 baseline after the fixes"}
