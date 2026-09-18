@@ -1,7 +1,7 @@
 # Report: IDE-quality features for vibe-station — file speed, tool pane, project model
 
 **Date:** 2026-09-16 · **Commit:** 93cc6cdd053dead86e5e5f9a53351638aa127b70  
-**Scope:** px0 (`~/code/fastestdevalive/px0`) vs vibe-station Rust daemon (`rust/`) — file tree, search, git, tool pane, project creation  
+**Scope:** ggcode (`~/code/fastestdevalive/ggcode`) vs vibe-station Rust daemon (`rust/`) — file tree, search, git, tool pane, project creation  
 **Method:** static code exploration of both repos (Rust code only for vibe-station)
 
 ---
@@ -26,12 +26,12 @@
 | No content search route exists in `vst-routes` | `grep -i search rust/vst-routes/src/*.rs` → 0 hits |
 | No file outline / symbols route | `rust/vst-routes/src/` — no `outline.rs`, no `/outline` endpoint |
 | Worktree create hard-blocks non-git projects (400) | `rust/vst-routes/src/worktrees.rs` (ported from Node) |
-| px0 parallel walk: semaphore `NumCPU×4` goroutines, root published before subtrees | `px0/index.go Build()` |
-| px0 debounce: timer-reset per debounce window (not fixed sleep) | `px0/index.go` |
-| px0 content search: N-CPU workers, `bytes.Contains` fast-reject, regex support | `px0/search.go` |
-| px0 outline: per-language regex, upgrades to LSP async | `px0/symbols.go`, `px0/web/src/outline.js` |
-| px0 git gutter: `gitHunks` → add/mod/del line arrays → in-viewer margin marks | `px0/git.go`, `px0/web/src/renderer.js` |
-| px0 opens any folder, git entirely optional | `px0/main.go resolveTarget` |
+| ggcode parallel walk: semaphore `NumCPU×4` goroutines, root published before subtrees | `ggcode/index.go Build()` |
+| ggcode debounce: timer-reset per debounce window (not fixed sleep) | `ggcode/index.go` |
+| ggcode content search: N-CPU workers, `bytes.Contains` fast-reject, regex support | `ggcode/search.go` |
+| ggcode outline: per-language regex, upgrades to LSP async | `ggcode/symbols.go`, `ggcode/web/src/outline.js` |
+| ggcode git gutter: `gitHunks` → add/mod/del line arrays → in-viewer margin marks | `ggcode/git.go`, `ggcode/web/src/renderer.js` |
+| ggcode opens any folder, git entirely optional | `ggcode/main.go resolveTarget` |
 
 ---
 
@@ -39,9 +39,9 @@
 
 ### Track 1 — File I/O speed
 
-**Current state vs px0:**
+**Current state vs ggcode:**
 
-| Feature | px0 | vibe-station Rust today | Gap |
+| Feature | ggcode | vibe-station Rust today | Gap |
 |---------|-----|------------------------|-----|
 | Tree walk concurrency | Parallel (`NumCPU×4` goroutines) | Sequential `tokio::fs::read_dir` per expanded dir | Medium — noticeable on large repos |
 | Root-first render | Root children published before subtrees finish | N/A — lazy per-click, adequate for most dirs | Low |
@@ -57,7 +57,7 @@
   - New `GET /worktrees/:id/search?q=&re=&case=&word=&glob=` route in `vst-routes/src/worktrees.rs`
   - Backend: `rg --json` subprocess (respects gitignore, binary skip, fast); line-by-line fallback only if rg absent
   - UI: new `search` tab in ToolPanel, debounced 200ms, grouped-by-file results, highlighted `pre/match/post` snippets
-  - **Architecture note:** content search must be server-driven (can't ship file contents to the browser). Filename/fuzzy-find stays client-side — fetch file list once on open, all keystroke filtering in the browser. Do NOT adopt px0's per-keystroke `/api/find` model for filename search.
+  - **Architecture note:** content search must be server-driven (can't ship file contents to the browser). Filename/fuzzy-find stays client-side — fetch file list once on open, all keystroke filtering in the browser. Do NOT adopt ggcode's per-keystroke `/api/find` model for filename search.
   - Scope: text search only; no semantic/LSP search in this track
 
 - **F1.2 — Parallel tree walk (Rayon)**
@@ -82,7 +82,7 @@
 
 - **F2.1 — File outline panel**
   - New `GET /worktrees/:id/outline/*path` → `{ symbols: [{name, kind, line, indent}] }`
-  - Backend in `vst-routes`: per-language regex patterns (same approach as px0 `symbols.go`); no LSP required
+  - Backend in `vst-routes`: per-language regex patterns (same approach as ggcode `symbols.go`); no LSP required
   - Languages priority: TS/JS, Python, Rust, Go, Markdown headings (covers >90% of user repos)
   - UI: `OutlinePanel` sub-panel inside FilesPanel, filterable, click-to-jump in `FilePreviewPane`
 
@@ -92,7 +92,7 @@
   - Proposed: store `{ scrollTop, selectedLine }` per tab in component state; restore on switch; Alt+Shift+T reopen
 
 - **F2.3 — Code navigation (go-to-definition, find-refs)**
-  - Lightweight: reuse F2.1 outline index + whole-file symbol search for go-to-def with declaration scoring (same as px0 `/api/def`)
+  - Lightweight: reuse F2.1 outline index + whole-file symbol search for go-to-def with declaration scoring (same as ggcode `/api/def`)
   - Full: optional LSP client per language — separate follow-on, not part of this track
 
 - **F2.4 — Collapse stub Devices + Artifacts tabs**
