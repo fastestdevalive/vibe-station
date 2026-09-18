@@ -371,6 +371,16 @@ impl JsonAgentSession {
             format!("{child_list} are waiting for your reply")
         };
 
+        // Emit notification pill(s) for the children when the notice turn is dequeued
+        for (child_id, child_name) in &pruned.children {
+            self.emit_system_event(super::EmitSystemEventPayload {
+                subagent_id: child_id.clone(),
+                subagent_name: child_name.clone(),
+                subagent_state: LifecycleState::WaitingForHuman,
+                text: String::new(),
+            });
+        }
+
         let turn_id = crate::util::new_uuid_v4();
 
         // KD-4: emit the silent user event BEFORE run_one_turn.

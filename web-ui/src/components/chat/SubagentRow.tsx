@@ -115,8 +115,16 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
 
   async function handleDelink(id: string) {
     if (!api) return;
-    await api.delinkSession(id);
-    setConfirmDelink(null);
+    const target = allSessions.find((s) => s.id === id);
+    const prevParent = target?.parentSessionId ?? null;
+    useServerStore.getState().applySessionUpdated(id, { parentSessionId: null });
+    try {
+      await api.delinkSession(id);
+    } catch {
+      useServerStore.getState().applySessionUpdated(id, { parentSessionId: prevParent });
+    } finally {
+      setConfirmDelink(null);
+    }
   }
 
   return (
@@ -142,13 +150,23 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           </span>
         ) : (
           <div
-            className="chat-subagent-row__item chat-subagent-row__item--parent"
-            onClick={() => parent.worktreeId === session.worktreeId && onOpen(parent)}
-            style={
-              parent.worktreeId !== session.worktreeId
-                ? { opacity: 0.5, cursor: "default" }
-                : undefined
-            }
+            role="button"
+            tabIndex={parent.worktreeId === session.worktreeId ? 0 : -1}
+            aria-disabled={parent.worktreeId !== session.worktreeId ? true : undefined}
+            className={`chat-subagent-row__item chat-subagent-row__item--parent${
+              parent.worktreeId !== session.worktreeId ? " chat-subagent-row__item--disabled" : ""
+            }`}
+            onClick={(e) => {
+              if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
+              if (parent.worktreeId === session.worktreeId) onOpen(parent);
+            }}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (parent.worktreeId === session.worktreeId && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onOpen(parent);
+              }
+            }}
             title={
               parent.worktreeId === session.worktreeId
                 ? undefined
@@ -205,12 +223,25 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           );
         }
         return (
-          <button
+          <div
             key={child.id}
-            type="button"
-            className={`chat-subagent-row__item${child.archivedAt ? " chat-subagent-row__item--archived" : ""}`}
-            onClick={() => sameWorktree && onOpen(child)}
-            disabled={!sameWorktree}
+            role="button"
+            tabIndex={sameWorktree ? 0 : -1}
+            aria-disabled={!sameWorktree ? true : undefined}
+            className={`chat-subagent-row__item${child.archivedAt ? " chat-subagent-row__item--archived" : ""}${
+              !sameWorktree ? " chat-subagent-row__item--disabled" : ""
+            }`}
+            onClick={(e) => {
+              if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
+              if (sameWorktree) onOpen(child);
+            }}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (sameWorktree && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onOpen(child);
+              }
+            }}
             title={
               sameWorktree
                 ? `${sessionLabel(child)} — ${statusPhrase(statusFor(child))}`
@@ -232,7 +263,7 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
                 <Unlink size={11} />
               </button>
             ) : null}
-          </button>
+          </div>
         );
       })}
       {overflow > 0 ? <span className="chat-subagent-row__more">+{overflow} more</span> : null}

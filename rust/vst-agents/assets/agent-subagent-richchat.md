@@ -25,27 +25,26 @@ That is the whole thing. No flags to look up, no tool to find.
   you will consume within this same turn. Spawn a vst subagent for anything
   the user might want to watch, open, or keep running — and ALWAYS when the
   user asked for a subagent by name, regardless of how small the task is.
-- **Your turn ends when you stop writing, and nothing will resume it.** So
-  never say "I'll check back once it's done" or "I'll report when it
-  finishes" — you cannot. There is no timer, no callback, and no one wakes
-  you. After you spawn a subagent you have exactly two honest options:
-  - **Block on it, now, inside this turn:** poll until it stops changing.
-    ```bash
-    vst session output <subagent-id>      # its work so far; repeat to poll
-    ```
-  - **Hand off:** tell the user the subagent is running, name its id, say
-    what to look for, and stop. The user can open its row and watch it.
-
-  Pick one and say which. Silently ending your turn with a promise to follow
-  up is the one thing that leaves the user waiting forever.
-- **Linking is automatic.** Do NOT pass `--parent` yourself —
-  `vst session create`/`vst worktree create` already default it from
-  `$VST_SESSION`, which is your own id. Passing it explicitly adds nothing.
-- **Mode and channel are inherited.** A subagent you spawn in your own
-  worktree runs the same mode and the same Rich Chat channel as you, unless
-  the user's instruction says otherwise (e.g. "review this in opus mode" —
-  then pass `--mode` explicitly). You do not need to pass `--mode` or `--json`
-  to get a Rich Chat sibling.
+- **Automatic wake-up on completion or blocked state.** When a linked subagent
+  enters `waiting_for_human` (e.g. finishes its turn, asks a question, or
+  needs input), the daemon automatically wakes you once you are idle with:
+  `<subagent-name> is waiting for your reply`.
+  When woken up:
+  1. Inspect the subagent's progress: `vst session output <subagent-id> --lines=100`.
+  2. Send further instructions if needed: `vst session send <subagent-id> "..."`.
+  3. Once the subagent's task is fully complete, terminate it: `vst session terminate <subagent-id>`.
+  4. Report back to the user on what was accomplished.
+  If you need immediate results inside the current turn rather than waiting for the wake-up turn, you can poll with `vst session output <subagent-id>`.
+- **Linking is automatic.** `--parent` defaults to `$VST_SESSION` (your own id)
+  when you run from an agent session, or you can pass `--parent="$VST_SESSION"`
+  explicitly. To create an unlinked sibling instead, pass `--no-parent`.
+- **Mode and channel are inherited.** A subagent you spawn in your own worktree
+  (or project) inherits your mode and channel by default, unless the user's
+  instruction specifies a different mode (e.g. "review this in opus mode" — then
+  pass `--mode=<modeId>` explicitly).
+- **Direct sessions and worktree sessions.** If you have `$VST_WORKTREE` set,
+  spawn with `vst session create $VST_WORKTREE ...`. If running directly in a
+  project without a worktree, spawn with `vst session create --project=$VST_PROJECT ...`.
 - **You own its lifecycle.** The user does not know when a subagent's work is
   done — you do. Once you've consumed a subagent's output (read its result,
   merged its change, etc.), terminate it:

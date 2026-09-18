@@ -118,6 +118,31 @@ fn test_session_create_options_parsing() {
     assert_eq!(opts.prompt.as_deref(), Some("do work"));
     assert!(opts.json);
     assert!(opts.no_parent);
+
+    let opts_parent = parse_session_create_options(&[
+        "wt-100".to_string(),
+        "--parent=p-sess-1".to_string(),
+    ])
+    .expect("parse parent ok");
+    assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
+
+    let opts_src_agent = parse_session_create_options(&[
+        "wt-100".to_string(),
+        "--source-agent".to_string(),
+        "src-sess-2".to_string(),
+    ])
+    .expect("parse source-agent ok");
+    assert_eq!(opts_src_agent.parent.as_deref(), Some("src-sess-2"));
+
+    let opts_project = parse_session_create_options(&[
+        "--project=proj-alpha".to_string(),
+        "--parent=p-direct-1".to_string(),
+        "--prompt=hello".to_string(),
+    ])
+    .expect("parse project ok");
+    assert_eq!(opts_project.project_id.as_deref(), Some("proj-alpha"));
+    assert_eq!(opts_project.parent.as_deref(), Some("p-direct-1"));
+    assert_eq!(opts_project.prompt.as_deref(), Some("hello"));
 }
 
 #[test]
@@ -551,6 +576,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
     // Verify POST /sessions success
     let sess_create_res = run_session_create(SessionCreateOptions {
         worktree_id: "wt-1".to_string(),
+        project_id: None,
         session_type: "agent".to_string(),
         mode: None,
         prompt: None,
@@ -565,6 +591,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
     // Verify POST /sessions 404
     let sess_create_404 = run_session_create(SessionCreateOptions {
         worktree_id: "wt-missing".to_string(),
+        project_id: None,
         session_type: "agent".to_string(),
         mode: None,
         prompt: None,

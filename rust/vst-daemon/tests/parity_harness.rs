@@ -75,8 +75,13 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
 }
 
 async fn rust_request(router: &axum::Router, method: &str, url: &str) -> (u16, String) {
+    let req_url = if url == "/health" || url == "/mobile-auth" || url == "/ws" || url.starts_with("/api") {
+        url.to_string()
+    } else {
+        format!("/api{url}")
+    };
     let req = Request::builder()
-        .uri(url)
+        .uri(&req_url)
         .method(match method {
             "GET" => Method::GET,
             "POST" => Method::POST,
