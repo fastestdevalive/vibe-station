@@ -90,6 +90,27 @@ const THEMES: RosterEntry[] = [
       "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.3)",
       "--shadow-md": "0 4px 12px rgba(0, 0, 0, 0.4)",
       "--shadow-lg": "0 8px 24px rgba(0, 0, 0, 0.5)",
+      "--term-background": "#0f0f0f",
+      "--term-foreground": "#e5e5e5",
+      "--term-cursor": "#e5e5e5",
+      "--term-cursor-accent": "#0f0f0f",
+      "--term-selection-bg": "rgba(229,229,229,0.2)",
+      "--term-black": "#262626",
+      "--term-red": "#f85149",
+      "--term-green": "#22c55e",
+      "--term-yellow": "#eab308",
+      "--term-blue": "#3b82f6",
+      "--term-magenta": "#8250df",
+      "--term-cyan": "#06b6d4",
+      "--term-white": "#d4d4d4",
+      "--term-bright-black": "#404040",
+      "--term-bright-red": "#fca5a5",
+      "--term-bright-green": "#86efac",
+      "--term-bright-yellow": "#fde047",
+      "--term-bright-blue": "#93c5fd",
+      "--term-bright-magenta": "#c084fc",
+      "--term-bright-cyan": "#67e8f9",
+      "--term-bright-white": "#e5e5e5",
     },
   },
   {
@@ -138,6 +159,27 @@ const THEMES: RosterEntry[] = [
       "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.05)",
       "--shadow-md": "0 4px 12px rgba(0, 0, 0, 0.08)",
       "--shadow-lg": "0 8px 24px rgba(0, 0, 0, 0.12)",
+      "--term-background": "#fafafa",
+      "--term-foreground": "#171717",
+      "--term-cursor": "#171717",
+      "--term-cursor-accent": "#fafafa",
+      "--term-selection-bg": "rgba(23,23,23,0.15)",
+      "--term-black": "#404040",
+      "--term-red": "#dc2626",
+      "--term-green": "#15803d",
+      "--term-yellow": "#a16207",
+      "--term-blue": "#1d4ed8",
+      "--term-magenta": "#6e40c9",
+      "--term-cyan": "#0e7490",
+      "--term-white": "#737373",
+      "--term-bright-black": "#a3a3a3",
+      "--term-bright-red": "#ef4444",
+      "--term-bright-green": "#22c55e",
+      "--term-bright-yellow": "#ca8a04",
+      "--term-bright-blue": "#3b82f6",
+      "--term-bright-magenta": "#8250df",
+      "--term-bright-cyan": "#06b6d4",
+      "--term-bright-white": "#a3a3a3",
     },
   },
   // Dracula was removed 2026-09-17 (see .vibekit/reports/2026-09-17-theme-catalog-revision.md):
@@ -214,7 +256,71 @@ function darken(hex: string, amount: number): string {
   return rgbToHex([Math.max(0, r - amount), Math.max(0, g - amount), Math.max(0, b - amount)]);
 }
 
+function brighten(hex: string, amount: number): string {
+  const [r, g, b] = hexToRgb(hex);
+  return rgbToHex([Math.min(255, r + amount), Math.min(255, g + amount), Math.min(255, b + amount)]);
+}
+
 /* ── Chrome-token derivation (Design Details → Theme Roster table) ─────────── */
+
+function deriveTerminal(c: Record<string, string>, bg: string, fg: string, appearance: Appearance): Record<string, string> {
+  const isDark = appearance === "dark";
+
+  // Normalize primary key reads: strip 8-digit alpha (same mix(x,x,0) pattern as --accent at line 235-237,
+  // to handle themes like Tokyo Night that use #RRGGBBAA values for terminal.* keys)
+  function norm(raw: string | undefined): string | undefined {
+    return raw != null ? mix(raw, raw, 0) : undefined;
+  }
+
+  // Regular ANSI colors — must be computed BEFORE bright fallbacks (which use these as inputs)
+  const ansiRed     = norm(c["terminal.ansiRed"])     ?? "#ef4444";
+  const ansiGreen   = norm(c["terminal.ansiGreen"])   ?? "#22c55e";
+  const ansiYellow  = norm(c["terminal.ansiYellow"])  ?? "#eab308";
+  const ansiBlue    = norm(c["terminal.ansiBlue"])    ?? "#3b82f6";
+  const ansiMagenta = norm(c["terminal.ansiMagenta"]) ?? "#8250df";
+  const ansiCyan    = norm(c["terminal.ansiCyan"])    ?? "#06b6d4";
+
+  // Appearance-conditional fallbacks for black/white variants:
+  // dark: black≈near-bg (low %), white≈near-fg (high %); light: reversed
+  const termBlack       = norm(c["terminal.ansiBlack"])       ?? (isDark ? mix(bg, fg, 0.15) : mix(bg, fg, 0.85));
+  const termWhite       = norm(c["terminal.ansiWhite"])       ?? (isDark ? mix(bg, fg, 0.85) : mix(bg, fg, 0.15));
+  const termBrightBlack = norm(c["terminal.ansiBrightBlack"]) ?? (isDark ? mix(bg, fg, 0.35) : mix(bg, fg, 0.65));
+  const termBrightWhite = norm(c["terminal.ansiBrightWhite"]) ?? (isDark ? mix(bg, fg, 0.95) : mix(bg, fg, 0.05));
+
+  // selectionBackground: primary key normalized, fallback as rgba for overlay alpha
+  const selBgRaw = norm(c["terminal.selectionBackground"]);
+  let termSelectionBg: string;
+  if (selBgRaw != null) {
+    termSelectionBg = selBgRaw;
+  } else {
+    const [r, g, b] = hexToRgb(mix(fg, bg, 0.3));
+    termSelectionBg = `rgba(${r},${g},${b},0.3)`;
+  }
+
+  return {
+    "--term-background":    norm(c["terminal.background"])          ?? bg,
+    "--term-foreground":    norm(c["terminal.foreground"])          ?? fg,
+    "--term-cursor":        norm(c["terminalCursor.foreground"])    ?? fg,
+    "--term-cursor-accent": norm(c["terminalCursor.background"])    ?? bg,
+    "--term-selection-bg":  termSelectionBg,
+    "--term-black":         termBlack,
+    "--term-red":           ansiRed,
+    "--term-green":         ansiGreen,
+    "--term-yellow":        ansiYellow,
+    "--term-blue":          ansiBlue,
+    "--term-magenta":       ansiMagenta,
+    "--term-cyan":          ansiCyan,
+    "--term-white":         termWhite,
+    "--term-bright-black":  termBrightBlack,
+    "--term-bright-red":    norm(c["terminal.ansiBrightRed"])    ?? brighten(ansiRed,     20),
+    "--term-bright-green":  norm(c["terminal.ansiBrightGreen"])  ?? brighten(ansiGreen,   20),
+    "--term-bright-yellow": norm(c["terminal.ansiBrightYellow"]) ?? brighten(ansiYellow,  20),
+    "--term-bright-blue":   norm(c["terminal.ansiBrightBlue"])   ?? brighten(ansiBlue,    20),
+    "--term-bright-magenta":norm(c["terminal.ansiBrightMagenta"])  ?? brighten(ansiMagenta, 20),
+    "--term-bright-cyan":   norm(c["terminal.ansiBrightCyan"])   ?? brighten(ansiCyan,    20),
+    "--term-bright-white":  termBrightWhite,
+  };
+}
 
 function deriveChrome(theme: ShikiTheme, appearance: Appearance): Record<string, string> {
   const c = theme.colors;
@@ -259,6 +365,7 @@ function deriveChrome(theme: ShikiTheme, appearance: Appearance): Record<string,
       };
 
   return {
+    ...deriveTerminal(c, bg, fg, appearance),
     "--accent": accent,
     "--chat-accent": fgMuted,
     "--bg-primary": bg,

@@ -271,6 +271,8 @@ export function AppearanceSetting() {
   const { themeId, font, setTheme, toggleFont } = useTheme();
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
   const toggleAgentStatusBorders = useWorkspaceStore((s) => s.toggleAgentStatusBorders);
+  const themeAgentTerminals = useWorkspaceStore((s) => s.themeAgentTerminals);
+  const toggleThemeAgentTerminals = useWorkspaceStore((s) => s.toggleThemeAgentTerminals);
 
   const darkThemes = themes.filter((t) => t.appearance === "dark");
   const lightThemes = themes.filter((t) => t.appearance === "light");
@@ -315,6 +317,23 @@ export function AppearanceSetting() {
             value={showAgentStatusBorders ? "on" : "off"}
             onChange={(v) => {
               if ((v === "on") !== showAgentStatusBorders) toggleAgentStatusBorders();
+            }}
+          />
+        }
+      />
+
+      <Row
+        label="Theme agent terminals"
+        description="Apply the selected theme's colors to agent panes' terminal output. The standalone terminal dock/tile (Ctrl/Cmd+Shift+Z) always keeps its own fixed colors."
+        control={
+          <SegmentedControl
+            options={[
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+            value={themeAgentTerminals ? "on" : "off"}
+            onChange={(v) => {
+              if ((v === "on") !== themeAgentTerminals) toggleThemeAgentTerminals();
             }}
           />
         }

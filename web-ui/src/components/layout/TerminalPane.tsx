@@ -2,7 +2,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import type { Session } from "@/api/types";
@@ -13,6 +13,8 @@ import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
 import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
+import { useThemeStore } from "@/hooks/useThemeStore";
+import { themeById, defaultThemeId } from "@/theme/registry";
 
 interface TerminalPaneProps {
   api: ApiInstance;
@@ -36,6 +38,21 @@ interface TerminalPaneProps {
    * onto a tile (navigation-focus-change).
    */
   focusOnMount?: boolean;
+  /**
+   * Whether this pane follows the app's theme's ANSI palette. Defaults to
+   * `true` for the themed agent pane. The plain terminal dock/tile
+   * (Ctrl/Cmd+Shift+Z and canvas "terminal:" tiles) passes `false` to keep
+   * its original fixed colors — it's not part of the themed agent UI.
+   *
+   * This is caller-supplied rather than inferred from `session.type`
+   * because the mount effect below fires as soon as `sessionId` is set,
+   * which can be before the full `session` record (with `.type`) has
+   * loaded — and `session` is intentionally NOT a dependency of that
+   * effect (it must never remount an existing terminal), so a
+   * session-derived value could get stuck stale at its first, possibly
+   * incomplete, read.
+   */
+  themed?: boolean;
 }
 
 /**
@@ -59,7 +76,50 @@ function isXtermAutoResponse(data: string): boolean {
   /* eslint-enable no-control-regex */
 }
 
-export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMount = true }: TerminalPaneProps) {
+function terminalThemeFromCssVars(themeId: string): ITheme {
+  const entry = themeById[themeId] ?? themeById[defaultThemeId]!;
+  const v = entry.cssVars;
+  return {
+    background:          v["--term-background"],
+    foreground:          v["--term-foreground"],
+    cursor:              v["--term-cursor"],
+    cursorAccent:        v["--term-cursor-accent"],
+    selectionBackground: v["--term-selection-bg"],
+    black:               v["--term-black"],
+    red:                 v["--term-red"],
+    green:               v["--term-green"],
+    yellow:              v["--term-yellow"],
+    blue:                v["--term-blue"],
+    magenta:             v["--term-magenta"],
+    cyan:                v["--term-cyan"],
+    white:               v["--term-white"],
+    brightBlack:         v["--term-bright-black"],
+    brightRed:           v["--term-bright-red"],
+    brightGreen:         v["--term-bright-green"],
+    brightYellow:        v["--term-bright-yellow"],
+    brightBlue:          v["--term-bright-blue"],
+    brightMagenta:       v["--term-bright-magenta"],
+    brightCyan:          v["--term-bright-cyan"],
+    brightWhite:         v["--term-bright-white"],
+  };
+}
+
+/** Original fixed palette, used whenever a pane isn't (or shouldn't be) themed. */
+const FIXED_TERMINAL_THEME: ITheme = { background: "#0f0f0f", foreground: "#e5e5e5" };
+
+/**
+ * `themed` is the caller's "this pane is eligible for theming" declaration
+ * (true for the agent pane, false for the plain terminal dock/tile — see
+ * `TerminalPaneProps.themed`). Eligible panes additionally respect the
+ * user's "Theme agent terminals" appearance setting, read live off the
+ * workspace store so toggling it applies without remounting the terminal.
+ */
+function resolveTerminalTheme(themed: boolean): ITheme {
+  if (!themed || !useWorkspaceStore.getState().themeAgentTerminals) return FIXED_TERMINAL_THEME;
+  return terminalThemeFromCssVars(useThemeStore.getState().themeId);
+}
+
+export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMount = true, themed = true }: TerminalPaneProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -194,10 +254,11 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       // shortcuts inside the PTY (e.g. Claude Code's Alt+P model selector)
       // never reach the CLI. No-op on non-Mac platforms.
       macOptionIsMeta: true,
-      theme: {
-        background: "#0f0f0f",
-        foreground: "#e5e5e5",
-      },
+      // Only the agent pane is eligible for the app theme's ANSI palette —
+      // the standalone terminal dock (Ctrl/Cmd+Shift+Z) is a plain shell,
+      // not part of the themed agent UI, and keeps its own fixed look
+      // regardless of the "Theme agent terminals" setting below.
+      theme: resolveTerminalTheme(themed),
     });
     termRef.current = term;
 
@@ -229,6 +290,28 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     }));
 
     term.open(host);
+
+    // Both the app theme itself and the "Theme agent terminals" setting can
+    // change while this terminal stays mounted (this effect deliberately
+    // never remounts on prop/setting changes — see the stable-tree-position
+    // note below), so each subscription just recomputes and re-applies
+    // through the same resolver rather than reasoning about the two
+    // independently. Skipped entirely for non-agent panes (`themed` false),
+    // which never theme regardless of the setting.
+    const unsubTheme = themed
+      ? useThemeStore.subscribe((state, prev) => {
+          if (state.themeId !== prev.themeId) {
+            term.options.theme = resolveTerminalTheme(themed);
+          }
+        })
+      : undefined;
+    const unsubThemeAgentTerminals = themed
+      ? useWorkspaceStore.subscribe((state, prev) => {
+          if (state.themeAgentTerminals !== prev.themeAgentTerminals) {
+            term.options.theme = resolveTerminalTheme(themed);
+          }
+        })
+      : undefined;
 
     const helperTextarea = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea");
 
@@ -497,14 +580,17 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       cleanupTouchScroll();
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
       void api.closeSession(activeSessionId);
+      unsubTheme?.();
+      unsubThemeAgentTerminals?.();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
     };
-    // `focusOnMount` and `isTouch` are deliberately NOT dependencies: they are
-    // mount-time decisions (false in canvas mode / on touch devices). Adding
-    // either would tear down and rebuild the whole xterm the moment it flips —
-    // exactly the remount churn the stable-tree-position rule forbids.
+    // `focusOnMount`, `isTouch`, and `themed` are deliberately NOT dependencies:
+    // they are mount-time decisions (false in canvas mode / on touch devices;
+    // fixed per call site for `themed`). Adding any would tear down and
+    // rebuild the whole xterm the moment it flips — exactly the remount churn
+    // the stable-tree-position rule forbids.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, enableCopyModeScroll, api, mountTerminal, markSessionAttachPending]);
 
