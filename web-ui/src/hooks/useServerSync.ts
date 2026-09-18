@@ -234,6 +234,30 @@ export function useServerSync(api: ApiInstance): void {
         patchSessionState(ev.sessionId, "exited");
       }
     });
+    // `session:error{reason:"gone"}` → "exited", globally.
+    //
+    // This translation used to live ONLY in `useSessionOutput`
+    // (`useSubscription.ts`), which is wired up by a mounted `TerminalPane`.
+    // That made it load-bearing on pane mount: for a direct-PTY (non-tmux)
+    // session the daemon's lifecycle poller skips `use_tmux == false`
+    // sessions (`rust/vst-lifecycle/src/lifecycle.rs`) and only the
+    // tmux-liveness branch calls `mark_session_exited`, so a mounted pane's
+    // own attach attempt was the ONLY producer of "exited" for that session.
+    // A client with no pane mounted for it (or one that never mounts a pane
+    // for it at all) kept showing it as alive forever.
+    //
+    // Same suppression rule as the pane-local handler it mirrors: only the
+    // daemon's explicit "gone" classification implies an exit ("transient"
+    // is a stream hiccup and must never flip state), and a session still in
+    // the `not_started` spawn window is racing `spawnSession`, not exiting —
+    // its eventual `session:state` settles it.
+    const offSessError = sessionRepo.on("session:error", (ev) => {
+      if (ev.type !== "session:error" || ev.reason !== "gone") return;
+      const known = useWorkspaceStore.getState().sessionStates[ev.sessionId];
+      if (known === "not_started") return; // race during fresh spawn
+      applySessionUpdated(ev.sessionId, { state: "exited" });
+      patchSessionState(ev.sessionId, "exited");
+    });
     const offSessResumed = sessionRepo.on("session:resumed", (ev) => {
       if (ev.type === "session:resumed") {
         applySessionUpdated(ev.sessionId, { state: "working" });
@@ -309,6 +333,7 @@ export function useServerSync(api: ApiInstance): void {
       offSessCreated();
       offSessState();
       offSessExited();
+      offSessError();
       offSessResumed();
       offSessDeleted();
       offSessUpdated();
