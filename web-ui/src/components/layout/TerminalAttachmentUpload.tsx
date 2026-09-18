@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { Attachment, CliId, Session } from "@/api/types";
-import { AttachmentPicker } from "@/components/chat/AttachmentPicker";
 import { AttachmentChip } from "@/components/chat/AttachmentChip";
+import { Paperclip } from "lucide-react";
 
 /**
  * CLIs with a `UserPromptSubmit` hook that consumes the pending-uploads
@@ -26,24 +26,15 @@ interface TerminalAttachmentUploadProps {
  * writes a pending-uploads reference a claude `UserPromptSubmit` hook reads
  * (and deletes) on the next prompt submitted in the terminal.
  *
- * Reuses `AttachmentPicker` (its `compact` variant — a small pill trigger,
- * not the full creation-time dropzone) and `AttachmentChip` (the pending
- * list) as-is — no new picker/chip UI (Decision 7). `AttachmentPicker`
- * is driven with an always-empty `files` prop so it never renders its own
- * (blank-path, upload-not-yet-happened) previews; this component renders the
- * REAL uploaded `Attachment`s via `AttachmentChip`, with `onRemove` wired to
- * the new `DELETE /sessions/:id/attachments/:uploadId` route (Decision 8) —
- * a real server-side delete, since the pending-uploads reference is written
- * the instant the upload succeeds (no draft phase to just drop client-side).
- *
- * Explicitly a SEPARATE control from the channel-toggle overlay (Decision 6) —
- * it does not touch `TerminalPane`'s tree position, only adds a sibling.
+ * Renders an attachment icon button and pending `AttachmentChip`s with `onRemove`
+ * wired to the `DELETE /sessions/:id/attachments/:uploadId` route.
  */
 export function TerminalAttachmentUpload({ api, session }: TerminalAttachmentUploadProps) {
   const [cli, setCli] = useState<CliId | null>(null);
   const [pending, setPending] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const channel = session.channel ?? "tmux";
   // Agent sessions only (a plain terminal has no CLI to read the file);
@@ -100,6 +91,29 @@ export function TerminalAttachmentUpload({ api, session }: TerminalAttachmentUpl
 
   return (
     <div className="terminal-attachment-upload">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        aria-label="Attach files"
+        disabled={uploading}
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []);
+          void upload(files);
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="terminal-attachment-upload__btn"
+        aria-label="Attach files"
+        title="Attach files"
+        disabled={uploading}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <Paperclip size={13} />
+      </button>
       {pending.length > 0 ? (
         <div className="terminal-attachment-upload__chips">
           {pending.map((a) => (
@@ -108,7 +122,6 @@ export function TerminalAttachmentUpload({ api, session }: TerminalAttachmentUpl
         </div>
       ) : null}
       {error ? <div className="terminal-attachment-upload__error">{error}</div> : null}
-      <AttachmentPicker files={[]} onChange={(files) => void upload(files)} disabled={uploading} compact />
     </div>
   );
 }

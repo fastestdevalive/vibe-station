@@ -192,6 +192,8 @@ describe("SubagentRow delink UX (5.T1, 5.T2, 5.T3)", () => {
     expect(screen.getByText("Detach worker?")).toBeInTheDocument();
     expect(screen.getByText("Detach")).toBeInTheDocument();
     expect(screen.getByText("Cancel")).toBeInTheDocument();
+    expect(document.querySelector(".chat-subagent-row__confirm-popup")).toBeInTheDocument();
+    expect(document.querySelector(".chat-subagent-row__item")).toBeInTheDocument();
   });
 
   it("5.T2 — confirming Detach calls the delink API; cancelling restores the chip", async () => {

@@ -26,7 +26,7 @@ function session(extra: Partial<Session> = {}): Session {
 describe("TerminalAttachmentUpload (item 3, Decision 5 hard-gate)", () => {
   it("3.T4 — renders the attach control for a terminal-channel claude session", async () => {
     render(<TerminalAttachmentUpload api={createMockApi()} session={session()} />);
-    expect(await screen.findByLabelText(/attach files/i)).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /attach files/i })).toBeTruthy();
   });
 
   it("3.T4 — hides for a CLI with no UserPromptSubmit hook (cursor)", async () => {

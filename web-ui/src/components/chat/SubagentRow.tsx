@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Unlink } from "lucide-react";
 import type { Session, SessionState } from "@/api/types";
 import type { ApiInstance } from "@/api";
@@ -106,6 +106,25 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
     );
   }, [session, allSessions]);
 
+  useEffect(() => {
+    if (!confirmDelink) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest(".chat-subagent-row__confirm-popup")) {
+        setConfirmDelink(null);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setConfirmDelink(null);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [confirmDelink]);
+
   if (!parent && children.length === 0) return null;
 
   const visibleChildren = children.slice(0, MAX_ROWS);
@@ -130,98 +149,82 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
   return (
     <div className="chat-subagent-row">
       {parent ? (
-        confirmDelink === session.id ? (
-          <span className="chat-subagent-row__item chat-subagent-row__item--parent chat-subagent-row__item--confirm">
-            <span className="chat-subagent-row__label">Leave parent?</span>
-            <button
-              type="button"
-              className="chat-subagent-row__confirm-btn"
-              onClick={() => void handleDelink(session.id)}
-            >
-              Detach
-            </button>
-            <button
-              type="button"
-              className="chat-subagent-row__cancel-btn"
-              onClick={() => setConfirmDelink(null)}
-            >
-              Cancel
-            </button>
-          </span>
-        ) : (
-          <div
-            role="button"
-            tabIndex={parent.worktreeId === session.worktreeId ? 0 : -1}
-            aria-disabled={parent.worktreeId !== session.worktreeId ? true : undefined}
-            className={`chat-subagent-row__item chat-subagent-row__item--parent${
-              parent.worktreeId !== session.worktreeId ? " chat-subagent-row__item--disabled" : ""
-            }`}
-            onClick={(e) => {
-              if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
-              if (parent.worktreeId === session.worktreeId) onOpen(parent);
-            }}
-            onKeyDown={(e) => {
-              if (e.target !== e.currentTarget) return;
-              if (parent.worktreeId === session.worktreeId && (e.key === "Enter" || e.key === " ")) {
-                e.preventDefault();
-                onOpen(parent);
-              }
-            }}
-            title={
-              parent.worktreeId === session.worktreeId
-                ? undefined
-                : "This parent is in a different worktree"
+        <div
+          role="button"
+          tabIndex={parent.worktreeId === session.worktreeId ? 0 : -1}
+          aria-disabled={parent.worktreeId !== session.worktreeId ? true : undefined}
+          className={`chat-subagent-row__item chat-subagent-row__item--parent${
+            parent.worktreeId !== session.worktreeId ? " chat-subagent-row__item--disabled" : ""
+          }`}
+          onClick={(e) => {
+            if (e.target !== e.currentTarget && (e.target as HTMLElement).closest("button")) return;
+            if (parent.worktreeId === session.worktreeId) onOpen(parent);
+          }}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (parent.worktreeId === session.worktreeId && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              onOpen(parent);
             }
-          >
-            <span className="chat-subagent-row__arrow" aria-hidden="true">
-              ↑
-            </span>
-            <span className="chat-subagent-row__label">Parent · {sessionLabel(parent)}</span>
-            {api ? (
-              <button
-                type="button"
-                className="chat-subagent-row__delink"
-                aria-label="Leave parent"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDelink(session.id);
-                }}
-              >
-                <Unlink size={11} />
-              </button>
-            ) : null}
-          </div>
-        )
-      ) : null}
-      {visibleChildren.length > 0 ? (
-        <span className="chat-subagent-row__caption">Subagents:</span>
-      ) : null}
-      {visibleChildren.map((child) => {
-        const sameWorktree = child.worktreeId === session.worktreeId;
-        if (confirmDelink === child.id) {
-          return (
-            <span
-              key={child.id}
-              className="chat-subagent-row__item chat-subagent-row__item--confirm"
+          }}
+          title={
+            parent.worktreeId === session.worktreeId
+              ? undefined
+              : "This parent is in a different worktree"
+          }
+        >
+          <span className="chat-subagent-row__arrow" aria-hidden="true">
+            ↑
+          </span>
+          <span className="chat-subagent-row__label">Parent · {sessionLabel(parent)}</span>
+          {api && confirmDelink !== session.id ? (
+            <button
+              type="button"
+              className="chat-subagent-row__delink"
+              aria-label="Leave parent"
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirmDelink(session.id);
+              }}
             >
-              <span className="chat-subagent-row__label">Detach {sessionLabel(child)}?</span>
+              <Unlink size={11} />
+            </button>
+          ) : null}
+          {confirmDelink === session.id ? (
+            <div
+              className="chat-subagent-row__confirm-popup"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="chat-subagent-row__confirm-label">Leave parent?</span>
               <button
                 type="button"
                 className="chat-subagent-row__confirm-btn"
-                onClick={() => void handleDelink(child.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDelink(session.id);
+                }}
               >
                 Detach
               </button>
               <button
                 type="button"
                 className="chat-subagent-row__cancel-btn"
-                onClick={() => setConfirmDelink(null)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDelink(null);
+                }}
               >
                 Cancel
               </button>
-            </span>
-          );
-        }
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {visibleChildren.length > 0 ? (
+        <span className="chat-subagent-row__caption">Subagents:</span>
+      ) : null}
+      {visibleChildren.map((child) => {
+        const sameWorktree = child.worktreeId === session.worktreeId;
         return (
           <div
             key={child.id}
@@ -250,7 +253,7 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           >
             <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>
-            {api ? (
+            {api && confirmDelink !== child.id ? (
               <button
                 type="button"
                 className="chat-subagent-row__delink"
@@ -262,6 +265,36 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
               >
                 <Unlink size={11} />
               </button>
+            ) : null}
+            {confirmDelink === child.id ? (
+              <div
+                className="chat-subagent-row__confirm-popup"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span className="chat-subagent-row__confirm-label">
+                  Detach {sessionLabel(child)}?
+                </span>
+                <button
+                  type="button"
+                  className="chat-subagent-row__confirm-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDelink(child.id);
+                  }}
+                >
+                  Detach
+                </button>
+                <button
+                  type="button"
+                  className="chat-subagent-row__cancel-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDelink(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
             ) : null}
           </div>
         );
