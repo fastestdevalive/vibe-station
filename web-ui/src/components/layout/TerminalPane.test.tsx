@@ -108,7 +108,7 @@ describe("TerminalPane", () => {
     expect(screen.getByRole("status", { name: /starting/i })).toBeInTheDocument();
   });
 
-  it("falls back to the session record's own state when the live map has no entry (running)", () => {
+  it("falls back to the session record's own state when the live map has no entry (running)", async () => {
     const openSpy = vi.spyOn(api, "openSession");
     useWorkspaceStore.setState({ sessionStates: {}, sessionAttachState: {} });
     const { container } = render(
@@ -117,7 +117,9 @@ describe("TerminalPane", () => {
     // The xterm host must actually mount — the reported symptom was that it
     // never did, so asserting "no placeholder" alone would not catch it.
     expect(container.querySelector(".terminal-host")).not.toBeNull();
-    expect(openSpy).toHaveBeenCalledWith("sess-main", expect.any(Number), expect.any(Number));
+    await waitFor(() => {
+      expect(openSpy).toHaveBeenCalledWith("sess-main", expect.any(Number), expect.any(Number));
+    });
     openSpy.mockRestore();
   });
 

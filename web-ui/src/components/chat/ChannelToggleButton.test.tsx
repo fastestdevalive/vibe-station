@@ -35,6 +35,14 @@ describe("ChannelToggleButton (item 4, Decision 6) — 4.T1", () => {
     expect((screen.getByRole("button", { name: "⇄ Terminal" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("renders split icon and text elements for responsive display", () => {
+    const { container } = render(<ChannelToggleButton api={createMockApi()} sessionId="s1" direction="toTerminal" />);
+    const icon = container.querySelector(".channel-toggle-button__icon");
+    const text = container.querySelector(".channel-toggle-button__text");
+    expect(icon).toHaveTextContent("⇄");
+    expect(text).toHaveTextContent("Terminal");
+  });
+
   it("confirmBlocked shows the blocked message and disables the confirm control", async () => {
     const api = createMockApi();
     const spy = vi.spyOn(api, "setSessionChannel");

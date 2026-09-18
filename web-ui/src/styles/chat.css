@@ -9,6 +9,7 @@
   border: 2px solid transparent;
   box-sizing: border-box;
   transition: border-color 0.2s ease;
+  container-type: inline-size;
 }
 
 /* Colored rectangle around the pane (D17, 2026-08-17 — supersedes the
@@ -49,6 +50,76 @@
   position: relative;
 }
 
+/* Terminal agent header — an absolute overlay row at the top of the terminal
+   hosting the attachment upload & SubagentRow chips (left) and the font/channel
+   controls (right). 50% background transparency + blur keeps the terminal output
+   visible in the background while taking zero vertical space. */
+.agent-pane-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--bg-primary) 50%, transparent);
+  border-bottom: var(--border-width) solid color-mix(in srgb, var(--border-subtle) 50%, transparent);
+  pointer-events: none;
+  container-type: inline-size;
+}
+.agent-pane-header > * {
+  pointer-events: auto;
+}
+.agent-pane-header__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+}
+.agent-pane-header__subagents {
+  flex: 1;
+  min-width: 0;
+}
+/* The SubagentRow already carries its own padding + top border for the chat
+   footer; in the header that would double up the chrome, so neutralize it. */
+.agent-pane-header__subagents .chat-subagent-row {
+  padding: 0;
+  border-top: none;
+  background: transparent;
+}
+.agent-pane-header__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+.agent-pane-header__controls .terminal-font-overlay__btns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* The attachment upload button and channel-toggle-button absolute positioning
+   is neutralized when hosted inside this unified top overlay. */
+.agent-pane-header .terminal-attachment-upload {
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+  flex-direction: row;
+  align-items: center;
+  max-width: none;
+}
+.agent-pane-header .channel-toggle-button {
+  position: static;
+  top: auto;
+  right: auto;
+  z-index: auto;
+}
+
 /* ── Channel toggle (BOTH directions — item 4, Decision 6): one shared
    top-right overlay style, positioned relative to the nearest positioned
    ancestor (`.agent-pane-slot__terminal` for tty→json, `.chat-pane` for
@@ -58,6 +129,10 @@
   top: var(--space-2);
   right: var(--space-2);
   z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
   background: var(--bg-elevated);
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -67,6 +142,9 @@
   font: inherit;
   line-height: 1.6;
   opacity: 0.85;
+  white-space: nowrap;
+  height: 24px;
+  box-sizing: border-box;
 }
 .channel-toggle-button:hover:not(:disabled) {
   color: var(--fg-primary);
@@ -76,6 +154,37 @@
 .channel-toggle-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.channel-toggle-button__icon {
+  font-size: 1.05em;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+.channel-toggle-button__text {
+  display: inline;
+}
+
+@container (max-width: 600px) {
+  .channel-toggle-button__text {
+    display: none;
+  }
+  .channel-toggle-button {
+    padding: 0 var(--space-1);
+    min-width: 24px;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 600px) {
+  .channel-toggle-button__text {
+    display: none;
+  }
+  .channel-toggle-button {
+    padding: 0 var(--space-1);
+    min-width: 24px;
+    justify-content: center;
+  }
 }
 
 /* Chat pane top-right overlay — font buttons + ⇄ Terminal toggle. Same visual
@@ -171,32 +280,29 @@
   gap: var(--space-1);
   max-width: min(320px, 60%);
 }
-/* `AttachmentPicker`'s `compact` variant (see AttachmentPicker.tsx) — a
-   small pill-style trigger instead of the full dropzone used at session
-   creation, sized to fit this absolutely-positioned corner overlay. */
-.terminal-attachment-upload .initial-artifacts--compact {
-  flex-direction: row;
+/* Terminal-mode file upload: icon button matching font overlay buttons with pending chips */
+.terminal-attachment-upload__btn {
+  display: inline-flex;
   align-items: center;
-  width: auto;
-  gap: var(--space-1);
-  padding: 0 var(--space-2);
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: var(--bg-elevated);
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
   color: var(--fg-secondary);
+  cursor: pointer;
   opacity: 0.85;
-  font: inherit;
-  line-height: 1.6;
 }
-.terminal-attachment-upload .initial-artifacts--compact:hover:not(.initial-artifacts--disabled) {
+.terminal-attachment-upload__btn:hover:not(:disabled) {
   color: var(--fg-primary);
   border-color: var(--fg-secondary);
   opacity: 1;
-  background: var(--bg-elevated);
 }
-.terminal-attachment-upload .initial-artifacts--compact .initial-artifacts__primary {
-  font-size: var(--font-size-sm);
-  color: inherit;
+.terminal-attachment-upload__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .terminal-attachment-upload__chips {
   display: flex;
@@ -216,6 +322,7 @@
   background: var(--bg-primary);
   color: var(--fg-primary);
   font-family: var(--font-sans);
+  container-type: inline-size;
   /* Re-resolve the base text size HERE, from this subtree's (possibly zoomed)
      --font-size-base — ChatPane overrides the --font-size-* tokens inline for
      the "Aa −/+" control. `body` already sets font-size: var(--font-size-base)
@@ -1020,13 +1127,17 @@
   top: 50%;
   transform: translateY(-50%);
   transition: opacity 0.1s;
-  padding: 2px var(--space-1);
+  padding: 2px 4px;
   display: flex;
   align-items: center;
+  justify-content: center;
   color: var(--fg-muted);
-  background: transparent;
-  border: none;
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
   cursor: pointer;
+  z-index: 2;
 }
 .chat-subagent-row__item:hover .chat-subagent-row__delink,
 .chat-subagent-row__item:focus-within .chat-subagent-row__delink {
@@ -1034,22 +1145,52 @@
 }
 .chat-subagent-row__delink:hover {
   color: var(--fg-primary);
+  background: var(--bg-card);
+  border-color: var(--border-default);
 }
-.chat-subagent-row__item--confirm {
-  cursor: default;
+.chat-subagent-row__confirm-popup {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  z-index: 50;
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elevated);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+  cursor: default;
+  color: var(--fg-primary);
+  font-size: var(--font-size-xs);
+}
+.chat-subagent-row__confirm-label {
+  font-weight: 500;
+  color: var(--fg-primary);
 }
 .chat-subagent-row__confirm-btn,
 .chat-subagent-row__cancel-btn {
   font-size: var(--font-size-xs);
-  padding: 0 var(--space-1);
+  padding: 1px var(--space-2);
   border-radius: var(--radius-sm);
   border: var(--border-width) solid var(--border-subtle);
-  background: var(--bg-elevated);
+  background: var(--bg-card);
   color: var(--fg-secondary);
   cursor: pointer;
+  line-height: 1.4;
+}
+.chat-subagent-row__confirm-btn {
+  color: var(--fg-danger, #ef4444);
+  border-color: color-mix(in srgb, var(--fg-danger, #ef4444) 40%, transparent);
 }
 .chat-subagent-row__confirm-btn:hover {
+  color: var(--fg-danger, #ef4444);
+  background: color-mix(in srgb, var(--fg-danger, #ef4444) 15%, transparent);
+  border-color: var(--fg-danger, #ef4444);
+}
+.chat-subagent-row__cancel-btn:hover {
   color: var(--fg-primary);
   border-color: var(--border-default);
 }

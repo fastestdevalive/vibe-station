@@ -53,6 +53,7 @@ interface ChannelToggleButtonProps {
 
 interface DirectionCopy {
   label: string;
+  text: string;
   targetChannel: Channel;
   dialogTitle: string;
   defaultMessage: string;
@@ -70,6 +71,7 @@ interface DirectionCopy {
 const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
   toTerminal: {
     label: "⇄ Terminal",
+    text: "Terminal",
     targetChannel: "tmux",
     dialogTitle: "Switch to terminal?",
     defaultMessage:
@@ -81,6 +83,7 @@ const COPY: Record<ChannelToggleDirection, DirectionCopy> = {
   },
   toJson: {
     label: "⇄ Rich Chat",
+    text: "Rich Chat",
     targetChannel: "json",
     dialogTitle: "Switch to Rich Chat?",
     defaultMessage:
@@ -145,8 +148,10 @@ export function ChannelToggleButton({
         onClick={() => setConfirmOpen(true)}
         disabled={triggerDisabled}
         title={triggerDisabled ? copy.busyTriggerTitle : copy.idleTriggerTitle}
+        aria-label={copy.label}
       >
-        {copy.label}
+        <span className="channel-toggle-button__icon">⇄</span>
+        <span className="channel-toggle-button__text">{copy.text}</span>
       </button>
       <ConfirmDialog
         open={confirmOpen}
