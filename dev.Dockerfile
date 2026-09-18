@@ -18,6 +18,22 @@
 
 FROM node:24-slim
 
+# node:24-slim has no locale generated at all (LANG unset, LC_CTYPE=POSIX).
+# This image's tmux (Debian's current version, 3.3a as of this writing) only
+# assumes UTF-8 output when the ATTACHING CLIENT has a UTF-8 locale — tmux
+# >= 3.4 dropped that check, but this image predates it. Without a UTF-8
+# locale, tmux rewrites every non-ASCII byte it would otherwise send to a
+# literal '_' and box-drawing chars to ACS escapes, so terminal panes render
+# icons/box-drawing as underscores/dashes instead of the real glyphs. The
+# Rust daemon's tmux attach already passes `-u` to force UTF-8 mode on the
+# client regardless of environment (see rust/vst-ws/src/streams/tmux_output.rs),
+# but setting a real locale here too keeps every OTHER process in the
+# container (the agent CLIs spawned inside panes, tmux's own server, etc.)
+# consistent instead of relying on that one call site. C.UTF-8 is a minimal
+# glibc locale already present in this image — no `locales`/`locale-gen`
+# package needed.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tmux git procps curl ripgrep ca-certificates unzip \
     python3 make g++ \

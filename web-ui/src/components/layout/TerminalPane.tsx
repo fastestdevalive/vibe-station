@@ -1,5 +1,6 @@
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -173,7 +174,17 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     const term = new Terminal({
       cursorBlink: true,
       fontSize: Math.round(14 * initialScale),
-      fontFamily: "JetBrains Mono, monospace",
+      // JetBrains Mono is loaded from Google Fonts (tokens.css), which serves
+      // only a limited per-family character subset — it doesn't cover every
+      // Unicode symbol block a CLI's TUI may emit (e.g. Claude Code's ⎿
+      // connector glyphs, box-drawing logo art, bullet/sparkle markers).
+      // xterm falls back per-glyph within this list, so more named fonts
+      // before the generic `monospace` keyword means more chances to land on
+      // one the OS actually has with that glyph, instead of falling straight
+      // to whatever `monospace` happens to resolve to. Matches (and extends)
+      // the site's own --font-mono fallback chain (tokens.css).
+      fontFamily:
+        "JetBrains Mono, Fira Code, SF Mono, Cascadia Code, Noto Sans Mono, monospace",
       lineHeight: 1.2,
       scrollback: 10000,
       allowProposedApi: true,
@@ -193,6 +204,17 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
+
+    // xterm's built-in width table (Unicode 6, "ambiguous width" characters
+    // treated as narrow) disagrees with the PTY side's libc wcwidth() for
+    // several codepoints CLIs commonly emit (arrows, box-drawing, technical
+    // symbols like ⏵/❯) — tmux writes the character assuming one column,
+    // xterm reads it as needing a second, and the phantom continuation cell
+    // it inserts renders as a literal "_". Loading this addon and opting
+    // into version 11 realigns xterm's table with the modern glibc one tmux
+    // actually uses.
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
 
     // Make http:// and https:// URLs clickable — opens in system browser (Tauri) or new tab (browser dev)
     term.loadAddon(new WebLinksAddon((_, url) => {

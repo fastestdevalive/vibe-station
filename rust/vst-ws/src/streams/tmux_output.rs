@@ -292,16 +292,21 @@ impl SessionStream for TmuxOutputStream {
                     argv.push("-L".to_string());
                     argv.push(sock.clone());
                 }
+                // -u: force this client into UTF-8 mode regardless of the
+                // ambient locale. On tmux <= 3.3, a client attaching without
+                // a UTF-8 LANG/LC_ALL/LC_CTYPE gets treated as non-UTF-8:
+                // every non-ASCII byte tmux would otherwise send is rewritten
+                // to a literal '_', and box-drawing characters become ACS
+                // escapes instead of real glyphs — exactly the "icons render
+                // as underscores/dashes" bug traced back to this. tmux >= 3.4
+                // dropped the locale check and always assumes UTF-8, so `-u`
+                // is a no-op there; harmless either way. This makes the
+                // client's UTF-8 mode independent of whatever locale the
+                // daemon process happens to have inherited (a bare/minimal
+                // environment, e.g. a container with no locale generated,
+                // would otherwise silently hit the broken path).
+                argv.push("-u".to_string());
                 argv.push("attach-session".to_string());
-                // -d: force-detach any other client already attached to this
-                // session. Our own close/detach path SIGHUPs the previous
-                // client but deliberately doesn't wait for it to exit (see
-                // `detach()` below), so a fast-enough close+open (worktree
-                // switch, rapid remounts) can otherwise attach a second live
-                // client before the first is gone — tmux would then mirror
-                // output to both, doubling every echoed keystroke. `-d` makes
-                // tmux itself enforce "at most one client" regardless of that
-                // timing.
                 // -d: force-detach any other client already attached to this
                 // session. Our own close/detach path SIGHUPs the previous
                 // client but deliberately doesn't wait for it to exit (see
@@ -316,6 +321,11 @@ impl SessionStream for TmuxOutputStream {
                 argv.push(tmux_name);
                 cmd.args(&argv);
                 cmd.env("TERM", "xterm-256color");
+                // Belt-and-braces alongside `-u`: some tmux-internal paths
+                // (and the pane's own shell/CLI) consult the locale directly
+                // rather than tmux's own UTF-8 flag. C.UTF-8 is a minimal
+                // glibc locale present without needing `locale-gen`.
+                cmd.env("LC_ALL", "C.UTF-8");
 
                 let child = pair
                     .slave
