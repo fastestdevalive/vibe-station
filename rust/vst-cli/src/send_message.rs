@@ -65,7 +65,10 @@ async fn upload_file(session_id: &str, file_path: &str) -> Attachment {
 
     let client = reqwest::Client::new();
     let encoded_id = encode_component(session_id);
-    let upload_url = format!("{url}/sessions/{encoded_id}/attachments");
+    // This bypasses client.rs's api_path() helper (multipart upload needs a raw
+    // reqwest request), so the /api prefix has to be added by hand here too —
+    // see AGENTS.md's "CLI — every REST route lives under /api" section.
+    let upload_url = format!("{url}/api/sessions/{encoded_id}/attachments");
 
     let resp = match client
         .post(&upload_url)

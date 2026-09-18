@@ -102,6 +102,13 @@ pub async fn post_open_at(
             let msg = err.to_string();
             if msg.contains("ECONNREFUSED") || msg.contains("connect") {
                 Err(OpenFailure::Connect)
+            } else if msg.contains("was not valid JSON") {
+                // The daemon answered (so it's not down / worth relaunching
+                // over), but the response body wasn't what we expected —
+                // surface the real error instead of misreporting it as
+                // "daemon not running" and kicking off a pointless
+                // launch-and-retry cycle.
+                Err(OpenFailure::Http { status: 0, message: msg })
             } else {
                 Err(OpenFailure::NoDaemon)
             }
