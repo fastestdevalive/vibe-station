@@ -1,4 +1,5 @@
-import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Home, Moon, MoreHorizontal, Pin, Plus, Trash2, Type } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Settings, Trash2, Type } from "lucide-react";
+import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
@@ -202,6 +203,9 @@ interface LeftSidebarProps {
   /** Mobile drawer: show pinned brand link at top */
   isMobile?: boolean;
   onWorktreeSelected?: (wtId: string) => void;
+  /** Opens the keyboard-shortcuts reference dialog (owned by Workspace/TopBar) — the
+   *  footer's Keyboard button triggers it since TopBar no longer has its own trigger. */
+  onOpenShortcuts?: () => void;
 }
 
 export function LeftSidebar({
@@ -209,10 +213,11 @@ export function LeftSidebar({
   collapsed = false,
   isMobile = false,
   onWorktreeSelected,
+  onOpenShortcuts,
 }: LeftSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { theme, toggleTheme, toggleFont } = useTheme();
+  const { toggleFont } = useTheme();
   // Server data comes from the central store, populated and refreshed by
   // `useServerSync` (mounted once in Workspace). LeftSidebar derives the
   // by-project / by-worktree maps it needs from those flat arrays — keeping
@@ -1179,15 +1184,25 @@ export function LeftSidebar({
         className="left-sidebar__scroll"
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
-        <div className="left-sidebar__brand" aria-hidden>
+        <div className="left-sidebar__brand">
           {!collapsed ? (
             <div className="left-sidebar__brand-inner">
-              <span className="left-sidebar__brand-name">Vibe Station</span>
+              <span className="left-sidebar__brand-name" aria-hidden>Vibe Station</span>
               <Logo size={11} />
-              <span className="left-sidebar__brand-version">{pkgJson.version}</span>
+              <span className="left-sidebar__brand-version" aria-hidden>v{pkgJson.version}</span>
+              <a
+                href="https://github.com/fastestdevalive/vibe-station"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="left-sidebar__brand-github"
+                aria-label="View on GitHub"
+                title="View on GitHub"
+              >
+                <Github size={12} />
+              </a>
             </div>
           ) : (
-            <div className="left-sidebar__brand-inner">
+            <div className="left-sidebar__brand-inner" aria-hidden>
               <Logo size={13} />
             </div>
           )}
@@ -2241,28 +2256,42 @@ export function LeftSidebar({
         </SortableContext>
         </DndContext>
       </div>
-      <div className="left-sidebar__footer">
-        <div className="left-sidebar__icon-row">
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Toggle font"
-            title="Font"
-            onClick={toggleFont}
-          >
-            <Type size={16} />
-          </button>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Toggle theme"
-            title={`Theme (${theme})`}
-            onClick={toggleTheme}
-          >
-            <Moon size={16} />
-          </button>
+      {!collapsed ? (
+        <div className="left-sidebar__footer">
+          <div className="left-sidebar__icon-row">
+            <ThemeQuickPicker />
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Toggle font"
+              title="Font"
+              onClick={toggleFont}
+            >
+              <Type size={14} />
+            </button>
+          </div>
+          <div className="left-sidebar__icon-row left-sidebar__icon-row--end">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts"
+              onClick={onOpenShortcuts}
+            >
+              <Keyboard size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => navigate("/settings")}
+            >
+              <Settings size={14} />
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Plus menu for project actions */}
       {plusMenu ? (

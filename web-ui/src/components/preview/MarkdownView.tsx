@@ -8,6 +8,7 @@ import { ImageZoomOverlay } from "./ImageZoomOverlay";
 import { resolveImagePath } from "@/lib/imageFile";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
+import { useMarkdownStyle } from "@/hooks/useMarkdownStyle";
 
 interface MarkdownImageProps {
   src?: string;
@@ -79,6 +80,16 @@ interface MarkdownViewProps {
 
 export function MarkdownView({ source, api = null, worktreeId = null, scope = "worktree", filePath = null }: MarkdownViewProps) {
   const fileDir = filePath ? filePath.split("/").slice(0, -1).join("/") || null : null;
+
+  // `MarkdownView` is the single real rendering path shared by chat bubbles
+  // and the file-preview `.md` pane (requirement 7) — it must be the thing
+  // that boots the daemon-synced override sync (GET /settings seed, WS
+  // subscription, and the injected `.workspace-markdown-preview` `<style>`
+  // block), same as `useTheme()` boots off whichever consumer mounts first.
+  // Before this, only `MarkdownStyleSetting.tsx` called `useMarkdownStyle()`,
+  // so overrides only ever applied while the Settings → Markdown page itself
+  // was open — every other Markdown surface silently rendered theme defaults.
+  useMarkdownStyle();
 
   const markdownComponents = useMemo(() => ({
     pre({ children }: { children?: ReactNode }) {

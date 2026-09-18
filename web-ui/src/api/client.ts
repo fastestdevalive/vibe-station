@@ -943,7 +943,7 @@ export function createClientApi() {
       return parseJson<Settings>(res);
     },
 
-    async updateSettings(body: Partial<Settings>): Promise<{ ok: true }> {
+    async updateSettings(body: Partial<Settings> & { resetMarkdownStyle?: boolean }): Promise<{ ok: true }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/settings`, {
         method: "PATCH",

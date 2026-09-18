@@ -64,13 +64,15 @@
   --bg-card: #191919;
   --bg-hover: #222222;
   --bg-active: #2a2a2a;
+  --bg-sidebar: #030303;
+  --bg-sidebar-secondary: #090909;
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
   --fg-muted: #6b6b6b;
   --border-default: #262626;
 }
 
-[data-theme="dark"] {
+[data-theme="vibestation-dark"] {
   --accent: #e5e5e5;
   /* Quiet, chat-scoped accent (user bubble border, spinners, throttle badge).
      Contained here so the global purple --accent stays on primary buttons etc. */
@@ -83,6 +85,14 @@
   --bg-input: #1e1e1e;
   --bg-hover: #222222;
   --bg-active: #2a2a2a;
+  /* Sidebar layering (darkest → lightest: sidebar < sidebar-secondary < bg-primary),
+     an absolute darken of --bg-primary by 12/6 RGB units — not a percentage mix, so
+     it stays visible at both very-dark and very-light extremes. See
+     scripts/generate-theme-css.ts's darken() for the formula shared with the other
+     12 themes. --bg-sidebar is the primary left-nav rail; --bg-sidebar-secondary is
+     for nested tree/list panels (file tree, artifacts list, VCS tree, settings nav). */
+  --bg-sidebar: #030303;
+  --bg-sidebar-secondary: #090909;
 
   --fg-primary: #e5e5e5;
   --fg-secondary: #a3a3a3;
@@ -123,10 +133,44 @@
   --pr-draft: #8a8a8a;
   --pr-closed: #6b6b6b;
 
+  /* Theme-invariant Markdown defaults (matching the generated themes.generated.css
+     set — color props reference this block's own chrome tokens). */
+  --md-h1-color: var(--fg-primary);
+  --md-h2-color: var(--fg-primary);
+  --md-h3-color: var(--fg-primary);
+  --md-h4-color: var(--fg-primary);
+  --md-h5-color: var(--fg-primary);
+  --md-h6-color: var(--fg-primary);
+  --md-bold-color: var(--fg-primary);
+  --md-italic-color: var(--fg-secondary);
+  --md-inline-code-bg: var(--bg-secondary);
+  --md-inline-code-color: var(--fg-primary);
+  --md-code-block-bg: var(--bg-secondary);
+  --md-code-block-color: var(--fg-primary);
+  --md-code-block-border: var(--border-default);
+  --md-blockquote-border: var(--border-strong);
+  --md-blockquote-color: var(--fg-secondary);
+  --md-link-color: var(--accent);
+  --md-code-font-family: var(--font-mono);
+  --md-italic-style: italic;
+  --md-bold-weight: 600;
+  --md-h1-size: 2.14em;
+  --md-h1-weight: 600;
+  --md-h2-size: 1.57em;
+  --md-h2-weight: 600;
+  --md-h3-size: 1.29em;
+  --md-h3-weight: 600;
+  --md-h4-size: 1.07em;
+  --md-h4-weight: 600;
+  --md-h5-size: 0.86em;
+  --md-h5-weight: 600;
+  --md-h6-size: 0.86em;
+  --md-h6-weight: 600;
+
   color-scheme: dark;
 }
 
-[data-theme="light"] {
+[data-theme="vibestation-light"] {
   --accent: #1a1a1a;
   --chat-accent: #737373;
   --bg-primary: #fafafa;
@@ -137,6 +181,8 @@
   --bg-input: #f5f5f5;
   --bg-hover: #f0f0f0;
   --bg-active: #e5e5e5;
+  --bg-sidebar: #eeeeee;
+  --bg-sidebar-secondary: #f4f4f4;
 
   --fg-primary: #171717;
   --fg-secondary: #404040;
@@ -172,6 +218,40 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* Theme-invariant Markdown defaults (matching the generated themes.generated.css
+     set — color props reference this block's own chrome tokens). */
+  --md-h1-color: var(--fg-primary);
+  --md-h2-color: var(--fg-primary);
+  --md-h3-color: var(--fg-primary);
+  --md-h4-color: var(--fg-primary);
+  --md-h5-color: var(--fg-primary);
+  --md-h6-color: var(--fg-primary);
+  --md-bold-color: var(--fg-primary);
+  --md-italic-color: var(--fg-secondary);
+  --md-inline-code-bg: var(--bg-secondary);
+  --md-inline-code-color: var(--fg-primary);
+  --md-code-block-bg: var(--bg-secondary);
+  --md-code-block-color: var(--fg-primary);
+  --md-code-block-border: var(--border-default);
+  --md-blockquote-border: var(--border-strong);
+  --md-blockquote-color: var(--fg-secondary);
+  --md-link-color: var(--accent);
+  --md-code-font-family: var(--font-mono);
+  --md-italic-style: italic;
+  --md-bold-weight: 600;
+  --md-h1-size: 2.14em;
+  --md-h1-weight: 600;
+  --md-h2-size: 1.57em;
+  --md-h2-weight: 600;
+  --md-h3-size: 1.29em;
+  --md-h3-weight: 600;
+  --md-h4-size: 1.07em;
+  --md-h4-weight: 600;
+  --md-h5-size: 0.86em;
+  --md-h5-weight: 600;
+  --md-h6-size: 0.86em;
+  --md-h6-weight: 600;
 
   color-scheme: light;
 }

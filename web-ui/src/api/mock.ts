@@ -9,6 +9,7 @@ import type {
   CliId,
   CommitLogEntry,
   LocalQrResponse,
+  MarkdownStyle,
   MobileQrResponse,
   NormalizedEvent,
   PrInfo,
@@ -71,6 +72,10 @@ const MOCK_FS_TREE: Record<string, string[]> = {
 export function createMockApi() {
   /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
   const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
+  /** In-memory settings mirror (themeId/markdownStyle) — persisted across
+   *  `updateSettings` calls within a single mock instance so `getSettings`
+   *  reflects a prior PATCH, mirroring the real daemon. */
+  const mockSettings: { themeId?: string; markdownStyle?: MarkdownStyle } = {};
 
   const projects: Project[] = [
     {
@@ -305,6 +310,12 @@ export function createMockApi() {
       emit,
       setDaemonDown(v: boolean) {
         daemonDown = v;
+      },
+      /** Seed the mock's server-side settings (e.g. a pre-set `themeId`) so
+       *  tests can control what `GET /settings` returns. */
+      setSettings(patch: Partial<Settings>) {
+        if (patch.themeId !== undefined) mockSettings.themeId = patch.themeId;
+        if (patch.markdownStyle !== undefined) mockSettings.markdownStyle = patch.markdownStyle;
       },
       /** Push an event into a mock transcript (for chat:replay in tests). */
       pushChatEvent(sessionId: string, event: NormalizedEvent) {
@@ -1171,11 +1182,37 @@ export function createMockApi() {
         defaultProjectsDir: "/home/user/projects",
         homeDir: "/home/user",
         skillPaths: ["/home/user/.claude/skills"],
+        themeId: mockSettings.themeId,
+        ...(mockSettings.markdownStyle ? { markdownStyle: mockSettings.markdownStyle } : {}),
       };
     },
 
-    async updateSettings(_body: Partial<Settings>): Promise<{ ok: true }> {
-      // Mock does not persist settings
+    async updateSettings(body: Partial<Settings> & { resetMarkdownStyle?: boolean }): Promise<{ ok: true }> {
+      // Persist the fields the mock cares about and broadcast a settings:updated
+      // event mirroring the real daemon's narrow payload (themeId/markdownStyle).
+      if (body.themeId !== undefined) mockSettings.themeId = body.themeId;
+      if (body.markdownStyle !== undefined) mockSettings.markdownStyle = body.markdownStyle;
+      // resetMarkdownStyle: true clears the persisted markdownStyle (mirrors the
+      // Rust route — processed before any markdownStyle in the same request).
+      if (body.resetMarkdownStyle === true) {
+        mockSettings.markdownStyle = undefined;
+        emit({
+          type: "settings:updated",
+          markdownStyle: undefined,
+        });
+      }
+      if (body.markdownStyle !== undefined) {
+        emit({
+          type: "settings:updated",
+          ...(body.themeId !== undefined ? { themeId: body.themeId } : {}),
+          ...(body.markdownStyle !== undefined ? { markdownStyle: body.markdownStyle } : {}),
+        });
+      } else if (body.themeId !== undefined) {
+        emit({
+          type: "settings:updated",
+          themeId: body.themeId,
+        });
+      }
       return { ok: true };
     },
 
