@@ -80,16 +80,16 @@ impl JsonAgentSession {
                 .or_else(|| s.session.agent_chat_id.clone())
         };
 
-        // ACP meta for the claude adapter (1M-token context-window beta).
-        let acp_meta = if matches!(self.0.cli, vst_types::NormalizedEventProvider::Claude) {
-            Some(serde_json::json!({
-                "claudeCode": {
-                    "options": { "betas": ["context-1m-2025-08-07"] }
-                }
-            }))
-        } else {
-            None
+        // ACP meta for the agent adapter (forward model & options without branching on CLI id).
+        let active_model = {
+            let s = self.0.state.lock().unwrap();
+            s.session
+                .model_override
+                .clone()
+                .or_else(|| s.requested_model.clone())
+                .unwrap_or_else(|| self.0.plugin.default_model().to_string())
         };
+        let acp_meta = self.0.plugin.acp_meta(&active_model);
 
         let cwd = self.0.cwd.clone();
         let mut used_fresh_session = true;
