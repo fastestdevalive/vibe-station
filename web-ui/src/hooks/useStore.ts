@@ -214,6 +214,11 @@ export interface WorkspaceState {
    *  Client-side view preference (persisted); does not affect the sidebar's
    *  StatusDot, which always shows. Defaults on. */
   showAgentStatusBorders: boolean;
+  /** Whether agent panes' xterm follows the app theme's ANSI palette. Client-
+   *  side view preference (persisted); does not affect the standalone
+   *  terminal dock/tile (Ctrl/Cmd+Shift+Z), which never themes regardless.
+   *  Defaults on. */
+  themeAgentTerminals: boolean;
   mobileSidebarOpen: boolean;
   /** Transient attach state between openSession and session:opened */
   sessionAttachState: Record<string, "pending" | "attached">;
@@ -271,6 +276,7 @@ export interface WorkspaceState {
   setMobileSidebarOpen: (open: boolean) => void;
   toggleInactiveWorktreesFilter: () => void;
   toggleAgentStatusBorders: () => void;
+  toggleThemeAgentTerminals: () => void;
   clearWorkspaceSelection: () => void;
   toggleDotFiles: () => void;
   patchSessionState: (sessionId: string, state: SessionState) => void;
@@ -620,6 +626,7 @@ const initial = {
   leftSidebarWidthPx: 220,
   hideInactiveWorktrees: true,
   showAgentStatusBorders: true,
+  themeAgentTerminals: true,
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
@@ -977,6 +984,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({ hideInactiveWorktrees: !s.hideInactiveWorktrees })),
         toggleAgentStatusBorders: () =>
           set((s) => ({ showAgentStatusBorders: !s.showAgentStatusBorders })),
+        toggleThemeAgentTerminals: () =>
+          set((s) => ({ themeAgentTerminals: !s.themeAgentTerminals })),
         setWorkspacePaneFullscreen: (next) => set({ workspacePaneFullscreen: next }),
         clearWorkspaceSelection: () =>
           set((s) => {
@@ -1580,6 +1589,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         leftSidebarWidthPx: s.leftSidebarWidthPx,
         hideInactiveWorktrees: s.hideInactiveWorktrees,
         showAgentStatusBorders: s.showAgentStatusBorders,
+        themeAgentTerminals: s.themeAgentTerminals,
         sortOrders: s.sortOrders,
         workspaceDocs: s.workspaceDocs,
         workspaceOrder: s.workspaceOrder,
