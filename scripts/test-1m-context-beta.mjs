@@ -41,7 +41,7 @@ import { join } from "node:path";
 
 const args = process.argv.slice(2);
 const modelIdx = args.indexOf("--model");
-const MODEL = modelIdx >= 0 ? args[modelIdx + 1] : "claude-sonnet-4-5";
+const MODEL = modelIdx >= 0 ? args[modelIdx + 1] : "sonnet";
 
 // Resolve claude binary: CLAUDE_BIN env → ~/.local/bin → PATH
 function resolveClaude() {

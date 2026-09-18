@@ -30,13 +30,17 @@ fn sq(s: &str) -> String {
 }
 
 /// The curated claude model list (`CLAUDE_MODELS`).
-pub const CLAUDE_MODELS: [&str; 8] = [
+pub const CLAUDE_MODELS: [&str; 12] = [
     "sonnet",
+    "sonnet[1m]",
     "opus",
+    "opus[1m]",
     "haiku",
     "fable",
     "claude-opus-4-5",
+    "claude-opus-4-5[1m]",
     "claude-sonnet-4-5",
+    "claude-sonnet-4-5[1m]",
     "claude-haiku-4-5",
     "claude-fable-5",
 ];
@@ -448,6 +452,22 @@ impl AgentPlugin for ClaudePlugin {
         };
         tokio::spawn(run_turn_acp(tx, input, ctx, cancel, params));
         rx
+    }
+
+    fn acp_meta(&self, model: &str) -> Option<serde_json::Value> {
+        let model_for_acp = match model {
+            "claude-sonnet-4-5" => "claude-sonnet-4-5[1m]",
+            "claude-opus-4-5" => "claude-opus-4-5[1m]",
+            other => other,
+        };
+        Some(serde_json::json!({
+            "claudeCode": {
+                "options": {
+                    "model": model_for_acp,
+                    "betas": ["context-1m-2025-08-07"]
+                }
+            }
+        }))
     }
 }
 

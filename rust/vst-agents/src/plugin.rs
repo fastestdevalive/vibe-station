@@ -341,6 +341,13 @@ pub trait AgentPlugin: Send + Sync {
     fn supports_json_to_terminal_resume(&self) -> bool {
         true
     }
+
+    /// Optional extension metadata payload passed in `session/new` and `session/load`.
+    /// Enables plugins (e.g. Claude) to pass CLI-specific options (model, betas, etc.)
+    /// without calling code inspecting CLI IDs (AGENTS.md Plugin Invariant).
+    fn acp_meta(&self, _model: &str) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// A short ISO8601-ish timestamp for event `ts`/`id` fields. Exact values are

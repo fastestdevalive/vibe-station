@@ -138,6 +138,29 @@ mod claude_plugin {
         assert!(signal.fallback_ms >= 10_000);
     }
 
+    #[test]
+    fn acp_meta_forwards_model_and_normalizes_pinned_1m() {
+        let plugin = create_claude_plugin();
+
+        let meta_sonnet = plugin.acp_meta("sonnet").expect("should have acp_meta");
+        assert_eq!(meta_sonnet["claudeCode"]["options"]["model"], "sonnet");
+        assert_eq!(meta_sonnet["claudeCode"]["options"]["betas"][0], "context-1m-2025-08-07");
+
+        let meta_pinned = plugin.acp_meta("claude-sonnet-4-5").expect("should have acp_meta");
+        assert_eq!(meta_pinned["claudeCode"]["options"]["model"], "claude-sonnet-4-5[1m]");
+
+        let meta_opus = plugin.acp_meta("claude-opus-4-5").expect("should have acp_meta");
+        assert_eq!(meta_opus["claudeCode"]["options"]["model"], "claude-opus-4-5[1m]");
+
+        let meta_explicit = plugin.acp_meta("sonnet[1m]").expect("should have acp_meta");
+        assert_eq!(meta_explicit["claudeCode"]["options"]["model"], "sonnet[1m]");
+
+        // Non-claude plugins return None
+        assert_eq!(create_cursor_plugin().acp_meta("auto"), None);
+        assert_eq!(create_opencode_plugin().acp_meta("big-pickle"), None);
+        assert_eq!(create_agy_plugin().acp_meta("Gemini 3.1 Pro (High)"), None);
+    }
+
     #[tokio::test]
     async fn restore_command_null_when_no_uuid() {
         let home = tempfile::tempdir().unwrap();
