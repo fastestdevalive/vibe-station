@@ -803,6 +803,93 @@ async fn handle_ws_upgrade(
     })
 }
 
+/// Queue depth per dispatch lane. Bounded on purpose: the read loop `await`s a
+/// full lane, which throttles a client flooding one session instead of letting
+/// it queue without limit in daemon memory. No lane worker depends on the read
+/// loop making progress, so parking there cannot deadlock.
+const LANE_QUEUE_CAP: usize = 256;
+
+/// Hard cap on lanes per connection. Lane keys come from CLIENT-supplied
+/// session ids and lanes are created before any lookup, so without a cap a
+/// client could spin up a task + channel per garbage id it invents. Legitimate
+/// use is bounded by the sessions in a worktree, orders of magnitude below this.
+const MAX_LANES_PER_CONNECTION: usize = 256;
+
+/// How long connection teardown waits for its lanes to drain before giving up
+/// on them. A bounded race is better than an unbounded hang: without this, a
+/// client that floods a lane and then disconnects could delay `conn.cleanup()`
+/// — and therefore the `detach()` that kills this connection's
+/// `tmux attach-session` clients — indefinitely, which is the phantom-client
+/// leak class commit 6fcad49 fixed. On expiry the stragglers are aborted so
+/// cleanup can proceed deterministically.
+const LANE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// One ordered dispatch worker for a connection: a bounded queue plus the task
+/// draining it, so messages on the same lane are still handled strictly in
+/// arrival order while different lanes progress independently.
+struct DispatchLane {
+    tx: mpsc::Sender<ClientMessage>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl DispatchLane {
+    fn spawn(conn: WsConnection, ctx: DispatchContext) -> Self {
+        let (tx, mut rx) = mpsc::channel::<ClientMessage>(LANE_QUEUE_CAP);
+        let handle = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                dispatch(&conn, &ctx, &msg).await;
+            }
+        });
+        DispatchLane { tx, handle }
+    }
+}
+
+/// The ordering lane a message belongs to, or `None` for message types handled
+/// inline on the read loop.
+///
+/// Anything that can block (a tmux attach, a SQLite read, an inotify
+/// registration) gets a lane keyed by the thing it actually contends for, so
+/// unrelated work never queues behind it:
+///
+/// - `session:*` → one lane per session id. This is the close/open ordering
+///   `WsConnection::with_session_lock` depends on, and it also keeps a
+///   session's `input`/`resize` behind its own `open`.
+/// - `chat:*` → a SEPARATE lane per session id (`chat:` prefix). Chat
+///   open/close must not reorder against each other, but a chat snapshot read
+///   has no interaction with that session's terminal attach, so the two run
+///   concurrently.
+/// - watcher messages → a single lane per connection. `file:`/`tree:`
+///   watch/unwatch are refcounted per watch key, so a `watch` must never
+///   overtake the `unwatch` that preceded it; one shared lane keeps all of them
+///   ordered without blocking any session.
+/// - everything else (`subscribe`/`unsubscribe`/`ping`/`debug:log`) → `None`:
+///   their handlers are synchronous, so the read loop runs them itself.
+///
+/// Lanes deliberately live until the connection closes rather than being torn
+/// down on `session:close`: removing a lane while its worker may still be
+/// finishing that close would let the NEXT `session:open` for the same session
+/// start on a fresh lane concurrently — exactly the close/open race the
+/// ordering exists to prevent. An idle lane is one parked task.
+fn dispatch_lane_key(msg: &ClientMessage) -> Option<String> {
+    match msg {
+        ClientMessage::SessionOpen { session_id, .. }
+        | ClientMessage::SessionClose { session_id }
+        | ClientMessage::SessionInput { session_id, .. }
+        | ClientMessage::SessionResize { session_id, .. } => Some(format!("session:{session_id}")),
+        ClientMessage::ChatOpen { session_id, .. } | ClientMessage::ChatClose { session_id } => {
+            Some(format!("chat:{session_id}"))
+        }
+        ClientMessage::FileWatch { .. }
+        | ClientMessage::FileUnwatch { .. }
+        | ClientMessage::TreeWatch { .. }
+        | ClientMessage::TreeUnwatch { .. } => Some("watch".to_string()),
+        ClientMessage::Subscribe { .. }
+        | ClientMessage::Unsubscribe { .. }
+        | ClientMessage::Ping
+        | ClientMessage::DebugLog { .. } => None,
+    }
+}
+
 async fn handle_socket(
     socket: WebSocket,
     dispatch_ctx: DispatchContext,
@@ -874,6 +961,9 @@ async fn handle_socket(
     // Inbound listener
     let conn_clone = conn.clone();
     let ctx_clone = dispatch_ctx.clone();
+    // Per-(connection, lane-key) ordered workers — see `dispatch_lane_key`.
+    let mut lanes: std::collections::HashMap<String, DispatchLane> =
+        std::collections::HashMap::new();
     while let Some(msg_res) = receiver.next().await {
         let msg = match msg_res {
             Ok(m) => m,
@@ -886,22 +976,83 @@ async fn handle_socket(
                 match serde_json::from_str::<serde_json::Value>(&text) {
                     Ok(val) => match serde_json::from_value::<ClientMessage>(val) {
                         Ok(client_msg) => {
-                            // IMPORTANT: dispatch is awaited inline, in arrival order.
-                            // The TS original (daemon/src/ws/server.ts) processes
-                            // `socket.on("message", async ...)` handlers starting
+                            // IMPORTANT: ordering is preserved PER LANE, and every
+                            // message belongs to exactly one lane — either a
+                            // dedicated ordered worker task (`dispatch_lane_key`)
+                            // or this read loop itself.
+                            //
+                            // The invariant this protects is the original one: the
+                            // TS daemon (daemon/src/ws/server.ts) started its
+                            // `socket.on("message", async ...)` handlers
                             // synchronously in arrival order, which is what lets
                             // `WSConnection.withSessionLock` (AGENTS.md: "WebSocket
                             // — serialize session:open / session:close") preserve
-                            // FIFO ordering per (connection, sessionId). Previously
-                            // this spawned an unordered `tokio::spawn` per message,
-                            // so a session:close immediately followed by a
-                            // session:open (a terminal remount / rapid tap) could
-                            // have their dispatches start in either order or
-                            // interleave, racing the DirectStreamRegistry/tmux
-                            // attach-detach and losing session:input keystrokes.
-                            // Do NOT reintroduce a per-message tokio::spawn here
-                            // without an ordered per-connection queue to replace it.
-                            dispatch(&conn_clone, &ctx_clone, &client_msg).await;
+                            // FIFO ordering per (connection, sessionId). A
+                            // session:close immediately followed by a session:open
+                            // (a terminal remount / rapid tap) must NOT interleave,
+                            // or the DirectStreamRegistry/tmux attach-detach races
+                            // and keystrokes are lost. Both land on the same lane
+                            // key here, so they still run strictly in arrival
+                            // order.
+                            //
+                            // What this no longer does is serialize *unrelated*
+                            // work: awaiting every dispatch inline made one
+                            // connection a single global FIFO, so a worktree switch
+                            // queued N+M `session:open`s, every `chat:open` and a
+                            // `tree:watch` behind each other — and the user's
+                            // keystrokes behind all of them. Do NOT replace the
+                            // lanes with a bare per-message `tokio::spawn`: that
+                            // loses the per-session ordering above.
+                            match dispatch_lane_key(&client_msg) {
+                                Some(key) => {
+                                    if !lanes.contains_key(&key)
+                                        && lanes.len() >= MAX_LANES_PER_CONNECTION
+                                    {
+                                        // Refuse to grow further rather than
+                                        // letting client-chosen ids allocate
+                                        // tasks without bound.
+                                        tracing::warn!(
+                                            "[WS] connection hit the {MAX_LANES_PER_CONNECTION}-lane cap; dropping message for lane {key}"
+                                        );
+                                        continue;
+                                    }
+                                    let lane = lanes.entry(key.clone()).or_insert_with(|| {
+                                        DispatchLane::spawn(conn_clone.clone(), ctx_clone.clone())
+                                    });
+                                    // A worker only ends when its sender is
+                                    // dropped (teardown) or it panicked. In the
+                                    // latter case nothing of this lane is in
+                                    // flight any more, so replacing it cannot
+                                    // reorder anything.
+                                    if lane.tx.is_closed() {
+                                        *lane = DispatchLane::spawn(
+                                            conn_clone.clone(),
+                                            ctx_clone.clone(),
+                                        );
+                                    }
+                                    // Awaits when the lane is full — see
+                                    // `LANE_QUEUE_CAP`.
+                                    if lane.tx.send(client_msg).await.is_err() {
+                                        tracing::warn!(
+                                            "[WS] dropping message for dead dispatch lane {key}"
+                                        );
+                                    }
+                                }
+                                // Lane-less message types: their handlers are
+                                // fully synchronous (no `.await` inside), so
+                                // running them here is both ordered and
+                                // non-blocking — and it keeps mutations of the
+                                // connection's explicit subscription set in
+                                // arrival order. That last part holds only
+                                // because NOTHING dispatched on a lane touches
+                                // that set: `chat:open`/`chat:close` keep their
+                                // own `chat_subscriptions` membership precisely
+                                // so a queued chat message cannot undo a
+                                // `subscribe` that ran here after it. Anything
+                                // added here that mutates shared connection
+                                // state from a lane needs the same treatment.
+                                None => dispatch(&conn_clone, &ctx_clone, &client_msg).await,
+                            }
                         }
                         Err(_) => send_parse_error(&conn_clone, false),
                     },
@@ -913,7 +1064,41 @@ async fn handle_socket(
         }
     }
 
-    // Connection teardown
+    // Connection teardown. Stop accepting new work and let every lane drain in
+    // order FIRST: `conn.cleanup()` detaches this connection's live streams, so
+    // it must not race a worker still parked inside `attach()` (which would
+    // leave a `tmux attach-session` client attached with nothing to detach it).
+    // Dropping a lane's sender is what ends its worker, so this also guarantees
+    // no task is leaked per connection.
+    //
+    // Every sender is dropped BEFORE awaiting any handle: a worker cannot
+    // notice its queue is finished until its sender is gone, so awaiting them
+    // one at a time while later lanes still hold senders would make teardown
+    // cost the SUM of the lanes' drains instead of the slowest one.
+    let mut lane_handles: Vec<tokio::task::JoinHandle<()>> = Vec::with_capacity(lanes.len());
+    for (_key, lane) in lanes.drain() {
+        let DispatchLane { tx, handle } = lane;
+        drop(tx);
+        lane_handles.push(handle);
+    }
+    let drain_deadline = tokio::time::Instant::now() + LANE_DRAIN_TIMEOUT;
+    let mut drain_timed_out = false;
+    for mut handle in lane_handles {
+        if drain_timed_out {
+            handle.abort();
+            continue;
+        }
+        if tokio::time::timeout_at(drain_deadline, &mut handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "[WS] dispatch lanes did not drain within {LANE_DRAIN_TIMEOUT:?}; aborting the rest so cleanup can proceed"
+            );
+            drain_timed_out = true;
+            handle.abort();
+        }
+    }
     dispatch_ctx.hub.unregister_connection(&conn);
     conn.cleanup().await;
     ready_state.store(3, Ordering::SeqCst);

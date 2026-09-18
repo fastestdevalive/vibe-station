@@ -75,7 +75,7 @@ pub async fn dispatch(conn: &WsConnection, ctx: &DispatchContext, msg: &ClientMe
             handle_file_unwatch(conn, &ctx.watchers, msg).await;
         }
         ClientMessage::TreeWatch { .. } => {
-            handle_tree_watch(conn, &ctx.watchers, &ctx.resolve_worktree_root, msg);
+            handle_tree_watch(conn, &ctx.watchers, &ctx.resolve_worktree_root, msg).await;
         }
         ClientMessage::TreeUnwatch { .. } => {
             handle_tree_unwatch(conn, &ctx.watchers, msg).await;

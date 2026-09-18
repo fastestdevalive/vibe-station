@@ -137,6 +137,17 @@ pub trait SessionStream: Send + Sync {
     async fn attach(&self, cols: i64, rows: i64, subscriber_id: &str) -> Result<(), Error>;
     /// Forward client keystrokes.
     fn write(&self, data: &str);
+    /// Whether [`SessionStream::write`] can actually deliver bytes yet.
+    ///
+    /// The stream entry is registered in the connection's map BEFORE `attach()`
+    /// runs (so a follow-up open/close finds it), which leaves a window where
+    /// `write()` has nowhere to write and would silently drop the keystroke.
+    /// `session:input` uses this to take its fallback path instead. Defaults to
+    /// `true` for streams whose `write()` is usable as soon as they exist
+    /// (direct-PTY).
+    fn is_attached(&self) -> bool {
+        true
+    }
     /// Resize the PTY.
     fn resize(&self, cols: i64, rows: i64, subscriber_id: Option<&str>);
     /// Stop streaming for one subscriber.
@@ -193,6 +204,18 @@ pub struct WatcherEntry {
 
 struct ConnectionState {
     subscriptions: HashSet<String>,
+    /// Sessions this connection receives broadcasts for because a `chat:open`
+    /// asked for them — deliberately SEPARATE from `subscriptions`.
+    ///
+    /// The two are mutated by different owners: `subscriptions` by the client's
+    /// explicit `subscribe`/`unsubscribe` messages, `chat_subscriptions` by the
+    /// `chat:open`/`chat:close` handlers. Sharing one set let one owner silently
+    /// undo the other's intent — a queued `chat:close` running after a fresh
+    /// `subscribe` for the same id would drop the subscription the client had
+    /// just (re-)established, with no frame to tell it so, until reconnect.
+    /// Two sets and a union in [`WsConnection::is_subscribed_to`] make each
+    /// owner's removals affect only its own membership.
+    chat_subscriptions: HashSet<String>,
     open_streams: HashMap<String, OpenStreamEntry>,
     chat_streams: HashMap<String, ChatStreamEntry>,
     file_watches: HashMap<String, WatcherEntry>,
@@ -206,6 +229,7 @@ impl ConnectionState {
     fn new() -> Self {
         ConnectionState {
             subscriptions: HashSet::new(),
+            chat_subscriptions: HashSet::new(),
             open_streams: HashMap::new(),
             chat_streams: HashMap::new(),
             file_watches: HashMap::new(),
@@ -472,13 +496,33 @@ impl WsConnection {
         }
     }
 
-    pub fn is_subscribed_to(&self, session_id: &str) -> bool {
+    /// Add/remove a chat-driven subscription (`chat:open` / `chat:close`).
+    ///
+    /// Tracked apart from the client's explicit `subscribe` set — see
+    /// `ConnectionState::chat_subscriptions`.
+    pub fn subscribe_chat(&self, session_id: &str) {
         self.inner
             .state
             .lock()
             .unwrap()
-            .subscriptions
-            .contains(session_id)
+            .chat_subscriptions
+            .insert(session_id.to_string());
+    }
+
+    pub fn unsubscribe_chat(&self, session_id: &str) {
+        self.inner
+            .state
+            .lock()
+            .unwrap()
+            .chat_subscriptions
+            .remove(session_id);
+    }
+
+    /// Whether broadcasts for `session_id` should reach this connection —
+    /// true if EITHER the client subscribed explicitly or a chat is open on it.
+    pub fn is_subscribed_to(&self, session_id: &str) -> bool {
+        let state = self.inner.state.lock().unwrap();
+        state.subscriptions.contains(session_id) || state.chat_subscriptions.contains(session_id)
     }
 
     pub fn subscriptions(&self) -> Vec<String> {
@@ -786,6 +830,7 @@ impl WsConnection {
         let streams_to_detach: Vec<OpenStreamEntryRef> = {
             let mut state = self.inner.state.lock().unwrap();
             state.subscriptions.clear();
+            state.chat_subscriptions.clear();
             let streams = state
                 .open_streams
                 .values()

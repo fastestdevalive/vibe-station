@@ -59,7 +59,11 @@ pub async fn handle_chat_open(
         return;
     };
 
-    conn.subscribe(std::slice::from_ref(&session_id));
+    // The chat's own subscription membership, NOT the client's explicit
+    // `subscribe` set: `chat:open`/`chat:close` are dispatched on their own
+    // ordering lane, so mutating the shared set here could undo a `subscribe`
+    // the client issued in between (see `ConnectionState::chat_subscriptions`).
+    conn.subscribe_chat(&session_id);
 
     // A session marked `done` has had its JsonAgentSession released — resolving
     // it would lazily RE-CREATE it. Serve it from disk instead.
@@ -170,6 +174,8 @@ fn send_snapshot(
 pub fn handle_chat_close(conn: &WsConnection, msg: &ClientMessage) {
     if let ClientMessage::ChatClose { session_id } = msg {
         conn.unregister_chat_stream(session_id);
-        conn.unsubscribe(std::slice::from_ref(session_id));
+        // Releases only this chat's own membership; an explicit client
+        // `subscribe` for the same session survives (and vice versa).
+        conn.unsubscribe_chat(session_id);
     }
 }

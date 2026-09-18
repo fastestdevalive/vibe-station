@@ -36,11 +36,20 @@ pub async fn handle_session_input(
     let entry = conn.open_stream_entry(session_id);
 
     if session.use_tmux {
-        if let Some(entry) = entry {
+        // `is_attached()` matters as much as the entry existing: `session:open`
+        // registers the entry BEFORE `attach()` sets up the PTY, so in that
+        // window `stream.write()` has no `master` to write to and drops the
+        // keystroke silently — with the entry present, the `send-keys` fallback
+        // below was unreachable. Per-session dispatch ordering means a
+        // `session:input` can legitimately land there (the client fires
+        // keystrokes as soon as the pane has focus, without waiting for
+        // `session:opened`), so treat "registered but not attached yet" exactly
+        // like "no stream": send the bytes to the tmux session directly.
+        if let Some(entry) = entry.filter(|e| e.stream.is_attached()) {
             entry.stream.write(data);
             return;
         }
-        // No stream — fall back to `tmux send-keys -l`. `data` is passed
+        // No usable stream — fall back to `tmux send-keys -l`. `data` is passed
         // straight through as a single argv element to `Command::args`
         // (no shell involved), so it must NOT be shell-escaped here. The
         // `'\\''`-escaping below was carried over from the TS original
