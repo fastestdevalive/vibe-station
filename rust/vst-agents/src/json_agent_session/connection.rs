@@ -107,8 +107,8 @@ impl JsonAgentSession {
                             "resumed with a fresh agent session — prior context may not be visible to the CLI"
                                 .to_string(),
                         );
-                        let ev = self.new_event(NormalizedEventKind::Status, &mut ev);
-                        self.persist_event(&ev);
+                        let mut ev = self.new_event(NormalizedEventKind::Status, &mut ev);
+                        self.persist_event(&mut ev);
                         self.0.stream.emit_message(&ev);
                     }
                     Err(e) => return Err(e),

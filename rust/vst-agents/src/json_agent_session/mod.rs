@@ -482,7 +482,7 @@ impl JsonAgentSession {
 
     /// Persist + broadcast a system annotation event.
     pub fn emit_system_event(&self, payload: EmitSystemEventPayload) {
-        let ev = self.new_event(
+        let mut ev = self.new_event(
             NormalizedEventKind::MessageGenerated,
             &mut vst_types::NormalizedEvent {
                 text: Some(payload.text),
@@ -492,7 +492,7 @@ impl JsonAgentSession {
                 ..Default::default()
             },
         );
-        self.persist_event(&ev);
+        self.persist_event(&mut ev);
         self.0.stream.emit_message(&ev);
     }
 }
@@ -868,14 +868,13 @@ impl JsonAgentSession {
     /// write can no longer block turn-queue/cancel-token/ACP bookkeeping. The
     /// `released` check happens under that same lock, which is what keeps it
     /// atomic with the append (see `Inner::released` and `release()`).
-    pub(super) fn persist_event(&self, ev: &NormalizedEvent) {
+    pub(super) fn persist_event(&self, ev: &mut NormalizedEvent) {
         let mut store = self.0.store.lock().unwrap();
         if self.0.released.load(Ordering::SeqCst) {
             return;
         }
         if let Some(store) = store.as_mut() {
-            let mut ev_clone = ev.clone();
-            store.append(&mut ev_clone);
+            store.append(ev);
         }
     }
 
@@ -887,7 +886,8 @@ impl JsonAgentSession {
     /// Mirrors the `StoreHandle::raw_conn` test-seam precedent in `vst-store`.
     #[doc(hidden)]
     pub fn persist_event_for_test(&self, ev: &NormalizedEvent) {
-        self.persist_event(ev);
+        let mut ev_clone = ev.clone();
+        self.persist_event(&mut ev_clone);
     }
 
     /// Test-only: run `f` while holding the session-`state` mutex.
@@ -901,16 +901,10 @@ impl JsonAgentSession {
         f()
     }
 
-    /// Same as `persist_event` but mutates the event in-place (assigns `log_seq`).
+    /// Same as `persist_event` (mutates the event in-place and assigns `log_seq`).
     #[allow(dead_code)]
     pub(super) fn persist_event_mut(&self, ev: &mut NormalizedEvent) {
-        let mut store = self.0.store.lock().unwrap();
-        if self.0.released.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Some(store) = store.as_mut() {
-            store.append(ev);
-        }
+        self.persist_event(ev);
     }
 }
 
