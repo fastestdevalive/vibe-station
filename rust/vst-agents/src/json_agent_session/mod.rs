@@ -34,6 +34,7 @@ use vst_types::{
 };
 
 use crate::acp_connection::AcpConnection;
+use crate::acp_transport::AcpTransport;
 use crate::json_agent_registry::JsonAgentRegistry;
 use crate::json_agent_stream::JsonAgentStream;
 use crate::native_history_importer::get_native_history_importer;
@@ -461,10 +462,19 @@ impl JsonAgentSession {
     /// Change the model for subsequent turns (status-bar switcher).
     pub async fn set_model(&self, override_model: Option<String>, mode_default: Option<String>) {
         let requested = override_model.clone().or(mode_default);
-        {
+        let conn_to_dispose = {
             let mut s = self.0.state.lock().unwrap();
+            let changed = s.requested_model != requested;
             s.requested_model = requested.clone();
             s.model = requested;
+            if changed {
+                s.connection.take()
+            } else {
+                None
+            }
+        };
+        if let Some(conn) = conn_to_dispose {
+            conn.dispose().await;
         }
         self.persist_model_override(override_model).await;
         self.emit_meta();
