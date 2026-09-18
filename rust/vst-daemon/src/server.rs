@@ -76,8 +76,8 @@ use vst_types::rest::tailscale::{
 use vst_types::rest::worktrees::{
     ChangedPath, CommitsResult, CreateWorktreeBody, DiffStat, DiskUsage, FileListResult,
     OpenFileBody, PatchWorktreeResult, PatchWorktreeToggleBody, PrLookupResult, RenameWorktreeBody,
-    RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult, SubmodulesResult,
-    WorktreeDoneResult,
+    RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult, SearchResult,
+    SubmodulesResult, WorktreeDoneResult,
 };
 use vst_types::ws::ClientMessage;
 use vst_ws::broadcaster::{spawn_event_fanout, WsHub};
@@ -402,7 +402,9 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/worktrees/:id", delete(handle_delete_worktree))
         .route("/worktrees/:id/tree", get(handle_worktree_tree))
         .route("/worktrees/:id/file-list", get(handle_worktree_file_list))
+        .route("/worktrees/:id/search", get(handle_worktree_search))
         .route("/worktrees/:id/files/*path", get(handle_worktree_get_file))
+        .route("/worktrees/:id/gutter/*path", get(handle_worktree_gutter))
         .route("/worktrees/:id/diff/*path", get(handle_worktree_diff))
         .route(
             "/worktrees/:id/changed-paths",
@@ -1454,6 +1456,38 @@ async fn handle_worktree_file_list(
         .map_err(worktree_err_to_response)
 }
 
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+    re: Option<bool>,
+    case: Option<bool>,
+    word: Option<bool>,
+    glob: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn handle_worktree_search(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<SearchResult>, (StatusCode, Json<serde_json::Value>)> {
+    let q = query.q.as_deref().unwrap_or("");
+    state
+        .worktree_routes
+        .search(
+            &id,
+            q,
+            query.re.unwrap_or(false),
+            query.case.unwrap_or(false),
+            query.word.unwrap_or(false),
+            query.glob.as_deref(),
+            query.limit,
+        )
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
 async fn handle_worktree_get_file(
     State(state): State<AppState>,
     axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
@@ -1479,6 +1513,18 @@ async fn handle_worktree_get_file(
             Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
         }
     }
+}
+
+async fn handle_worktree_gutter(
+    State(state): State<AppState>,
+    axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::GutterResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .gutter(&id, &file_path)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
 }
 
 #[derive(Deserialize)]

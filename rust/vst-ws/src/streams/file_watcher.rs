@@ -30,8 +30,9 @@
 //! created *after* registration; the event loop reproduces that by walking (and
 //! watching) any newly-created, non-ignored directory it sees.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -121,14 +122,41 @@ fn watch_tree_pruned(
 struct Inner {
     callbacks: WatcherCallbacks,
     worktree_root: std::path::PathBuf,
-    debounce_ms: u64,
+    debounce_ms: AtomicU64,
     closed: AtomicBool,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    pending: Mutex<HashMap<String, tokio::task::AbortHandle>>,
 }
 
 /// A file/tree watcher backed by `notify`.
 pub struct FileWatcher {
     inner: Arc<Inner>,
+}
+
+/// Schedule (or reschedule) a debounced callback for the given path.
+///
+/// The insert into `pending` happens synchronously on the CALLING task, so it
+/// can never race the timer task's own removal — this closes the leak window
+/// that a naive "insert via a second `tokio::spawn`" would have.
+fn schedule_debounced(inner: &Arc<Inner>, abs: String, deleted: bool) {
+    let inner2 = Arc::clone(inner);
+    let key = abs.clone();
+    let cb_path = abs.clone();
+    let debounce_ms = inner.debounce_ms.load(Ordering::SeqCst);
+    let handle = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
+        inner2.pending.lock().unwrap().remove(&key);
+        if deleted {
+            (inner2.callbacks.on_deleted)(cb_path);
+        } else {
+            (inner2.callbacks.on_changed)(cb_path);
+        }
+    });
+    // Synchronous insert on the CALLING task — this must happen before
+    // returning, so it can never race the timer task's own removal above.
+    if let Some(old) = inner.pending.lock().unwrap().insert(abs, handle.abort_handle()) {
+        old.abort(); // a still-pending timer for this same path — superseded, not fired
+    }
 }
 
 impl FileWatcher {
@@ -138,11 +166,18 @@ impl FileWatcher {
             inner: Arc::new(Inner {
                 callbacks,
                 worktree_root,
-                debounce_ms: 200,
+                debounce_ms: AtomicU64::new(200),
                 closed: AtomicBool::new(false),
                 watcher: Mutex::new(None),
+                pending: Mutex::new(HashMap::new()),
             }),
         }
+    }
+
+    /// Override the debounce interval (milliseconds). Test-only — avoids
+    /// sleeping the full 200ms in unit tests.
+    pub fn set_debounce_ms_for_test(&self, ms: u64) {
+        self.inner.debounce_ms.store(ms, Ordering::SeqCst);
     }
 
     /// Start a watch of a directory tree (tree:watch mode).
@@ -184,15 +219,7 @@ impl FileWatcher {
                         let _ = watch_tree_pruned(w, &path, &mut matcher, false);
                     }
                 }
-                let m = me.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(m.debounce_ms)).await;
-                    if deleted {
-                        (m.callbacks.on_deleted)(abs.clone());
-                    } else {
-                        (m.callbacks.on_changed)(abs);
-                    }
-                });
+                schedule_debounced(&me, abs, deleted);
             }
         });
         Ok(())
@@ -225,16 +252,8 @@ impl FileWatcher {
                 if path.to_string_lossy() != target_str {
                     continue; // only the exact watched file
                 }
-                let m = me.clone();
                 let abs = path.to_string_lossy().into_owned();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(m.debounce_ms)).await;
-                    if deleted {
-                        (m.callbacks.on_deleted)(abs.clone());
-                    } else {
-                        (m.callbacks.on_changed)(abs);
-                    }
-                });
+                schedule_debounced(&me, abs, deleted);
             }
         });
         Ok(())
@@ -244,6 +263,10 @@ impl FileWatcher {
 impl WatcherHandle for FileWatcher {
     fn close(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
+        // Abort every pending debounce timer so no callback fires after close.
+        for (_, h) in self.inner.pending.lock().unwrap().drain() {
+            h.abort();
+        }
         // Drop the notify watcher (releases inotify handles).
         *self.inner.watcher.lock().unwrap() = None;
     }
@@ -253,7 +276,115 @@ impl std::fmt::Debug for FileWatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileWatcher")
             .field("worktree_root", &self.inner.worktree_root)
-            .field("debounce_ms", &self.inner.debounce_ms)
+            .field(
+                "debounce_ms",
+                &self.inner.debounce_ms.load(Ordering::SeqCst),
+            )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// 1.T1 — Send 5 rapid events for the same path within the debounce
+    /// window; assert `on_changed` fires exactly once.
+    #[tokio::test]
+    async fn coalesces_rapid_events_for_same_path() {
+        let changed_count = Arc::new(AtomicUsize::new(0));
+        let cc = Arc::clone(&changed_count);
+
+        let callbacks = WatcherCallbacks {
+            on_changed: Arc::new(move |_path: String| {
+                cc.fetch_add(1, Ordering::SeqCst);
+            }),
+            on_deleted: Arc::new(|_: String| {}),
+            on_error: Arc::new(|_: String| {}),
+        };
+        let watcher = FileWatcher::new(callbacks, std::path::PathBuf::from("/tmp/fake"));
+        watcher.set_debounce_ms_for_test(20);
+
+        // Simulate 5 rapid events for the same path.
+        for _ in 0..5 {
+            schedule_debounced(&watcher.inner, "/tmp/fake/file.txt".to_string(), false);
+        }
+
+        // Wait long enough for the debounce to fire (20ms + margin).
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        assert_eq!(
+            changed_count.load(Ordering::SeqCst),
+            1,
+            "on_changed should fire exactly once for 5 rapid events on the same path"
+        );
+    }
+
+    /// 1.T2 — Two different paths debounce independently: an event on path A
+    /// does not delay or cancel path B's timer.
+    #[tokio::test]
+    async fn independent_debounce_per_path() {
+        let changed_paths = Arc::new(Mutex::new(Vec::<String>::new()));
+        let cp = Arc::clone(&changed_paths);
+
+        let callbacks = WatcherCallbacks {
+            on_changed: Arc::new(move |path: String| {
+                cp.lock().unwrap().push(path);
+            }),
+            on_deleted: Arc::new(|_: String| {}),
+            on_error: Arc::new(|_: String| {}),
+        };
+        let watcher = FileWatcher::new(callbacks, std::path::PathBuf::from("/tmp/fake"));
+        watcher.set_debounce_ms_for_test(20);
+
+        // Fire events for two different paths.
+        schedule_debounced(&watcher.inner, "/tmp/fake/a.txt".to_string(), false);
+        schedule_debounced(&watcher.inner, "/tmp/fake/b.txt".to_string(), false);
+
+        // Wait for both debounce timers to fire.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut paths = changed_paths.lock().unwrap().clone();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec!["/tmp/fake/a.txt", "/tmp/fake/b.txt"],
+            "both paths should fire independently"
+        );
+    }
+
+    /// 1.T3 — A single event fires exactly one `on_changed` callback after
+    /// ~debounce_ms, with the correct absolute path.
+    #[tokio::test]
+    async fn single_event_fires_once_with_correct_path() {
+        let received_path = Arc::new(Mutex::new(None::<String>));
+        let rp = Arc::clone(&received_path);
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = Arc::clone(&call_count);
+
+        let callbacks = WatcherCallbacks {
+            on_changed: Arc::new(move |path: String| {
+                cc.fetch_add(1, Ordering::SeqCst);
+                *rp.lock().unwrap() = Some(path);
+            }),
+            on_deleted: Arc::new(|_: String| {}),
+            on_error: Arc::new(|_: String| {}),
+        };
+        let watcher = FileWatcher::new(callbacks, std::path::PathBuf::from("/tmp/fake"));
+        watcher.set_debounce_ms_for_test(20);
+
+        let expected = "/tmp/fake/single.txt".to_string();
+        schedule_debounced(&watcher.inner, expected.clone(), false);
+
+        // Wait for the debounce to fire.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        assert_eq!(call_count.load(Ordering::SeqCst), 1, "should fire exactly once");
+        assert_eq!(
+            received_path.lock().unwrap().as_deref(),
+            Some("/tmp/fake/single.txt"),
+            "callback should receive the correct absolute path"
+        );
     }
 }
