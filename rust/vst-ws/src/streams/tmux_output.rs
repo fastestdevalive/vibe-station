@@ -153,37 +153,26 @@ impl TmuxOutputStream {
     }
 
     // (`resize-window` on attach is chained into the single pre-flight
-    // invocation in `attach()`; `resize()` uses the sync variant below.)
+    // invocation in `attach()`; `resize()` uses the async helper below.)
 
-    // ── Sync variants kept for `resize()` (called on user resize events) ─────
-
-    fn run_sync(&self, args: &[&str]) -> Result<(), Error> {
-        let mut cmd = std::process::Command::new("tmux");
-        if let Some(sock) = &self.inner.socket {
-            cmd.arg("-L").arg(sock);
-        }
-        let out = cmd
-            .args(args)
-            .output()
-            .map_err(|e| Error::Stream(format!("io: {e}")))?;
-        if !out.status.success() {
-            return Err(Error::Stream(
-                String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn force_window_size_sync(&self, cols: i64, rows: i64) {
-        let _ = self.run_sync(&[
-            "resize-window",
-            "-t",
-            &self.inner.tmux_name,
-            "-x",
-            &cols.to_string(),
-            "-y",
-            &rows.to_string(),
-        ]);
+    /// Apply `tmux resize-window` for a user-driven resize event.
+    ///
+    /// Uses `tokio::process` (not `std::process`) so waiting on the tmux
+    /// subprocess parks the task instead of pinning a tokio worker thread —
+    /// see [`SessionStream::resize`]. Awaited by the caller, so successive
+    /// resizes apply in the order they were issued.
+    async fn force_window_size(&self, cols: i64, rows: i64) {
+        let _ = self
+            .run_async(&[
+                "resize-window",
+                "-t",
+                &self.inner.tmux_name,
+                "-x",
+                &cols.to_string(),
+                "-y",
+                &rows.to_string(),
+            ])
+            .await;
     }
 }
 
@@ -516,19 +505,23 @@ impl SessionStream for TmuxOutputStream {
         self.inner.master.lock().unwrap().is_some()
     }
 
-    fn resize(&self, cols: i64, rows: i64, _subscriber_id: Option<&str>) {
+    async fn resize(&self, cols: i64, rows: i64, _subscriber_id: Option<&str>) {
         if self.inner.closed.load(Ordering::SeqCst) {
             return;
         }
-        if let Some(master) = self.inner.master.lock().unwrap().as_mut() {
-            let _ = master.resize(portable_pty::PtySize {
-                rows: rows as u16,
-                cols: cols as u16,
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+        // Scoped so the `std::sync::Mutex` guard is dropped before the await
+        // below — a std guard must never be held across an await point.
+        {
+            if let Some(master) = self.inner.master.lock().unwrap().as_mut() {
+                let _ = master.resize(portable_pty::PtySize {
+                    rows: rows as u16,
+                    cols: cols as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
         }
-        self.force_window_size_sync(cols, rows);
+        self.force_window_size(cols, rows).await;
     }
 
     async fn detach(&self, _subscriber_id: &str) -> Result<(), Error> {

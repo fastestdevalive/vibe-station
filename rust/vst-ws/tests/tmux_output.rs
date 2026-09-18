@@ -29,6 +29,83 @@ fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Own socket, so a failure/leftover server from the attach test above cannot
+/// take this one down with it.
+const RESIZE_SOCK: &str = "vst-ws-resize-sock";
+
+/// `#{window_width}x#{window_height}` for a tmux window on the resize socket.
+fn window_size(name: &str) -> String {
+    let out = std::process::Command::new("tmux")
+        .args([
+            "-L",
+            RESIZE_SOCK,
+            "display-message",
+            "-p",
+            "-t",
+            name,
+            "#{window_width}x#{window_height}",
+        ])
+        .output()
+        .expect("tmux display-message");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// `SessionStream::resize` is `async` (item 7: it shells out to `tmux
+/// resize-window` via `tokio::process` so it cannot pin a tokio worker thread)
+/// — but it is still *awaited* by its caller rather than fire-and-forget, so
+/// the pre-existing ordering guarantee holds: each resize is applied before the
+/// call returns, and under rapid successive resizes the last one wins.
+#[tokio::test]
+#[ignore = "requires a real tmux binary; run with --ignored"]
+async fn rapid_resizes_apply_in_order_and_last_one_wins() {
+    if !tmux_available() {
+        eprintln!("tmux not available; skipping");
+        return;
+    }
+    let tmux = Tmux::with_socket(RESIZE_SOCK);
+    tmux.kill_server();
+    let name = "vst-ws-resize-test";
+    tmux.new_session(&NewSessionOptions {
+        name: name.to_string(),
+        cwd: None,
+        env: Default::default(),
+        command: Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 30".to_string(),
+        ]),
+    })
+    .expect("new-session should succeed");
+
+    let stream = Arc::new(TmuxOutputStream::new(
+        name.to_string(),
+        Some(RESIZE_SOCK.to_string()),
+    ));
+    SessionStream::attach(stream.as_ref(), 100, 30, "sub1")
+        .await
+        .expect("attach");
+
+    // Rapid successive resizes, each awaited: the window must already be at the
+    // requested size by the time the call returns (no detached/racing apply).
+    for (cols, rows) in [(120i64, 40i64), (90, 24), (133, 37)] {
+        SessionStream::resize(stream.as_ref(), cols, rows, Some("sub1")).await;
+        assert_eq!(
+            window_size(name),
+            format!("{cols}x{rows}"),
+            "resize must be applied before it returns (ordering guarantee)"
+        );
+    }
+
+    // And the final state after the burst is the last requested size.
+    assert_eq!(window_size(name), "133x37");
+
+    SessionStream::detach(stream.as_ref(), "sub1")
+        .await
+        .expect("detach");
+    tmux.kill_session(name);
+    tmux.kill_server();
+}
+
 #[tokio::test]
 #[ignore = "requires a real tmux binary; run with --ignored"]
 async fn attach_emits_opened_and_initial_redraw_then_detach_closes_and_keeps_session() {

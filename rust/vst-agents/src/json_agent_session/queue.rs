@@ -333,8 +333,8 @@ impl JsonAgentSession {
         attachments: Vec<Attachment>,
     ) -> ForkResult {
         let fork_seq = {
-            let s = self.0.state.lock().unwrap();
-            s.store
+            let store = self.0.store.lock().unwrap();
+            store
                 .as_ref()
                 .and_then(|st| st.first_seq_of_turn(from_turn_id))
         };
@@ -342,8 +342,8 @@ impl JsonAgentSession {
             return ForkResult::NotFound;
         };
         let superseded_turn_ids = {
-            let mut s = self.0.state.lock().unwrap();
-            s.store
+            let mut store = self.0.store.lock().unwrap();
+            store
                 .as_mut()
                 .map_or_else(Vec::new, |st| st.mark_superseded_from(fork_seq))
         };
@@ -379,9 +379,23 @@ impl JsonAgentSession {
 
     /// Fire the drain loop if not already running and there is work to do.
     pub fn kick_drain(&self) {
+        if self.is_released() {
+            return;
+        }
         let should_start = {
             let mut s = self.0.state.lock().unwrap();
-            if s.running || s.released {
+            // Re-check `is_released()` INSIDE the `state` lock, not just the
+            // fast-path check above: `release()` latches `released` (under the
+            // `store` lock) strictly before it ever takes `state`
+            // (`Inner::store`/`Inner::released` doc comment), so a caller that
+            // wins `state` here after the latch is guaranteed to observe it.
+            // Without this recheck, a `kick_drain` that raced past the
+            // fast-path check just before `release()` latched could still win
+            // `state`, set `running = true`, and spawn a `drain_loop` on an
+            // already-released session — whose turn could then run to
+            // completion (spawning a real CLI process) after `release()` has
+            // already returned and `dispose()`d the session.
+            if s.running || self.is_released() {
                 return;
             }
             let has_work = !s.queue.is_empty() || s.notice_slot.is_some() || s.promoted_notice;

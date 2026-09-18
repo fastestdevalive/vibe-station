@@ -47,7 +47,7 @@ impl SessionStream for FakeStream {
         Ok(())
     }
     fn write(&self, _data: &str) {}
-    fn resize(&self, _cols: i64, _rows: i64, _subscriber_id: Option<&str>) {}
+    async fn resize(&self, _cols: i64, _rows: i64, _subscriber_id: Option<&str>) {}
     async fn detach(&self, _subscriber_id: &str) -> Result<(), vst_ws::Error> {
         self.live.fetch_sub(1, Ordering::SeqCst);
         Ok(())
