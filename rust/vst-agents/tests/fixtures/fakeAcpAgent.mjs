@@ -26,6 +26,13 @@
 //     "cancel" mode) — simulates a connection that looks alive (child process
 //     still running) but has stopped answering, so the per-request timeout
 //     (not process death) must be what eventually rejects the turn.
+//   FAKE_ACP_MODE=prompt_stream_then_hang — session/prompt sends a
+//     session/update notification every PROMPT_STREAM_INTERVAL_MS (default
+//     30ms) for PROMPT_STREAM_COUNT updates (default 5), then goes silent
+//     forever without ever responding or observing session/cancel. Models an
+//     agent that is actively streaming (so an IDLE timeout must NOT fire
+//     while updates keep arriving) and then genuinely hangs (so it must
+//     eventually fire once updates stop).
 //   FAKE_ACP_MODE=steering_supported — initialize includes _meta.steering.supported=true;
 //     session/prompt behaves like normal mode.
 //   FAKE_ACP_MODE=steering_method_not_found — _session/steering returns a
@@ -184,6 +191,27 @@ rl.on("line", (line) => {
     }
     if (mode === "prompt_hang") {
       // Deliberately never write a response and never observe cancelRequested.
+      return;
+    }
+    if (mode === "prompt_stream_then_hang") {
+      const intervalMs = Number(process.env.PROMPT_STREAM_INTERVAL_MS ?? 30);
+      const count = Number(process.env.PROMPT_STREAM_COUNT ?? 5);
+      let sent = 0;
+      const streamer = setInterval(() => {
+        sent += 1;
+        write({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: sid,
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `chunk ${sent}` } },
+          },
+        });
+        if (sent >= count) {
+          clearInterval(streamer);
+          // Then go fully silent — never respond, never observe cancel.
+        }
+      }, intervalMs);
       return;
     }
     if (mode === "cancel") {
