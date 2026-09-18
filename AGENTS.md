@@ -2,6 +2,55 @@
 
 Accumulated lessons from bugs that were painful to diagnose. Read before touching the listed areas.
 
+**Note on the sections below referencing `daemon/src/...` (Node/TypeScript):** this branch's daemon has been
+rewritten in Rust (`rust/vst-daemon`, `rust/vst-routes`, `rust/vst-store`, `rust/vst-types`,
+`rust/vst-lifecycle`, `rust/vst-cli`) — there is no `daemon/` or `cli/` directory here anymore. The
+architectural *invariants* documented below (plugin boundaries, status axes, WS locking, etc.) still hold
+conceptually; only the file paths are stale. Don't assume a `daemon/src/foo.ts` path you can't find means the
+invariant no longer applies — find its Rust equivalent instead of skipping the rule.
+
+---
+
+## CLI — every REST route lives under `/api`; the CLI must prefix every path with it
+
+**Files:** `rust/vst-daemon/src/server.rs` (`.nest("/api", api)`) · `rust/vst-cli/src/client.rs` (`api_path`)
+
+### The invariant
+
+The daemon's `Router` in `server.rs` puts every REST route (`/sessions`, `/worktrees`, `/projects`, `/modes`,
+`/open`, etc.) under `.nest("/api", api)`. Only three routes are intentionally at root: `/health`,
+`/mobile-auth`, `/ws`. Anything else hit at root falls through to `.fallback(handle_fallback)`, which serves
+the SPA's `index.html` with a `200` status — **not** a `404`.
+
+This bit us for real: every `vst-cli` call site built its request path root-relative (`"/sessions"`,
+`"/worktrees"`, …) with no `/api` prefix anywhere, so every CLI command — including `vst session create` and
+`vst worktree create`, which is literally how an agent following `skill/SKILL.md` spawns a subagent — silently
+200'd against the SPA HTML instead of hitting its route. Worse, `client.rs`'s old response parsing swallowed
+the real "this isn't JSON" error and replaced it with `serde_json::from_value(Value::Null)`, which then failed
+with the misleading `invalid type: null, expected a sequence` — nothing in that message points at routing, so
+an agent hitting it reasonably (but wrongly) suspects DB/daemon corruption instead. `vst doctor`/`vst status`
+still reported "Daemon is running" throughout, because `/health` is one of the three root routes that *does*
+work, masking the outage from the one diagnostic an agent would naturally reach for.
+
+The fix: `client.rs` has a single `api_path()` helper that every `daemon_request*` call routes through, which
+prefixes `/api` onto anything except the three root paths. **Do not add `/api` at individual call sites** —
+if a new CLI command needs a new route, add the route under `.nest("/api", ...)` in `server.rs` as usual and
+call it root-relative from the CLI; `api_path()` handles the prefix.
+
+### What to watch for
+
+- **A non-2xx-looking response that still parses as valid JSON `null` is not proof of success.** If you ever
+  need to loosen `client.rs`'s JSON-parse error again (e.g. to special-case another status code), keep it
+  narrow — the whole point of surfacing the real parse error (status + content-type + body snippet) is so a
+  routing/prefix mismatch like this one fails loudly instead of masquerading as a deserialization bug three
+  layers away from the actual cause.
+- **Mock servers in `vst-cli/tests/*.rs` must mount their routes under `/api/...`** to match what
+  `daemon_request_with_base` actually requests (except `/health`, which stays at root) — a contract test with
+  an unprefixed mock route will pass while encoding the wrong convention, which is exactly how this shipped
+  undetected.
+- **`vst doctor`/`preflight()` only prove `/health` works**, not that the rest of the API is reachable. Don't
+  treat "daemon is running" as evidence that `vst session create`/`vst worktree create`/etc. will work.
+
 ---
 
 ## Terminal — never unmount TerminalPane during UI transitions

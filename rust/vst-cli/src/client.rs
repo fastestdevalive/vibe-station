@@ -32,6 +32,24 @@ impl<T> DaemonResult<T> {
     }
 }
 
+/// The daemon nests all REST routes under `/api` (see
+/// `vst-daemon/src/server.rs`'s `.nest("/api", api)`); only `/health`,
+/// `/mobile-auth` and `/ws` live at root. Every CLI call path is written
+/// root-relative (e.g. `"/sessions"`), so this is the single place that
+/// adds the `/api` prefix before the request goes out. Do NOT add `/api`
+/// at individual call sites — it belongs here, once, so the routing
+/// convention can't drift out of sync again.
+fn api_path(path: &str) -> String {
+    const ROOT_PATHS: &[&str] = &["/health", "/mobile-auth", "/ws"];
+    if path.starts_with("/api/") || ROOT_PATHS.iter().any(|p| path == *p || path.starts_with(&format!("{p}?"))) {
+        path.to_string()
+    } else if let Some(rest) = path.strip_prefix('/') {
+        format!("/api/{rest}")
+    } else {
+        format!("/api/{path}")
+    }
+}
+
 pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
     base_url: &str,
     token: Option<&str>,
@@ -52,7 +70,7 @@ pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
         }
     }
 
-    let full_url = format!("{base_url}{path}");
+    let full_url = format!("{base_url}{}", api_path(path));
     let mut req = client.request(method, &full_url).headers(headers);
 
     if let Some(b) = body {
@@ -76,11 +94,23 @@ pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
     let status = response.status().as_u16();
 
     if (200..300).contains(&status) {
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         let text = response.text().await.unwrap_or_default();
-        let data: T = match serde_json::from_str(&text) {
-            Ok(d) => d,
-            Err(_) => serde_json::from_value(Value::Null)?,
-        };
+        // A 2xx with an empty body (e.g. 204 No Content) has no JSON to parse
+        // at all — treat it the same as an explicit `null`, same as before.
+        let parse_target: &str = if text.trim().is_empty() { "null" } else { &text };
+        let data: T = serde_json::from_str(parse_target).map_err(|err| {
+            let snippet: String = text.chars().take(200).collect();
+            anyhow::anyhow!(
+                "daemon response for {full_url} was not valid JSON for the expected shape \
+                 (status {status}, content-type {content_type:?}): {err}\nbody: {snippet}"
+            )
+        })?;
         Ok(DaemonResult::Ok { status, data })
     } else {
         let text = response.text().await.unwrap_or_default();
@@ -145,4 +175,29 @@ pub async fn daemon_patch<T: DeserializeOwned, B: Serialize>(
 
 pub async fn daemon_delete<T: DeserializeOwned>(path: &str) -> anyhow::Result<DaemonResult<T>> {
     daemon_request::<T, ()>(Method::DELETE, path, None).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::api_path;
+
+    #[test]
+    fn prefixes_rest_paths_with_api() {
+        assert_eq!(api_path("/sessions"), "/api/sessions");
+        assert_eq!(api_path("/worktrees?project=p1"), "/api/worktrees?project=p1");
+        assert_eq!(api_path("/sessions/abc/rename"), "/api/sessions/abc/rename");
+        assert_eq!(api_path("/open"), "/api/open");
+    }
+
+    #[test]
+    fn leaves_root_level_paths_alone() {
+        assert_eq!(api_path("/health"), "/health");
+        assert_eq!(api_path("/mobile-auth"), "/mobile-auth");
+        assert_eq!(api_path("/ws"), "/ws");
+    }
+
+    #[test]
+    fn is_idempotent_on_already_prefixed_paths() {
+        assert_eq!(api_path("/api/sessions"), "/api/sessions");
+    }
 }

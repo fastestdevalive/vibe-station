@@ -246,7 +246,7 @@ async fn test_client_and_preflight_mock_server() {
             }),
         )
         .route(
-            "/test-ok",
+            "/api/test-ok",
             get(|| async {
                 Json(json!({
                     "message": "success"
@@ -254,7 +254,7 @@ async fn test_client_and_preflight_mock_server() {
             }),
         )
         .route(
-            "/test-err",
+            "/api/test-err",
             get(|| async {
                 (
                     StatusCode::NOT_FOUND,
