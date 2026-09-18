@@ -275,7 +275,9 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
     // into version 11 realigns xterm's table with the modern glibc one tmux
     // actually uses.
     term.loadAddon(new Unicode11Addon());
-    term.unicode.activeVersion = "11";
+    if (term.unicode) {
+      term.unicode.activeVersion = "11";
+    }
 
     // Make http:// and https:// URLs clickable — opens in system browser (Tauri) or new tab (browser dev)
     term.loadAddon(new WebLinksAddon((_, url) => {

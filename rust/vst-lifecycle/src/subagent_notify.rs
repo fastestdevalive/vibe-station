@@ -40,6 +40,9 @@ pub struct SessionLookup {
     pub channel: Channel,
     pub parent_session_id: Option<String>,
     pub name: Option<String>,
+    pub archived_at: Option<String>,
+    pub superseded_by: Option<String>,
+    pub lifecycle_state: Option<LifecycleState>,
 }
 
 /// Dependency-injection surface — keeps `subagent_notify` as a leaf crate
@@ -56,6 +59,31 @@ pub trait NotifyDeps: Send + Sync {
     fn prune_notice_slot_child(&self, parent: &str, child: &str);
 }
 
+/// Resolve the effective parent session id (following the `superseded_by`
+/// chain), and verify it is a valid target (exists, not archived, not done,
+/// and json channel).
+pub fn resolve_parent(child_id: &str, deps: &dyn NotifyDeps) -> Option<String> {
+    let child = deps.lookup(child_id)?;
+    let mut parent_id = child.parent_session_id?;
+    let mut seen = std::collections::HashSet::new();
+    while seen.insert(parent_id.clone()) {
+        let Some(p) = deps.lookup(&parent_id) else { break };
+        let Some(next) = p.superseded_by else { break };
+        parent_id = next;
+    }
+    let parent = deps.lookup(&parent_id)?;
+    if parent.archived_at.is_some() {
+        return None;
+    }
+    if parent.lifecycle_state == Some(LifecycleState::Done) {
+        return None;
+    }
+    if parent.channel != Channel::Json {
+        return None;
+    }
+    Some(parent_id)
+}
+
 #[derive(Default)]
 struct ParentState {
     budget: usize,
@@ -66,6 +94,8 @@ struct Inner {
     parents: HashMap<String, ParentState>,
     children: HashMap<String, String>,
     flush_handles: HashMap<String, tokio::task::JoinHandle<()>>,
+    suppression_warned: std::collections::HashSet<String>,
+    deps: Option<Arc<dyn NotifyDeps>>,
 }
 
 /// Handle to the subagent-notify coalescer.
@@ -78,7 +108,15 @@ impl SubagentNotifyHandle {
             parents: HashMap::new(),
             children: HashMap::new(),
             flush_handles: HashMap::new(),
+            suppression_warned: std::collections::HashSet::new(),
+            deps: None,
         })))
+    }
+
+    /// Set runtime dependencies used for async flushing.
+    pub fn set_deps(&self, deps: Arc<dyn NotifyDeps>) {
+        let mut inner = self.0.lock().expect("poisoned");
+        inner.deps = Some(deps);
     }
 
     /// Record a child state transition.  Fires flush after `COALESCE_MS` if
@@ -86,24 +124,41 @@ impl SubagentNotifyHandle {
     pub fn note_subagent_state_change(
         &self,
         child_id: &str,
-        _from: LifecycleState,
+        from: LifecycleState,
         to: LifecycleState,
         deps: &dyn NotifyDeps,
     ) {
+        if from == to {
+            return;
+        }
+
+        // R16 prune: when child leaves WaitingForHuman (any reason), prune from parent's notice slot
+        if from == LifecycleState::WaitingForHuman && to != LifecycleState::WaitingForHuman {
+            if let Some(parent_id) = resolve_parent(child_id, deps) {
+                deps.prune_notice_slot_child(&parent_id, child_id);
+            }
+            let mut inner = self.0.lock().expect("poisoned");
+            if let Some(parent_id) = inner.children.remove(child_id) {
+                if let Some(state) = inner.parents.get_mut(&parent_id) {
+                    state.pending.remove(child_id);
+                }
+            }
+        }
+
         if to != LifecycleState::WaitingForHuman {
             return;
         }
-        let Some(child_rec) = deps.lookup(child_id) else {
-            return;
-        };
-        let Some(ref parent_id) = child_rec.parent_session_id else {
-            return;
-        };
-        let parent_id = parent_id.clone();
-        let child_name = child_rec.name.clone().unwrap_or_default();
 
-        // R16 prune: cancel any in-flight flush for this child/parent pair if
-        // the child re-enters NOTABLE before the window elapsed.
+        let Some(parent_id) = resolve_parent(child_id, deps) else {
+            return;
+        };
+        let child_rec = deps.lookup(child_id);
+        let child_name = child_rec
+            .as_ref()
+            .and_then(|c| c.name.clone())
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| child_id.to_string());
+
         {
             let mut inner = self.0.lock().expect("SubagentNotify poisoned");
             let entry = inner.parents.entry(parent_id.clone()).or_default();
@@ -113,7 +168,7 @@ impl SubagentNotifyHandle {
                     subagent_id: child_id.to_string(),
                     subagent_name: child_name.clone(),
                     subagent_state: to,
-                    text: format!("{child_name} is waiting for human"),
+                    text: String::new(),
                 },
             );
             inner
@@ -121,28 +176,84 @@ impl SubagentNotifyHandle {
                 .insert(child_id.to_string(), parent_id.clone());
         }
 
-        self.schedule_flush(parent_id, deps);
+        self.schedule_flush(parent_id);
     }
 
-    fn schedule_flush(&self, parent_id: String, deps: &dyn NotifyDeps) {
+    fn schedule_flush(&self, parent_id: String) {
         // Cancel any previous pending flush handle for this parent.
         let mut inner = self.0.lock().expect("poisoned");
         if let Some(handle) = inner.flush_handles.remove(&parent_id) {
             handle.abort();
         }
-        // NOTE: full async coalescing timer requires a tokio runtime.
-        // The flush is scheduled below; in unit tests the timer is advanced
-        // by the test harness.
         let handle_arc = self.0.clone();
-        let _ = deps; // deps wiring is done at flush time
         let parent_clone = parent_id.clone();
         let handle = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(COALESCE_MS)).await;
-            let _inner = handle_arc.lock().expect("poisoned");
-            let _ = parent_clone;
-            // Flush body executed in impl — see flush().
+            Self::flush_parent(handle_arc, &parent_clone).await;
         });
         inner.flush_handles.insert(parent_id, handle);
+    }
+
+    /// Flush pending notices for a single parent session.
+    async fn flush_parent(arc: Arc<Mutex<Inner>>, parent_id: &str) {
+        let (deps, children, at_cap) = {
+            let mut inner = arc.lock().expect("poisoned");
+            inner.flush_handles.remove(parent_id);
+            let Some(deps) = inner.deps.clone() else { return };
+            let Some(state) = inner.parents.get_mut(parent_id) else { return };
+            let children: Vec<(String, PillPayload)> = state.pending.drain().collect();
+            if children.is_empty() { return };
+            let at_cap = state.budget >= MAX_NOTICES_PER_PARENT;
+            (deps, children, at_cap)
+        };
+
+        // Re-check parent validity
+        let Some(parent) = deps.lookup(parent_id) else { return };
+        if parent.archived_at.is_some()
+            || parent.lifecycle_state == Some(LifecycleState::Done)
+            || parent.channel != Channel::Json
+        {
+            return;
+        }
+
+        if at_cap {
+            for (_, payload) in &children {
+                deps.emit_pill(parent_id, payload.clone()).await;
+            }
+            let is_first = {
+                let mut inner = arc.lock().expect("poisoned");
+                inner.suppression_warned.insert(parent_id.to_string())
+            };
+            if is_first {
+                deps.emit_pill(
+                    parent_id,
+                    PillPayload {
+                        subagent_id: String::new(),
+                        subagent_name: String::new(),
+                        subagent_state: LifecycleState::WaitingForHuman,
+                        text: "auto-wake paused; reply here to resume".to_string(),
+                    },
+                )
+                .await;
+            }
+            return;
+        }
+
+        let mut slotted: Vec<(String, PillPayload)> = Vec::new();
+        for (child_id, payload) in children {
+            if deps.populate_notice_slot(parent_id, &child_id, &payload.subagent_name) {
+                slotted.push((child_id, payload));
+            }
+        }
+
+        if !slotted.is_empty() {
+            // Pills are NOT emitted here while the event is only queued in the tray;
+            // pills are emitted upon dequeue when the parent runs the wake-up turn.
+            let mut inner = arc.lock().expect("poisoned");
+            if let Some(state) = inner.parents.get_mut(parent_id) {
+                state.budget += 1;
+            }
+        }
     }
 
     /// Reset the notice budget for a parent session (called when a human turn
@@ -152,12 +263,17 @@ impl SubagentNotifyHandle {
         if let Some(state) = inner.parents.get_mut(parent_id) {
             state.budget = 0;
         }
+        inner.suppression_warned.remove(parent_id);
     }
 
     /// Remove `id` from both parent and child tracking maps.
     pub fn forget_subagent_notify(&self, id: &str) {
         let mut inner = self.0.lock().expect("poisoned");
+        if let Some(handle) = inner.flush_handles.remove(id) {
+            handle.abort();
+        }
         inner.parents.remove(id);
+        inner.suppression_warned.remove(id);
         if let Some(parent_id) = inner.children.remove(id) {
             if let Some(state) = inner.parents.get_mut(&parent_id) {
                 state.pending.remove(id);

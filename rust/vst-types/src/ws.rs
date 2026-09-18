@@ -134,8 +134,8 @@ pub enum ServerMessage {
         superseded_by: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         is_main: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        parent_session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_session_id: Option<Option<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         worktree_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -346,6 +346,8 @@ pub struct SessionCreatedSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handoff_summary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<PrStatus>,
@@ -409,6 +411,7 @@ impl From<&crate::rest::shared::Session> for SessionCreatedSnapshot {
             archived_at: s.archived_at.clone(),
             sort_order: Some(s.sort_order),
             handoff_summary: s.handoff_summary.clone(),
+            parent_session_id: s.parent_session_id.clone(),
             superseded_by: s.superseded_by.clone(),
             pr: s.pr.clone(),
             draft_prompt: s.draft_prompt.clone(),
@@ -442,6 +445,7 @@ impl From<&crate::rest::shared::GlobalDraft> for SessionCreatedSnapshot {
             archived_at: s.archived_at.clone(),
             sort_order: Some(s.sort_order),
             handoff_summary: s.handoff_summary.clone(),
+            parent_session_id: None,
             superseded_by: s.superseded_by.clone(),
             pr: s.pr.clone(),
             draft_prompt: s.draft_prompt.clone(),

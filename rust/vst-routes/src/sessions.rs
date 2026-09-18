@@ -2334,7 +2334,7 @@ impl SessionRoutes {
             pr: None,
             superseded_by: None,
             is_main: None,
-            parent_session_id: None,
+            parent_session_id: Some(None),
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,

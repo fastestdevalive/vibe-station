@@ -80,6 +80,22 @@ fn session_created_snapshot_from_session_preserves_sort_order() {
 }
 
 #[test]
+fn session_created_snapshot_from_session_preserves_parent_session_id() {
+    let value = load_fixture("session.json");
+    let mut session: Session = serde_json::from_value(value).unwrap();
+    session.parent_session_id = Some("parent-sess-123".to_string());
+
+    let snapshot: SessionCreatedSnapshot = (&session).into();
+    let json = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        json.get("parentSessionId").and_then(Value::as_str),
+        Some("parent-sess-123"),
+        "parentSessionId must survive the Session -> SessionCreatedSnapshot conversion, \
+         or live clients will store parentSessionId: undefined and fail to render subagents in SubagentRow"
+    );
+}
+
+#[test]
 fn worktree_fixture_roundtrips() {
     assert_roundtrip::<Worktree>("worktree.json");
 }
@@ -148,6 +164,30 @@ fn session_updated_omits_unchanged_optionals() {
     // changed fields appear
     assert_eq!(obj.get("name").unwrap(), "renamed");
     assert_eq!(obj.get("sortOrder").unwrap(), 2.0);
+    assert!(!obj.contains_key("parentSessionId"));
+}
+
+#[test]
+fn session_updated_delink_serializes_parent_session_id_null() {
+    let msg = ServerMessage::SessionUpdated {
+        session_id: "s-child".into(),
+        pinned_at: None,
+        channel: None,
+        name: None,
+        archived_at: None,
+        sort_order: None,
+        pr: None,
+        superseded_by: None,
+        is_main: None,
+        parent_session_id: Some(None),
+        worktree_id: None,
+        draft_prompt: None,
+        draft_config: None,
+    };
+    let value = serde_json::to_value(&msg).unwrap();
+    let obj = value.as_object().unwrap();
+    assert_eq!(obj.get("type").unwrap(), "session:updated");
+    assert_eq!(obj.get("parentSessionId").unwrap(), &serde_json::Value::Null);
 }
 
 /// Id newtypes serialize as the bare string, not `{"0": "..."}`.

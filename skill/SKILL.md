@@ -62,7 +62,30 @@ vst mode ls --json
 
 ---
 
-## 4. Spawn a worktree + agent session
+## 4. Agent Creation Topologies
+
+vibe-station supports creating agents either in an isolated git worktree (with its own branch and directory) or directly in the project root ("direct session", no worktree). Always select the topology that matches your intent:
+
+| Topology | Location / Branch | Relationship | Command | When to Use |
+|---|---|---|---|---|
+| **1. Direct Agent in Project** | Project root (no worktree/branch) | Standalone (`parentSessionId: null`) | `vst session create --project=<projectId> --type=agent --mode=<modeId> --no-parent --prompt="..."` | Agent operating directly in the base project directory without worktree isolation. |
+| **2. Direct Subagent in Project** | Project root (no worktree/branch) | Linked child (`parentSessionId: $VST_SESSION`) | `vst session create --project=<projectId> --type=agent --mode=<modeId> --parent="$VST_SESSION" --prompt="..."` | Subagent operating directly in the project root, reporting back to parent. |
+| **3. Sibling in Same Worktree** | Same worktree (shares branch & checkout) | Independent peer (`parentSessionId: null`) | `vst session create <worktreeId> --type=agent --mode=<modeId> --no-parent --prompt="..."` | Concurrent peer task in same worktree without parent/child supervision. |
+| **4. Subagent in Same Worktree** | Same worktree (shares branch & checkout) | Linked child (`parentSessionId: $VST_SESSION`) | `vst session create <worktreeId> --type=agent --mode=<modeId> --parent="$VST_SESSION" --prompt="..."` | **Standard Subagent Pattern:** Worker assigned to a sub-task; wakes the parent when finished or blocked. |
+| **5. Independent New Worktree** | New worktree (new git branch & directory) | Standalone agent (`parentSessionId: null`) | `vst worktree create <projectId> --branch=<branch> --mode=<modeId> --no-parent --prompt="..."` | Standard new feature branch or isolated workspace. |
+| **6. Subagent in New Worktree (Cross-Worktree)** | New worktree (new git branch & directory) | Linked child (`parentSessionId: $VST_SESSION`) | `vst worktree create <projectId> --branch=<branch> --mode=<modeId> --parent="$VST_SESSION" --prompt="..."` | ⚠️ **Rare Exception:** Almost NEVER needed unless the user explicitly states *"subagent in a new worktree"*. Do NOT use this otherwise. |
+
+> **CRITICAL RULES FOR SUBAGENTS:**
+> - When asked to create a **subagent**, ALWAYS default to **Topology 4 (Subagent in Same Worktree)** using:
+>   `vst session create "$VST_WORKTREE" --type=agent --mode=<modeId> --parent="$VST_SESSION" --prompt="..."`
+> - If working directly in a project (no worktree), use **Topology 2 (Direct Subagent in Project)**:
+>   `vst session create --project="$VST_PROJECT" --type=agent --mode=<modeId> --parent="$VST_SESSION" --prompt="..."`
+> - **Topology 6 (Subagent in a New Worktree)** should NEVER be created unless the user explicitly requests a *"subagent in a new worktree"*.
+> - Inside an agent session (`$VST_SESSION` set), `--parent` defaults to `$VST_SESSION` unless `--no-parent` is explicitly specified. Passing `--parent="$VST_SESSION"` makes your intent explicit. `--source-agent="<id>"` is accepted as an alias.
+
+---
+
+## 5. Spawn a new worktree + agent session (Topology 5 & 6)
 
 ```bash
 # Creates worktree + main agent session in one shot.
@@ -86,23 +109,86 @@ SESSION_ID=$(vst session ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 
 ---
 
-## 5. Add a session to an existing worktree
+## 6. Add a session to an existing worktree (Topologies 3 & 4)
 
-Use this when you need extra parallelism inside an already-created worktree (same branch, same checkout):
+Use this when working inside an existing worktree checkout:
 
 ```bash
-# Add a sibling agent session
-vst session create <worktreeId> --type=agent --mode=<modeId> --prompt="your sub-task"
+# Standard: Add a linked SUBAGENT (Topology 4) — reports back to parent ($VST_SESSION)
+vst session create "$VST_WORKTREE" \
+  --type=agent \
+  --mode=<modeId> \
+  --parent="$VST_SESSION" \
+  --prompt="Run tests and fix failures in auth/login.test.ts"
+
+# Add an unlinked SIBLING agent session (Topology 3) — independent peer
+vst session create "$VST_WORKTREE" \
+  --type=agent \
+  --mode=<modeId> \
+  --no-parent \
+  --prompt="your independent sub-task"
 
 # Add a plain terminal tab
-vst session create <worktreeId> --type=terminal
+vst session create "$VST_WORKTREE" --type=terminal
 ```
 
 Output is always plain text — two lines: a label then the session id. Capture it with `tail -1`. Agent sessions default to Rich Chat; terminal sessions default to tmux. Do not use this after `vst worktree create` for the same worktree — the main session already exists.
 
+### Subagent Wake-up Lifecycle (What to do when woken up)
+
+When a linked subagent finishes its turn or enters `waiting_for_human` (e.g. completes its assigned task or needs clarification), the daemon automatically enqueues a wake-up notice for the parent agent. Once the parent agent is idle, the daemon dispatches an automated prompt turn to the parent:
+
+`<Child Name> is waiting for your reply`
+
+**What the parent agent should do upon wake-up:**
+
+1. **Inspect the subagent's output:**
+   Check what work the subagent accomplished:
+   ```bash
+   vst session output <subagentId> --lines=100
+   ```
+   Or view structured turns/tool calls:
+   ```bash
+   vst session transcript <subagentId> --json
+   ```
+2. **Follow up or steer if more work is needed:**
+   If the subagent needs further guidance or another step:
+   ```bash
+   vst session send <subagentId> "Please address the lint warning in auth.ts" --wait
+   ```
+3. **Terminate the subagent when its task is complete:**
+   Once the subagent's task is fully finished and its results are consumed, terminate it to clean up the UI tab/chip and release resources:
+   ```bash
+   vst session terminate <subagentId>
+   ```
+4. **Report back to the user:**
+   Summarize the completed work or findings in your reply to the user.
+
 ---
 
-## 6. Restore an exited session
+## 7. Direct Sessions in Project (Topologies 1 & 2 — No Worktree)
+
+Direct sessions run in the root directory of the project rather than in an isolated git worktree branch:
+
+```bash
+# Create a direct agent session in the project (Topology 1)
+vst session create --project=<projectId> \
+  --type=agent \
+  --mode=<modeId> \
+  --no-parent \
+  --prompt="Perform project-wide inspection"
+
+# Create a direct SUBAGENT linked to current session (Topology 2)
+vst session create --project=<projectId> \
+  --type=agent \
+  --mode=<modeId> \
+  --parent="$VST_SESSION" \
+  --prompt="Audit dependencies in package.json"
+```
+
+---
+
+## 8. Restore an exited session
 
 ```bash
 vst session restore <sessionId>
@@ -112,7 +198,7 @@ The agent re-launches in the same worktree checkout on the same branch.
 
 ---
 
-## 7. Send a message and wait
+## 9. Send a message and wait
 
 If you only have a session's UI-set display name (not its id), resolve it first:
 
@@ -136,7 +222,7 @@ vst session send <sessionId> --file=./instructions.md --wait
 
 ---
 
-## 8. Open a file in the UI
+## 10. Open a file in the UI
 
 When you want the user to see a specific file in the vibe-station web UI, open it in the Files panel with:
 
@@ -159,7 +245,7 @@ If the user's browser is already connected, the file tab opens immediately via a
 
 ---
 
-## 10. Read session output
+## 11. Read session output
 
 ```bash
 # Capture last N lines of pane output (tmux/pty) or assistant prose (json)
@@ -176,7 +262,7 @@ This returns an array of turn events. It errors on a tmux/pty session (those hav
 
 ---
 
-## 11. OpenClaw integration recipe
+## 12. OpenClaw integration recipe
 
 **Scenario:** an OpenClaw webhook receives "review this PR" and wants to spawn a claude session, wait for it to finish, then post results back.
 
@@ -219,7 +305,7 @@ vst worktree rm "$WORKTREE_ID" --purge
 
 ---
 
-## 12. GitHub Actions / CI integration recipe
+## 13. GitHub Actions / CI integration recipe
 
 ```yaml
 # .github/workflows/agent-review.yml
@@ -269,7 +355,7 @@ jobs:
 
 ---
 
-## 13. Rename a worktree or session
+## 14. Rename a worktree or session
 
 ```bash
 vst worktree rename <id> <newName>   # rename a worktree
@@ -309,7 +395,7 @@ vst session rename vs-19-a-3f9c2b7a my-session      # rename a session by its id
 
 ---
 
-## 14. Tear down
+## 15. Tear down
 
 ```bash
 # Terminate a specific session by id
@@ -334,7 +420,7 @@ When to use each:
 
 ---
 
-## 15. Conventions to honour
+## 16. Conventions to honour
 
 - **Never push to `main`/`master`/the base branch.** Agents work on their own branch. If you trigger a push, target the feature branch only.
 - **Respect `AGENTS.md` / `.vibe-station/rules.md`** if the project has them. These files are loaded as L3 of the agent's system prompt automatically — agents will follow them.
