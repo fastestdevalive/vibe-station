@@ -71,5 +71,6 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   document.documentElement.removeAttribute("data-theme");
+  document.documentElement.removeAttribute("data-appearance");
   document.documentElement.style.removeProperty("--font-family");
 });
