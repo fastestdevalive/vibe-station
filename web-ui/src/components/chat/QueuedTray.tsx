@@ -109,20 +109,27 @@ export function QueuedTray({
     >
       {noticeSlot && !noticeSlot.running ? (() => {
         const names = Object.values(noticeSlot.children);
-        const label = names.length === 0
-          ? "Checking on subagent…"
-          : names.length === 1
-          ? `Will wake parent when idle — ${names[0]}`
-          : `Will wake parent when idle — ${names.join(", ")}`;
+        const subagentSuffix = names.length <= 1
+          ? "subagent has update, will wake parent when idle"
+          : "subagents have update, will wake parent when idle";
+        const ariaLabel = names.length === 0
+          ? "Subagent has update, will wake parent when idle"
+          : `${names.join(", ")} ${subagentSuffix}`;
         return (
           <div
             key="__notice__"
             className="chat-queued-tray__row chat-queued-tray__row--notice"
-            style={{ opacity: 0.7 }}
             role="listitem"
-            aria-label={label}
+            aria-label={ariaLabel}
           >
-            <div className="chat-queued-tray__text">{label}</div>
+            <div className="chat-queued-tray__text chat-queued-tray__text--notice">
+              {names.map((name, idx) => (
+                <span key={`${name}-${idx}`} className="chat-queued-tray__chip" data-testid="notice-child-chip">
+                  {name}
+                </span>
+              ))}
+              <span className="chat-queued-tray__notice-label">{subagentSuffix}</span>
+            </div>
             <div className="chat-queued-tray__actions">
               <button
                 type="button"
@@ -137,7 +144,7 @@ export function QueuedTray({
                 type="button"
                 className="chat-queued-tray__action"
                 aria-label="Dismiss wake-up"
-                title="Dismiss"
+                title="Cancel / Dismiss"
                 onClick={() => onDismissNotice?.()}
               >
                 ✕

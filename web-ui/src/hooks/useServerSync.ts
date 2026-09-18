@@ -185,8 +185,12 @@ export function useServerSync(api: ApiInstance): void {
     const offSessCreated = sessionRepo.on("session:created", (ev) => {
       if (ev.type !== "session:created") return;
       if (ev.snapshot) {
-        applySessionCreated(ev.snapshot);
-        patchSessionState(ev.snapshot.id, ev.snapshot.state);
+        const snapshot = {
+          ...ev.snapshot,
+          parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
+        };
+        applySessionCreated(snapshot);
+        patchSessionState(snapshot.id, snapshot.state);
       }
       // Phase 4c (agent-interaction-workspaces/04-workspaces): a session
       // spawned from a currently-tiled source auto-inserts as a new tile,

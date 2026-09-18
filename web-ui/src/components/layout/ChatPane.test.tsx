@@ -324,6 +324,13 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
     api.__test.pushChatEvent("js-v3g-a", ev("sn1", { kind: "user", role: "user", text: "notice text", silent: true, turnId: "t-silent" }));
     api.__test.pushChatEvent("js-v3g-a", ev("e1", { kind: "error", text: "Something went wrong" }));
 
+    const calls: string[] = [];
+    const origSendChat = api.sendChat.bind(api);
+    api.sendChat = async (sessionId: string, message: string, attachmentIds?: string[]) => {
+      calls.push(message);
+      return origSendChat(sessionId, message, attachmentIds);
+    };
+
     render(<ChatPane api={api} session={jsonSession("js-v3g-a")} visible />);
 
     // Wait for error to render.
@@ -347,12 +354,6 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
     }
     const retryBtn = screen.queryByRole("button", { name: /retry/i });
     if (retryBtn) {
-      const calls: string[] = [];
-      const origSendChat = api.sendChat.bind(api);
-      api.sendChat = async (sessionId: string, message: string, attachmentIds?: string[]) => {
-        calls.push(message);
-        return origSendChat(sessionId, message, attachmentIds);
-      };
       await userEvent.setup().click(retryBtn);
       expect(calls).toHaveLength(1);
       expect(calls[0]).toBe("real user message");

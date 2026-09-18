@@ -94,6 +94,15 @@ fn test_worktree_create_parses_all_flags() {
     assert_eq!(opts.prompt.as_deref(), Some("do stuff"));
     assert!(opts.json);
     assert_eq!(opts.parent.as_deref(), Some("sess-abc"));
+
+    let opts_src = parse_worktree_create_options(&[
+        "proj-1".into(),
+        "--mode".into(),
+        "m1".into(),
+        "--source-agent=sess-xyz".into(),
+    ])
+    .expect("parse ok");
+    assert_eq!(opts_src.parent.as_deref(), Some("sess-xyz"));
 }
 
 #[test]

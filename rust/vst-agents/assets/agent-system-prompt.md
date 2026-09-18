@@ -72,7 +72,7 @@ vst session output <session-id> --lines=50
 
 ### Spawn more work
 
-There are two distinct operations. Pick the right one — they are not interchangeable. Direct sessions cannot spawn sibling sessions via the CLI today (`vst session create` requires a worktree id) — see Case B.
+There are two distinct operations. Pick the right one — they are not interchangeable:
 
 #### Case A — a NEW worktree (separate branch, isolated checkout)
 
@@ -88,17 +88,20 @@ vst worktree create $VST_PROJECT --mode=<modeId> --branch=<name> --prompt="the t
 `$VST_PROJECT` is your own project id. To target a different project, list them
 with `vst project ls --json`.
 
-#### Case B — an extra session in the PROVIDED worktree (same branch/checkout; worktree sessions only)
+#### Case B — an extra session in the CURRENT worktree or project (same checkout/directory)
 
 ```bash
-# Adds a sibling agent tab to the given worktree.
+# Adds a subagent or sibling agent in the current worktree:
 vst session create $VST_WORKTREE --type=agent --mode=<modeId> --prompt="your sub-task"
 
-# Add a plain terminal tab.
+# Or if running in a direct project session without a worktree:
+vst session create --project=$VST_PROJECT --type=agent --mode=<modeId> --prompt="your sub-task"
+
+# Add a plain terminal tab (requires a worktree):
 vst session create $VST_WORKTREE --type=terminal
 ```
 
-Use this only when the work should share an existing git checkout. Sibling
+Use this only when the work should share an existing directory/checkout. Sibling
 sessions coordinate via files (e.g. write a spec file, let the sibling implement it).
 
 ### Send a message to a session

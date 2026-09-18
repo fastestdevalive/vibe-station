@@ -54,7 +54,7 @@ describe("SubagentRow — child rows (3.T1, 3.T1b, 3.T2, 3.T3)", () => {
     const done = makeSession({ id: "c1", parentSessionId: "p1", name: "finished-child", state: "done" });
     seedSessions([parent, done]);
     render(<SubagentRow session={parent} onOpen={vi.fn()} />);
-    const row = screen.getByText("finished-child").closest("button")!;
+    const row = screen.getByText("finished-child").closest(".chat-subagent-row__item")!;
     expect(row.querySelector(".status-dot--done")).toBeTruthy();
   });
 
@@ -72,7 +72,7 @@ describe("SubagentRow — child rows (3.T1, 3.T1b, 3.T2, 3.T3)", () => {
     render(<SubagentRow session={parent} onOpen={vi.fn()} />);
     expect(screen.queryByText("old-child")).not.toBeInTheDocument();
     expect(screen.getByText("new-child")).toBeInTheDocument();
-    const archivedRow = screen.getByText("archived-child").closest("button")!;
+    const archivedRow = screen.getByText("archived-child").closest(".chat-subagent-row__item")!;
     expect(archivedRow.className).toContain("chat-subagent-row__item--archived");
   });
 
@@ -224,6 +224,64 @@ describe("SubagentRow delink UX (5.T1, 5.T2, 5.T3)", () => {
     render(<SubagentRow session={parent} onOpen={vi.fn()} />);
     expect(screen.queryByLabelText("Detach subagent")).toBeNull();
     expect(screen.getByText("worker")).toBeInTheDocument();
+  });
+
+  it("detaches a cross-worktree child cleanly: button works despite disabled chip and updates store", async () => {
+    const user = userEvent.setup();
+    const parent = makeSession({ id: "p1", worktreeId: "wt-1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker-remote", worktreeId: "wt-2" });
+    seedSessions([parent, child]);
+    const api = createMockApi();
+    const delinkSpy = vi.fn().mockResolvedValue({ ok: true });
+    api.delinkSession = delinkSpy;
+    const onOpen = vi.fn();
+
+    render(<SubagentRow session={parent} onOpen={onOpen} api={api} />);
+
+    const chip = screen.getByText("worker-remote").closest(".chat-subagent-row__item")!;
+    expect(chip.className).toContain("chat-subagent-row__item--disabled");
+
+    // Clicking chip itself does not navigate
+    await user.click(screen.getByText("worker-remote"));
+    expect(onOpen).not.toHaveBeenCalled();
+
+    // Clicking detach triggers confirm dialog and detaches
+    const delinkBtn = screen.getByLabelText("Detach subagent");
+    await user.click(delinkBtn);
+    expect(screen.getByText("Detach worker-remote?")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Detach"));
+    expect(delinkSpy).toHaveBeenCalledWith("c1");
+    expect(useServerStore.getState().sessions.find((s) => s.id === "c1")?.parentSessionId).toBeNull();
+  });
+
+  it("detaches a cross-worktree parent cleanly and updates store", async () => {
+    const user = userEvent.setup();
+    const parent = makeSession({ id: "p1", name: "parent-remote", worktreeId: "wt-2" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker", worktreeId: "wt-1" });
+    seedSessions([parent, child]);
+    const api = createMockApi();
+    const delinkSpy = vi.fn().mockResolvedValue({ ok: true });
+    api.delinkSession = delinkSpy;
+    const onOpen = vi.fn();
+
+    render(<SubagentRow session={child} onOpen={onOpen} api={api} />);
+
+    const chip = screen.getByText(/Parent · parent-remote/).closest(".chat-subagent-row__item")!;
+    expect(chip.className).toContain("chat-subagent-row__item--disabled");
+
+    // Clicking chip itself does not navigate
+    await user.click(screen.getByText(/Parent · parent-remote/));
+    expect(onOpen).not.toHaveBeenCalled();
+
+    // Clicking detach triggers confirm dialog and detaches child from parent
+    const delinkBtn = screen.getByLabelText("Leave parent");
+    await user.click(delinkBtn);
+    expect(screen.getByText("Leave parent?")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Detach"));
+    expect(delinkSpy).toHaveBeenCalledWith("c1");
+    expect(useServerStore.getState().sessions.find((s) => s.id === "c1")?.parentSessionId).toBeNull();
   });
 });
 

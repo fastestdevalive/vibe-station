@@ -172,19 +172,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   // further label oscillation is still smoothed as intended.
   const displayStateIsBusy =
     displayTurnState === "thinking" || displayTurnState === "responding" || displayTurnState === "tool";
-  // Notice slot contextual label (subagent-ux-v2 R12): when a notice turn is
-  // running, override the generic "Thinking" label with "Checking on <name>".
   const noticeSlot = meta?.noticeSlot;
-  const noticeRunning = noticeSlot?.running === true;
-  const noticeChildNames = noticeSlot ? Object.values(noticeSlot.children) : [];
-  const noticeName = noticeChildNames.length === 1
-    ? noticeChildNames[0]!
-    : noticeChildNames.length > 1
-    ? `${noticeChildNames[0]} +${noticeChildNames.length - 1}`
-    : "subagent";
-  const workingLabel = noticeRunning
-    ? `Checking on ${noticeName}`
-    : turnLabel(displayStateIsBusy ? displayTurnState : meta?.turnState, meta?.queueDepth ?? 0);
+  const workingLabel = turnLabel(displayStateIsBusy ? displayTurnState : meta?.turnState, meta?.queueDepth ?? 0);
 
   // Latest user text + attachments per turnId (last wins, mirroring the A7
   // edited-turn rule) + the set of turnIds that have a real `user` event.
@@ -365,7 +354,6 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           onStop={() => void stop()}
           api={api}
           {...(sessionId ? { sessionId } : {})}
-          noticeSlot={noticeSlot}
           fontControls={
             <div className="chat-font-overlay__btns">
               <button type="button" className="terminal-font-overlay__btn" aria-label="Decrease chat font" onClick={() => bumpTerminalFont(-0.05)}>

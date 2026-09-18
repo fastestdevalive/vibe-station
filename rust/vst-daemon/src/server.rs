@@ -3,8 +3,10 @@
 //! Server assembly, Axum routing, auth & loopback middleware, static file serving, and WebSocket upgrade.
 //! Ports `daemon/src/server.ts` and `daemon/src/ws/server.ts`.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,6 +25,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
+use vst_lifecycle::subagent_notify::{NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle};
 use vst_proc::tmux::Tmux;
 use vst_routes::attachments::{AttachmentRouteError, AttachmentRoutes, UploadPart};
 use vst_routes::auth::{
@@ -206,6 +209,97 @@ impl WsSink for AxumWsSink {
     }
 }
 
+struct ProductionNotifyDeps {
+    store: StoreHandle,
+    json_registry: Arc<JsonAgentRegistry<JsonAgentSession>>,
+}
+
+impl NotifyDeps for ProductionNotifyDeps {
+    fn lookup(&self, id: &str) -> Option<SessionLookup> {
+        let (_project, session) = self.store.find_session_cached(id)?;
+        Some(SessionLookup {
+            id: session.id,
+            channel: session.channel.unwrap_or(vst_types::Channel::Tmux),
+            parent_session_id: session.parent_session_id,
+            name: session.name,
+            archived_at: session.archived_at,
+            superseded_by: session.superseded_by,
+            lifecycle_state: Some(session.lifecycle.state),
+        })
+    }
+
+    fn populate_notice_slot(&self, parent: &str, child_id: &str, child_name: &str) -> bool {
+        if let Some(agent) = self.json_registry.get(parent) {
+            agent.populate_notice_slot(child_id.to_string(), child_name.to_string())
+        } else {
+            false
+        }
+    }
+
+    fn emit_pill(
+        &self,
+        parent: &str,
+        payload: PillPayload,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let agent = self.json_registry.get(parent);
+        Box::pin(async move {
+            if let Some(agent) = agent {
+                agent.emit_system_event(vst_agents::json_agent_session::EmitSystemEventPayload {
+                    subagent_id: payload.subagent_id,
+                    subagent_name: payload.subagent_name,
+                    subagent_state: payload.subagent_state,
+                    text: payload.text,
+                });
+            }
+        })
+    }
+
+    fn prune_notice_slot_child(&self, parent: &str, child: &str) {
+        if let Some(agent) = self.json_registry.get(parent) {
+            agent.prune_notice_slot_child(child);
+        }
+    }
+}
+
+fn spawn_subagent_notify_listener(
+    handle: SubagentNotifyHandle,
+    broadcaster: Broadcaster,
+    deps: Arc<dyn NotifyDeps>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut rx = broadcaster.subscribe();
+        let mut last_states = std::collections::HashMap::<String, vst_types::LifecycleState>::new();
+        loop {
+            let event = match rx.recv().await {
+                Ok(e) => e,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            match event {
+                vst_types::events::ServerEvent::SessionState {
+                    session_id,
+                    state,
+                    ..
+                } => {
+                    let prev = last_states
+                        .get(&session_id)
+                        .copied()
+                        .unwrap_or(vst_types::LifecycleState::Working);
+                    if prev != state {
+                        last_states.insert(session_id.clone(), state);
+                        handle.note_subagent_state_change(&session_id, prev, state, deps.as_ref());
+                    }
+                }
+                vst_types::events::ServerEvent::SessionDeleted { session_id, .. } => {
+                    last_states.remove(&session_id);
+                    handle.forget_subagent_notify(&session_id);
+                }
+                _ => {}
+            }
+        }
+    })
+}
+
 /// Build the full Axum router.
 pub fn build_app(opts: BuildServerOptions) -> Router {
     let ws_hub = Arc::new(WsHub::new());
@@ -234,6 +328,16 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
     worktree_routes.paths = opts.paths.clone();
 
     let subagent_notify = vst_lifecycle::subagent_notify::SubagentNotifyHandle::new();
+    let notify_deps: Arc<dyn NotifyDeps> = Arc::new(ProductionNotifyDeps {
+        store: opts.store.clone(),
+        json_registry: opts.json_registry.clone(),
+    });
+    subagent_notify.set_deps(notify_deps.clone());
+    spawn_subagent_notify_listener(
+        subagent_notify.clone(),
+        opts.broadcaster.clone(),
+        notify_deps,
+    );
     let attachment_registry = vst_ws::state::attachment_registry::AttachmentRegistry::new();
     let json_unsupported = Arc::new(json_unsupported_cli);
 

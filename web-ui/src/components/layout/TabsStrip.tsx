@@ -395,21 +395,25 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       if (ev.type !== "session:created" || !ev.snapshot) return;
       if (ev.snapshot.worktreeId !== worktreeId) return;
       if (!matches(ev.snapshot)) return;
+      const snapshot = {
+        ...ev.snapshot,
+        parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
+      };
       // Also record it for the in-flight fetch to merge in — appending to
       // state alone is not enough, because a `listSessions` response that is
       // still in flight will replace this array wholesale when it lands.
       arrivedDuringFetch.current = [
-        ...arrivedDuringFetch.current.filter((s) => s.id !== ev.snapshot!.id),
-        ev.snapshot,
+        ...arrivedDuringFetch.current.filter((s) => s.id !== snapshot.id),
+        snapshot,
       ];
       setSessions((prev) => {
-        const exists = prev.some((s) => s.id === ev.snapshot!.id);
-        return exists ? prev : [...prev, ev.snapshot!];
+        const exists = prev.some((s) => s.id === snapshot.id);
+        return exists ? prev : [...prev, snapshot];
       });
       // Seed lifecycle state from the snapshot so the spawning placeholder
       // shows "Starting…" while state is "not_started", instead of skipping
       // straight to "Reconnecting…" when session:state working arrives later.
-      useWorkspaceStore.getState().patchSessionState(ev.snapshot.id, ev.snapshot.state);
+      useWorkspaceStore.getState().patchSessionState(snapshot.id, snapshot.state);
       // Focus a session the USER created — they asked for it and expect to
       // land in it. Never focus one an AGENT spawned: the user is mid-read in
       // the parent, and yanking them into a subagent they did not open loses
@@ -425,10 +429,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       const cur = isAgent ? st.activeSessionId : st.activeTerminalSessionId;
       const curIsValid =
         !!cur &&
-        (cur === ev.snapshot.id ||
+        (cur === snapshot.id ||
           arrivedDuringFetch.current.some((s) => s.id === cur) ||
           sessionsRef.current.some((s) => s.id === cur));
-      if (!ev.snapshot.parentSessionId || !curIsValid) setActiveSession(ev.snapshot.id);
+      if (!snapshot.parentSessionId || !curIsValid) setActiveSession(snapshot.id);
     });
 
     const offDeleted = api.on("session:deleted", (ev) => {

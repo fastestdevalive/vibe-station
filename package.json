@@ -19,6 +19,8 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.70.0",
+    "@agentclientprotocol/sdk": "1.4.0",
     "@eslint/js": "^9.15.0",
     "@shikijs/themes": "3.23.0",
     "@types/node": "20",

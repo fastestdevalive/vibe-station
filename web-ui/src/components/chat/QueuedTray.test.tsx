@@ -172,14 +172,19 @@ describe("QueuedTray", () => {
     expect(screen.queryByRole("listitem")).toBeNull();
   });
 
-  it("renders label 'Will wake parent when idle — <names>' correctly for single and plural", () => {
+  it("renders label with child chips for single and plural", () => {
     const singleSlot: NoticeSlotInfo = { children: { "c1": "Worker" }, running: false };
     const { unmount } = renderTray([], { noticeSlot: singleSlot });
-    expect(screen.getByText("Will wake parent when idle — Worker")).toBeTruthy();
+    expect(screen.getByText("subagent has update, will wake parent when idle")).toBeTruthy();
+    expect(screen.getByText("Worker")).toBeTruthy();
+    expect(screen.getByLabelText("Worker subagent has update, will wake parent when idle")).toBeTruthy();
     unmount();
 
     const pluralSlot: NoticeSlotInfo = { children: { "c1": "Worker", "c2": "Reviewer" }, running: false };
     renderTray([], { noticeSlot: pluralSlot });
-    expect(screen.getByText("Will wake parent when idle — Worker, Reviewer")).toBeTruthy();
+    expect(screen.getByText("subagents have update, will wake parent when idle")).toBeTruthy();
+    expect(screen.getByText("Worker")).toBeTruthy();
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+    expect(screen.getByLabelText("Worker, Reviewer subagents have update, will wake parent when idle")).toBeTruthy();
   });
 });

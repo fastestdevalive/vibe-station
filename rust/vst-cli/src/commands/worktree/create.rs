@@ -76,11 +76,14 @@ pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOp
             "--json" => {
                 opts.json = true;
             }
-            "--parent" => {
+            "--parent" | "--source-agent" => {
                 opts.parent = iter.next().cloned();
             }
             s if s.starts_with("--parent=") => {
                 opts.parent = Some(s.trim_start_matches("--parent=").to_string());
+            }
+            s if s.starts_with("--source-agent=") => {
+                opts.parent = Some(s.trim_start_matches("--source-agent=").to_string());
             }
             "--no-parent" => {
                 opts.no_parent = true;

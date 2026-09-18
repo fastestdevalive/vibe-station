@@ -10,6 +10,7 @@ use crate::text_source::resolve_file_or_inline;
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionCreateOptions {
     pub worktree_id: String,
+    pub project_id: Option<String>,
     pub session_type: String,
     pub mode: Option<String>,
     pub prompt: Option<String>,
@@ -23,6 +24,7 @@ impl Default for SessionCreateOptions {
     fn default() -> Self {
         Self {
             worktree_id: String::new(),
+            project_id: None,
             session_type: "agent".to_string(),
             mode: None,
             prompt: None,
@@ -41,6 +43,23 @@ pub fn parse_session_create_options(args: &[String]) -> Result<SessionCreateOpti
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            "--project" => {
+                let val = iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| "--project requires an argument".to_string())?;
+                if val.is_empty() {
+                    return Err("--project requires a non-empty argument".to_string());
+                }
+                opts.project_id = Some(val);
+            }
+            s if s.starts_with("--project=") => {
+                let val = s.trim_start_matches("--project=").to_string();
+                if val.is_empty() {
+                    return Err("--project requires a non-empty argument".to_string());
+                }
+                opts.project_id = Some(val);
+            }
             "--type" => {
                 opts.session_type = iter
                     .next()
@@ -71,11 +90,14 @@ pub fn parse_session_create_options(args: &[String]) -> Result<SessionCreateOpti
             "--json" => {
                 opts.json = true;
             }
-            "--parent" => {
+            "--parent" | "--source-agent" => {
                 opts.parent = iter.next().cloned();
             }
             s if s.starts_with("--parent=") => {
                 opts.parent = Some(s.trim_start_matches("--parent=").to_string());
+            }
+            s if s.starts_with("--source-agent=") => {
+                opts.parent = Some(s.trim_start_matches("--source-agent=").to_string());
             }
             "--no-parent" => {
                 opts.no_parent = true;
@@ -89,10 +111,14 @@ pub fn parse_session_create_options(args: &[String]) -> Result<SessionCreateOpti
         }
     }
 
-    if positional.is_empty() {
-        return Err("worktreeId is required".to_string());
+    if let Some(pos) = positional.first() {
+        if opts.project_id.is_some() {
+            return Err("Cannot specify both a worktree and --project".to_string());
+        }
+        opts.worktree_id = pos.clone();
+    } else if opts.project_id.is_none() {
+        return Err("worktreeId or --project is required".to_string());
     }
-    opts.worktree_id = positional[0].clone();
 
     Ok(opts)
 }
@@ -131,10 +157,20 @@ pub async fn run_session_create(opts: SessionCreateOptions) -> Result<(), (Strin
         SessionType::Agent
     };
 
+    let (target, worktree_id, project_id) = if let Some(pid) = opts.project_id {
+        (
+            Some(vst_types::rest::sessions::CreateTarget::Direct),
+            None,
+            Some(pid),
+        )
+    } else {
+        (None, Some(opts.worktree_id), None)
+    };
+
     let body = CreateSessionBody {
-        target: None,
-        worktree_id: Some(opts.worktree_id),
-        project_id: None,
+        target,
+        worktree_id,
+        project_id,
         r#type: session_type,
         mode_id: opts.mode,
         prompt,

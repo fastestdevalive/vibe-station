@@ -74,8 +74,8 @@ pub enum ServerEvent {
         superseded_by: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         is_main: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        parent_session_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_session_id: Option<Option<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         worktree_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

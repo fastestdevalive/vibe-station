@@ -176,6 +176,23 @@ impl StoreHandle {
         None
     }
 
+    /// Synchronous read of a session from the in-memory cache without awaiting
+    /// `ensure_loaded()`. Used by non-async caller paths (e.g. `NotifyDeps::lookup`).
+    pub fn find_session_cached(&self, session_id: &str) -> Option<(ProjectRecord, SessionRecord)> {
+        let cache = self.0.cache.read().unwrap();
+        for project in cache.values() {
+            for worktree in &project.worktrees {
+                if let Some(session) = worktree.sessions.iter().find(|s| s.id == session_id) {
+                    return Some((project.clone(), session.clone()));
+                }
+            }
+            if let Some(direct) = project.direct_sessions.iter().find(|s| s.id == session_id) {
+                return Some((project.clone(), direct.clone()));
+            }
+        }
+        None
+    }
+
     /// Add a new project. Errors if a project with the same id already exists.
     pub async fn add_project(&self, record: ProjectRecord) -> StoreResult<()> {
         let _lock = self.project_lock(&record.id).await;
