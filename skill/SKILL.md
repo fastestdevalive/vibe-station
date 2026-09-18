@@ -1,4 +1,3 @@
-<!-- vst-skill-version: 0.0.0 -->
 ---
 name: vst
 description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vst daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
