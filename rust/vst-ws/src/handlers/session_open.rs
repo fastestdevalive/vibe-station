@@ -9,9 +9,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use vst_store::StoreHandle;
 use vst_types::ws::{ClientMessage, ServerMessage, SessionErrorReason};
 
-use super::session_lookup::{find_session_record, SessionLookup};
 use crate::connection::{OpenStreamEntry, SessionStream, WsConnection};
 use crate::streams::tmux_output::TmuxOutputStream;
 use crate::Error;
@@ -24,7 +24,7 @@ pub type DirectStreamRegistry = Arc<Mutex<HashMap<String, Arc<dyn SessionStream>
 
 pub async fn handle_session_open(
     conn: &WsConnection,
-    lookup: &SessionLookup,
+    store: &StoreHandle,
     direct: &DirectStreamRegistry,
     msg: &ClientMessage,
 ) {
@@ -40,24 +40,24 @@ pub async fn handle_session_open(
     let cols = *cols;
     let rows = *rows;
     let conn = conn.clone();
-    let lookup = lookup.clone();
+    let store = store.clone();
     let direct = direct.clone();
 
     let c = conn.clone();
     let sid = session_id.clone();
     conn.with_session_lock(&session_id, move || {
         let c = c.clone();
-        let lookup = lookup.clone();
+        let store = store.clone();
         let direct = direct.clone();
         let sid = sid.clone();
-        async move { open_session_locked(&c, &lookup, &direct, &sid, cols, rows).await }
+        async move { open_session_locked(&c, &store, &direct, &sid, cols, rows).await }
     })
     .await;
 }
 
 async fn open_session_locked(
     conn: &WsConnection,
-    lookup: &SessionLookup,
+    store: &StoreHandle,
     direct: &DirectStreamRegistry,
     session_id: &str,
     cols: i64,
@@ -70,7 +70,7 @@ async fn open_session_locked(
         conn.unregister_open_stream(session_id);
     }
 
-    let Some((_project, session)) = find_session_record(lookup, session_id).await else {
+    let Some((_project, session)) = store.find_session(session_id).await else {
         conn.send(ServerMessage::SessionError {
             session_id: session_id.to_string(),
             message: format!("Session '{session_id}' not found"),

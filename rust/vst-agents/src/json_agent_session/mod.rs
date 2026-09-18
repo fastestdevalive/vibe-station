@@ -18,6 +18,7 @@ pub mod queue;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::watch;
@@ -175,13 +176,10 @@ pub(super) struct State {
     // ---- notice slot ----
     pub(super) notice_slot: Option<NoticeSlotInner>,
     pub(super) active_notice: Option<NoticeSlotInner>,
-
-    // ---- release gate ----
-    pub(super) released: bool,
-
-    // ---- transcript ----
-    /// `None` after `dispose()`.
-    pub(super) store: Option<TranscriptStore>,
+    // (The release latch lives on `Inner` as an `AtomicBool`, and the
+    // transcript store in `Inner::store` — both hoisted OUT of this struct so
+    // a synchronous SQLite write never blocks turn-queue / running-flag /
+    // cancel-token / ACP bookkeeping. See `Inner`.)
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +189,36 @@ pub(super) struct State {
 #[allow(dead_code)]
 pub(super) struct Inner {
     pub(super) state: Mutex<State>,
+    /// The per-session SQLite transcript store, in its OWN lock — deliberately
+    /// a sibling of `state`, not a field inside it.
+    ///
+    /// `persist_event` appends synchronously (SQLite has no async API here). It
+    /// used to do that while holding the `state` mutex, which guards the turn
+    /// queue, running flag, cancel token, live PIDs and the ACP connection — so
+    /// every concurrent WS handler that touched any of those blocked for the
+    /// duration of a disk write. The reproducible symptom: `chat:open`'s
+    /// snapshot (`read_session_tail` → `tail()`) stalling during a worktree
+    /// switch whenever an agent in that worktree was actively streaming.
+    ///
+    /// The four readers (`read_transcript`/`tail`/`page_before`/`since`) and
+    /// both writers now take ONLY this lock. Append ordering and `next_seq`
+    /// monotonicity are unchanged — it is still exactly one exclusive lock
+    /// guarding the store.
+    ///
+    /// LOCK ORDER: never acquire `state` while holding this lock (and vice
+    /// versa) — every call site takes one, finishes with it, drops it, then
+    /// takes the other. `release()` is the one place that cares about both and
+    /// it does so sequentially, for the reason documented there.
+    ///
+    /// `None` after `dispose()`.
+    pub(super) store: Mutex<Option<TranscriptStore>>,
+    /// Release latch. An `AtomicBool` on `Inner` rather than a `State` field so
+    /// that the "is released, then append" pair in `persist_event` stays atomic
+    /// now that the append is guarded by `store` instead of `state`:
+    /// `persist_event` reads it while holding the store lock, and `release()`
+    /// sets it while holding the store lock, so no straggler event from an
+    /// unwinding turn can slip in after the latch is set.
+    pub(super) released: AtomicBool,
     pub(super) stream: JsonAgentStream,
     pub(super) store_handle: StoreHandle,
     pub(super) broadcaster: Broadcaster,
@@ -318,12 +346,12 @@ impl JsonAgentSession {
             out_of_band_last_at_ms: 0,
             notice_slot: None,
             active_notice: None,
-            released: false,
-            store: Some(store),
         };
 
         let inner = Inner {
             state: Mutex::new(state),
+            store: Mutex::new(Some(store)),
+            released: AtomicBool::new(false),
             stream: JsonAgentStream::new(),
             store_handle: opts.store_handle,
             broadcaster: opts.broadcaster,
@@ -472,14 +500,19 @@ pub struct EmitSystemEventPayload {
 // ---------------------------------------------------------------------------
 
 impl JsonAgentSession {
+    /// Is this session's `JsonAgentSession` released (torn down)?
+    pub(super) fn is_released(&self) -> bool {
+        self.0.released.load(Ordering::SeqCst)
+    }
+
     pub fn read_transcript(&self) -> Vec<NormalizedEvent> {
-        let s = self.0.state.lock().unwrap();
-        s.store.as_ref().map_or_else(Vec::new, |st| st.read_all())
+        let store = self.0.store.lock().unwrap();
+        store.as_ref().map_or_else(Vec::new, |st| st.read_all())
     }
 
     pub fn tail(&self, n_turns: i64) -> TranscriptPage {
-        let s = self.0.state.lock().unwrap();
-        s.store.as_ref().map_or(
+        let store = self.0.store.lock().unwrap();
+        store.as_ref().map_or(
             TranscriptPage {
                 events: Vec::new(),
                 oldest_seq: None,
@@ -490,8 +523,8 @@ impl JsonAgentSession {
     }
 
     pub fn page_before(&self, before_seq: i64, limit: i64) -> TranscriptPage {
-        let s = self.0.state.lock().unwrap();
-        s.store.as_ref().map_or(
+        let store = self.0.store.lock().unwrap();
+        store.as_ref().map_or(
             TranscriptPage {
                 events: Vec::new(),
                 oldest_seq: None,
@@ -502,8 +535,8 @@ impl JsonAgentSession {
     }
 
     pub fn since(&self, since_seq: i64, limit: Option<i64>) -> SincePage {
-        let s = self.0.state.lock().unwrap();
-        s.store.as_ref().map_or(
+        let store = self.0.store.lock().unwrap();
+        store.as_ref().map_or(
             SincePage {
                 events: Vec::new(),
                 next_seq: None,
@@ -523,11 +556,11 @@ impl JsonAgentSession {
         let cli = provider_str(self.0.cli);
         let importer = get_native_history_importer(&cli)?;
 
-        let (session_id, watermark) = {
-            let s = self.0.state.lock().unwrap();
-            let wm = s.store.as_ref().and_then(|st| st.get_native_watermark());
-            (s.session.id.clone(), wm)
+        let watermark = {
+            let store = self.0.store.lock().unwrap();
+            store.as_ref().and_then(|st| st.get_native_watermark())
         };
+        let session_id = self.0.state.lock().unwrap().session.id.clone();
 
         let req = crate::native_history_importer::NativeImportRequest {
             session_id,
@@ -543,12 +576,12 @@ impl JsonAgentSession {
         let events = result.events;
 
         let outcome = {
-            let mut s = self.0.state.lock().unwrap();
+            let mut store = self.0.store.lock().unwrap();
             let opts = vst_store::transcript::ImportOptions {
                 cli: cli.clone(),
                 cursor: next_watermark,
             };
-            s.store.as_mut()?.import_transaction(events, opts)
+            store.as_mut()?.import_transaction(events, opts)
         };
 
         // Rebuild meta so status bar reflects backfilled context.
@@ -565,8 +598,8 @@ impl JsonAgentSession {
 impl JsonAgentSession {
     /// Close the SQLite handle. Idempotent.
     pub fn dispose(&self) {
-        let mut s = self.0.state.lock().unwrap();
-        if let Some(store) = s.store.take() {
+        let mut store = self.0.store.lock().unwrap();
+        if let Some(store) = store.take() {
             store.close();
         }
     }
@@ -574,12 +607,20 @@ impl JsonAgentSession {
     /// Full teardown: latch released, abort + queue clear, wait for drain to
     /// unwind (bounded), tear down ACP connection, close the SQLite handle.
     pub async fn release(&self) {
+        // Latch WHILE HOLDING THE STORE LOCK. `persist_event` checks the latch
+        // and appends under that same lock, so this keeps "is released, then
+        // append" atomic across the state/store lock split: an in-flight
+        // append either completes before the latch is set, or observes it and
+        // no-ops. Set here and nowhere else, and never while `state` is held
+        // (lock order — see `Inner::store`).
         {
-            let mut s = self.0.state.lock().unwrap();
-            if s.released {
+            let _store = self.0.store.lock().unwrap();
+            if self.0.released.swap(true, Ordering::SeqCst) {
                 return;
             }
-            s.released = true;
+        }
+        {
+            let mut s = self.0.state.lock().unwrap();
             s.notice_slot = None;
             s.active_notice = None;
             s.promoted_notice = false;
@@ -617,11 +658,11 @@ impl JsonAgentSession {
     /// Persist lifecycle state for this session (JSON-channel authoritative writer).
     #[allow(dead_code)]
     pub(super) async fn persist_lifecycle(&self, new_state: LifecycleState) {
-        let (released, project_id, session_id) = {
+        let (project_id, session_id) = {
             let s = self.0.state.lock().unwrap();
-            (s.released, s.project.id.clone(), s.session.id.clone())
+            (s.project.id.clone(), s.session.id.clone())
         };
-        if released {
+        if self.is_released() {
             return;
         }
         let lifecycle = SessionLifecycle {
@@ -693,8 +734,8 @@ impl JsonAgentSession {
     /// `commands_update` events in the store.
     pub(super) fn rebuild_meta_from_transcript(&self) {
         let meta = {
-            let s = self.0.state.lock().unwrap();
-            s.store.as_ref().map(|st| st.last_meta())
+            let store = self.0.store.lock().unwrap();
+            store.as_ref().map(|st| st.last_meta())
         };
         if let Some(TranscriptMeta {
             model,
@@ -812,25 +853,52 @@ pub fn get_or_create_json_agent_session(
 impl JsonAgentSession {
     /// Append an event to the SQLite store. No-op when `released` (handles
     /// straggler events from an unwinding turn after `release()`).
+    ///
+    /// Takes ONLY the store lock — never `state` — so a synchronous SQLite
+    /// write can no longer block turn-queue/cancel-token/ACP bookkeeping. The
+    /// `released` check happens under that same lock, which is what keeps it
+    /// atomic with the append (see `Inner::released` and `release()`).
     pub(super) fn persist_event(&self, ev: &NormalizedEvent) {
-        let mut s = self.0.state.lock().unwrap();
-        if s.released {
+        let mut store = self.0.store.lock().unwrap();
+        if self.0.released.load(Ordering::SeqCst) {
             return;
         }
-        if let Some(store) = s.store.as_mut() {
+        if let Some(store) = store.as_mut() {
             let mut ev_clone = ev.clone();
             store.append(&mut ev_clone);
         }
     }
 
+    /// Test-only: append through the exact production path (`persist_event`).
+    ///
+    /// The store/`state` lock split (and the `released` latch that guards it)
+    /// can only be exercised by really appending while something else reads or
+    /// releases, and every production append path needs a live CLI turn.
+    /// Mirrors the `StoreHandle::raw_conn` test-seam precedent in `vst-store`.
+    #[doc(hidden)]
+    pub fn persist_event_for_test(&self, ev: &NormalizedEvent) {
+        self.persist_event(ev);
+    }
+
+    /// Test-only: run `f` while holding the session-`state` mutex.
+    ///
+    /// Lets a test pin the point of item 8: transcript appends and reads take
+    /// ONLY the store lock, so they must complete while `state` (turn queue,
+    /// running flag, cancel token, ACP connection) is held by someone else.
+    #[doc(hidden)]
+    pub fn with_state_locked_for_test<T>(&self, f: impl FnOnce() -> T) -> T {
+        let _s = self.0.state.lock().unwrap();
+        f()
+    }
+
     /// Same as `persist_event` but mutates the event in-place (assigns `log_seq`).
     #[allow(dead_code)]
     pub(super) fn persist_event_mut(&self, ev: &mut NormalizedEvent) {
-        let mut s = self.0.state.lock().unwrap();
-        if s.released {
+        let mut store = self.0.store.lock().unwrap();
+        if self.0.released.load(Ordering::SeqCst) {
             return;
         }
-        if let Some(store) = s.store.as_mut() {
+        if let Some(store) = store.as_mut() {
             store.append(ev);
         }
     }

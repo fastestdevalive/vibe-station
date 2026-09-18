@@ -1,8 +1,8 @@
 //! `session:input` handler — forward client keystrokes to the session.
 
+use vst_store::StoreHandle;
 use vst_types::ws::{ClientMessage, ServerMessage, SessionErrorReason};
 
-use super::session_lookup::{find_session_record, SessionLookup};
 use crate::connection::WsConnection;
 
 /// Forward client keystrokes to the session.
@@ -12,11 +12,7 @@ use crate::connection::WsConnection;
 /// back to `tmux send-keys -l` if no stream is registered (mid attach/detach).
 ///
 /// Direct-pty mode: write to the open stream's PTY; drop silently if none.
-pub async fn handle_session_input(
-    conn: &WsConnection,
-    lookup: &SessionLookup,
-    msg: &ClientMessage,
-) {
+pub async fn handle_session_input(conn: &WsConnection, store: &StoreHandle, msg: &ClientMessage) {
     let ClientMessage::SessionInput { session_id, data } = msg else {
         return;
     };
@@ -24,7 +20,7 @@ pub async fn handle_session_input(
         return;
     }
 
-    let Some((_project, session)) = find_session_record(lookup, session_id).await else {
+    let Some((_project, session)) = store.find_session(session_id).await else {
         conn.send(ServerMessage::SessionError {
             session_id: session_id.clone(),
             message: format!("Session '{session_id}' not found"),

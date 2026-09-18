@@ -149,7 +149,18 @@ pub trait SessionStream: Send + Sync {
         true
     }
     /// Resize the PTY.
-    fn resize(&self, cols: i64, rows: i64, subscriber_id: Option<&str>);
+    ///
+    /// Async because the tmux implementation shells out to `tmux
+    /// resize-window`: running that with `std::process::Command` pinned a
+    /// shared tokio worker thread for the duration of the subprocess
+    /// round-trip, which — now that dispatch is per-session concurrent rather
+    /// than one global FIFO — stalls *other* sessions' work. Every terminal
+    /// mount fires a resize, so a worktree switch fires N+M of them at once.
+    ///
+    /// Kept `async` (rather than fire-and-forget spawning) so the resize is
+    /// still applied before the call returns: rapid resizes (e.g. a drag) stay
+    /// ordered, and the last one wins.
+    async fn resize(&self, cols: i64, rows: i64, subscriber_id: Option<&str>);
     /// Stop streaming for one subscriber.
     async fn detach(&self, subscriber_id: &str) -> Result<(), Error>;
     /// Subscribe to live output chunks (`session:output`).

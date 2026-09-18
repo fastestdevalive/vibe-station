@@ -148,6 +148,34 @@ impl StoreHandle {
         self.0.cache.read().unwrap().values().cloned().collect()
     }
 
+    /// Resolve a session id to its `(project, session)` pair, scanning worktree
+    /// sessions AND direct sessions (a project's `direct_sessions` have no
+    /// worktree — a prior Node bug hid them from the WS lookup entirely and
+    /// answered "Session not found" for live, healthy agents).
+    ///
+    /// This exists so the hot WS paths (`session:open`/`input`/`resize`) do not
+    /// have to deep-clone the ENTIRE store via `get_all_projects()` on every
+    /// single message just to find one record: only the matched pair is cloned.
+    ///
+    /// `ensure_loaded()` first, exactly like `get_project`/`get_all_projects` —
+    /// without it this silently returns `None` (read as "session not found") on
+    /// the very first message after a cold daemon start.
+    pub async fn find_session(&self, session_id: &str) -> Option<(ProjectRecord, SessionRecord)> {
+        self.ensure_loaded().await;
+        let cache = self.0.cache.read().unwrap();
+        for project in cache.values() {
+            for worktree in &project.worktrees {
+                if let Some(session) = worktree.sessions.iter().find(|s| s.id == session_id) {
+                    return Some((project.clone(), session.clone()));
+                }
+            }
+            if let Some(direct) = project.direct_sessions.iter().find(|s| s.id == session_id) {
+                return Some((project.clone(), direct.clone()));
+            }
+        }
+        None
+    }
+
     /// Add a new project. Errors if a project with the same id already exists.
     pub async fn add_project(&self, record: ProjectRecord) -> StoreResult<()> {
         let _lock = self.project_lock(&record.id).await;

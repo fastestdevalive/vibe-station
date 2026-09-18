@@ -47,7 +47,9 @@ impl SessionStream for PtySessionStream {
         self.pty.write(data);
     }
 
-    fn resize(&self, cols: i64, rows: i64, subscriber_id: Option<&str>) {
+    /// Direct-PTY resize is a local `ioctl` (no subprocess), so this is `async`
+    /// only to satisfy the trait — it never actually yields.
+    async fn resize(&self, cols: i64, rows: i64, subscriber_id: Option<&str>) {
         self.pty.resize(
             cols.clamp(1, u16::MAX as i64) as u16,
             rows.clamp(1, u16::MAX as i64) as u16,

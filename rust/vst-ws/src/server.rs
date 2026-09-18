@@ -24,7 +24,6 @@ use crate::handlers::file_watch::{
 use crate::handlers::ping::handle_ping;
 use crate::handlers::session_close::handle_session_close;
 use crate::handlers::session_input::handle_session_input;
-use crate::handlers::session_lookup::SessionLookup;
 use crate::handlers::session_open::{handle_session_open, DirectStreamRegistry};
 use crate::handlers::session_resize::handle_session_resize;
 use crate::handlers::subscribe::{handle_subscribe, handle_unsubscribe};
@@ -44,7 +43,11 @@ pub struct DispatchContext {
 }
 
 impl DispatchContext {
-    // (handlers build their own SessionLookup from the store on demand)
+    // (the session-resolving handlers below look their record up straight out
+    // of the store's cache via `StoreHandle::find_session`, which clones only
+    // the matched project/session pair — NOT the whole store, as the old
+    // `SessionLookup::from_store` + `get_all_projects()` path did on every
+    // single `session:open`/`resize`/`input` message.)
 }
 
 /// Dispatch a parsed client message to its handler.
@@ -54,19 +57,16 @@ pub async fn dispatch(conn: &WsConnection, ctx: &DispatchContext, msg: &ClientMe
         ClientMessage::Unsubscribe { .. } => handle_unsubscribe(conn, msg),
         ClientMessage::Ping => handle_ping(conn),
         ClientMessage::SessionOpen { .. } => {
-            let lookup = SessionLookup::from_store(&ctx.store).await;
-            handle_session_open(conn, &lookup, &ctx.direct_streams, msg).await;
+            handle_session_open(conn, &ctx.store, &ctx.direct_streams, msg).await;
         }
         ClientMessage::SessionClose { .. } => {
             handle_session_close(conn, msg).await;
         }
         ClientMessage::SessionResize { .. } => {
-            let lookup = SessionLookup::from_store(&ctx.store).await;
-            handle_session_resize(conn, &lookup, msg).await;
+            handle_session_resize(conn, &ctx.store, msg).await;
         }
         ClientMessage::SessionInput { .. } => {
-            let lookup = SessionLookup::from_store(&ctx.store).await;
-            handle_session_input(conn, &lookup, msg).await;
+            handle_session_input(conn, &ctx.store, msg).await;
         }
         ClientMessage::FileWatch { .. } => {
             handle_file_watch(conn, &ctx.watchers, &ctx.resolve_worktree_root, msg);

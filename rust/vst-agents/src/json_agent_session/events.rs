@@ -74,8 +74,7 @@ impl JsonAgentSession {
     /// Handle an out-of-band (subagent task-notification) event. Does NOT call
     /// `update_turn_state` — no lifecycle transitions for notifications.
     pub fn handle_out_of_band_event(&self, mut ev: NormalizedEvent) {
-        let released = self.0.state.lock().unwrap().released;
-        if released {
+        if self.is_released() {
             return;
         }
 
