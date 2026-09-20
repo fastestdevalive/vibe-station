@@ -2690,6 +2690,7 @@ impl SessionRoutes {
             context: String::new(),
             created_at: now_iso(),
             model: None,
+            icon: None,
         };
         if let Some(live) = self.json_registry.get(&session.id) {
             if let Some(n) = live.get_mode_name() {

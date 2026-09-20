@@ -36,6 +36,8 @@ pub struct CreateModeBody {
     pub context: String,
     pub preset_id: Option<String>,
     pub model: Option<String>,
+    /// Explicit icon key; when present it wins over plugin derivation.
+    pub icon: Option<String>,
 }
 
 /// `PUT /modes/:id` request body (patch semantics, all optional).
@@ -47,6 +49,8 @@ pub struct UpdateModeBody {
     pub context: Option<String>,
     pub cli: Option<CliId>,
     pub model: Option<String>,
+    /// Explicit icon key; when present it wins over plugin derivation.
+    pub icon: Option<String>,
 }
 
 /// `DELETE /modes/:id` success.

@@ -307,6 +307,10 @@ impl AgentPlugin for AgyPlugin {
         AGY_DEFAULT_MODEL
     }
 
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "agy"
+    }
+
     fn prompt_delivery(&self) -> PromptDelivery {
         PromptDelivery::Inline
     }
