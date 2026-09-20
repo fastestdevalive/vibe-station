@@ -330,6 +330,10 @@ impl AgentPlugin for CursorPlugin {
         "auto"
     }
 
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "cursor"
+    }
+
     fn prompt_delivery(&self) -> PromptDelivery {
         PromptDelivery::Inline
     }

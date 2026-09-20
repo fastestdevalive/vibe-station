@@ -68,6 +68,9 @@ impl AgentPlugin for MockTurnPlugin {
     fn default_model(&self) -> &str {
         "mock-model"
     }
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "mock"
+    }
     fn prompt_delivery(&self) -> PromptDelivery {
         PromptDelivery::Inline
     }

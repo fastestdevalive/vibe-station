@@ -227,6 +227,12 @@ pub trait AgentPlugin: Send + Sync {
     fn name(&self) -> &str;
     /// Default model id for the UI when creating modes for this CLI.
     fn default_model(&self) -> &str;
+    /// Default mode icon key derived from the mode's CLI and (for model-aware
+    /// plugins like opencode) its model. claude/cursor/agy return a constant;
+    /// opencode returns `"deepseek"` when the model names deepseek
+    /// (case-insensitive), else `"opencode"`. Required — no default, matching
+    /// the plan's Decision 1.
+    fn default_mode_icon(&self, model: Option<&str>) -> &'static str;
     fn prompt_delivery(&self) -> PromptDelivery;
     /// Extra settle time after ready sentinel, before stdin paste.
     fn post_sentinel_delay_ms(&self) -> Option<u64> {
