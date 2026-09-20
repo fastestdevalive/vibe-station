@@ -211,6 +211,10 @@ impl AgentPlugin for ClaudePlugin {
         "sonnet"
     }
 
+    fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+        "claude"
+    }
+
     fn prompt_delivery(&self) -> PromptDelivery {
         PromptDelivery::Inline
     }

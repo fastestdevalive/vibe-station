@@ -35,6 +35,20 @@ use vst_types::CliId;
 pub const MAX_MODES: usize = 20;
 pub const MAX_CONTEXT_LEN: usize = 10_000;
 pub const MAX_MODEL_LEN: usize = 100;
+/// Icon keys the web-ui ships an asset for; an explicit `icon` must be one of these.
+pub const KNOWN_MODE_ICONS: [&str; 5] = ["claude", "agy", "cursor", "opencode", "deepseek"];
+
+fn validate_icon(icon: &str) -> Result<String, ModeRouteError> {
+    let icon = icon.trim();
+    if KNOWN_MODE_ICONS.contains(&icon) {
+        Ok(icon.to_string())
+    } else {
+        Err(ModeRouteError::Validation(format!(
+            "Unknown icon '{icon}'. Expected one of: {}.",
+            KNOWN_MODE_ICONS.join(", ")
+        )))
+    }
+}
 pub const CLI_MODEL_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Load all modes from `~/.vibe-station/modes.json`. Returns an empty vec on
@@ -42,9 +56,34 @@ pub const CLI_MODEL_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 pub fn load_modes() -> Vec<Mode> {
     let path = home_dir().join(".vibe-station").join("modes.json");
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_json::from_str::<Vec<Mode>>(&text).unwrap_or_default(),
+        Ok(text) => {
+            let modes = serde_json::from_str::<Vec<Mode>>(&text).unwrap_or_default();
+            derive_missing_icons(modes)
+        }
         Err(_) => vec![],
     }
+}
+
+/// Fill in `icon` for any mode missing it (legacy rows), deriving from the
+/// mode's CLI + model via the plugin. In-memory only — persistence happens on
+/// the next `save_modes`, not on the read path.
+pub(crate) fn derive_missing_icons(modes: Vec<Mode>) -> Vec<Mode> {
+    modes
+        .into_iter()
+        .map(|m| {
+            if m.icon.is_some() {
+                m
+            } else {
+                let icon = resolve_plugin(m.cli)
+                    .default_mode_icon(m.model.as_deref())
+                    .to_string();
+                Mode {
+                    icon: Some(icon),
+                    ..m
+                }
+            }
+        })
+        .collect()
 }
 
 /// Resolve a `modeId` that may be either an `id` or a `name` to the canonical
@@ -194,7 +233,10 @@ impl ModeRoutes {
 
         let path = self.file_path();
         let loaded = match tokio::fs::read_to_string(&path).await {
-            Ok(content) => serde_json::from_str::<Vec<Mode>>(&content).unwrap_or_default(),
+            Ok(content) => {
+                let modes = serde_json::from_str::<Vec<Mode>>(&content).unwrap_or_default();
+                derive_missing_icons(modes)
+            }
             Err(_) => vec![],
         };
 
@@ -380,6 +422,14 @@ impl ModeRoutes {
                 .unwrap_or(0)
         );
 
+        // Explicit icon wins; otherwise derive from the CLI + model (Decision 1).
+        let icon = match body.icon.as_deref() {
+            Some(icon) => validate_icon(icon)?,
+            None => resolve_plugin(body.cli)
+                .default_mode_icon(model_norm.as_deref())
+                .to_string(),
+        };
+
         let mode = Mode {
             id: generate_mode_id(),
             name: name.to_string(),
@@ -387,6 +437,7 @@ impl ModeRoutes {
             context: context.to_string(),
             created_at: now_iso,
             model: model_norm,
+            icon: Some(icon),
         };
 
         let mut updated = modes;
@@ -458,6 +509,8 @@ impl ModeRoutes {
         let prev = &modes[idx];
         let mut updated = prev.clone();
 
+        let mut cli_changed = false;
+        let mut model_changed = false;
         if let Some(ref name) = body.name {
             updated.name = name.trim().to_string();
         }
@@ -465,6 +518,7 @@ impl ModeRoutes {
             updated.context = context.trim().to_string();
         }
         if let Some(cli) = body.cli {
+            cli_changed = cli != prev.cli;
             updated.cli = cli;
             // Changing CLI invalidates the saved model unless caller explicitly supplies a new one
             if body.model.is_none() {
@@ -473,7 +527,19 @@ impl ModeRoutes {
         }
         if let Some(ref model) = body.model {
             let m = normalize_model_field(Some(model.as_str()));
+            model_changed = updated.model != m;
             updated.model = m;
+        }
+
+        // Explicit icon wins; otherwise re-derive on cli/model change (Decision 1).
+        if let Some(ref icon) = body.icon {
+            updated.icon = Some(validate_icon(icon)?);
+        } else if cli_changed || model_changed {
+            updated.icon = Some(
+                resolve_plugin(updated.cli)
+                    .default_mode_icon(updated.model.as_deref())
+                    .to_string(),
+            );
         }
 
         modes[idx] = updated.clone();

@@ -78,6 +78,7 @@ fn setup_temp_mode(home_path: &Path, mode_id: &str, cli: CliId) {
         context: "test-context".to_string(),
         created_at: "2026-01-01T00:00:00.000Z".to_string(),
         model: Some("test-model".to_string()),
+        icon: None,
     };
     let modes_json = serde_json::to_string(&vec![mode]).unwrap();
     std::fs::write(vst_dir.join("modes.json"), modes_json).unwrap();

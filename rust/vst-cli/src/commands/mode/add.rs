@@ -86,6 +86,7 @@ pub async fn run_mode_add(opts: ModeAddOptions) -> Result<(), (String, i32)> {
         context,
         preset_id: opts.preset,
         model: None,
+        icon: None,
     };
 
     let result = daemon_post::<Mode, _>("/modes", Some(&body))

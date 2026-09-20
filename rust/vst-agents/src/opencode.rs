@@ -297,6 +297,13 @@ impl AgentPlugin for OpencodePlugin {
         "opencode/big-pickle"
     }
 
+    fn default_mode_icon(&self, model: Option<&str>) -> &'static str {
+        match model {
+            Some(m) if m.to_ascii_lowercase().contains("deepseek") => "deepseek",
+            _ => "opencode",
+        }
+    }
+
     fn prompt_delivery(&self) -> PromptDelivery {
         PromptDelivery::PostLaunch
     }
@@ -621,4 +628,24 @@ async fn ensure_gitignore_entry(gitignore_path: PathBuf, entry: &str) {
         format!("{content}\n{entry}\n")
     };
     let _ = fs::write(&gitignore_path, new_content).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_mode_icon_model_aware() {
+        let plugin = OpencodePlugin;
+        // deepseek model (case-insensitive) -> deepseek
+        assert_eq!(
+            plugin.default_mode_icon(Some("deepseek-local/deepseek-v4")),
+            "deepseek"
+        );
+        assert_eq!(plugin.default_mode_icon(Some("DeepSeek-R1")), "deepseek");
+        // non-deepseek model -> opencode
+        assert_eq!(plugin.default_mode_icon(Some("gpt-5")), "opencode");
+        // missing model -> opencode
+        assert_eq!(plugin.default_mode_icon(None), "opencode");
+    }
 }

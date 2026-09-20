@@ -126,6 +126,9 @@ pub struct Mode {
     pub context: String,
     pub created_at: String,
     pub model: Option<String>,
+    /// Icon key (claude|agy|cursor|opencode|deepseek). Absent on legacy rows
+    /// until backfilled on the next save.
+    pub icon: Option<String>,
 }
 
 /// A token-level remote session (`TokenSession` in broadcaster.ts). The

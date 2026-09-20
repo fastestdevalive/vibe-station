@@ -19,6 +19,7 @@ use std::path::Path;
 use std::process::Command;
 
 use tempfile::tempdir;
+use vst_agents::home::with_home;
 use vst_routes::modes::{
     find_mode, json_unsupported_cli, load_modes, resolve_mode_id, ModeRouteError, ModeRoutes,
     MAX_CONTEXT_LEN, MAX_MODES,
@@ -68,6 +69,7 @@ async fn test_modes_pure_and_resolution_helpers() {
             context: "Be helpful".to_string(),
             created_at: "2026-09-15T00:00:00Z".to_string(),
             model: Some("claude-3-5-sonnet".to_string()),
+            icon: None,
         },
         Mode {
             id: "mode-2".to_string(),
@@ -76,6 +78,7 @@ async fn test_modes_pure_and_resolution_helpers() {
             context: "Be fast".to_string(),
             created_at: "2026-09-15T00:00:00Z".to_string(),
             model: None,
+            icon: None,
         },
     ];
 
@@ -156,6 +159,7 @@ async fn test_modes_crud_lifecycle_and_events() {
             context: "Plan everything first".to_string(),
             preset_id: None,
             model: Some("claude-3-7-sonnet".to_string()),
+            icon: None,
         })
         .await
         .expect("create_mode should succeed");
@@ -186,6 +190,7 @@ async fn test_modes_crud_lifecycle_and_events() {
             context: "Some context".to_string(),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
@@ -208,6 +213,7 @@ async fn test_modes_crud_lifecycle_and_events() {
                 context: Some("Plan even harder".to_string()),
                 cli: Some(CliId::Opencode),
                 model: Some("deepseek-v3".to_string()),
+                icon: None,
             },
         )
         .await
@@ -243,6 +249,7 @@ async fn test_modes_crud_lifecycle_and_events() {
                 context: None,
                 cli: Some(CliId::Claude),
                 model: None,
+                icon: None,
             },
         )
         .await
@@ -267,6 +274,7 @@ async fn test_modes_crud_lifecycle_and_events() {
                 context: None,
                 cli: None,
                 model: None,
+                icon: None,
             },
         )
         .await;
@@ -430,6 +438,319 @@ async fn test_modes_crud_lifecycle_and_events() {
 }
 
 #[tokio::test]
+async fn test_modes_icon_on_create() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let routes = ModeRoutes::new(store, broadcaster).with_modes_file(dir.path().join("modes.json"));
+
+    let mk = |name: &str, cli: CliId, model: Option<&str>, icon: Option<&str>| {
+        let model = model.map(str::to_string);
+        let icon = icon.map(str::to_string);
+        routes.create_mode(CreateModeBody {
+            name: name.to_string(),
+            cli,
+            context: "c".to_string(),
+            preset_id: None,
+            model,
+            icon,
+        })
+    };
+
+    // One mode per CLI -> expected icon derived from cli (+ model).
+    assert_eq!(
+        mk("Claude M", CliId::Claude, None, None)
+            .await
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        mk("Cursor M", CliId::Cursor, None, None)
+            .await
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("cursor")
+    );
+    assert_eq!(
+        mk("Agy M", CliId::Agy, None, None)
+            .await
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("agy")
+    );
+    // opencode + deepseek model -> deepseek
+    assert_eq!(
+        mk(
+            "DS M",
+            CliId::Opencode,
+            Some("deepseek-local/deepseek-v4"),
+            None
+        )
+        .await
+        .unwrap()
+        .icon
+        .as_deref(),
+        Some("deepseek")
+    );
+    // opencode + non-deepseek model -> opencode
+    assert_eq!(
+        mk("OC M", CliId::Opencode, Some("gpt-5"), None)
+            .await
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("opencode")
+    );
+    // Explicit icon wins over derivation on create.
+    assert_eq!(
+        mk("Explicit M", CliId::Claude, None, Some("opencode"))
+            .await
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("opencode")
+    );
+}
+
+#[tokio::test]
+async fn test_modes_icon_rederive_on_update() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let routes = ModeRoutes::new(store, broadcaster).with_modes_file(dir.path().join("modes.json"));
+
+    let ds = routes
+        .create_mode(CreateModeBody {
+            name: "DS M".to_string(),
+            cli: CliId::Opencode,
+            context: "c".to_string(),
+            preset_id: None,
+            model: Some("deepseek-v3".to_string()),
+            icon: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(ds.icon.as_deref(), Some("deepseek"));
+
+    // Changing model away from deepseek re-derives to opencode.
+    let flipped = routes
+        .update_mode(
+            &ds.id,
+            UpdateModeBody {
+                name: None,
+                context: None,
+                cli: None,
+                model: Some("gpt-5".to_string()),
+                icon: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(flipped.icon.as_deref(), Some("opencode"));
+
+    // ... and back to deepseek flips it back.
+    let flipped_back = routes
+        .update_mode(
+            &ds.id,
+            UpdateModeBody {
+                name: None,
+                context: None,
+                cli: None,
+                model: Some("deepseek-v4".to_string()),
+                icon: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(flipped_back.icon.as_deref(), Some("deepseek"));
+
+    // Changing CLI re-derives.
+    let cli_flipped = routes
+        .update_mode(
+            &ds.id,
+            UpdateModeBody {
+                name: None,
+                context: None,
+                cli: Some(CliId::Claude),
+                model: None,
+                icon: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cli_flipped.icon.as_deref(), Some("claude"));
+
+    // Explicit icon on update wins over derivation.
+    let explicit_upd = routes
+        .update_mode(
+            &ds.id,
+            UpdateModeBody {
+                name: None,
+                context: None,
+                cli: None,
+                model: Some("gpt-5".to_string()),
+                icon: Some("cursor".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(explicit_upd.icon.as_deref(), Some("cursor"));
+
+    // Re-sending the SAME cli (the edit dialog always does) must not clobber an
+    // explicit icon; only a real cli change re-derives.
+    let same_cli = routes
+        .update_mode(
+            &ds.id,
+            UpdateModeBody {
+                name: Some("renamed".to_string()),
+                context: None,
+                cli: Some(CliId::Claude),
+                model: Some("gpt-5".to_string()),
+                icon: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(same_cli.icon.as_deref(), Some("cursor"));
+}
+
+#[tokio::test]
+async fn test_modes_icon_rejects_unknown_key() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let routes =
+        ModeRoutes::new(store, Broadcaster::new(16)).with_modes_file(dir.path().join("modes.json"));
+
+    let err = routes
+        .create_mode(CreateModeBody {
+            name: "bad".to_string(),
+            cli: CliId::Claude,
+            context: "c".to_string(),
+            preset_id: None,
+            model: None,
+            icon: Some("constructor".to_string()),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ModeRouteError::Validation(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn test_modes_icon_backfill_cached_loader() {
+    let dir = tempdir().unwrap();
+    let modes_file = dir.path().join("modes.json");
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let routes = ModeRoutes::new(store, broadcaster).with_modes_file(modes_file.clone());
+
+    std::fs::write(
+        &modes_file,
+        serde_json::to_string(&vec![
+            Mode {
+                id: "legacy-claude".to_string(),
+                name: "Legacy Claude".to_string(),
+                cli: CliId::Claude,
+                context: "c".to_string(),
+                created_at: "t".to_string(),
+                model: None,
+                icon: None,
+            },
+            Mode {
+                id: "legacy-ds".to_string(),
+                name: "Legacy DS".to_string(),
+                cli: CliId::Opencode,
+                context: "c".to_string(),
+                created_at: "t".to_string(),
+                model: Some("deepseek-v3".to_string()),
+                icon: None,
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    routes.reset_cache_for_test().await;
+
+    let loaded = routes.load_modes().await;
+    assert_eq!(loaded.len(), 2);
+    assert_eq!(
+        loaded
+            .iter()
+            .find(|m| m.id == "legacy-claude")
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        loaded
+            .iter()
+            .find(|m| m.id == "legacy-ds")
+            .unwrap()
+            .icon
+            .as_deref(),
+        Some("deepseek")
+    );
+}
+
+#[tokio::test]
+async fn test_modes_icon_backfill_free_loader() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    let vst_dir = home.join(".vibe-station");
+    std::fs::create_dir_all(&vst_dir).unwrap();
+    std::fs::write(
+        vst_dir.join("modes.json"),
+        serde_json::to_string(&vec![
+            Mode {
+                id: "free-claude".to_string(),
+                name: "Free Claude".to_string(),
+                cli: CliId::Claude,
+                context: "c".to_string(),
+                created_at: "t".to_string(),
+                model: None,
+                icon: None,
+            },
+            Mode {
+                id: "free-oc".to_string(),
+                name: "Free OC".to_string(),
+                cli: CliId::Opencode,
+                context: "c".to_string(),
+                created_at: "t".to_string(),
+                model: Some("gpt-5".to_string()),
+                icon: None,
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    {
+        let _guard = with_home(home.clone());
+        let free = load_modes();
+        assert_eq!(free.len(), 2);
+        assert_eq!(
+            free.iter()
+                .find(|m| m.id == "free-claude")
+                .unwrap()
+                .icon
+                .as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            free.iter()
+                .find(|m| m.id == "free-oc")
+                .unwrap()
+                .icon
+                .as_deref(),
+            Some("opencode")
+        );
+    }
+}
+#[tokio::test]
 async fn test_modes_validation_and_limits() {
     let dir = tempdir().unwrap();
     let modes_file = dir.path().join("modes.json");
@@ -445,6 +766,7 @@ async fn test_modes_validation_and_limits() {
             context: "valid".to_string(),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
@@ -460,6 +782,7 @@ async fn test_modes_validation_and_limits() {
             context: "valid".to_string(),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
@@ -475,6 +798,7 @@ async fn test_modes_validation_and_limits() {
             context: "   ".to_string(),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
@@ -490,6 +814,7 @@ async fn test_modes_validation_and_limits() {
             context: "c".repeat(MAX_CONTEXT_LEN + 1),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
@@ -505,6 +830,7 @@ async fn test_modes_validation_and_limits() {
             context: "valid".to_string(),
             preset_id: None,
             model: Some("m".repeat(101)),
+            icon: None,
         })
         .await;
     assert!(
@@ -521,6 +847,7 @@ async fn test_modes_validation_and_limits() {
                 context: format!("Context {i}"),
                 preset_id: None,
                 model: None,
+                icon: None,
             })
             .await
             .unwrap();
@@ -534,6 +861,7 @@ async fn test_modes_validation_and_limits() {
             context: "Context 21".to_string(),
             preset_id: None,
             model: None,
+            icon: None,
         })
         .await;
     assert!(
