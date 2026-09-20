@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -57,5 +57,17 @@ describe("NewModeDialog", () => {
     await user.type(screen.getByRole("textbox", { name: /mode name/i }), "UniqueMode");
     await user.click(screen.getByRole("button", { name: /Save/i }));
     expect(spy).toHaveBeenCalled();
+  });
+
+  it("shows an icon on each CLI option and previews the derived icon", async () => {
+    const user = userEvent.setup();
+    render(<NewModeDialog open api={api} onClose={() => {}} existingNames={[]} />);
+    const claude = await screen.findByRole("radio", { name: "claude" });
+    const label = claude.closest("label") as HTMLElement;
+    expect(within(label).getByRole("img", { hidden: true })).toBeInTheDocument();
+    await user.click(claude);
+    await waitFor(() => {
+      expect(within(screen.getByTestId("new-mode-icon-preview")).getByRole("img")).toHaveAttribute("aria-label", "claude");
+    });
   });
 });

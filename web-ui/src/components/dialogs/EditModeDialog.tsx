@@ -4,6 +4,7 @@ import type { CliId, Mode, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
+import { CliOptionLabel } from "../agent/CliOptionLabel";
 import { ModelPicker } from "../shared/ModelPicker";
 
 function modelPreference(cliId: string, apiDefault: string): string | undefined {
@@ -127,7 +128,7 @@ export function EditModeDialog({ mode, open, onClose, api }: EditModeDialogProps
         <Radio
           key={c.id}
           name="edit-cli"
-          label={c.id}
+          label={<CliOptionLabel cli={c.id} />}
           checked={cli === c.id}
           disabled={clisLoading}
           onChange={() => {

@@ -20,8 +20,11 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { ApiInstance } from "@/api";
-import type { Session } from "@/api/types";
+import type { Channel, Session } from "@/api/types";
 import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
+import { ModeIcon } from "@/components/agent/ModeIcon";
+import { useModeIcon } from "@/store/modesStore";
+import { sessionModeId } from "@/lib/modeIcon";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
@@ -98,6 +101,31 @@ function SortableTab({ id, children }: SortableTabProps) {
     opacity: isDragging ? 0.5 : 1,
   };
   return children({ setNodeRef, style, attributes, listeners, isDragging });
+}
+
+/**
+ * Agent-tab mode icon. Wrapped in its own component so the `useModeIcon` hook
+ * (which must be called at the top level of a component, not in a loop) can
+ * resolve the icon key for a single session's modeId and keep the strip in sync
+ * as modes load/update/delete. Terminal tabs render no icon.
+ */
+function AgentTabIcon({
+  modeId,
+  channel,
+  api,
+}: {
+  modeId: string | null;
+  channel?: Channel;
+  api: ApiInstance;
+}) {
+  const iconKey = useModeIcon(modeId, api);
+  // aria-hidden: the icon is decorative here — the tab's text label already
+  // conveys the session, so the icon must not pollute the tab's accessible name.
+  return (
+    <span className="tab__icon" aria-hidden="true">
+      <ModeIcon iconKey={iconKey} channel={channel} size={13} />
+    </span>
+  );
 }
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
@@ -475,6 +503,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           if (ev.pinnedAt !== undefined) patch.pinnedAt = ev.pinnedAt ?? null;
           if (ev.supersededBy !== undefined) patch.supersededBy = ev.supersededBy ?? null;
           if (ev.isMain !== undefined) patch.isMain = ev.isMain;
+          // Keep the draft's chosen mode current: `sessionModeId` reads it, and it
+          // is what keeps the tab icon right after the draft is promoted.
+          if (ev.draftConfig !== undefined) patch.draftConfig = ev.draftConfig ?? null;
           if (ev.channel !== undefined) {
             patch.channel = ev.channel;
             patch.useTmux = ev.channel === "tmux";
@@ -738,7 +769,18 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                           }}
                         />
                       ) : null}
-                      <span style={{ position: "relative", zIndex: 1 }}>
+                      <span
+                        className="tab__content"
+                        style={{
+                          position: "relative",
+                          zIndex: 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "var(--space-2)",
+                          flex: "0 1 auto",
+                          minWidth: 0,
+                        }}
+                      >
                         {isRenaming ? (
                           <input
                             ref={renameInputRef}
@@ -757,17 +799,15 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                             style={{ font: "inherit", width: `${Math.max(4, renameValue.length)}ch` }}
                           />
                         ) : (
-                          label
+                          <>
+                            {isAgent ? (
+                              <AgentTabIcon modeId={sessionModeId(s)} channel={s.channel} api={api} />
+                            ) : null}
+                            <span className="tab__label" title={label}>
+                              {label}
+                            </span>
+                          </>
                         )}
-                        {isAgent && !isDraft ? (
-                          <span
-                            className="tab__channel-icon"
-                            aria-hidden
-                            title={s.channel === "json" ? "Rich Chat agent (json based)" : "Terminal agent"}
-                          >
-                            {s.channel === "json" ? "💬" : "⌨"}
-                          </span>
-                        ) : null}
                         {isDraft ? <span className="draft-chip">Draft</span> : null}
                         {archived ? (
                           <span className="tab__archived-badge" title="This session has been archived">
@@ -934,6 +974,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 zIndex: 4000,
               }}
             >
+              <div className="menu-pop__title" title={sessionLabel(resetMenu.session)}>
+                {sessionLabel(resetMenu.session)}
+              </div>
               <button
                 type="button"
                 role="menuitem"

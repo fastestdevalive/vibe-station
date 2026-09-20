@@ -11,6 +11,9 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { type WorktreeRolledUpStatus, sessionStatus } from "@/lib/worktreeStatus";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
+import { ModeIcon } from "@/components/agent/ModeIcon";
+import { useModeIcon } from "@/store/modesStore";
+import { sessionModeId } from "@/lib/modeIcon";
 
 interface DashboardPanelProps {
   api: ApiInstance;
@@ -56,6 +59,22 @@ export function bucketForRollup(
 
 const DASHBOARD_VIEW_KEY = "dashboard:view";
 const DASHBOARD_SHOW_FINISHED_KEY = "dashboard:showFinished";
+
+/**
+ * Mode icon for a dashboard card. Wrapped in its own component so the
+ * `useModeIcon` hook (which must run at the top level, not in the render map)
+ * resolves the icon key for a single session and re-renders as modes
+ * load/update/delete.
+ */
+function CardIcon({ session, api }: { session: Session; api: ApiInstance }) {
+  const iconKey = useModeIcon(sessionModeId(session), api);
+  // aria-hidden: decorative — the card's text label conveys the session name.
+  return (
+    <span className="dashboard-card__icon" aria-hidden="true">
+      <ModeIcon iconKey={iconKey} channel={session.channel} size={14} />
+    </span>
+  );
+}
 
 export function DashboardPanel({ api }: DashboardPanelProps) {
   const navigate = useNavigate();
@@ -223,7 +242,10 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
                 <StatusDot status={status} pr={sessionPr} />
               </span>
               <span className="dashboard-card__session-main">
-                <span className="dashboard-card__primary">{sessionLabel(s)}</span>
+                <CardIcon session={s} api={api} />
+                <span className="dashboard-card__primary" title={sessionLabel(s)}>
+                  {sessionLabel(s)}
+                </span>
                 <span className="dashboard-card__branch">direct</span>
               </span>
               <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
@@ -243,7 +265,10 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
               <StatusDot status={status} pr={sessionPr} />
             </span>
             <span className="dashboard-card__session-main">
-              <span className="dashboard-card__primary">{sessionLabel(s)}</span>
+              <CardIcon session={s} api={api} />
+              <span className="dashboard-card__primary" title={sessionLabel(s)}>
+                {sessionLabel(s)}
+              </span>
               <span className="dashboard-card__branch">
                 {wt.branch} · {wt.id}
               </span>
@@ -253,7 +278,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
         </div>
       );
     },
-    [projectById, sessionStates, sessions, setActiveWorktree, worktreeById, worktreePrById],
+    [projectById, sessionStates, sessions, setActiveWorktree, worktreeById, worktreePrById, api],
   );
 
   const toggleViewLabel =

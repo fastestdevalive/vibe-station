@@ -1,5 +1,4 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { GutterResult } from "@/api/types";
 import { createMockApi } from "@/api/mock";
@@ -292,15 +291,8 @@ describe("FilePreviewPane — 5.T4 (markdown raw-view toggle)", () => {
     getGutterSpy.mockRestore();
   });
 
-  it("toggling to raw markdown view shows gutter marks in CodeView with code chrome", async () => {
+  it("markdown files have no source/rendered toggle — plain mode is always rendered", async () => {
     const api = createMockApi();
-    const gutterResult: GutterResult = {
-      added: [1, 2],
-      deleted: [],
-      modified: [],
-    };
-    const getGutterSpy = vi.spyOn(api, "getGutter").mockResolvedValue(gutterResult);
-
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
       activeFilePath: "README.md",
@@ -308,31 +300,31 @@ describe("FilePreviewPane — 5.T4 (markdown raw-view toggle)", () => {
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
 
-    // Wait for rendered markdown view
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument();
     });
 
-    // Before toggle: no gutter marks, no code chrome
-    expect(container.querySelectorAll(".workspace-code-line--added").length).toBe(0);
-    const previewBody = container.querySelector(".preview-body");
-    expect(previewBody?.className).not.toContain("preview-body--code");
+    expect(screen.queryByRole("button", { name: /View source|View rendered markdown/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Source")).not.toBeInTheDocument();
+    expect(screen.queryByText("Formatted")).not.toBeInTheDocument();
+    expect(container.querySelector(".preview-body")?.className).not.toContain("preview-body--code");
+  });
 
-    // Click the Source/Formatted toggle button
-    const toggleButton = screen.getByRole("button", { name: /View source|View rendered markdown/ });
-    await userEvent.click(toggleButton);
+  it("markdown file with git diff enabled shows the diff, not the rendered preview, and no toggle", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "README.md",
+      diffScopeByWorktree: { "wt-1": "branch" },
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
 
-    // After toggle: gutter marks should appear, code chrome should be applied
     await waitFor(() => {
-      const addedLines = container.querySelectorAll(".workspace-code-line--added");
-      expect(addedLines.length).toBeGreaterThan(0);
+      expect(screen.getByText("Compared to fork base")).toBeInTheDocument();
     });
 
-    // preview-body--code class should be present for code chrome
-    const updatedPreviewBody = container.querySelector(".preview-body");
-    expect(updatedPreviewBody?.className).toContain("preview-body--code");
-
-    getGutterSpy.mockRestore();
+    expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /View source|View rendered markdown/ })).not.toBeInTheDocument();
+    expect(container.querySelector(".preview-body")?.className).toContain("preview-body--code");
   });
 });
-

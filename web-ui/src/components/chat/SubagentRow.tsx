@@ -5,6 +5,9 @@ import type { ApiInstance } from "@/api";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT, type TileKind } from "@/hooks/useStore";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { ModeIcon } from "@/components/agent/ModeIcon";
+import { useModeIcon } from "@/store/modesStore";
+import { sessionModeId } from "@/lib/modeIcon";
 import { sessionLabel } from "@/lib/sessionLabel";
 import type { WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
 
@@ -36,6 +39,22 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
 function statusPhrase(state: SessionState): string {
   if (state === "waiting_for_human") return "waiting for agent";
   return state.replace(/_/g, " ");
+}
+
+/**
+ * Mode icon for a parent/child chip. Wrapped in its own component so the
+ * `useModeIcon` hook (which must run at the top level, not in a loop) resolves
+ * the icon key for a single session and re-renders as modes load/update/delete.
+ * When no `api` is supplied the icon degrades to the generic fallback glyph.
+ */
+function ChipIcon({ session, api }: { session: Session; api?: ApiInstance }) {
+  const iconKey = useModeIcon(sessionModeId(session), api);
+  // aria-hidden: decorative — the chip's text label conveys the session name.
+  return (
+    <span aria-hidden="true">
+      <ModeIcon iconKey={iconKey} channel={session.channel} size={13} />
+    </span>
+  );
 }
 
 export function ancestorIds(session: Session, all: Session[]): Set<string> {
@@ -176,7 +195,10 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           <span className="chat-subagent-row__arrow" aria-hidden="true">
             ↑
           </span>
-          <span className="chat-subagent-row__label">Parent · {sessionLabel(parent)}</span>
+          <ChipIcon session={parent} api={api} />
+          <span className="chat-subagent-row__label" title={sessionLabel(parent)}>
+            Parent · {sessionLabel(parent)}
+          </span>
           {api && confirmDelink !== session.id ? (
             <button
               type="button"
@@ -252,6 +274,7 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
             }
           >
             <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
+            <ChipIcon session={child} api={api} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>
             {api && confirmDelink !== child.id ? (
               <button

@@ -473,6 +473,8 @@ export interface Mode {
   presetId?: string;
   /** Passed as CLI `--model` / `-m` when set; omitted uses CLI default. */
   model?: string;
+  /** Key into the mode-icon asset set (claude|agy|opencode|deepseek|cursor); absent → generic fallback. */
+  icon?: string;
 }
 
 export interface TreeEntry {
@@ -902,6 +904,8 @@ export interface CreateModeBody {
   context: string;
   presetId?: string;
   model?: string;
+  /** Optional explicit icon key; when absent the daemon derives it from cli/model. */
+  icon?: string;
 }
 
 export interface UpdateModeBody {
@@ -909,6 +913,8 @@ export interface UpdateModeBody {
   cli?: CliId;
   context?: string;
   model?: string;
+  /** Optional explicit icon key; when absent the daemon re-derives it on cli/model change. */
+  icon?: string;
 }
 
 export interface TerminalApi {
