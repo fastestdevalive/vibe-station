@@ -49,6 +49,12 @@
   --border-width: 1px;
   --border-width-2: 2px;
 
+  /* Max width for agent tabs / subagent chips. Desktop keeps the full 18rem so
+     long names are readable; mobile (see @media below) narrows it so several
+     tabs fit on a phone viewport at once. Named token so both surfaces (tabs
+     in workspace.css, chips in chat.css) share one value. */
+  --agent-surface-max-width: 18rem;
+
   --transition-fast: 150ms ease;
   --transition-base: 200ms ease;
   --transition-slow: 300ms ease;
@@ -317,5 +323,9 @@ body {
     --space-3: 14px;
     --space-4: 18px;
     --space-5: 22px;
+
+    /* ~8rem (~128px) per tab lets 3+ agent tabs fit on a 390px-wide phone
+       without horizontal scroll; chips narrow to match. */
+    --agent-surface-max-width: 8rem;
   }
 }

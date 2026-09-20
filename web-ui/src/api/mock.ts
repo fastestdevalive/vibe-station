@@ -145,6 +145,7 @@ export function createMockApi() {
       cli: "claude",
       context: PRESET_BUG_FIX,
       presetId: "bug-fix-with-pr",
+      icon: "claude",
     },
     {
       id: "mode-2",
@@ -152,6 +153,7 @@ export function createMockApi() {
       cli: "cursor",
       context: PRESET_PLANNING,
       presetId: "planning-no-pr",
+      icon: "cursor",
     },
   ];
 
@@ -1170,6 +1172,7 @@ export function createMockApi() {
         context: body.context,
         presetId: body.presetId,
         ...(body.model ? { model: body.model } : {}),
+        ...(body.icon ? { icon: body.icon } : {}),
       };
       modes.push(m);
       emit({ type: "mode:created", mode: m });
@@ -1187,6 +1190,13 @@ export function createMockApi() {
           delete m.model;
         } else {
           m.model = body.model;
+        }
+      }
+      if (body.icon !== undefined) {
+        if (body.icon.trim() === "") {
+          delete m.icon;
+        } else {
+          m.icon = body.icon;
         }
       }
       emit({ type: "mode:updated", mode: m });

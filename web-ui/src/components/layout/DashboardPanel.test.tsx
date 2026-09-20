@@ -8,6 +8,7 @@ import { createMockApi } from "@/api/mock";
 import { DashboardPanel, bucketForRollup } from "./DashboardPanel";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
+import { useModesStore } from "@/store/modesStore";
 
 describe("bucketForRollup (4.T1, inverted by 5.T3/D19, split by 6.T1/6.6)", () => {
   it("5.T3 — done + pr=merged lands in finished, NOT the pr bucket (D19 — done is terminal)", () => {
@@ -52,6 +53,7 @@ function Harness({ api, children }: { api: ApiInstance; children: ReactNode }) {
 describe("DashboardPanel", () => {
   beforeEach(() => {
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useModesStore.getState()._reset();
   });
 
   // The daemon dot was replaced by the remote-access indicators (tunnel state +
@@ -529,5 +531,33 @@ describe("DashboardPanel", () => {
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: /Direct Hide Agent/i })).toBeNull();
     });
+  });
+
+  it("3.T3 — a dashboard card renders the session's mode icon before the name", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByText(/Proj A/i).length).toBeGreaterThan(0);
+    });
+
+    // sess-main (mode-1 → claude) is a working card; its .mode-icon resolves
+    // via the modes store (useModeIcon → ensureLoaded).
+    const workingSection = screen.getByText("working").closest("section");
+    expect(workingSection).not.toBeNull();
+    await waitFor(() => {
+      const link = within(workingSection!).getByRole("link", { name: /Proj A/i });
+      expect(link.querySelector(".mode-icon")).not.toBeNull();
+    });
+
+    // The truncated name keeps the full label in title.
+    const card = within(workingSection!).getByRole("link", { name: /Proj A/i });
+    const primary = card.querySelector(".dashboard-card__primary");
+    expect(primary?.getAttribute("title")).toBeTruthy();
   });
 });

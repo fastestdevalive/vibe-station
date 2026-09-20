@@ -3,11 +3,13 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { createMockApi } from "@/api/mock";
 import { TabsStrip } from "./TabsStrip";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useModesStore } from "@/store/modesStore";
 import type { Session } from "@/api/types";
 
 /**
@@ -1218,5 +1220,133 @@ describe("TabsStrip", () => {
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: /raced agent/i })).toBeInTheDocument();
     });
+  });
+
+  // ─── Mode icons + reset-menu full name (Phase 3) ─────────────────────────
+
+  it("3.T1 — agent tabs render a mode icon and NO emoji channel marker; the reset popup shows the full name", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+
+    // sess-agent2's mode-2 → cursor icon renders as a .mode-icon element.
+    const agentTab = screen.getByRole("tab", { name: /agent-2/i });
+    await waitFor(() => {
+      expect(agentTab.querySelector(".mode-icon")).not.toBeNull();
+    });
+
+    // The 💬/⌨ emoji channel marker and its class are gone.
+    expect(agentTab.querySelector(".tab__channel-icon")).toBeNull();
+    expect(agentTab.textContent).not.toContain("💬");
+    expect(agentTab.textContent).not.toContain("⌨");
+
+    // Right-click opens the reset menu, which carries the FULL session name.
+    fireEvent.contextMenu(agentTab, { clientX: 120, clientY: 40 });
+    const menu = await screen.findByRole("menu", { name: /session actions/i });
+    expect(within(menu).getByText("agent-2")).toBeInTheDocument();
+    useModesStore.getState()._reset();
+  });
+
+  it("3.T1 — the tab label carries the full name in title (for truncation)", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    const agentTab = screen.getByRole("tab", { name: /agent-2/i });
+    const label = agentTab.querySelector(".tab__label");
+    expect(label).not.toBeNull();
+    expect(label?.getAttribute("title")).toBe("agent-2");
+    useModesStore.getState()._reset();
+  });
+
+  it("3.T1 — the label ellipsizes: it carries the truncation class and sits in a shrinkable inline-flex wrapper, not a non-shrinking inline span", async () => {
+    // Verification bug 1: `.tab__label` used to sit inside a plain inline
+    // wrapper (`display:inline`), which made its max-width/overflow/text-overflow
+    // inert — the full name spilled past the tab's max width. The wrapper is
+    // now `.tab__content` (inline-flex, min-width:0) so the label truncates.
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const longNamed = snapshot.map((s) =>
+      s.id === "sess-agent2"
+        ? { ...s, name: "this-is-an-extremely-long-session-name-that-must-truncate" }
+        : s,
+    );
+    vi.spyOn(localApi, "listSessions").mockResolvedValue(longNamed);
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const agentTab = await screen.findByRole("tab", { name: /this-is-an-extremely-long/i });
+
+    const label = agentTab.querySelector(".tab__label");
+    expect(label).not.toBeNull();
+    // The label carries the ellipsis/truncation classes (via its class string's
+    // computed style source is CSS, which jsdom can't read, so assert the
+    // structure: the label is a block/flex-ish box with the ellipsis classes).
+    expect(label!.className).toContain("tab__label");
+
+    // The wrapper must be a shrinkable flex container, NOT a plain inline span
+    // (inline parents ignore the child's max-width and never truncate).
+    const wrapper = label!.parentElement;
+    expect(wrapper!.className).toContain("tab__content");
+    expect(wrapper!.style.display).toBe("inline-flex");
+    expect(["0", "0px"]).toContain(wrapper!.style.minWidth);
+    useModesStore.getState()._reset();
+  });
+
+  it("3.T1 — the reset popup renders the FULL name (wrapping, not truncated)", async () => {
+    // Verification bug 2: `.menu-pop__title` had max-width:16rem + ellipsis, so
+    // a long name was visually cut in the popup. The full name must render.
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    const snapshot = await localApi.listSessions("wt-1");
+    const longName = "This is an extremely long session name that must show in full";
+    const longNamed = snapshot.map((s) =>
+      s.id === "sess-agent2" ? { ...s, name: longName } : s,
+    );
+    vi.spyOn(localApi, "listSessions").mockResolvedValue(longNamed);
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    const agentTab = await screen.findByRole("tab", { name: /extremely long session name/i });
+
+    fireEvent.contextMenu(agentTab, { clientX: 120, clientY: 40 });
+    const menu = await screen.findByRole("menu", { name: /session actions/i });
+    const title = menu.querySelector(".menu-pop__title");
+    expect(title).not.toBeNull();
+    // The full name is present verbatim (not cut off)...
+    expect(title!.textContent).toBe(longName);
+    expect(title!.getAttribute("title")).toBe(longName);
+    // ...and it is not styled as a truncating one-liner: no nowrap/ellipsis
+    // truncation classes remain on the title.
+    expect(title!.className).not.toMatch(/truncate|ellipsis/i);
+    useModesStore.getState()._reset();
+  });
+
+  it("mobile — the tab max-width is driven by a token that narrows under the 640px breakpoint", () => {
+    // jsdom has no layout and can't read the stylesheet, so we assert the CSS
+    // structure directly: tokens.css declares `--agent-surface-max-width`
+    // (18rem desktop) and narrows it to 8rem under `@media (max-width: 640px)`,
+    // and `.tab` consumes that token rather than a bare number.
+    const tokens = readFileSync("src/styles/tokens.css", "utf8");
+    const workspace = readFileSync("src/styles/workspace.css", "utf8");
+    expect(tokens).toMatch(/--agent-surface-max-width:\s*18rem/);
+    expect(tokens).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*--agent-surface-max-width:\s*8rem/,
+    );
+    expect(workspace).toMatch(/\.tab\s*\{[\s\S]*max-width:\s*var\(--agent-surface-max-width\)/);
   });
 });
