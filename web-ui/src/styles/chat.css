@@ -1080,6 +1080,9 @@
   color: var(--fg-secondary);
   font-size: var(--font-size-sm);
   cursor: pointer;
+  /* The token value is 18rem on desktop and ~8rem on mobile (see tokens.css
+     @media (max-width: 640px) so chips narrow alongside the tabs. */
+  max-width: var(--agent-surface-max-width);
 }
 .chat-subagent-row__item:hover:not(:disabled):not(.chat-subagent-row__item--disabled) {
   color: var(--fg-primary);
@@ -1104,6 +1107,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 16rem;
+  min-width: 0;
+  /* The delink button is absolutely positioned at the chip's right edge and
+     only appears on hover. Reserve its width so the ellipsis renders to its
+     left instead of being covered by the button (which made a long name clip
+     with no "…" when hovering the parent chip). */
+  padding-right: 1.75rem;
 }
 .chat-subagent-row__more {
   font-size: var(--font-size-xs);
@@ -1833,14 +1842,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-/* ── Tab channel marker ───────────────────────────────────────────────────── */
-
-.tab__channel-icon {
-  margin-left: var(--space-1);
-  font-size: var(--font-size-xs);
-  opacity: 0.75;
 }
 
 /* Sent-message skill token (Phase 7B.10). The name and its arguments are

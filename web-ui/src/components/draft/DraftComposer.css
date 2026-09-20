@@ -232,3 +232,11 @@
   margin-bottom: var(--space-3);
 }
 
+
+.draft-composer__mode-row .draft-composer__mode-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+}

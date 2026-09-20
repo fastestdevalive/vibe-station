@@ -91,7 +91,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const [imageBlob, setImageBlob] = useState<{ key: string; url: string } | null>(null);
   const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
   const [imageFullscreen, setImageFullscreen] = useState(false);
-  const [rawMarkdown, setRawMarkdown] = useState(false);
   const [gutterMarks, setGutterMarks] = useState<Map<number, "added" | "modified" | "deleted"> | null>(null);
   const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
@@ -324,7 +323,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // effect below can tell "stale, the user moved to a different file" apart
   // from "this file hasn't rendered a matching line yet" (e.g. a Markdown
   // file renders MarkdownView — no `.workspace-code-line` elements — until
-  // the user toggles to raw/source view).
+  // the diff view is enabled).
   const pendingLineForPathRef = useRef<string | null>(null);
   useEffect(() => {
     if (pendingFileLine !== null) pendingLineForPathRef.current = path;
@@ -336,9 +335,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // the same file/path — only on an actual scroll, or on discovering the
   // active file has moved on to a different path than this request was for
   // (stale — clearing here also prevents it from coincidentally matching an
-  // unrelated file's line numbers). `rawMarkdown`/`scope` are dependencies
-  // so toggling into a view that DOES render `.workspace-code-line`s (e.g.
-  // Markdown → raw/source) gives this effect another chance instead of the
+  // unrelated file's line numbers). `scope` is a dependency
+  // so switching into a view that DOES render `.workspace-code-line`s (e.g.
+  // Markdown → diff) gives this effect another chance instead of the
   // jump-to-line intent being silently and permanently dropped.
   useEffect(() => {
     if (pendingFileLine === null || !bodyRef.current) return;
@@ -362,9 +361,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       clearPendingFileLine();
     }
     // else: leave pendingFileLine set — no matching line element exists in
-    // the CURRENT render (e.g. Markdown pretty-view), but one may appear on
-    // a later render of this same file (raw-markdown toggle, etc.).
-  }, [pendingFileLine, fileBody, path, rawMarkdown, scope, clearPendingFileLine]);
+    // the CURRENT render (e.g. rendered Markdown), but one may appear on a
+    // later render of this same file (diff view enabled, etc.).
+  }, [pendingFileLine, fileBody, path, scope, clearPendingFileLine]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -485,7 +484,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     if (!fileBody) {
       return <div className="empty-state">Loading…</div>;
     }
-    if (isMd && !rawMarkdown) {
+    if (isMd) {
       const segments = segmentMarkdownWithMermaid(fileBody);
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
@@ -502,7 +501,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} gutterMarks={gutterMarks ?? undefined} />;
   })();
 
-  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || ((!isMd || rawMarkdown) && !isImage && scope === "none");
+  const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && !isImage && scope === "none");
 
   const bump = (delta: number) => {
     if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
@@ -516,16 +515,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       <button type="button" className="preview-font-overlay__btn" aria-label="Increase preview font" onClick={() => bump(0.05)}>
         <Plus size={11} />
       </button>
-      {isMd && scope === "none" && (
-        <button
-          type="button"
-          className="preview-font-overlay__btn"
-          aria-label={rawMarkdown ? "View rendered markdown" : "View source"}
-          onClick={() => setRawMarkdown(!rawMarkdown)}
-        >
-          {rawMarkdown ? "Formatted" : "Source"}
-        </button>
-      )}
     </div>
   );
 

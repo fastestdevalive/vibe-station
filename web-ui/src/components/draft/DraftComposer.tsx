@@ -6,6 +6,7 @@ import { ApiError } from "@/api/errors";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
 import { Select } from "../ui/Select";
+import { ModeIcon } from "../agent/ModeIcon";
 import { SkillEditor, type SkillEditorHandle } from "../chat/SkillEditor";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
@@ -452,7 +453,12 @@ function DraftComposerInner({
       // AgentPaneSlot briefly reads the stale pre-start channel (default
       // "json") and renders Rich Chat during the starting state even for an
       // agent started on the Terminal channel.
-      useServerStore.getState().applySessionUpdated(draftSessionId, { channel: currentConfig.channel });
+      // `modeId` is patched for the same reason: the tab icon resolves from it, and
+      // the record's `modeId` is only set server-side on start.
+      useServerStore.getState().applySessionUpdated(draftSessionId, {
+        channel: currentConfig.channel,
+        ...(currentConfig.modeId ? { modeId: currentConfig.modeId } : {}),
+      });
       if (isJson) {
         await sendJsonFirstTurn(api, draftSessionId, prompt, files);
       }
@@ -861,6 +867,16 @@ function DraftComposerInner({
           <div className="draft-composer__field">
             <div className="draft-composer__field-label">Mode</div>
             <div className="draft-composer__mode-row">
+              {/* A native <select> can't render icons in its options, so the
+                  selected mode's icon leads the control — framed as a terminal
+                  when the Terminal channel is chosen, bare for Rich Chat. */}
+              <span className="draft-composer__mode-icon" data-testid="draft-mode-icon" aria-hidden="true">
+                <ModeIcon
+                  iconKey={modes.find((m) => m.id === modeId)?.icon}
+                  channel={isJson ? "json" : "pty"}
+                  size={16}
+                />
+              </span>
               <Select aria-label="Mode" value={modeId} onChange={(e) => setModeId(e.target.value)}>
                 {modes.map((m) => (
                   <option key={m.id} value={m.id}>

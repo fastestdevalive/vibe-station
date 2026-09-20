@@ -4,7 +4,10 @@ import type { CliId, SupportedCli } from "@/api/types";
 import { Dialog } from "./Dialog";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
+import { CliOptionLabel } from "../agent/CliOptionLabel";
 import { ModelPicker } from "../shared/ModelPicker";
+import { ModeIcon } from "../agent/ModeIcon";
+import { deriveModeIcon } from "@/lib/modeIcon";
 
 function modelPreference(cliId: string, apiDefault: string): string {
   try {
@@ -162,7 +165,7 @@ export function NewModeDialog({
         <Radio
           key={c.id}
           name="cli"
-          label={c.id}
+          label={<CliOptionLabel cli={c.id} />}
           checked={cli === c.id}
           disabled={clisLoading}
           onChange={() => {
@@ -208,6 +211,15 @@ export function NewModeDialog({
       />
       <div className="field-label">Model</div>
       <ModelPicker api={api} cli={cli || null} value={model} onChange={setModel} />
+      {cli ? (
+        <div
+          data-testid="new-mode-icon-preview"
+          style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginTop: "var(--space-3)", fontSize: "var(--font-size-sm)", color: "var(--fg-muted)" }}
+        >
+          Icon
+          <ModeIcon iconKey={deriveModeIcon(cli, model)} channel="json" size={16} label={deriveModeIcon(cli, model) ?? undefined} />
+        </div>
+      ) : null}
       {error ? <div className="field-error">{error}</div> : null}
     </Dialog>
   );

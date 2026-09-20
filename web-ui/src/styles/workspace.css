@@ -2164,6 +2164,53 @@
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  /* The tab can be narrow, so cap its width and let the label ellipsize
+     inside instead of shoving the strip into horizontal scroll. The token
+     value is 18rem on desktop and ~8rem on mobile (see tokens.css @media
+     max-width: 640px) so several agent tabs fit on a phone viewport. */
+  max-width: var(--agent-surface-max-width);
+  min-width: 0;
+}
+
+/* The inline flex wrapper around the tab's icon + label (+ draft/archived
+   chips). Making it a shrinkable flex container is what lets `.tab__label`
+   truncate: as an inline child of an inline parent its max-width/overflow were
+   ignored and the full name spilled out past the tab's max-width. */
+/* The mode icon's wrapper in an agent tab. The framed terminal icon (~22px)
+   is taller than the ~16px text line, and the strip is `align-items: stretch`,
+   so left alone it would grow every agent tab above the text-only height.
+   Collapsing the wrapper to one line removes the icon from the line-height
+   calc; the icon still overflows it (overflow visible) and is centred, so it
+   stays fully visible and un-shrunk. (Negative margins on the icon only got
+   41→38px, never the 34px text-only height.) */
+.tab__icon {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  height: 1em;
+}
+
+.tab__content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Agent tab label: the tab can be narrow, so the name ellipsizes under a max
+   width while the leading mode icon keeps its intrinsic size (flex-shrink: 0
+   on the icon in mode-icon.css). The full name is exposed via title/aria-label.
+   This is a flex item of the inline-flex `.tab__content` wrapper, so its
+   max-width/overflow actually apply (an inline child of an inline parent would
+   ignore them and never truncate). */
+.tab__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .tab[data-active="true"] {
@@ -2225,6 +2272,12 @@
 .tab--new {
   padding: var(--space-1) var(--space-2);
   color: var(--fg-muted);
+  /* Never shrink: `.tab` allows min-width: 0 (so labels can ellipsize), which
+     let this button collapse to its bare padding — icon and all — once the
+     strip overflowed, leaving it invisible next to the pane tools. */
+  flex: 0 0 auto;
+  min-width: 28px;
+  justify-content: center;
 }
 
 /* Archived session: greyed-out tab + small "Archived" badge (Part 03
@@ -3795,6 +3848,20 @@ textarea.input {
   cursor: not-allowed;
 }
 
+/* Full session name header atop the agent-tab reset menu — the tab itself
+   ellipsizes, so this is where the complete name is always readable. It must
+   NOT truncate: the whole point is to show the full name, so it wraps. */
+.menu-pop__title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-subtle);
+  color: var(--fg-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium, 500);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* Quick open (file search) — ao-142–style */
 .quick-open-overlay {
   position: fixed;
@@ -4086,6 +4153,20 @@ a.dashboard-card.dashboard-card--session {
   display: inline-flex;
   align-items: baseline;
   gap: var(--space-2);
+}
+
+/* Mode icon in a session card. The name/branch row is baseline-aligned, which
+   would hang the icon off the text baseline (looks too high), so it centres
+   itself on the row instead. Its box is collapsed to one text line so the
+   taller terminal frame doesn't make terminal-agent cards taller than the rest;
+   the icon overflows that box symmetrically and stays fully visible. */
+.dashboard-card__icon {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  flex-shrink: 0;
+  line-height: 0;
+  height: 1em;
 }
 
 .dashboard-card--session .dashboard-card__primary {

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
 import { SectionHeader } from "./SectionHeader";
+import { ModeIcon } from "@/components/agent/ModeIcon";
 
 interface ModesSettingProps {
   api: ApiInstance;
@@ -152,6 +153,9 @@ export function ModesSetting({ api }: ModesSettingProps) {
               border: "var(--border-width) solid var(--border-default)",
             }}
           >
+            <span aria-hidden="true" style={{ display: "inline-flex" }}>
+              <ModeIcon iconKey={m.icon} channel="json" size={20} />
+            </span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{m.name}</div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginTop: 4 }}>

@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { render, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SubagentRow, openSubagentSession } from "./SubagentRow";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
 import { createMockApi } from "@/api/mock";
+import { useModesStore } from "@/store/modesStore";
 import type { Session } from "@/api/types";
 
 function makeSession(overrides: Partial<Session> & { id: string }): Session {
@@ -29,6 +31,7 @@ function seedSessions(sessions: Session[]): void {
 beforeEach(() => {
   useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
   useWorkspaceStore.setState({ sessionStates: {}, layoutByWorktree: {} });
+  useModesStore.getState()._reset();
 });
 
 describe("SubagentRow — child rows (3.T1, 3.T1b, 3.T2, 3.T3)", () => {
@@ -338,5 +341,102 @@ describe("openSubagentSession — classic vs workspace mode, cross-worktree guar
     expect(st.setActiveSession).not.toHaveBeenCalled();
     expect(st.setActiveTerminalSession).not.toHaveBeenCalled();
     expect(st.insertTileIntoScratchCanvas).not.toHaveBeenCalled();
+  });
+});
+
+describe("SubagentRow — mode icons (3.T2)", () => {
+  it("renders a mode icon in BOTH the parent chip and the child chip", () => {
+    useModesStore.getState().setModes([
+      { id: "m1", name: "Mode", cli: "claude", context: "", icon: "claude" },
+    ]);
+    const parent = makeSession({ id: "p1", name: "the-parent" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "child-one" });
+    seedSessions([parent, child]);
+
+    // Parent chip (child's session renders the '↑ Parent' link).
+    const childView = render(<SubagentRow session={child} onOpen={vi.fn()} />);
+    const parentChip = childView.container.querySelector(
+      ".chat-subagent-row__item--parent",
+    )!;
+    expect(parentChip.querySelector(".mode-icon")).not.toBeNull();
+    childView.unmount();
+
+    // Child chip (parent's session renders the child list).
+    const parentView = render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const childChip = parentView.container.querySelector(".chat-subagent-row__item")!;
+    expect(childChip.querySelector(".mode-icon")).not.toBeNull();
+  });
+
+  it("renders the mode icon even when api is absent (degrades to fallback), and the full name stays in title", () => {
+    const parent = makeSession({ id: "p1", name: "the-parent" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "child-one" });
+    seedSessions([parent, child]);
+    const { container } = render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const childChip = container.querySelector(".chat-subagent-row__item")!;
+    expect(childChip.querySelector(".mode-icon")).not.toBeNull();
+    // The child item's title carries the full name (the label is ellipsized).
+    expect(childChip.getAttribute("title")).toContain("child-one");
+  });
+
+  it("the detach button still renders and stays hover-revealed on a child chip with a mode icon", async () => {
+    const user = userEvent.setup();
+    const parent = makeSession({ id: "p1", name: "the-parent" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    const api = createMockApi();
+    const { container } = render(<SubagentRow session={parent} onOpen={vi.fn()} api={api} />);
+
+    const childChip = container.querySelector(".chat-subagent-row__item")!;
+    expect(childChip.querySelector(".mode-icon")).not.toBeNull();
+    const delinkBtn = within(childChip as HTMLElement).getByLabelText("Detach subagent");
+    expect(delinkBtn).toBeTruthy();
+
+    await user.click(delinkBtn);
+    expect(screen.getByText("Detach worker?")).toBeInTheDocument();
+  });
+});
+
+describe("SubagentRow — chip label ellipsis (verification bug 3)", () => {
+  it("the parent chip label carries the ellipsis class and exposes the full name in title", () => {
+    const parent = makeSession({ id: "p1", name: "the-parent" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+
+    const { container } = render(<SubagentRow session={child} onOpen={vi.fn()} />);
+    const parentChip = container.querySelector(".chat-subagent-row__item--parent")!;
+    const label = parentChip.querySelector(".chat-subagent-row__label")!;
+
+    // The label is the truncating element (its CSS rule carries overflow:
+    // hidden + text-overflow: ellipsis + right padding to clear the hover
+    // delink button) and carries the full name in title — the visible label is
+    // only the truncated `Parent · <name>`.
+    expect(label.className).toContain("chat-subagent-row__label");
+    expect(label.getAttribute("title")).toBe("the-parent");
+  });
+
+  it("the child chip label is also the truncating element and keeps its label text", () => {
+    const parent = makeSession({ id: "p1", name: "the-parent" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+
+    const { container } = render(<SubagentRow session={parent} onOpen={vi.fn()} />);
+    const childChip = container.querySelector(".chat-subagent-row__item")!;
+    const label = childChip.querySelector(".chat-subagent-row__label")!;
+    expect(label.className).toContain("chat-subagent-row__label");
+    expect(label.textContent).toBe("worker");
+  });
+
+  it("mobile — the chip max-width is driven by the same narrowable token", () => {
+    // jsdom has no layout and can't read the stylesheet, so assert the CSS
+    // structure: `.chat-subagent-row__item` consumes `--agent-surface-max-width`
+    // (the token that narrows to 8rem under the 640px mobile breakpoint).
+    const chat = readFileSync("src/styles/chat.css", "utf8");
+    const tokens = readFileSync("src/styles/tokens.css", "utf8");
+    expect(chat).toMatch(
+      /\.chat-subagent-row__item\s*\{[\s\S]*max-width:\s*var\(--agent-surface-max-width\)/,
+    );
+    expect(tokens).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*--agent-surface-max-width:\s*8rem/,
+    );
   });
 });
