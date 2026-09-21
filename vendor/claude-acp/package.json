@@ -1,0 +1,8 @@
+{
+  "name": "vst-claude-acp-vendor",
+  "private": true,
+  "description": "Not a real package — pins the exact @agentclientprotocol/claude-agent-acp version scripts/install-claude-acp-vendor.sh installs (bun install --omit=optional) so the daemon can run it via `bun` directly, with no system Node.js install needed. See rust/vst-agents/src/claude.rs's `claude_acp_entry_path()`.",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.70.0"
+  }
+}

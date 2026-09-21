@@ -181,8 +181,14 @@ if [ ! -f /usr/local/bin/vst-daemon-rust ] || [ ! -x /usr/local/bin/vst-daemon-r
   exit 1
 fi
 
+# Explicit, not relied-on-by-inference: `claude_acp_entry_path()`'s
+# walk-upward-from-cwd fallback would likely also find this (cwd is /app,
+# this WORKDIR, when `su -c` is invoked from here) but `su -c`'s cwd
+# behavior isn't a contract worth depending on silently — pin it directly.
+export VST_CLAUDE_ACP_ENTRY=/app/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
+
 echo "[daemon] starting Rust daemon (/usr/local/bin/vst-daemon-rust)"
-su vst -c '/usr/local/bin/vst-daemon-rust' &
+su vst -c "VST_CLAUDE_ACP_ENTRY='$VST_CLAUDE_ACP_ENTRY' /usr/local/bin/vst-daemon-rust" &
 echo 'Waiting for daemon...'
 timeout=60
 while ! curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do
