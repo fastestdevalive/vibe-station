@@ -42,7 +42,8 @@
     "externalBin": ["binaries/vst-daemon", "binaries/cloudflared", "binaries/vst"],
     "resources": {
       "../../skill/SKILL.md": "SKILL.md",
-      "../../web-ui/dist": "web-ui/dist"
+      "../../web-ui/dist": "web-ui/dist",
+      "../../vendor/claude-acp/node_modules": "claude-acp-vendor/node_modules"
     },
     "macOS": {
       "entitlements": "entitlements.mac.plist",

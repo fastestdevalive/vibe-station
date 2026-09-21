@@ -136,6 +136,32 @@ pub fn spawn_daemon(
         }
     }
 
+    // Point the daemon at the bundled claude-agent-acp adapter (Claude's Rich
+    // Chat / ACP path runs it as `bun <entry.js>` — see
+    // `rust/vst-agents/src/claude.rs::claude_acp_entry_path`). Staged into
+    // the bundle by `tauri.conf.json`'s `bundle.resources`
+    // (`vendor/claude-acp/node_modules` → `claude-acp-vendor/node_modules`,
+    // installed by `scripts/prep-sidecar.sh` before bundling). Set explicitly
+    // from here rather than relying on the daemon's own beside-the-exe
+    // fallback: the Tauri host is the only process that actually knows where
+    // the resource dir is (on macOS it's `Contents/Resources/`, NOT beside
+    // the sidecar in `Contents/MacOS/`), same reasoning as `VST_DIST_PATH`
+    // above. Missing file ⇒ leave unset; `vst doctor` flags it.
+    if let Ok(dir) = app_handle.path().resource_dir() {
+        let entry_candidate = dir
+            .join("claude-acp-vendor")
+            .join("node_modules")
+            .join("@agentclientprotocol")
+            .join("claude-agent-acp")
+            .join("dist")
+            .join("index.js");
+        if entry_candidate.is_file() {
+            if let Some(entry) = entry_candidate.to_str() {
+                cmd = cmd.env("VST_CLAUDE_ACP_ENTRY", entry);
+            }
+        }
+    }
+
     let (mut rx, child) = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn vst-daemon sidecar: {e}"))?;

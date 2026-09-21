@@ -6,6 +6,9 @@
 //! - git >= 2.20
 //! - supported CLIs (claude, cursor, opencode, agy) on PATH (warn if missing)
 //! - bun on PATH (warn if missing; required for agy ACP)
+//! - claude-agent-acp vendor install present (warn if missing; the official
+//!   ACP adapter for Claude Rich Chat, run via `bun` — see
+//!   `scripts/install-claude-acp-vendor.sh`)
 //! - orphan tmux sessions (vr-* whose project/session is not in store)
 //! - orphan worktree dirs (in store manifest but missing directory on disk)
 
@@ -221,25 +224,46 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         });
     }
 
-    // 4. bun (required for agy ACP)
+    // 4. bun (required for agy ACP, and now for Claude ACP too — see check 5)
     checks.push(if check_binary("bun") {
         DoctorCheck {
             name: "bun".to_string(),
             status: DoctorStatus::Ok,
-            message: "bun found on PATH (required for agy ACP)".to_string(),
+            message: "bun found on PATH (required for agy and claude Rich Chat / ACP)".to_string(),
         }
     } else {
         DoctorCheck {
             name: "bun".to_string(),
             status: DoctorStatus::Warn,
-            message: "bun not found on PATH — agy Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash".to_string(),
+            message: "bun not found on PATH — agy and claude Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash".to_string(),
         }
     });
 
-    // 5. Orphan tmux sessions
+    // 5. claude-agent-acp vendor install (the official ACP adapter for
+    // Claude, run via `bun` — no system Node.js install needed; see
+    // `rust/vst-agents/src/claude.rs::claude_acp_entry_path`).
+    {
+        let entry = vst_agents::claude::claude_acp_entry_path();
+        let found = Path::new(&entry).is_file();
+        checks.push(if found {
+            DoctorCheck {
+                name: "claude-agent-acp".to_string(),
+                status: DoctorStatus::Ok,
+                message: format!("claude-agent-acp adapter found at {entry} (Claude Rich Chat / ACP)"),
+            }
+        } else {
+            DoctorCheck {
+                name: "claude-agent-acp".to_string(),
+                status: DoctorStatus::Warn,
+                message: "claude-agent-acp adapter not found — Claude Rich Chat (ACP) will fail. Install it: ./scripts/install-claude-acp-vendor.sh (or set VST_CLAUDE_ACP_ENTRY to an existing install's dist/index.js)".to_string(),
+            }
+        });
+    }
+
+    // 6. Orphan tmux sessions
     checks.push(check_orphan_sessions(store, tmux).await);
 
-    // 6. Orphan worktree dirs
+    // 7. Orphan worktree dirs
     checks.push(check_orphan_worktrees(store, paths).await);
 
     checks

@@ -83,12 +83,22 @@ RUN chmod +x /app/scripts/dev-entrypoint.sh
 USER vst
 RUN pnpm install --no-frozen-lockfile
 
-# agy's ACP path spawns the third-party `antigravity-acp` adapter via `bunx` —
-# Bun is a hard runtime dependency of that one plugin, not otherwise needed
-# by this project. Installed as `vst` (not root) so it lands under $HOME/.bun,
-# matching how the daemon itself runs `bunx` at spawn time.
+# agy's ACP path spawns the third-party `antigravity-acp` adapter via `bunx`,
+# and Claude's ACP path (see rust/vst-agents/src/claude.rs) spawns the
+# official `claude-agent-acp` adapter via a plain `bun <entry.js>` — Bun is a
+# hard runtime dependency of both, not otherwise needed by this project.
+# Installed as `vst` (not root) so it lands under $HOME/.bun, matching how
+# the daemon itself runs `bun`/`bunx` at spawn time.
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/vst/.bun/bin:${PATH}"
+
+# Vendor install for Claude's ACP adapter (see scripts/install-claude-acp-vendor.sh
+# for why `--omit=optional` matters — skips 600MB+ of per-platform binaries
+# this project never uses). `rust/vst-agents/src/claude.rs::claude_acp_entry_path`
+# would find this by walking upward from the daemon's cwd (`/app`, this
+# WORKDIR), but scripts/dev-entrypoint.sh also pins VST_CLAUDE_ACP_ENTRY to it
+# explicitly so the lookup doesn't depend on `su -c`'s cwd.
+RUN ./scripts/install-claude-acp-vendor.sh
 
 # The Rust CLI binary is mounted from the host at /usr/local/bin/vst-rust by
 # docker-compose.dev.yml, and scripts/dev-entrypoint.sh symlinks it to
