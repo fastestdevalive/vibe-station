@@ -147,6 +147,46 @@ fn print_hint(message: &str) {
     println!("\x1b[33m  →\x1b[0m {message}");
 }
 
+/// Resolve the claude-agent-acp adapter entrypoint the same way
+/// `rust/vst-agents/src/claude.rs::resolve_claude_acp_entry_path` does, for a
+/// health check here. Deliberately a separate, lightweight implementation
+/// rather than a `vst-agents` dependency — this file is explicitly
+/// self-contained (see its header comment), and pulling in the daemon-side
+/// agent-plugin crate just for one path check would break that boundary.
+fn find_claude_acp_entry() -> Option<PathBuf> {
+    const SUFFIX: &[&str] = &[
+        "node_modules",
+        "@agentclientprotocol",
+        "claude-agent-acp",
+        "dist",
+        "index.js",
+    ];
+    if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ENTRY") {
+        if !p.is_empty() && Path::new(&p).is_file() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let mut candidate = dir.join("claude-acp-vendor");
+            candidate.extend(SUFFIX);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors().take(8) {
+            let mut candidate = ancestor.join("vendor").join("claude-acp");
+            candidate.extend(SUFFIX);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
 fn which(bin: &str) -> bool {
     SyncCommand::new("which")
         .arg(bin)
@@ -254,9 +294,10 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
         check(&format!("{bin} is on PATH"), || which(bin));
     }
 
-    let bun_found = check("bun is on PATH (required for agy Rich Chat / ACP)", || {
-        which("bun")
-    });
+    let bun_found = check(
+        "bun is on PATH (required for agy and claude Rich Chat / ACP)",
+        || which("bun"),
+    );
     if !bun_found {
         let install_cmd = if cfg!(target_os = "macos") {
             "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
@@ -264,6 +305,15 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
             "curl -fsSL https://bun.sh/install | bash"
         };
         print_hint(&format!("Install: {install_cmd}"));
+    }
+
+    let acp_entry = find_claude_acp_entry();
+    let acp_found = check(
+        "claude-agent-acp adapter found (Claude Rich Chat / ACP)",
+        || acp_entry.is_some(),
+    );
+    if !acp_found {
+        print_hint("Install it: ./scripts/install-claude-acp-vendor.sh (then set VST_CLAUDE_ACP_ENTRY to the path it prints, if this checkout isn't the one the daemon runs from)");
     }
 
     let cloudflared_found = check("cloudflared", || which("cloudflared"));

@@ -414,8 +414,8 @@ impl AgentPlugin for ClaudePlugin {
         let params = RunTurnAcpParams {
             provider: NormalizedEventProvider::Claude,
             build_spec: Box::new(|ctx| AcpLaunchSpec {
-                command: claude_acp_command(),
-                args: vec![claude_acp_adapter_entry()],
+                command: claude_acp_bun_command(),
+                args: vec![claude_acp_entry_path()],
                 cwd: ctx.cwd.clone(),
                 env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".to_string(), "claude".to_string())])
                     .into_iter()
@@ -475,83 +475,125 @@ impl AgentPlugin for ClaudePlugin {
     }
 }
 
-/// The node binary that drives the claude ACP adapter (mirrors TS `process.execPath`).
-fn claude_acp_command() -> String {
-    std::env::var("VST_CLAUDE_ACP_NODE").unwrap_or_else(|_| "node".to_string())
+/// The `bun` binary that runs the claude ACP adapter. `bun` (not `node`) is
+/// used deliberately: it's already a required, doctor-checked dependency for
+/// agy's own ACP path, and — unlike `node` — can run the adapter's real
+/// `dist/index.js` directly with no separate install/compile step of its
+/// own. This is the load-bearing reason Node.js is no longer a daemon
+/// dependency for Claude: `bun <entry.js>` replaces `node <entry.js>`
+/// one-for-one, sharing the tool the project already requires elsewhere.
+///
+/// (A single compiled standalone binary via `bun build --compile` was tried
+/// first and rejected: it silently fails at `session/new` with "Cannot find
+/// package '@anthropic-ai/claude-agent-sdk'" — that dependency ships
+/// per-platform optional variants Bun's static bundler can't resolve inside
+/// a compiled binary's virtual filesystem, `--external` doesn't help either
+/// since the externalized `require` can't walk up from a virtual path to a
+/// real `node_modules` on disk. Running `bun` against the real, unmodified
+/// `dist/index.js` — a real file, real `require.resolve` — has none of that
+/// problem, confirmed end to end via `examples/acp_hello_bundled.rs`.)
+fn claude_acp_bun_command() -> String {
+    std::env::var("VST_CLAUDE_ACP_BUN").unwrap_or_else(|_| "bun".to_string())
 }
 
-/// The claude ACP adapter entrypoint (`dist/index.js`). The TS resolves this
-/// via Node's `require.resolve`; Rust has no equivalent module resolver, so
-/// this shells out to `node -e` once (cached) to run the SAME resolution
-/// node itself would do, inheriting the daemon's own cwd — which is where
-/// `node_modules/@agentclientprotocol/claude-agent-acp` actually lives for
-/// this project's install layout (a pnpm-hoisted symlink under the repo
-/// root/`/app`, the daemon's WORKDIR in the dev-sandbox image).
+/// The claude-agent-acp adapter's real entrypoint (`dist/index.js`), from a
+/// vendored install pinned in `vendor/claude-acp/package.json` and produced
+/// by `scripts/install-claude-acp-vendor.sh` (`bun install --omit=optional` —
+/// the `--omit=optional` matters: without it, `bun install` pulls BOTH
+/// platform-specific `@anthropic-ai/claude-agent-sdk-*` packages, 300MB+
+/// each, that this project never uses because `CLAUDE_CODE_EXECUTABLE` below
+/// already points the adapter at the real, separately-installed `claude` CLI
+/// instead — 56MB installed vs. 666MB with them).
 ///
-/// Confirmed root cause of "agent process failed to spawn: agent connection
-/// closed before initialize completed" for Rich Chat with the `claude` CLI:
-/// the previous fallback returned the BARE npm specifier
-/// (`@agentclientprotocol/claude-agent-acp/dist/index.js`) whenever
-/// `VST_CLAUDE_ACP_ADAPTER` was unset (always, in practice — nothing sets
-/// it). `node <bare-specifier>` does not do module resolution on its
-/// positional script argument; it treats it as a literal path relative to
-/// cwd and fails immediately with `MODULE_NOT_FOUND`, closing stdio before
-/// the ACP `initialize` handshake can even begin — reproduced verbatim
-/// against the dev-sandbox container (`node
-/// '@agentclientprotocol/claude-agent-acp/dist/index.js'` → `Error: Cannot
-/// find module '/app/@agentclientprotocol/claude-agent-acp/dist/index.js'`,
-/// exit 1), while `require.resolve(...)` from the same cwd resolves fine.
+/// Running the *official* adapter via `bun` gets the "no Node.js install"
+/// outcome without taking on a reimplementation of its undocumented,
+/// no-compatibility-guarantee wire protocol.
 ///
-/// `VST_CLAUDE_ACP_ADAPTER` is still honored first, for tests/overrides.
-fn claude_acp_adapter_entry() -> String {
-    if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ADAPTER") {
+/// Resolution order — designed to need ZERO env vars in every environment
+/// this project actually runs in today (dev sandbox, a bare `cargo run`,
+/// packaged builds all covered — see each candidate below):
+/// 1. `VST_CLAUDE_ACP_ENTRY` env var, if set — explicit override, always wins.
+///    This is how the packaged Tauri desktop app finds it:
+///    `desktop/src-tauri/src/daemon.rs` resolves the bundle's resource dir
+///    (`tauri.conf.json`'s `bundle.resources` stages the vendor install as
+///    `claude-acp-vendor/node_modules`) and sets this on the sidecar. The dev
+///    sandbox (`scripts/dev-entrypoint.sh`) and `tauri dev`
+///    (`scripts/dev-start.sh`) set it explicitly too.
+/// 2. `<dir of the running exe>/claude-acp-vendor/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+///    — for a hand-staged layout that puts the vendor dir beside the daemon
+///    binary (mirrors how `agent-orchestrator`, a sibling project solving the
+///    identical problem, places its own Node/ACP runtime beside its own
+///    executable). NOT what a Tauri bundle produces — Tauri resources land
+///    in a separate resource dir (`Contents/Resources/` on macOS,
+///    `/usr/lib/<app>/` for a Linux deb), which is why case 1 exists.
+/// 3. Walk UPWARD from the current working directory (bounded to 8 levels)
+///    looking for `vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+///    — the DEV/DOCKER-SANDBOX convention: a plain `cargo run`/`cargo build`
+///    from anywhere inside the repo, or the dev-sandbox container (cwd
+///    `/app`, the repo root — see `dev.Dockerfile`), finds the vendor
+///    install this way with no env var needed. `dev.Dockerfile` installs it
+///    at image-build time (`scripts/install-claude-acp-vendor.sh`).
+/// 4. Falls back to the raw npm specifier so a caller still gets SOME argv
+///    instead of a panic if none of the above resolved. Also `eprintln!`s the
+///    resolution failure directly — the OLD node-based resolver did this too
+///    (see git history), and losing it here would make a broken install
+///    silently produce a generic downstream ACP connection error with no
+///    hint that entry-path resolution itself came up empty.
+///    `vst doctor` (`vst-cli/src/commands/doctor.rs`) also flags a missing
+///    install ahead of time, but that only helps if someone actually runs it.
+pub fn claude_acp_entry_path() -> String {
+    if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ENTRY") {
         if !p.is_empty() {
             return p;
         }
     }
     static RESOLVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    RESOLVED
-        .get_or_init(resolve_claude_acp_adapter_entry_via_node)
-        .clone()
+    RESOLVED.get_or_init(resolve_claude_acp_entry_path).clone()
+}
+
+/// Relative suffix shared by both the beside-exe and walk-upward candidates.
+const VENDOR_ENTRY_SUFFIX: &[&str] = &[
+    "node_modules",
+    "@agentclientprotocol",
+    "claude-agent-acp",
+    "dist",
+    "index.js",
+];
+
+fn resolve_claude_acp_entry_path() -> String {
+    // Candidate 2: beside the running exe, under `claude-acp-vendor/` (packaged builds).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let mut candidate = dir.join("claude-acp-vendor");
+            candidate.extend(VENDOR_ENTRY_SUFFIX);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Candidate 3: walk upward from cwd looking for `vendor/claude-acp/...` (dev/Docker).
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors().take(8) {
+            let mut candidate = ancestor.join("vendor").join("claude-acp");
+            candidate.extend(VENDOR_ENTRY_SUFFIX);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Candidate 4: no install found anywhere. Diagnose loudly — this used to
+    // be silent-until-downstream-failure, which made the actual root cause
+    // (missing vendor install) much harder to spot than the generic ACP
+    // connection error it produces a few layers up.
+    eprintln!(
+        "[claude-acp] no vendored install found (checked VST_CLAUDE_ACP_ENTRY, beside-exe, and \
+         vendor/claude-acp/ walking up from cwd) — falling back to a bare npm specifier, which \
+         will fail to spawn. Run ./scripts/install-claude-acp-vendor.sh, or set VST_CLAUDE_ACP_ENTRY."
+    );
+    CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
 }
 
 const CLAUDE_ACP_ADAPTER_SPECIFIER: &str = "@agentclientprotocol/claude-agent-acp/dist/index.js";
-
-/// Blocking (one-time, cached by the caller) — spawns `node -e` to resolve
-/// the adapter's real on-disk path via node's own `require.resolve`. Falls
-/// back to the bare specifier (the old, broken-but-at-least-legible
-/// behavior) if node itself is missing or resolution fails, so a caller
-/// still gets SOME argv instead of a panic; the resulting spawn failure
-/// remains diagnosable via the improved error surfaced by `AcpConnection`.
-fn resolve_claude_acp_adapter_entry_via_node() -> String {
-    let script = format!("process.stdout.write(require.resolve('{CLAUDE_ACP_ADAPTER_SPECIFIER}'))");
-    match std::process::Command::new(claude_acp_command())
-        .arg("-e")
-        .arg(&script)
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            let resolved = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if resolved.is_empty() {
-                CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
-            } else {
-                resolved
-            }
-        }
-        Ok(out) => {
-            eprintln!(
-                "[acp] failed to resolve claude-agent-acp adapter via node -e require.resolve: status={} stderr={}",
-                out.status,
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-            CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
-        }
-        Err(err) => {
-            eprintln!("[acp] failed to spawn node to resolve claude-agent-acp adapter: {err}");
-            CLAUDE_ACP_ADAPTER_SPECIFIER.to_string()
-        }
-    }
-}
 
 async fn write_mode_755(path: &PathBuf, content: &str) {
     let _ = fs::write(path, content).await;

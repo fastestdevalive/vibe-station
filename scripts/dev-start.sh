@@ -10,7 +10,10 @@
 # 3. Builds web-ui/dist, which the daemon serves to non-Vite clients (LAN/tunnel,
 #    curl). The desktop window loads Vite directly and never needs this, but
 #    other clients get a stale dist without it.
-# 4. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
+# 4. Installs the vendored claude-agent-acp adapter if missing — it's a
+#    tauri.conf.json bundle.resources entry, so build.rs's resource-path check
+#    fails without it, and the dev daemon needs it for Claude Rich Chat anyway.
+# 5. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
 #    so the daemon writes the shim on first boot.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
@@ -70,12 +73,23 @@ VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst"
 echo "[dev-start] building web-ui/dist..."
 pnpm --filter @vibestation/web build
 
+# Vendored claude-agent-acp adapter: required by build.rs (bundle.resources)
+# and by the daemon's Claude ACP path. Always run the install script rather
+# than skip-if-file-exists: `bun install` with an already-satisfied lockfile
+# is a ~15ms no-op (confirmed), so there is no real cost to always checking —
+# and a skip-if-present guard would silently leave a stale adapter installed
+# forever after `vendor/claude-acp/package.json` bumps the pinned version,
+# since the file would already exist and never get re-checked.
+echo "[dev-start] checking vendored claude-agent-acp adapter..."
+bash "$REPO_ROOT/scripts/install-claude-acp-vendor.sh"
+CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+
 # Launch Rust daemon + Vite dev server concurrently.
 # --kill-others-on-fail: if either exits, kill the other (prevents orphaned daemon).
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

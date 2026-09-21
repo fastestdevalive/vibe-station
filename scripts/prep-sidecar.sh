@@ -12,6 +12,10 @@
 #   4. Copy rust/target/release/vst-cli     → desktop/src-tauri/binaries/vst-<triple>
 #   5. Download cloudflared for the host triple →
 #      desktop/src-tauri/binaries/cloudflared-<triple>
+#   6. Install the vendored claude-agent-acp adapter
+#      (vendor/claude-acp/node_modules, via install-claude-acp-vendor.sh) —
+#      tauri.conf.json's bundle.resources ships it as
+#      claude-acp-vendor/node_modules, so it must exist before bundling.
 #
 # Tauri resolves externalBin entries by appending the host triple, so the
 # triple suffix in the filename MUST match exactly what rustc reports.
@@ -115,6 +119,20 @@ echo "    $(du -h "$DEST_CLI" | cut -f1)  $DEST_CLI"
 echo ""
 echo "==> Downloading cloudflared for $TRIPLE..."
 bash "$SCRIPT_DIR/download-cloudflared.sh" --target "$TRIPLE"
+
+# ── Step 6: install the vendored claude-agent-acp adapter ────────────────────
+# Not a binary, but staged here anyway so this script stays the single "make
+# every bundle input exist" step `beforeBuildCommand` runs — Tauri reads
+# bundle.resources only after beforeBuildCommand finishes, and a missing
+# resource path fails the build outright. The adapter is platform-neutral JS
+# (optional per-platform packages are omitted, see that script's header), so
+# unlike the binaries above it needs no triple suffix. Run by `bun` at
+# runtime; the desktop host passes its path to the daemon as
+# VST_CLAUDE_ACP_ENTRY (desktop/src-tauri/src/daemon.rs).
+
+echo ""
+echo "==> Installing vendored claude-agent-acp adapter..."
+bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
 
 echo ""
 echo "==> prep-sidecar done!"
