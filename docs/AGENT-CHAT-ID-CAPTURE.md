@@ -154,22 +154,40 @@ own state**, which falls into three shapes:
 
 ### opencode
 
-- **Terminal spawn:** `setupWorkspaceHooks` (`opencode.ts:349-381`) writes a
-  real plugin file (`@opencode-ai/plugin`) into `.opencode/plugins/`, hooking
-  `session.created` — fires when the TUI's first chat is actually created,
-  which can be **after** the ready sentinel (opencode's own comment: "may be
-  after the ready sentinel"). Writes to the same
+> **Rust port note (2026-09-22):** the description below is the intended
+> design; three independent Rust-port gaps broke it in practice (chat id
+> stayed `None` for a session's entire terminal phase, so the first
+> tty→json toggle minted a brand-new native session instead of continuing
+> the terminal one) — see
+> `.vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md` for the
+> full root cause. Fixed: the recorder plugin's hook shape (below), a
+> missing `setup_workspace_hooks`/`capture_chat_id` call on the fresh-create
+> spawn path (`rust/vst-routes/src/sessions.rs::spawn_session`), and a
+> missing `capture_chat_id` self-heal on the tty→json toggle direction
+> (`rust/vst-routes/src/sessions.rs::patch_session_channel`).
+
+- **Terminal spawn:** `setup_workspace_hooks` (`opencode.rs`) writes a real
+  plugin file (`@opencode-ai/plugin`) into `.opencode/plugins/`, registered
+  via the generic **`event`** hook — branching on
+  `event.type === "session.created"` and reading
+  `event.properties.info.id`. **Not** a top-level `"session.created"` hook
+  key: opencode 1.18.x never invokes that shape at all (verified live
+  against 1.18.32). Writes to the same
   `.vibe-station/agent-chat-ids/<session.id>` convention as claude.
-- **Capture:** `captureChatId` (`opencode.ts:383-407`) **polls** that file
-  for up to 30s at 500ms intervals (unlike claude's single read) — this is
-  the shape agy's fix (below) was modeled on. Deletes the file on success.
+- **Capture:** `capture_chat_id` (`opencode.rs`) **polls** that file for up
+  to 30s at 500ms intervals (unlike claude's single read) — this is the
+  shape agy's fix (below) was modeled on. Deletes the file on success.
   ENOENT during the poll just means "not yet," not "wrong" — same
   session-scoped safety property as claude.
-- **JSON turns:** `runTurn` (`opencode.ts:296`) passes `--session <chatId>`.
-  Every turn's `session_init` reports `agentChatId` (`opencode.ts:94`).
-- **Toggle / resume:** no `refreshChatIdOnToggle` (not needed). `/resume`
-  and json→tty restore both self-heal-only (`captureChatId`, guarded by
-  `if (!session.agentChatId)`), same as claude.
+- **JSON turns:** `run_turn` passes `--session <chatId>`. Every turn's
+  `session_init` reports `agentChatId`.
+- **Toggle / resume:** no `refresh_chat_id_on_toggle` (opencode doesn't
+  implement it — that's agy's mechanism). Every spawn/toggle path that can
+  produce or discover a chat id now self-heals via `capture_chat_id`
+  (guarded by `if session.agent_chat_id.is_none()`, never overwrites): the
+  fresh-create spawn path, `/resume`, json→tty restore, **and** tty→json
+  toggle (this last one was the missing case — the other three already had
+  it).
 
 ### agy
 
