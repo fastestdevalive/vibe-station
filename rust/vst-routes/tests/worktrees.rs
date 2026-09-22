@@ -880,6 +880,81 @@ async fn test_search_validation_errors() {
     );
 }
 
+/// Phase 3, 3.T1: Integration test — real temp worktree with known files on
+/// disk; `file_search("main", None)` must return the `main` file ranked first.
+#[tokio::test]
+async fn test_file_search_integration() {
+    let (_dir, store, mut routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(wt_dir.path().to_path_buf());
+
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let wt_path = routes.paths.worktree_path("proj-1", "wt-1");
+    tokio::fs::create_dir_all(&wt_path).await.unwrap();
+    tokio::fs::create_dir_all(wt_path.join("src/other")).await.unwrap();
+    tokio::fs::write(wt_path.join("src/main.rs"), "fn main() {}\n")
+        .await
+        .unwrap();
+    tokio::fs::write(wt_path.join("src/other/zzmain.rs"), "// not main\n")
+        .await
+        .unwrap();
+    tokio::fs::write(wt_path.join("README.md"), "# Title\n").await.unwrap();
+
+    let result = routes
+        .file_search("wt-1", "main", None)
+        .await
+        .unwrap();
+
+    // `main` is a filename prefix-match for src/main.rs, so it ranks first.
+    assert_eq!(
+        result.files.first().map(String::as_str),
+        Some("src/main.rs"),
+        "expected src/main.rs ranked first, got: {:?}",
+        result.files
+    );
+    assert!(result.files.contains(&"src/other/zzmain.rs".to_string()));
+}
+
+/// Phase 3, 3.T2: Integration test — `q=""` returns entries without error.
+#[tokio::test]
+async fn test_file_search_empty_query_returns_entries() {
+    let (_dir, store, mut routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(wt_dir.path().to_path_buf());
+
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let wt_path = routes.paths.worktree_path("proj-1", "wt-1");
+    tokio::fs::create_dir_all(&wt_path).await.unwrap();
+    tokio::fs::write(wt_path.join("a.rs"), "a").await.unwrap();
+    tokio::fs::write(wt_path.join("b.rs"), "b").await.unwrap();
+
+    let result = routes.file_search("wt-1", "", None).await.unwrap();
+    assert_eq!(result.files.len(), 2);
+    assert!(!result.truncated);
+}
+
+/// Phase 3, 3.T3: Integration test — nonexistent worktree id → NotFound.
+#[tokio::test]
+async fn test_file_search_unknown_worktree() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let err = routes
+        .file_search("nonexistent-wt", "main", None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, WorktreeRouteError::NotFound(_)),
+        "expected NotFound error, got: {err:?}"
+    );
+}
+
 /// 4.T1: Unit test — feed the hunk parser a representative unified diff with
 /// a pure addition, a pure deletion, and a replacement block → assert correct
 /// `added`/`deleted`/`modified` arrays, including the `0`-sentinel case for

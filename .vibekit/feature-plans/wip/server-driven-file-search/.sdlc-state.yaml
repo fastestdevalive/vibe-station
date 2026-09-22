@@ -1,0 +1,27 @@
+feature: server-driven-file-search
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-160
+created: 2026-09-18T00:00:00Z
+
+master:
+  prd: skipped
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "5.T7"
+    awaiting_phase: implement
+    awaiting_artifact: ".vibekit/feature-plans/wip/server-driven-file-search/plan-server-driven-file-search.md"
+    impl_turn: null
+    phase_chain: [plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: null
+      returned_at: null
+      verified_by: null
+    commit: null
