@@ -305,19 +305,35 @@ async fn compose_launch_prompt_writes_combined_prompt_file() {
 mod capture_native_chat_id {
     use super::*;
 
-    async fn write_acp_sessions_file(home: &std::path::Path, sessions_json: &str) {
-        let dir = home.join(".agy-acp");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("sessions.json"), sessions_json).unwrap();
+    // The bridge reads vst_agy_acp::agy_acp_sessions_path(), which is the
+    // adapter's store under the state dir (AGY_ACP_STATE_DIR, else
+    // $HOME/.vibe-station/agy-acp). Point AGY_ACP_STATE_DIR at the temp home
+    // and write the adapter's store there so the bridge and adapter agree.
+    // The env var is restored on guard drop so it never leaks to other tests.
+    struct StateDirGuard;
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            std::env::remove_var(vst_agy_acp::AGY_ACP_STATE_DIR_ENV);
+        }
+    }
+
+    async fn write_acp_sessions_file(home: &std::path::Path, sessions_json: &str) -> StateDirGuard {
+        let state_dir = home.join(".vibe-station").join("agy-acp");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("sessions.json"), sessions_json).unwrap();
+        std::env::set_var(vst_agy_acp::AGY_ACP_STATE_DIR_ENV, &state_dir);
+        StateDirGuard
     }
 
     #[tokio::test]
     async fn prefers_acp_adapter_session_keyed_conversation_id() {
         let home = tempfile::tempdir().unwrap();
         let _guard = with_home(home.path().to_path_buf());
-        write_acp_sessions_file(
+        let _state_guard = write_acp_sessions_file(
             home.path(),
-            r#"{"sessions":{"acp-session-1":{"conversationId":"e1daa217-70be-4b99-b7e5-78706623762b","cwd":"/tmp/ws"}}}"#,
+            // Real openab StoredSession shape: conversation_id (snake_case).
+            r#"{"sessions":{"acp-session-1":{"conversation_id":"e1daa217-70be-4b99-b7e5-78706623762b","last_step_idx":1,"model_id":null}}}"#,
         )
         .await;
         let plugin = create_agy_plugin();
@@ -337,9 +353,9 @@ mod capture_native_chat_id {
     async fn never_overwrites_already_captured_native_id() {
         let home = tempfile::tempdir().unwrap();
         let _guard = with_home(home.path().to_path_buf());
-        write_acp_sessions_file(
+        let _state_guard = write_acp_sessions_file(
             home.path(),
-            r#"{"sessions":{"acp-session-2":{"conversationId":"some-other-id"}}}"#,
+            r#"{"sessions":{"acp-session-2":{"conversation_id":"some-other-id"}}}"#,
         )
         .await;
         let plugin = create_agy_plugin();

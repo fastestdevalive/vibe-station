@@ -310,7 +310,7 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
     }
 
     let bun_found = check(
-        "bun is on PATH (required for agy and claude Rich Chat / ACP)",
+        "bun is on PATH (required for claude Rich Chat / ACP)",
         || which("bun"),
     );
     if !bun_found {
@@ -320,6 +320,16 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
             "curl -fsSL https://bun.sh/install | bash"
         };
         print_hint(&format!("Install: {install_cmd}"));
+    }
+
+    let agy_acp_found = check(
+        "agy-acp adapter binary (required for agy Rich Chat / ACP)",
+        vst_agy_acp::agy_acp_available,
+    );
+    if !agy_acp_found {
+        print_hint(
+            "Build it from the vendored submodule (rust/vendor/openab/agy-acp) or set AGY_ACP_BIN",
+        );
     }
 
     let acp_entry = find_claude_acp_entry();

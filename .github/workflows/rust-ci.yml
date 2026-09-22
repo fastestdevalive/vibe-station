@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The agy-acp adapter lives in a git submodule (rust/vendor/openab).
+          submodules: true
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -34,5 +37,11 @@ jobs:
       - name: Run the gate
         run: rust/scripts/rust-gate.sh --workspace
 
-      - name: cargo deny check
+      - name: Build + gate agy-acp (walled-garden)
+        run: rust/scripts/agy-acp-gate.sh
+
+      - name: cargo deny check (workspace)
         run: cargo deny check --manifest-path rust/Cargo.toml
+
+      - name: cargo deny check licenses (agy-acp)
+        run: cargo deny check licenses --manifest-path rust/vendor/openab/agy-acp/Cargo.toml

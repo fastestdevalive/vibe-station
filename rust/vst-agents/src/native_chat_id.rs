@@ -115,21 +115,11 @@ pub async fn read_latest_agy_conversation_id(cwd: &str) -> Option<String> {
     }
 }
 
-/// `~/.agy-acp/sessions.json`
-fn agy_acp_sessions_path() -> PathBuf {
-    home_dir().join(".agy-acp").join("sessions.json")
-}
-
-/// The ACP-id → native-id BRIDGE for agy: read the `antigravity-acp` adapter's
-/// own `~/.agy-acp/sessions.json`, keyed by ACP session id. Mirrors
+/// The ACP-id → native-id BRIDGE for agy: read the openab `agy-acp` adapter's
+/// own session store, keyed by ACP session id. The store path is owned by
+/// `vst-agy-acp` (the same one the adapter writes via `AGY_ACP_STATE_DIR`), so
+/// the bridge and the adapter can never disagree. Mirrors
 /// `native-chat-id/agy.ts`'s `readAgyAcpSessionConversationId`.
 pub async fn read_agy_acp_session_conversation_id(acp_session_id: &str) -> Option<String> {
-    let raw = fs::read_to_string(agy_acp_sessions_path()).await.ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let sessions = parsed.get("sessions")?;
-    let entry = sessions.get(acp_session_id)?;
-    match entry.get("conversationId") {
-        Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        _ => None,
-    }
+    vst_agy_acp::conversation_id_for_acp_session(acp_session_id)
 }
