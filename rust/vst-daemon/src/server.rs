@@ -85,7 +85,7 @@ use vst_types::rest::worktrees::{
     SearchResult, SubmodulesResult, WorktreeDoneResult,
 };
 use vst_types::ws::ClientMessage;
-use vst_ws::broadcaster::{spawn_event_fanout, WsHub};
+use vst_ws::broadcaster::{close_auth_expired, spawn_event_fanout, WsHub};
 use vst_ws::connection::{WsConnection, WsSink};
 use vst_ws::handlers::file_watch::{release_connection_file_watches, WatcherRegistry};
 use vst_ws::handlers::session_open::DirectStreamRegistry;
@@ -303,6 +303,36 @@ fn spawn_subagent_notify_listener(
     })
 }
 
+/// How often the auth-expiry sweep checks open WS connections for expired
+/// tokens. A socket opened just before its token expired would otherwise stay
+/// fully live (terminal/agent panes keep streaming) because the WS layer is
+/// only authenticated at connect time. The sweep closes such sockets with the
+/// same 4401 code as a revoke so the client drops to its login screen.
+const AUTH_EXPIRY_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Spawn a background task that periodically walks open WS connections and
+/// actively closes any whose token has passed `token_expires_at`, using the
+/// shared auth-expired close codepath (`WsHub::close_expired_auth` →
+/// `close_auth_expired`, code 4401). Runs for the lifetime of the process,
+/// consistent with the other fan-out/listener tasks spawned in `build_state`.
+fn spawn_auth_expiry_sweep(hub: Arc<WsHub>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(AUTH_EXPIRY_SWEEP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let closed = hub.close_expired_auth(now_ms);
+            if closed > 0 {
+                tracing::info!("[auth] closed {closed} expired WS connection(s) with 4401");
+            }
+        }
+    });
+}
+
 /// Build all of the daemon's shared application state — every service, route
 /// handler bundle, the WS `DispatchContext`, and `WorktreeRoutes`.
 ///
@@ -312,6 +342,7 @@ fn spawn_subagent_notify_listener(
 pub fn build_state(opts: BuildServerOptions) -> AppState {
     let ws_hub = Arc::new(WsHub::new());
     spawn_event_fanout(ws_hub.clone(), opts.broadcaster.clone());
+    spawn_auth_expiry_sweep(ws_hub.clone());
 
     let code_store = OneTimeCodeStore::new();
 
@@ -880,6 +911,15 @@ async fn handle_ws_upgrade(
     let mut token_id = None;
     let mut token_issued_at = None;
     let mut token_expires_at = None;
+    // True when a non-loopback request presented a missing/invalid/expired
+    // token. We still accept the upgrade, but immediately close the new socket
+    // with the auth-expired code (4401) instead of returning a bare HTTP 401:
+    // the browser sees a 401-before-upgrade as close code 1006, which the
+    // client treats as an ordinary disconnect and reconnects forever. This is
+    // the common remote-session path (token expires while the socket is down,
+    // then the client reconnects and hits this gate), so it must emit 4401 so
+    // the client shows the login screen instead of looping.
+    let mut auth_rejected = false;
 
     if let Some(ref auth_state) = auth_state {
         if !no_auth {
@@ -917,10 +957,10 @@ async fn handle_ws_upgrade(
                         token_id = Some(raw_token[..dot].to_string());
                     }
                 } else if !is_loopback {
-                    return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+                    auth_rejected = true;
                 }
             } else if !is_loopback {
-                return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+                auth_rejected = true;
             }
         }
     }
@@ -937,6 +977,7 @@ async fn handle_ws_upgrade(
             token_id,
             token_issued_at,
             token_expires_at,
+            auth_rejected,
         )
     })
 }
@@ -1036,6 +1077,7 @@ async fn handle_socket(
     token_id: Option<String>,
     token_issued_at: Option<i64>,
     token_expires_at: Option<i64>,
+    auth_rejected: bool,
 ) {
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
@@ -1058,6 +1100,14 @@ async fn handle_socket(
     conn.set_token_expires_at(token_expires_at);
 
     dispatch_ctx.hub.register_connection(&conn);
+
+    // The upgrade gate accepted the socket but the token was missing/invalid/
+    // expired for a non-loopback client. Close it immediately with the
+    // auth-expired code (4401) so the client shows the login screen rather than
+    // treating it as a normal disconnect and reconnecting forever.
+    if auth_rejected {
+        close_auth_expired(&conn);
+    }
 
     // Replay pending navigate event if any
     if let Some(project_id) = open_routes.replay_navigate() {
@@ -1107,6 +1157,16 @@ async fn handle_socket(
             Ok(m) => m,
             Err(_) => break,
         };
+
+        // Once we've initiated a close (revoke/expiry/upgrade-rejection via the
+        // auth-expired code), stop dispatching any further incoming messages
+        // (including terminal input) from this socket. tungstenite keeps
+        // delivering already-buffered/in-flight frames after a server-initiated
+        // close, so without this guard the read loop would keep processing
+        // client messages until the client's own Close arrives or TCP times out.
+        if conn_clone.closed().is_some() {
+            break;
+        }
 
         match msg {
             Message::Text(text) => {
