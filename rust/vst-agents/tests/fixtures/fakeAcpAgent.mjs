@@ -101,6 +101,12 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "initialize") {
+    // Record exactly what the daemon sent, unconditionally, so a test can
+    // assert on the REAL do_initialize() call site's wire shape rather than
+    // re-serializing the builder in isolation.
+    if (process.env.CLIENT_CAPS_OUT_FILE) {
+      writeFileSync(process.env.CLIENT_CAPS_OUT_FILE, JSON.stringify(msg.params?.clientCapabilities ?? null));
+    }
     const result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
     if (mode === "steering_supported" || mode === "steering_method_not_found") {
       result._meta = { steering: { supported: mode === "steering_supported" } };
@@ -235,6 +241,11 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.method === "_session/steering") {
+    const p = msg.params ?? {};
+    if (typeof p.sessionId !== "string" || !Array.isArray(p.prompt) || p._meta?.steering?.idleBehavior !== "promptRequired") {
+      write({ jsonrpc: "2.0", id: msg.id, error: { code: -32602, message: "Invalid params: expected sessionId, prompt[], _meta.steering.idleBehavior" } });
+      return;
+    }
     if (mode === "steering_method_not_found") {
       write({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
     } else {

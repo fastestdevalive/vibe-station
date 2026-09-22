@@ -261,7 +261,10 @@ async fn prompt_times_out_with_clear_error_instead_of_hanging() {
 #[tokio::test]
 async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent() {
     let mut env = HashMap::new();
-    env.insert("FAKE_ACP_MODE".to_string(), "prompt_stream_then_hang".to_string());
+    env.insert(
+        "FAKE_ACP_MODE".to_string(),
+        "prompt_stream_then_hang".to_string(),
+    );
     env.insert("PROMPT_STREAM_INTERVAL_MS".to_string(), "30".to_string());
     env.insert("PROMPT_STREAM_COUNT".to_string(), "5".to_string());
     let conn = AcpConnection::new(AcpLaunchSpec {
@@ -298,7 +301,11 @@ async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent()
     let elapsed = start.elapsed();
     let updates = drain_task.await.expect("drain task completes");
     assert!(matches!(err, AcpTransportError::RequestFailed(_)));
-    assert_eq!(updates.len(), 5, "all streamed updates must have been delivered");
+    assert_eq!(
+        updates.len(),
+        5,
+        "all streamed updates must have been delivered"
+    );
     assert!(
         elapsed >= Duration::from_millis(130),
         "must survive past the flat {}ms window while updates are streaming, took {:?}",
@@ -311,6 +318,44 @@ async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent()
         elapsed
     );
     conn.dispose().await;
+}
+
+/// `initialize` advertises fs read/write + terminal client capabilities on
+/// the real wire (TS parity: `acpTransport.ts`'s `clientCapabilities: { fs:
+/// { readTextFile: true, writeTextFile: true }, terminal: true }`). Reads
+/// back what the fake agent actually received, so this fails if
+/// `do_initialize` stops sending `client_capabilities(...)` — unlike a test
+/// that just re-serializes the builder in isolation.
+#[tokio::test]
+async fn initialize_sends_fs_and_terminal_client_capabilities_on_the_wire() {
+    let out_file =
+        std::env::temp_dir().join(format!("vst-client-caps-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&out_file);
+
+    let mut env = HashMap::new();
+    env.insert("FAKE_ACP_MODE".to_string(), "normal".to_string());
+    env.insert(
+        "CLIENT_CAPS_OUT_FILE".to_string(),
+        out_file.to_string_lossy().into_owned(),
+    );
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "node".to_string(),
+        args: vec![fake_agent()],
+        cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        env,
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+    });
+    conn.initialize().await.expect("initialize");
+    conn.dispose().await;
+
+    let raw = std::fs::read_to_string(&out_file)
+        .expect("fake agent should have recorded clientCapabilities");
+    let _ = std::fs::remove_file(&out_file);
+    let caps: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(caps["fs"]["readTextFile"], true);
+    assert_eq!(caps["fs"]["writeTextFile"], true);
+    assert_eq!(caps["terminal"], true);
 }
 
 // --- 5.T1 / 5.T2 — steering (`supports_steering` / `steer`) ---

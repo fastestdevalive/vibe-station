@@ -40,15 +40,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, CreateTerminalRequest, CreateTerminalResponse,
-    InitializeRequest, InitializeResponse, KillTerminalRequest, KillTerminalResponse,
-    LoadSessionRequest, NewSessionRequest, PermissionOptionKind, PromptRequest, PromptResponse,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate, StopReason,
-    TerminalExitStatus as AcpTerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse,
-    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
-    WriteTextFileResponse,
+    CancelNotification, ClientCapabilities, ContentBlock, CreateTerminalRequest,
+    CreateTerminalResponse, FileSystemCapabilities, InitializeRequest, InitializeResponse,
+    KillTerminalRequest, KillTerminalResponse, LoadSessionRequest, NewSessionRequest,
+    PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
+    ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
+    SessionNotification, SessionUpdate, StopReason, TerminalExitStatus as AcpTerminalExitStatus,
+    TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
+    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
@@ -102,6 +102,9 @@ const IDLE_POLL_INTERVAL_MS: u64 = 5_000;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, JsonRpcRequest)]
 #[request(method = "_session/steering", response = SteeringResponse)]
 struct SteeringRequest {
+    // ACP wire format is camelCase; without this rename the agent receives
+    // `session_id`, rejects the request, and steering silently degrades to queueing.
+    #[serde(rename = "sessionId")]
     session_id: String,
     prompt: Vec<ContentBlock>,
     #[serde(rename = "_meta")]
@@ -665,7 +668,18 @@ async fn do_initialize(
 ) -> Result<InitializeOutcome, AcpTransportError> {
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_INITIALIZE_TIMEOUT_MS));
     let future = cx
-        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+        .send_request(
+            // Parity with the TS daemon: advertise the fs + terminal client
+            // handlers wired below. Without this the agent is told we support
+            // none of them and the handlers are never called.
+            InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                ClientCapabilities::new()
+                    .fs(FileSystemCapabilities::new()
+                        .read_text_file(true)
+                        .write_text_file(true))
+                    .terminal(true),
+            ),
+        )
         .block_task();
     let response: Result<InitializeResponse, _> = match tokio::time::timeout(timeout, future).await
     {
@@ -810,7 +824,39 @@ async fn do_steer(
     let response: Result<SteeringResponse, _> = cx.send_request(req).block_task().await;
     match response {
         Ok(resp) if resp.outcome.as_deref() == Some("injected") => SteerOutcome::Injected,
-        Ok(_) => SteerOutcome::PromptRequired,
-        Err(_) => SteerOutcome::Unsupported,
+        Ok(resp) => {
+            tracing::debug!(outcome = ?resp.outcome, "_session/steering: not injected");
+            SteerOutcome::PromptRequired
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "_session/steering failed; falling back to queue");
+            SteerOutcome::Unsupported
+        }
     }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// ACP is camelCase on the wire. A snake_case `session_id` makes the agent
+    /// reject `_session/steering`, which silently degrades steering to queueing.
+    #[test]
+    fn steering_request_serializes_camel_case_session_id() {
+        let v = serde_json::to_value(SteeringRequest {
+            session_id: "abc".into(),
+            prompt: vec![],
+            meta: serde_json::json!({ "steering": { "idleBehavior": "promptRequired" } }),
+        })
+        .unwrap();
+        assert_eq!(v["sessionId"], "abc");
+        assert!(v.get("session_id").is_none());
+        assert_eq!(v["_meta"]["steering"]["idleBehavior"], "promptRequired");
+    }
+
+    // `client_capabilities(...)` is actually reached by `do_initialize` and
+    // observed on the wire by `initialize_sends_fs_and_terminal_client_capabilities_on_the_wire`
+    // in tests/acp_transport.rs, rather than re-asserted here against an
+    // isolated builder call (which would still pass if `do_initialize` never
+    // called `.client_capabilities(...)` at all).
 }

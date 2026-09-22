@@ -45,9 +45,9 @@ export interface UseChatResult {
   editingTurnIds: string[];
   /** Prefill content for turns THIS tab is editing (keyed by turnId). */
   editingDrafts: Record<string, EditingDraft>;
-  /** Enqueue a user turn. Returns the daemon turnId + queue position.
+  /** Enqueue a user turn. Returns the delivery mode ("queued" | "steered" | undefined).
    *  `queue: true` forces a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. */
-  send: (message: string, attachmentIds?: string[], queue?: boolean) => Promise<void>;
+  send: (message: string, attachmentIds?: string[], queue?: boolean) => Promise<"queued" | "steered" | undefined>;
   /** Abort the active turn (keeps queued turns). */
   stop: () => Promise<void>;
   /** Cancel one queued (not-yet-started) turn. */
@@ -384,7 +384,7 @@ export function useChat(
   }, [api, chatRepo, sessionId, active, cacheEnabled]);
 
   const send = useCallback(
-    async (message: string, attachmentIds?: string[], queue?: boolean) => {
+    async (message: string, attachmentIds?: string[], queue?: boolean): Promise<"queued" | "steered" | undefined> => {
       if (!sessionId) return;
       const res = await chatRepo.sendChat(sessionId, message, attachmentIds, queue);
       // Dedupe: only add the optimistic bubble if the authoritative `user` event
@@ -403,6 +403,7 @@ export function useChat(
           },
         ];
       });
+      return res.delivery;
     },
     [chatRepo, sessionId],
   );
