@@ -168,10 +168,25 @@ fn find_claude_acp_entry() -> Option<PathBuf> {
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let mut candidate = dir.join("claude-acp-vendor");
-            candidate.extend(SUFFIX);
-            if candidate.is_file() {
-                return Some(candidate);
+            // Beside the exe (hand-staged layout; also where a Windows Tauri
+            // bundle puts resources), then the Tauri bundle's resource dir
+            // relative to the bundled `vst` sidecar: `Contents/Resources/` on
+            // macOS (exe in `Contents/MacOS/`), `usr/lib/<productName>/` for a
+            // Linux deb/AppImage (exe in `usr/bin/`). The daemon itself gets
+            // the path via VST_CLAUDE_ACP_ENTRY from the Tauri host
+            // (desktop/src-tauri/src/daemon.rs), but a user running `vst
+            // doctor` from a terminal has no such env var.
+            let bases = [
+                dir.to_path_buf(),
+                dir.join("..").join("Resources"),
+                dir.join("..").join("lib").join("vibe-station"),
+            ];
+            for base in bases {
+                let mut candidate = base.join("claude-acp-vendor");
+                candidate.extend(SUFFIX);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
             }
         }
     }

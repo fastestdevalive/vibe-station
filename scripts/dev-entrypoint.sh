@@ -111,6 +111,13 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   unset CLAUDE_CODE_OAUTH_TOKEN
   echo "claude: WARNING — CLAUDE_CODE_OAUTH_TOKEN not set; falling back to a copy of the host's ~/.claude/.credentials.json, which stops working the next time either side refreshes its token (typically within hours). Run 'claude setup-token' on the host — see scripts/dev-sandbox.sh." >&2
   seed_writable_home /seed/claude /home/vst/.claude "projects file-history"
+  # `.seeded` survives a container restart (~/.claude is container fs, not a
+  # volume), so a restart that drops the token after a token-mode boot would
+  # skip the seed above and leave NO credentials — copy the file explicitly.
+  if [ ! -f /home/vst/.claude/.credentials.json ] && [ -f /seed/claude/.credentials.json ]; then
+    cp /seed/claude/.credentials.json /home/vst/.claude/.credentials.json
+    chown vst:vst /home/vst/.claude/.credentials.json
+  fi
 else
   echo "claude: using CLAUDE_CODE_OAUTH_TOKEN (long-lived token; host .credentials.json not copied)"
   export CLAUDE_CODE_OAUTH_TOKEN

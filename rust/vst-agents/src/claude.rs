@@ -509,9 +509,9 @@ fn claude_acp_bun_command() -> String {
 /// outcome without taking on a reimplementation of its undocumented,
 /// no-compatibility-guarantee wire protocol.
 ///
-/// Resolution order — designed to need ZERO env vars in every environment
-/// this project actually runs in today (dev sandbox, a bare `cargo run`,
-/// packaged builds all covered — see each candidate below):
+/// Resolution order — a bare `cargo run` from inside the repo needs zero env
+/// vars (case 3); the dev sandbox, `tauri dev` and the packaged desktop app
+/// all set `VST_CLAUDE_ACP_ENTRY` explicitly (case 1):
 /// 1. `VST_CLAUDE_ACP_ENTRY` env var, if set — explicit override, always wins.
 ///    This is how the packaged Tauri desktop app finds it:
 ///    `desktop/src-tauri/src/daemon.rs` resolves the bundle's resource dir
