@@ -27,7 +27,9 @@ use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
 use vst_lifecycle::subagent_notify::{NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle};
 use vst_proc::tmux::Tmux;
-use vst_routes::attachments::{AttachmentRouteError, AttachmentRoutes, UploadPart};
+use vst_routes::attachments::{
+    AttachmentRouteError, AttachmentRoutes, UploadPart, MAX_BODY_BYTES, MAX_FILE_BYTES,
+};
 use vst_routes::auth::{
     extract_token_id_from_auth, parse_cookie_value, verify_token, AuthRouteError, AuthRoutes,
     AuthState, PersistEpochFn, COOKIE_NAME,
@@ -594,7 +596,22 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         )
         .route("/sessions/:id/meta", get(handle_get_session_meta))
         // Attachments
-        .route("/sessions/:id/attachments", post(handle_upload_attachments))
+        //
+        // `route_layer` (not `layer`) so this only widens the limit for this
+        // exact route, not the whole router. Without it, axum's `Multipart`
+        // extractor applies its own DEFAULT_LIMIT (2 MiB, via
+        // `RequestExt::with_limited_body`) BEFORE the handler ever runs,
+        // regardless of the handler's own MAX_FILE_BYTES/MAX_BODY_BYTES
+        // streaming checks below — so a 5 MB file (well under the intended
+        // 20 MB per-file cap) would 400 with a generic "invalid multipart
+        // body" error, never reaching this handler's own 413 messaging.
+        // Sized to MAX_BODY_BYTES (25 MB), the same overall cap the handler
+        // already enforces.
+        .route(
+            "/sessions/:id/attachments",
+            post(handle_upload_attachments)
+                .route_layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES)),
+        )
         .route(
             "/sessions/:id/attachments/:uploadId",
             delete(handle_delete_attachment),
@@ -2467,33 +2484,93 @@ fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Va
 }
 
 // ── Attachments ───────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct UploadPartRaw {
-    filename: String,
-    content_type: Option<String>,
-    data: String, // base64 or text
-}
-
+//
+// The web-ui client (`web-ui/src/api/client.ts`'s `uploadAttachments`) sends a
+// real `multipart/form-data` request (browser `FormData`, field name `files`,
+// no explicit Content-Type so the browser sets the boundary). This must be
+// parsed with axum's `Multipart` extractor, NOT `Json<...>` — a `Json`
+// extractor rejects any non-`application/json` request before the handler
+// body ever runs. See `.vibekit/reports/2026-09-22-attachment-upload-debug.md`
+// for the full root-cause writeup of the regression this fixes.
+//
+// We enforce `MAX_FILE_BYTES`/`MAX_BODY_BYTES` while streaming field chunks so
+// an oversized upload is rejected (413) without buffering the whole body into
+// memory first; `AttachmentRoutes::upload_attachments` re-checks per-file size
+// too, so this is a belt-and-braces early-exit, not the only enforcement.
 async fn handle_upload_attachments(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-    Json(raw_parts): Json<Vec<UploadPartRaw>>,
+    mut multipart: axum::extract::Multipart,
 ) -> Result<Json<AttachmentsResult>, (StatusCode, Json<serde_json::Value>)> {
-    use base64::Engine;
-    let parts: Vec<UploadPart> = raw_parts
-        .into_iter()
-        .map(|p| {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&p.data)
-                .unwrap_or_else(|_| p.data.into_bytes());
-            UploadPart {
-                filename: p.filename,
-                content_type: p.content_type,
-                data: bytes,
+    fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg.into() })),
+        )
+    }
+
+    let mut parts: Vec<UploadPart> = Vec::new();
+    let mut total_bytes: usize = 0;
+
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                return Err(bad_request(format!("invalid multipart body: {e}")));
             }
-        })
-        .collect();
+        };
+
+        if field.name() != Some("files") {
+            // Ignore unrelated fields rather than rejecting the whole request.
+            continue;
+        }
+
+        let filename = field
+            .file_name()
+            .map(str::to_string)
+            .unwrap_or_else(|| "upload".to_string());
+        let content_type = field.content_type().map(str::to_string);
+
+        let mut field = field;
+        let mut data: Vec<u8> = Vec::new();
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    total_bytes += chunk.len();
+                    if total_bytes > MAX_BODY_BYTES {
+                        return Err((
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            Json(serde_json::json!({
+                                "error": format!("request body exceeds {MAX_BODY_BYTES} bytes")
+                            })),
+                        ));
+                    }
+                    if data.len() + chunk.len() > MAX_FILE_BYTES {
+                        return Err((
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            Json(serde_json::json!({
+                                "error": format!(
+                                    "file '{filename}' exceeds {MAX_FILE_BYTES} bytes"
+                                )
+                            })),
+                        ));
+                    }
+                    data.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(bad_request(format!("invalid multipart body: {e}")));
+                }
+            }
+        }
+
+        parts.push(UploadPart {
+            filename,
+            content_type,
+            data,
+        });
+    }
 
     state
         .attachment_routes
