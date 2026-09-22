@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vst_agents::home::home_dir;
+use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::settings::{
@@ -55,6 +56,22 @@ pub fn default_skill_paths() -> Vec<String> {
         claude_dir.to_string_lossy().to_string(),
         gemini_dir.to_string_lossy().to_string(),
     ]
+}
+
+/// The effective `skillPaths` set: the user's configured paths (or the
+/// global defaults, if none configured/cleared) plus vibe-station's own
+/// bundled skill dir, always appended. Shared by daemon startup (`main.rs`)
+/// and `PATCH /settings`'s live catalog refresh so the two can't silently
+/// diverge — that divergence is exactly the class of bug this module's
+/// skill-catalog consolidation exists to eliminate.
+pub fn effective_skill_paths(configured: &[String], vst_home: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = if configured.is_empty() {
+        default_skill_paths()
+    } else {
+        configured.to_vec()
+    };
+    paths.push(vst_home.join("skill").to_string_lossy().to_string());
+    paths
 }
 
 /// Default projects dir (`~/projects`).
@@ -219,6 +236,13 @@ impl SettingsRoutes {
             raw["defaultProjectsDir"] = serde_json::Value::String(dir);
         }
 
+        // Computed here (validated + deduped) but not applied to the live
+        // catalog until AFTER the config write below succeeds — applying it
+        // first would leave the live catalog ahead of what's actually
+        // persisted if the write then fails (e.g. disk full), surviving
+        // until the next restart re-reads the (unchanged) file.
+        let mut pending_skill_paths_refresh: Option<Vec<String>> = None;
+
         if let Some(paths) = body.skill_paths {
             // Deduplicate preserving order
             let mut deduped = Vec::new();
@@ -227,7 +251,9 @@ impl SettingsRoutes {
                     deduped.push(p);
                 }
             }
-            raw["skillPaths"] = serde_json::to_value(deduped).unwrap();
+            raw["skillPaths"] = serde_json::to_value(deduped.clone()).unwrap();
+            pending_skill_paths_refresh =
+                Some(effective_skill_paths(&deduped, self.paths.vst_home()));
         }
 
         // Resulting theme/markdown state, broadcast to other tabs after write.
@@ -282,6 +308,13 @@ impl SettingsRoutes {
         tokio::fs::write(&cfg_path, content)
             .await
             .map_err(|e| SettingsRouteError::Internal(e.to_string()))?;
+
+        // Config write succeeded — now safe to refresh the shared,
+        // live-watched skill catalog so the Rich Chat composer / draft
+        // composer both reflect the change without a daemon restart.
+        if let Some(effective) = pending_skill_paths_refresh {
+            skill_resolution::set_skill_paths(&effective).await;
+        }
 
         #[cfg(unix)]
         {

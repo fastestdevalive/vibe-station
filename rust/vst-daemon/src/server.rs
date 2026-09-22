@@ -366,11 +366,9 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
     let mode_routes = ModeRoutes::new(opts.store.clone(), opts.broadcaster.clone())
         .with_paths(opts.paths.clone());
     let settings_routes = SettingsRoutes::new(opts.paths.clone(), opts.broadcaster.clone());
-    let default_skills = vst_routes::settings::default_skill_paths()
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-    let skills_routes = SkillsRoutes::new(default_skills);
+    // Reads the shared skill catalog singleton (seeded from user settings at
+    // startup, see `main.rs`'s "Skill catalog" block) — no path config here.
+    let skills_routes = SkillsRoutes::new();
     let ordered_lists_routes =
         OrderedListsRoutes::new(opts.store.clone(), opts.broadcaster.clone());
     let fs_routes = FsRoutes::new();

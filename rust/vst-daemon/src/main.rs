@@ -28,7 +28,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use tokio::signal::unix::{signal, SignalKind};
 
-use vst_agents::user_skill_catalog;
+use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_git::recover::{recover_not_started_sessions, sweep_direct_pty_sessions_on_boot};
 use vst_git::DirectPtyRegistry;
@@ -38,7 +38,7 @@ use vst_lifecycle::pr_poller::PrPollerHandle;
 use vst_lifecycle::tailscale_serve;
 use vst_proc::tmux::Tmux;
 use vst_routes::auth::{mint_token, AuthState};
-use vst_routes::settings::default_skill_paths;
+use vst_routes::settings::effective_skill_paths;
 use vst_store::StoreHandle;
 use vst_types::domain::TokenScope;
 use vst_types::events::Broadcaster;
@@ -319,9 +319,6 @@ async fn main() -> Result<()> {
     // fresh install without requiring the user to open Skills settings first.
     // Best-effort: never abort startup on failure.
     {
-        let skill_dir = vst_home.join("skill");
-        let mut all_paths = default_skill_paths();
-        all_paths.push(skill_dir.to_string_lossy().to_string());
         if let Err(e) = async {
             // Read skillPaths from persisted config if present.
             let custom: Vec<String> = existing_config
@@ -333,11 +330,11 @@ async fn main() -> Result<()> {
                         .collect()
                 })
                 .unwrap_or_default();
-            if !custom.is_empty() {
-                all_paths = custom;
-                all_paths.push(skill_dir.to_string_lossy().to_string());
-            }
-            user_skill_catalog::set_skill_paths(&all_paths).await;
+            // Same effective-path computation `PATCH /settings` uses for its
+            // live refresh — kept in one place (`vst_routes::settings`) so
+            // the two can't silently diverge.
+            let all_paths = effective_skill_paths(&custom, &vst_home);
+            skill_resolution::set_skill_paths(&all_paths).await;
             Ok::<_, anyhow::Error>(())
         }
         .await
