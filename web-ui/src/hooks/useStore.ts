@@ -286,7 +286,7 @@ export interface WorkspaceState {
   clearWorkspaceSelection: () => void;
   toggleDotFiles: () => void;
   patchSessionState: (sessionId: string, state: SessionState) => void;
-  syncSessionsFromApi: (sessions: Session[]) => void;
+  syncSessionsFromApi: (sessions: Session[], opts?: { prune?: boolean }) => void;
   markSessionAttachPending: (sessionId: string) => void;
   markSessionAttached: (sessionId: string) => void;
   clearSessionAttach: (sessionId: string) => void;
@@ -1040,8 +1040,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             sessionStates: { ...s.sessionStates, [sessionId]: state },
           })),
-        syncSessionsFromApi: (sessions) =>
+        syncSessionsFromApi: (sessions, opts) =>
           set((s) => {
+            if (opts?.prune) {
+              const next: Record<string, SessionState> = {};
+              for (const sess of sessions) {
+                next[sess.id] = sess.state;
+              }
+              return { sessionStates: next };
+            }
             const next = { ...s.sessionStates };
             for (const sess of sessions) {
               next[sess.id] = sess.state;

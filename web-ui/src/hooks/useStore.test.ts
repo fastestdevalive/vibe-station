@@ -813,3 +813,59 @@ describe("useWorkspaceStore - toggleCanvasToolbar", () => {
     expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.canvasToolbarVisible).toBe(true);
   });
 });
+
+// --- syncSessionsFromApi opt-in prune mode (reconnect-stale-state Phase 1) ---
+describe("useWorkspaceStore - syncSessionsFromApi prune mode", () => {
+  const mkSess = (id: string, state: Session["state"]): Session => ({
+    id,
+    worktreeId: W1,
+    projectId: P1,
+    modeId: null,
+    type: "agent",
+    state,
+    lifecycleState: state,
+    isMain: false,
+    tmuxName: id,
+    createdAt: new Date().toISOString(),
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({ sessionStates: {} });
+  });
+
+  it("1.T1 — prune mode drops ids absent from the latest list", () => {
+    const sessA = mkSess("sess-a", "working");
+    const sessB = mkSess("sess-b", "idle");
+
+    useWorkspaceStore.getState().syncSessionsFromApi([sessA], { prune: true });
+    useWorkspaceStore.getState().syncSessionsFromApi([sessB], { prune: true });
+
+    const states = useWorkspaceStore.getState().sessionStates;
+    expect(states["sess-b"]).toBe("idle");
+    expect(states["sess-a"]).toBeUndefined();
+  });
+
+  it("1.T2 — default (no opts) is upsert-only, keeping ids absent from the later list", () => {
+    const sessA = mkSess("sess-a", "working");
+    const sessB = mkSess("sess-b", "idle");
+
+    useWorkspaceStore.getState().syncSessionsFromApi([sessA]);
+    useWorkspaceStore.getState().syncSessionsFromApi([sessB]);
+
+    const states = useWorkspaceStore.getState().sessionStates;
+    expect(states["sess-b"]).toBe("idle");
+    expect(states["sess-a"]).toBe("working");
+  });
+
+  it("1.T3 — default (no opts) still updates an existing id to its new state", () => {
+    const sessA_v1 = mkSess("sess-a", "working");
+    const sessA_v1_with_new_state = mkSess("sess-a", "exited");
+
+    useWorkspaceStore.getState().syncSessionsFromApi([sessA_v1]);
+    useWorkspaceStore.getState().syncSessionsFromApi([sessA_v1_with_new_state]);
+
+    expect(useWorkspaceStore.getState().sessionStates["sess-a"]).toBe("exited");
+  });
+});
