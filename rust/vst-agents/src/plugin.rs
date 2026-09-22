@@ -354,6 +354,23 @@ pub trait AgentPlugin: Send + Sync {
     fn acp_meta(&self, _model: &str) -> Option<serde_json::Value> {
         None
     }
+
+    /// Optional `(config_id, value)` pair to set via a follow-up
+    /// `session/set_config_option` call right after `session/new`/
+    /// `session/load` succeeds, before the first prompt.
+    ///
+    /// `acp_meta` above is the *preferred* way to hand a model to an ACP
+    /// adapter — it rides along on the same request that creates the
+    /// session. This hook exists only for adapters that ignore `_meta` at
+    /// session-creation time entirely and instead require an explicit
+    /// follow-up request (e.g. openab's `agy-acp`, whose `session/new`
+    /// handler hardcodes `model_id: None` and only ever reads a model from a
+    /// dedicated `session/set_config_option` call — see
+    /// `.vibekit/reports/2026-09-22-agy-toggle-no-reply.md`). Most plugins
+    /// should leave this as `None` and use `acp_meta` instead.
+    fn acp_initial_config_option(&self, _model: &str) -> Option<(String, String)> {
+        None
+    }
 }
 
 /// A short ISO8601-ish timestamp for event `ts`/`id` fields. Exact values are

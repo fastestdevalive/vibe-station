@@ -502,6 +502,22 @@ impl AgentPlugin for AgyPlugin {
         true
     }
 
+    fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
+        // openab's agy-acp ignores `_meta` at `session/new`/`session/load`
+        // entirely (its handler hardcodes `model_id: None`) — the only way
+        // to select a model is this explicit follow-up `configId: "model"`
+        // call. Without it, every agy Rich Chat session silently runs on
+        // whatever `agy`'s own CLI defaults to (currently its first `agy
+        // models` entry), ignoring the mode's configured model and the model
+        // picker entirely — verified live: a mode set to "Claude Opus 4.6
+        // (Thinking)" still replied as "Gemini 3.8 Flash". `value` is the
+        // model's display name (same string `list_models()`/`--model`
+        // already use — the adapter passes it straight through to `agy
+        // --model <value>`, and agy accepts the display name directly). See
+        // .vibekit/reports/2026-09-22-agy-toggle-no-reply.md.
+        Some(("model".to_string(), model.to_string()))
+    }
+
     fn capture_native_chat_id(
         &self,
         args: CaptureNativeChatIdArgs<'_>,
@@ -573,6 +589,22 @@ impl AgentPlugin for AgyPlugin {
                         (
                             vst_agy_acp::AGY_ACP_STATE_DIR_ENV.to_string(),
                             vst_agy_acp::agy_acp_state_dir_env_value(),
+                        ),
+                        // The adapter splices this into every `agy -p ...` invocation
+                        // it makes internally (adapter.rs's AGY_EXTRA_ARGS handling).
+                        // Without it, agy runs with toolPermission=request-review and
+                        // soft-denies every tool confirmation in headless/print mode
+                        // (no TTY to approve from), silently stopping the stream with
+                        // no error surfaced anywhere — the turn just ends with no
+                        // text. The TTY launch (get_launch_command/get_restore_command
+                        // below, and compose_launch_prompt) has always passed
+                        // --dangerously-skip-permissions directly; ACP mode needs the
+                        // exact same policy, just via this indirect env seam since we
+                        // don't build agy's argv ourselves here (the adapter does).
+                        // See .vibekit/reports/2026-09-22-agy-toggle-no-reply.md (B1/A1).
+                        (
+                            "AGY_EXTRA_ARGS".to_string(),
+                            "--dangerously-skip-permissions".to_string(),
                         ),
                     ]),
                     // Phase 4.3 — never lets the connect/initialize hang indefinitely.
