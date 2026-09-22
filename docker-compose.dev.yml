@@ -83,6 +83,12 @@ services:
       # `scripts/dev-sandbox.sh up --seed=file-search` — see
       # scripts/dev-entrypoint.sh for the branch.
       VST_SEED_MODE: "${VST_SEED_MODE:-demo}"
+      # Long-lived claude auth token (`claude setup-token` on the host) —
+      # scripts/dev-sandbox.sh reads it from ~/.config/vibe-station/claude-oauth-token
+      # when not already in the environment. Without it the sandbox falls back
+      # to a copied .credentials.json snapshot that breaks at the next token
+      # rotation — see the claude block in scripts/dev-entrypoint.sh.
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
     volumes:
       # Mount CLI binaries read-only so the daemon can shell out to them.
       # Paths use $HOME — override with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN if yours differ.

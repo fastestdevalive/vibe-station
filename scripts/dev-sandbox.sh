@@ -107,6 +107,25 @@ case "$CMD" in
     export VST_SANDBOX_PROJECTS_VOLUME="vst-dev-projects-${WORKTREE}"
     export VST_SEED_MODE="$SEED_MODE"
 
+    # Claude auth for the sandbox: a long-lived token from `claude setup-token`
+    # (run once on the host, then save the printed token to the file below,
+    # mode 600). Copying the host's ~/.claude/.credentials.json instead (the
+    # fallback) shares one rotating OAuth grant between host and sandbox, and
+    # breaks within hours — see the claude block in scripts/dev-entrypoint.sh.
+    CLAUDE_TOKEN_FILE="${VST_CLAUDE_TOKEN_FILE:-$HOME/.config/vibe-station/claude-oauth-token}"
+    if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -s "$CLAUDE_TOKEN_FILE" ]; then
+      CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "$CLAUDE_TOKEN_FILE")"
+      export CLAUDE_CODE_OAUTH_TOKEN
+    fi
+    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+      echo "    claude: long-lived token (CLAUDE_CODE_OAUTH_TOKEN)"
+    else
+      echo "    claude: WARNING — no long-lived token; the sandbox will use a copy of your"
+      echo "            host credentials that stops working at the next token refresh."
+      echo "            Fix: run 'claude setup-token', save the token to $CLAUDE_TOKEN_FILE"
+      echo "            (chmod 600), then re-run this command."
+    fi
+
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
     # The dev sandbox mounts host Rust binaries (vst-daemon, vst).
     # Prefer pre-built container-matching binaries (target-docker), then host release or debug:
