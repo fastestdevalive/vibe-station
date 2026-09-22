@@ -168,6 +168,26 @@ pub trait AcpTransport: Send + Sync {
         blocks: Vec<ContentBlock>,
     ) -> impl std::future::Future<Output = SteerOutcome> + Send;
 
+    /// `session/set_config_option` — set a named session configuration
+    /// option (e.g. `"model"`) on the agent, targeting the session
+    /// established by the most recent `new_session`/`load_session` call.
+    ///
+    /// Best-effort by design: some adapters carry model/options entirely
+    /// through `session/new`'s `_meta` (see [`crate::AgentPlugin::acp_meta`])
+    /// and never need this; others ignore `_meta` at session creation and
+    /// require this explicit follow-up call instead (e.g. openab's
+    /// `agy-acp`, which hardcodes `model_id: None` in its `session/new`
+    /// handler — see
+    /// `.vibekit/reports/2026-09-22-agy-toggle-no-reply.md`). Callers should
+    /// treat any error (including method-not-found on an adapter that
+    /// doesn't implement it at all) as non-fatal and proceed with whatever
+    /// the adapter already defaulted to.
+    fn set_config_option(
+        &self,
+        config_id: &str,
+        value: &str,
+    ) -> impl std::future::Future<Output = Result<(), AcpTransportError>> + Send;
+
     /// True until this connection has been (or is being) torn down — by
     /// [`AcpTransport::dispose`], an idle timeout, or the child process
     /// exiting/crashing on its own.

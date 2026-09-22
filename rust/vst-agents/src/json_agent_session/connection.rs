@@ -121,6 +121,25 @@ impl JsonAgentSession {
             self.persist_acp_session_id(acp_session_id).await;
         }
 
+        // Some adapters (e.g. openab's agy-acp) ignore `_meta` at
+        // `session/new`/`session/load` entirely and only accept a model via
+        // this explicit follow-up call — see `AgentPlugin::acp_initial_config_option`'s
+        // doc comment. Best-effort: most plugins return `None` here (they
+        // already carried the model via `acp_meta` above), and any failure
+        // (including method-not-found on an adapter that doesn't implement
+        // it) just means the turn proceeds with whatever the adapter already
+        // defaulted to — never fails the connection setup over this.
+        if let Some((config_id, value)) = self.0.plugin.acp_initial_config_option(&active_model) {
+            if let Err(e) = conn.set_config_option(&config_id, &value).await {
+                tracing::warn!(
+                    config_id = %config_id,
+                    value = %value,
+                    error = %e,
+                    "acp_initial_config_option: session/set_config_option failed (non-fatal)"
+                );
+            }
+        }
+
         // Store connection and set the first-turn-pending flag.
         {
             let mut s = self.0.state.lock().unwrap();

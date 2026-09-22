@@ -46,14 +46,15 @@ use agent_client_protocol::schema::v1::{
     PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionNotification, SessionUpdate, StopReason, TerminalExitStatus as AcpTerminalExitStatus,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionConfigOptionResponse, StopReason, TerminalExitStatus as AcpTerminalExitStatus,
     TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
     on_receive_notification, on_receive_request, AcpAgent, AcpAgentConfig, Agent, Client,
-    ConnectionTo, JsonRpcRequest, JsonRpcResponse, Responder,
+    ConnectionTo, JsonRpcRequest, JsonRpcResponse, LineDirection, Responder,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -173,6 +174,11 @@ enum Command {
     Steer {
         blocks: Vec<ContentBlock>,
         reply: oneshot::Sender<SteerOutcome>,
+    },
+    SetConfigOption {
+        config_id: String,
+        value: String,
+        reply: oneshot::Sender<Result<(), AcpTransportError>>,
     },
     Cancel,
     Dispose {
@@ -360,6 +366,26 @@ impl AcpTransport for AcpConnection {
         rx.await.unwrap_or(SteerOutcome::Unsupported)
     }
 
+    async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpTransportError> {
+        if self.0.shared.disposed.load(Ordering::Relaxed) {
+            return Err(AcpTransportError::RequestFailed(
+                "ACP connection is disposed; cannot set config option".to_string(),
+            ));
+        }
+        let (tx, rx) = oneshot::channel();
+        if !self.send(Command::SetConfigOption {
+            config_id: config_id.to_string(),
+            value: value.to_string(),
+            reply: tx,
+        }) {
+            return Err(AcpTransportError::RequestFailed(
+                "connection is not running".to_string(),
+            ));
+        }
+        rx.await
+            .map_err(|_| AcpTransportError::RequestFailed("connection closed".to_string()))?
+    }
+
     fn is_alive(&self) -> bool {
         !self.0.shared.disposed.load(Ordering::Relaxed)
     }
@@ -384,11 +410,26 @@ fn spawn_actor(
     cmd_rx: mpsc::UnboundedReceiver<Command>,
 ) {
     tokio::spawn(async move {
+        // Surface the child's stderr to the daemon's own logs. Without this,
+        // a failure the adapter only reports on stderr (e.g. openab agy-acp's
+        // "jetski: no output produced — a tool required the ... permission
+        // that headless mode cannot prompt for, so it was auto-denied")
+        // vanishes entirely — nothing in `docker logs`/journal ever mentions
+        // it, and the turn just silently ends with zero updates. See
+        // .vibekit/reports/2026-09-22-agy-toggle-no-reply.md (B2/A3). This is
+        // plugin-agnostic (every ACP-driven CLI benefits), so it lives here
+        // rather than in any one plugin.
+        let debug_command = spec.command.clone();
         let agent = AcpAgent::new(
             AcpAgentConfig::new(spec.command.clone())
                 .args(spec.args.clone())
                 .envs(spec.env.clone()),
-        );
+        )
+        .with_debug(move |line, direction| {
+            if direction == LineDirection::Stderr {
+                tracing::warn!(command = %debug_command, "acp agent stderr: {line}");
+            }
+        });
 
         let terminals = TerminalManager::default();
         let cwd = spec.cwd.clone();
@@ -646,6 +687,14 @@ async fn command_loop(
                 let outcome = do_steer(&cx, &shared, blocks).await;
                 let _ = reply.send(outcome);
             }
+            Command::SetConfigOption {
+                config_id,
+                value,
+                reply,
+            } => {
+                let result = do_set_config_option(&cx, &shared, &config_id, &value).await;
+                let _ = reply.send(result);
+            }
             Command::Dispose { reply } => {
                 shared.disposed.store(true, Ordering::SeqCst);
                 shared.active_update.lock().unwrap().take();
@@ -833,6 +882,31 @@ async fn do_steer(
             SteerOutcome::Unsupported
         }
     }
+}
+
+/// `session/set_config_option` — set a named option (e.g. `"model"`) on the
+/// current session. See [`AcpTransport::set_config_option`]'s doc comment for
+/// why this exists; failures are returned to the caller (unlike `do_steer`,
+/// which collapses to an enum), but callers are expected to treat them as
+/// non-fatal.
+async fn do_set_config_option(
+    cx: &ConnectionTo<Agent>,
+    shared: &Arc<Shared>,
+    config_id: &str,
+    value: &str,
+) -> Result<(), AcpTransportError> {
+    let Some(session_id) = shared.session_id.lock().unwrap().clone() else {
+        return Err(AcpTransportError::RequestFailed(
+            "no active session".to_string(),
+        ));
+    };
+    let req = SetSessionConfigOptionRequest::new(session_id, config_id.to_string(), value);
+    let _resp: SetSessionConfigOptionResponse = cx
+        .send_request(req)
+        .block_task()
+        .await
+        .map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
