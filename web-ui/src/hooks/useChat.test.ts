@@ -1,12 +1,12 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiInstance } from "@/api";
-import type { NormalizedEvent, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
+import type { NormalizedEvent, SendChatResponse, SessionMeta, TranscriptPage, WSEvent } from "@/api/types";
 import { useChat } from "./useChat";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
 /** Minimal fake api with controllable WS emission for deterministic ordering. */
-function makeApi(sendChatResult = { turnId: "t1", queuePosition: 0 }) {
+function makeApi(sendChatResult: SendChatResponse = { turnId: "t1", queuePosition: 0 }) {
   const listeners = new Map<string, Set<(e: WSEvent) => void>>();
   const emit = (ev: WSEvent) => {
     for (const h of listeners.get("*") ?? []) h(ev);
@@ -208,6 +208,18 @@ describe("useChat optimistic dedupe (4.T6)", () => {
     });
     expect(result.current.pending).toHaveLength(0);
     expect(result.current.events.filter((e) => e.kind === "user")).toHaveLength(1);
+  });
+
+  it("returns delivery from send", async () => {
+    const api = makeApi({ turnId: "turn-s", queuePosition: 0 });
+    api.sendChat.mockResolvedValueOnce({ turnId: "turn-s", queuePosition: 0, delivery: "steered" as const });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    let delivery: "queued" | "steered" | undefined;
+    await act(async () => {
+      delivery = await result.current.send("steer this", []);
+    });
+    expect(delivery).toBe("steered");
   });
 
   it("closes the chat on unmount", () => {

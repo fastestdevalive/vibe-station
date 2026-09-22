@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { render, screen, within, act } from "@testing-library/react";
+import { render, screen, within, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -390,6 +390,79 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
     // Since the tray renders queued turns, check that "this is the notice text" is NOT in the tray.
     const trayText = screen.queryByText("this is the notice text");
     expect(trayText).toBeNull();
+  });
+
+  it("shows an inline notice when an expected steer falls back to queued", async () => {
+    localStorage.setItem("vst-chat-draft-js-steer", "steer command");
+    const api = createMockApi();
+    api.sendChat = vi.fn(async () => ({
+      turnId: "t-fallback",
+      queuePosition: 1,
+      delivery: "queued" as const,
+    }));
+    api.__test.pushChatEvent("js-steer", ev("u1", { kind: "user", role: "user", text: "initial", turnId: "t0" }));
+
+    render(<ChatPane api={api} session={jsonSession("js-steer")} visible />);
+    await screen.findByText("initial");
+
+    // Set meta: busy + canSteer
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-steer",
+        meta: meta("js-steer", { turnState: "responding", canSteer: true }),
+      });
+    });
+
+    const sendBtn = await screen.findByRole("button", { name: /steers the running turn/i });
+    await userEvent.setup().click(sendBtn);
+
+    expect(await screen.findByText("Couldn't steer this turn — queued instead")).toBeTruthy();
+
+    // Dismissing clears it
+    const dismissBtn = screen.getByRole("button", { name: /dismiss notice/i });
+    await userEvent.setup().click(dismissBtn);
+    expect(screen.queryByText("Couldn't steer this turn — queued instead")).toBeNull();
+  });
+
+  it("does NOT show the steer-fallback notice when a turn is already queued (by-design enqueue, not a failed steer)", async () => {
+    localStorage.setItem("vst-chat-draft-js-steer-already-queued", "another command");
+    const api = createMockApi();
+    api.sendChat = vi.fn(async () => ({
+      turnId: "t-fallback-2",
+      queuePosition: 2,
+      delivery: "queued" as const,
+    }));
+    api.__test.pushChatEvent(
+      "js-steer-already-queued",
+      ev("u1", { kind: "user", role: "user", text: "initial", turnId: "t0" }),
+    );
+
+    render(<ChatPane api={api} session={jsonSession("js-steer-already-queued")} visible />);
+    await screen.findByText("initial");
+
+    // Busy + canSteer, but a turn is already queued (queueDepth > 0) — the
+    // daemon's can_attempt_steer gate (json_agent_session/queue.rs) never
+    // even attempts a steer here, so this must not be reported as a
+    // "fallback".
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-steer-already-queued",
+        meta: meta("js-steer-already-queued", {
+          turnState: "responding",
+          canSteer: true,
+          queueDepth: 1,
+          queuedTurnIds: ["q-existing"],
+        }),
+      });
+    });
+
+    const sendBtn = await screen.findByRole("button", { name: /steers the running turn/i });
+    await userEvent.setup().click(sendBtn);
+
+    await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
+    expect(screen.queryByText("Couldn't steer this turn — queued instead")).toBeNull();
   });
 });
 

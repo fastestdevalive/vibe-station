@@ -16,7 +16,7 @@ interface ComposerProps {
   sessionId: string;
   /** Enqueue a turn (message + resolved attachment ids). `queue: true` forces
    *  a FIFO enqueue (never steers) — the Ctrl/Cmd+Enter path. */
-  onSend: (message: string, attachmentIds: string[], queue?: boolean) => Promise<void> | void;
+  onSend: (message: string, attachmentIds: string[], queue?: boolean) => Promise<"queued" | "steered" | undefined | void> | void;
   /** A turn is active — show Stop instead of disabling. */
   busy?: boolean;
   onStop?: () => void;
