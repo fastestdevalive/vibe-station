@@ -13,6 +13,7 @@ import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
+import { attachPinchZoom } from "@/lib/pinchZoom";
 
 // Desktop bases for the --font-size-* tokens (tokens.css), scaled by the same
 // PaneTools "Aa −/+" control that zooms TerminalPane's xterm font (14 * scale
@@ -92,6 +93,27 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     }
     return vars as CSSProperties;
   }, [terminalFontScale]);
+
+  // Two-finger pinch (touch) / trackpad pinch (ctrl+wheel) zoom, on the same
+  // shared `terminalFontScale` the Aa −/+ buttons already drive — the
+  // scrollable message viewport (`.chat-pane__body`, owned by this
+  // component; `MessageList`'s own root is unscrolled content inside it).
+  //
+  // A callback ref, not a plain ref + mount effect: this component has
+  // earlier returns (hidden / spawning) that render no `.chat-pane__body` at
+  // all, so the element the ref points to can appear well after initial
+  // mount (once a spawning session comes up) — a `useEffect` keyed on
+  // `bumpTerminalFont` (stable, so it would only ever run once) would miss
+  // that and never attach. The ref callback fires exactly when the element
+  // itself mounts/unmounts, whichever render that happens on.
+  const pinchCleanupRef = useRef<(() => void) | null>(null);
+  const setBodyRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      pinchCleanupRef.current?.();
+      pinchCleanupRef.current = el ? attachPinchZoom(el, (delta) => bumpTerminalFont(delta)) : null;
+    },
+    [bumpTerminalFont],
+  );
 
   const {
     events,
@@ -288,7 +310,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           status bar + auto-growing composer) at any footer height instead of
           relying on a fixed offset that a tall footer overlaps. */}
       <div className="chat-pane__viewport">
-        <div className="chat-pane__body">
+        <div className="chat-pane__body" ref={setBodyRef}>
           {loading ? (
             <div className="chat-pane__state">
               <span className="chat-spinner" aria-hidden /> Loading history…

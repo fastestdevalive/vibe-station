@@ -49,6 +49,40 @@ function chatMsgsFor(sent: string[], type: "chat:open" | "chat:close", sessionId
     .filter((m) => m.type === type && m.sessionId === sessionId);
 }
 
+/** Controllable WebSocket: lets a test fire onopen/onclose/onmessage by hand. */
+function makeControllableWsFactory() {
+  const sent: string[] = [];
+  const sockets: Array<{
+    readyState: number;
+    onopen: (() => void) | null;
+    onclose: ((ev: { code: number }) => void) | null;
+    onerror: (() => void) | null;
+    onmessage: ((ev: { data: string }) => void) | null;
+    send: (d: string) => void;
+    close: () => void;
+  }> = [];
+  class FakeWebSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = 0;
+    onopen: (() => void) | null = null;
+    onclose: ((ev: { code: number }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((ev: { data: string }) => void) | null = null;
+    constructor(_url: string) {
+      sockets.push(this);
+    }
+    send(d: string) {
+      sent.push(d);
+    }
+    close() {
+      this.readyState = 3;
+      this.onclose?.({ code: 1000 });
+    }
+  }
+  return { FakeWebSocket, sockets, sent };
+}
+
 describe("openChat / closeChat refcounting", () => {
   let sent: string[];
   let api: ReturnType<typeof createClientApi>;
@@ -106,40 +140,6 @@ describe("openChat / closeChat refcounting", () => {
  *    connection has been stable for ~10s.
  */
 describe("socket-cycling fixes (sinceSeq cursor + backoff)", () => {
-  /** Controllable WebSocket: lets the test fire onopen/onclose/onmessage by hand. */
-  function makeControllableWsFactory() {
-    const sent: string[] = [];
-    const sockets: Array<{
-      readyState: number;
-      onopen: (() => void) | null;
-      onclose: ((ev: { code: number }) => void) | null;
-      onerror: (() => void) | null;
-      onmessage: ((ev: { data: string }) => void) | null;
-      send: (d: string) => void;
-      close: () => void;
-    }> = [];
-    class FakeWebSocket {
-      static OPEN = 1;
-      static CONNECTING = 0;
-      readyState = 0;
-      onopen: (() => void) | null = null;
-      onclose: ((ev: { code: number }) => void) | null = null;
-      onerror: (() => void) | null = null;
-      onmessage: ((ev: { data: string }) => void) | null = null;
-      constructor(_url: string) {
-        sockets.push(this);
-      }
-      send(d: string) {
-        sent.push(d);
-      }
-      close() {
-        this.readyState = 3;
-        this.onclose?.({ code: 1000 });
-      }
-    }
-    return { FakeWebSocket, sockets, sent };
-  }
-
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -215,3 +215,116 @@ describe("socket-cycling fixes (sinceSeq cursor + backoff)", () => {
     expect(sockets.length).toBe(3); // fired at ~1700ms
   });
 });
+
+/**
+ * Phase 3 (file-watch-leak fix) — client-side replay maps (`fileWatches` /
+ * `treeWatches`) are refcounted so one consumer's `*:unwatch` doesn't drop the
+ * replay entry another still-mounted consumer depends on. The daemon loses its
+ * per-connection watch state on a drop, so the reconnect replay is the ONLY
+ * thing that keeps the other consumer's live updates flowing — deleting the
+ * entry early would silently strand it (the bug this pins).
+ */
+describe("file:watch / tree:watch reconnect-replay refcounting", () => {
+  function fileWatchMsgs(sent: string[]) {
+    return sent
+      .map((s) => JSON.parse(s) as Record<string, unknown>)
+      .filter((m) => m.type === "file:watch");
+  }
+
+  it("one consumer unwatching does not drop the replay entry another still holds; it is dropped only when the count reaches zero", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets, sent } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.onopen!();
+    sent.splice(0);
+
+    // Two consumers watch the same file path.
+    await api.send({ type: "file:watch", worktreeId: "wt1", path: "a.rs" });
+    await api.send({ type: "file:watch", worktreeId: "wt1", path: "a.rs" });
+    // One consumer unwatches — count 2→1, replay entry must SURVIVE.
+    await api.send({ type: "file:unwatch", worktreeId: "wt1", path: "a.rs" });
+
+    sent.splice(0);
+    // Drop and reconnect — the still-held watch must be replayed.
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.onopen!();
+    expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(1);
+
+    // The remaining consumer unwatches — count 1→0, entry dropped. Reconnect
+    // must NOT replay it.
+    await api.send({ type: "file:unwatch", worktreeId: "wt1", path: "a.rs" });
+    sent.splice(0);
+    sockets[1]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(3);
+    sockets[2]!.readyState = 1;
+    sockets[2]!.onopen!();
+    expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(0);
+  });
+
+  // Regression: the test above never leaves a key's replay count above 1
+  // before a reconnect (it unwatches down to 1 first), so it can't tell the
+  // fixed "replay N times" behavior apart from the old "replay once per key
+  // regardless of count" bug — both produce exactly one replayed message in
+  // that test. This one keeps count at 2 heading into a reconnect and checks
+  // the wire directly: the daemon's `retain_file_watcher`/`retain_tree_watcher`
+  // only take ONE global ref per (connection, key), and a repeat `*:watch`
+  // for a key the (new, post-reconnect) connection already holds locally just
+  // bumps ITS OWN local refcount without re-touching the shared registry — so
+  // replaying a key exactly as many times as it has local subscribers is what
+  // rebuilds the connection's local refcount to match reality. Replay it only
+  // once (the bug) and the daemon's post-reconnect local refcount for that key
+  // is 1 instead of 2: the first of the two consumers to unwatch releases the
+  // connection's only global ref and closes the watcher out from under the
+  // second, still-mounted one.
+  it("replays a key as many times as it has local subscribers, not once per key — both survive independently after reconnect", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets, sent } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.onopen!();
+    sent.splice(0);
+
+    // Two consumers watch the same file path — count stays at 2, neither
+    // ever unwatches before the reconnect.
+    await api.send({ type: "file:watch", worktreeId: "wt1", path: "a.rs" });
+    await api.send({ type: "file:watch", worktreeId: "wt1", path: "a.rs" });
+
+    sent.splice(0);
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.onopen!();
+
+    // The replay must send the key TWICE — once per local subscriber this
+    // client had — not once per distinct key.
+    expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(2);
+
+    // Confirm both consumers really are independent post-reconnect: the
+    // first one unwatching must not drop the replay entry the second still
+    // needs (same invariant the test above pins, now exercised starting
+    // from a post-reconnect state instead of a pre-reconnect one).
+    await api.send({ type: "file:unwatch", worktreeId: "wt1", path: "a.rs" });
+    sent.splice(0);
+    sockets[1]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(3);
+    sockets[2]!.readyState = 1;
+    sockets[2]!.onopen!();
+    expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(1);
+  });
+});
+

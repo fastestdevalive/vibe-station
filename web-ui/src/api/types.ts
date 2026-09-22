@@ -501,6 +501,11 @@ export interface SearchResult {
   totalMatches: number;
 }
 
+export interface FileSearchResult {
+  files: string[];
+  truncated: boolean;
+}
+
 export interface GutterResult {
   added: number[];
   deleted: number[];
@@ -765,6 +770,9 @@ export interface ChangedPathEntry {
    *  omitted together) for binary files, which have no meaningful line diff. */
   insertions?: number;
   deletions?: number;
+  /** File mtime (ms since epoch). Only for `scope=local` entries that still
+   *  exist on disk; absent for deleted files and other scopes. */
+  mtimeMs?: number;
 }
 
 export interface CommitLogEntry {

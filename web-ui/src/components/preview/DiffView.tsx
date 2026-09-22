@@ -198,7 +198,11 @@ export function DiffView({
               const key = `${i}-${j}`;
               const html = highlightedByKey?.[key];
               return (
-                <div key={key} className={`diff-line diff-line--${line.type}`}>
+                <div
+                  key={key}
+                  className={`diff-line diff-line--${line.type}`}
+                  data-line={line.newLineNumber ?? undefined}
+                >
                   <span className="diff-gutter">{line.oldLineNumber ?? ""}</span>
                   <span className="diff-gutter">{line.newLineNumber ?? ""}</span>
                   <span className="diff-marker">{line.type === "added" ? "+" : line.type === "removed" ? "-" : " "}</span>

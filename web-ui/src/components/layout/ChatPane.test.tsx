@@ -139,6 +139,25 @@ describe("ChatPane (4.T2)", () => {
     }
   });
 
+  it("pinch/trackpad-zoom on the message viewport bumps the shared terminalFontScale (same control as Aa −/+)", async () => {
+    const api = createMockApi();
+    try {
+      const { container } = render(<ChatPane api={api} session={jsonSession("js-pinch")} visible />);
+      await screen.findByText("Start chatting");
+      const body = container.querySelector(".chat-pane__body") as HTMLElement;
+      expect(body).toBeTruthy();
+
+      const before = useWorkspaceStore.getState().terminalFontScale;
+      const ev = new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, cancelable: true });
+      body.dispatchEvent(ev);
+
+      expect(ev.defaultPrevented).toBe(true);
+      expect(useWorkspaceStore.getState().terminalFontScale).toBeGreaterThan(before);
+    } finally {
+      useWorkspaceStore.setState({ terminalFontScale: 1 });
+    }
+  });
+
   it("`.chat-pane` re-declares font-size from the scaled token, so inherited text zooms too", () => {
     // jsdom resolves neither stylesheets nor var(), so the *rendered* size of a
     // message bubble can't be asserted here. The regression guarded instead is
