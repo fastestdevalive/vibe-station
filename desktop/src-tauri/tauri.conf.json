@@ -39,7 +39,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/vst-daemon", "binaries/cloudflared", "binaries/vst"],
+    "externalBin": ["binaries/vst-daemon", "binaries/cloudflared", "binaries/vst", "binaries/agy-acp"],
     "resources": {
       "../../skill/SKILL.md": "SKILL.md",
       "../../web-ui/dist": "web-ui/dist",

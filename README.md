@@ -66,7 +66,7 @@ For contributors, or if you want the browser UI and `vst` CLI without installing
 - **tmux** — `brew install tmux` / `apt install tmux`
 - **git** ≥ 2.5 (worktree support)
 - **Rust toolchain** — only if you're building the Tauri desktop app
-- **bun** — only if you want Rich Chat on agy (its ACP adapter runs under bun)
+- **agy-acp** adapter binary — only if you want Rich Chat on agy (built from the vendored `rust/vendor/openab` submodule; see `vst-agy-acp`)
 - At least one AI CLI: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Cursor](https://cursor.sh), [OpenCode](https://opencode.ai), or agy
 
 ```bash
@@ -500,7 +500,7 @@ Run `vst <command> --help` for full options on any subcommand.
 
 ## Troubleshooting
 
-**`vst doctor`** is the first stop — it checks `tmux`, `git`, `claude` / `cursor` / `opencode` / `agy` on PATH, `bun` (needed for agy Rich Chat), `cloudflared`, and whether the daemon is reachable.
+**`vst doctor`** is the first stop — it checks `tmux`, `git`, `claude` / `cursor` / `opencode` / `agy` on PATH, the `agy-acp` adapter binary (needed for agy Rich Chat), `cloudflared`, and whether the daemon is reachable.
 
 **Daemon not starting**
 

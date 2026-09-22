@@ -30,6 +30,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # agy-acp adapter binary comes from a git submodule (rust/vendor/openab);
+          # prep-sidecar.sh builds it from the submodule.
+          submodules: true
 
       # ── Node / pnpm ───────────────────────────────────────────────────────
       - name: Setup pnpm

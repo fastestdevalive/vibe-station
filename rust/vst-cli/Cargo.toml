@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 vst-types = { workspace = true }
+vst-agy-acp = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

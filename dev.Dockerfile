@@ -83,12 +83,14 @@ RUN chmod +x /app/scripts/dev-entrypoint.sh
 USER vst
 RUN pnpm install --no-frozen-lockfile
 
-# agy's ACP path spawns the third-party `antigravity-acp` adapter via `bunx`,
-# and Claude's ACP path (see rust/vst-agents/src/claude.rs) spawns the
-# official `claude-agent-acp` adapter via a plain `bun <entry.js>` — Bun is a
-# hard runtime dependency of both, not otherwise needed by this project.
-# Installed as `vst` (not root) so it lands under $HOME/.bun, matching how
-# the daemon itself runs `bun`/`bunx` at spawn time.
+# Claude's ACP path (see rust/vst-agents/src/claude.rs) spawns the official
+# `claude-agent-acp` adapter via a plain `bun <entry.js>` — Bun is a hard
+# runtime dependency of Claude's Rich Chat, not otherwise needed by this
+# project. (agy's Rich Chat (ACP) no longer needs bun/npm at all — it's
+# driven by the openab `agy-acp` adapter binary, mounted from the host by
+# docker-compose.dev.yml (built by scripts/prep-sidecar.sh) and found via
+# AGY_ACP_BIN.) Installed as `vst` (not root) so it lands under $HOME/.bun,
+# matching how the daemon itself runs `bun` at spawn time.
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/vst/.bun/bin:${PATH}"
 

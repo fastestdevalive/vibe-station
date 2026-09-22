@@ -1,8 +1,8 @@
 //! Home-directory resolution + a test seam for redirecting it.
 //!
 //! Several plugin methods derive paths under the user's home directory
-//! (`~/.vibe-station/agy-logs`, `~/.claude`, `~/.cursor`, `~/.gemini`,
-//! `~/.agy-acp`). The TS tests mock `node:os.homedir()`; the Rust tests need
+//! (`~/.vibe-station/agy-logs`, `~/.claude`, `~/.cursor`, `~/.gemini`). The TS
+//! tests mock `node:os.homedir()`; the Rust tests need
 //! an equivalent seam. This module exposes a process-wide override guarded by
 //! a mutex so tests can point it at a temp dir without racing other tests.
 //!

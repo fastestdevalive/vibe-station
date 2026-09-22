@@ -1,0 +1,20 @@
+[package]
+name = "vst-agy-acp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Lightweight helper crate for the openab `agy-acp` adapter binary: resolves
+# its path, its state-dir, and whether it is available — a single source of
+# truth shared by the agy plugin (vst-agents), the daemon doctor (vst-daemon),
+# and the CLI doctor (vst-cli) so they can never disagree. std-only (plus
+# serde for the state file), deliberately NOT pulling vst-agents' heavy graph
+# into the CLI.
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

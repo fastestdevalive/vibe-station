@@ -43,7 +43,7 @@ see the "two session identities" block above `captureNativeChatId`):
 |---|---|---|---|---|---|
 | **claude** | `identical` | Yes, byte-identical | not implemented (deliberately) | not implemented → `true` | `native-chat-id/claude.ts` (terminal restore only) |
 | **opencode** | `identical` | Yes, byte-identical | not implemented (deliberately) | not implemented → `true` | none needed |
-| **agy** | `bridged` | No — but a reliable, ACP-id-keyed mapping exists on disk | implemented: reads the `antigravity-acp` adapter's own `~/.agy-acp/sessions.json` | not implemented → `true` | `native-chat-id/agy.ts` |
+| **agy** | `bridged` | No — but a reliable, ACP-id-keyed mapping exists on disk | implemented: reads the openab `agy-acp` adapter's own `~/.vibe-station/agy-acp/sessions.json` (via `vst-agy-acp`) | not implemented → `true` | `native-chat-id/agy.ts` |
 | **cursor** | `unavailable` | No, and no bridge exists at all | implemented best-effort only (a cwd-keyed guess) | returns **`false`** | `native-chat-id/cursor.ts` |
 
 - `identical` — implementing `captureNativeChatId` would be pure downside: the

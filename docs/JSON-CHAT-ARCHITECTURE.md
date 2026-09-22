@@ -104,23 +104,21 @@ CLI), was whether the ACP `session/new` id IS that same value:
 | claude | **Yes** (byte-identical; verified `claude --resume <ACP id>` recalls the conversation) | `agentChatId` only — no `acpSessionId` column used | Normal: `getRestoreCommand` resumes correctly |
 | opencode | **Yes** (byte-identical; verified via a direct `opencode.db` query AND `opencode --session <ACP id>`) | `agentChatId` only | Normal |
 | cursor | **No, and no fix exists** (re-investigated live 2026-08-30). `cursor-agent`'s ACP mode persists each session at `~/.cursor/acp-sessions/<sessionId>/store.db` — a dedicated SQLite store keyed by the ACP session id, structurally separate from BOTH the interactive `~/.cursor/chats/` store and the print-mode `~/.cursor/projects/<slug>/agent-transcripts/` store that the raw CLI's `--resume` flag and `findLatestCursorChatId` read. `cursor-agent acp` takes no flags to bridge into an existing ACP session — the only way to resume one is the ACP `session/load` RPC, which a plain terminal invocation cannot call. Live-tested and refuted: this is NOT a timing/async-sync issue (polled >90s, no `agent-transcripts/` entry ever appears for an ACP-only session in a fresh cwd) | `sessions.acpSessionId` (new nullable column, `session/load` only) + `agentChatId` populated out-of-band by `findLatestCursorChatId(cwd)` (may legitimately stay NULL) | **Degraded, documented, confirmed final**: when the native id can't be recovered, `getRestoreCommand` returns `null` and the toggle falls through to a FRESH terminal launch — no crash, no bogus `--resume`. The Rich Chat transcript itself is unaffected (it lives in SQLite, not in cursor's own state) |
-| agy | **No, but a real fix exists** (found and live-verified 2026-08-30). The ACP `session/new` id is a different uuid than agy's own native conversation id, BUT the third-party `antigravity-acp` npm adapter (which drives agy under ACP) persists its own session↔conversation binding to `~/.agy-acp/sessions.json`, keyed by the exact ACP session id — verified live end-to-end: spawned a real ACP session, read the adapter's own file, and confirmed `agy --conversation <that id>` correctly resumed the conversation | `sessions.acpSessionId` (session/load only) + `agentChatId` populated out-of-band by `readAgyAcpSessionConversationId(acpSessionId)` (reads the adapter's own `~/.agy-acp/sessions.json`; falls back to the old cwd-keyed `readLatestAgyConversationId(cwd)` only if that file/entry is missing) | **Normal — NOT degraded**: `getRestoreCommand` resumes correctly via the adapter-provided id in the common case; falls to the old cwd-keyed best-effort path (and, from there, possibly the documented degrade) only for sessions from an adapter version predating this store |
+| agy | **No, but a real fix exists** (found and live-verified 2026-08-30). The ACP `session/new` id is a different uuid than agy's own native conversation id, BUT the openab `agy-acp` adapter (which drives agy under ACP; vendored submodule) persists its own session↔conversation binding to `~/.vibe-station/agy-acp/sessions.json` (via `AGY_ACP_STATE_DIR`), keyed by the exact ACP session id — verified live end-to-end: spawned a real ACP session, read the adapter's own file, and confirmed `agy --conversation <that id>` correctly resumed the conversation | `sessions.acpSessionId` (session/load only) + `agentChatId` populated out-of-band by `readAgyAcpSessionConversationId(acpSessionId)` (reads the adapter's own `~/.vibe-station/agy-acp/sessions.json` via `vst-agy-acp`; falls back to the old cwd-keyed `readLatestAgyConversationId(cwd)` only if that file/entry is missing) | **Normal — NOT degraded**: `getRestoreCommand` resumes correctly via the adapter-provided id in the common case; falls to the old cwd-keyed best-effort path (and, from there, possibly the documented degrade) only for sessions from an adapter version predating this store |
 
 **Queryable, not just documented:** the "Toggle (json→tty) behavior" column above is exposed as a named capability, `AgentPlugin.supportsChannelResume?(): boolean` (`spawn.ts`) — `false` only for cursor, defaulting to `true` for the other three. It's surfaced through `GET /supported-clis` (`supportsChannelResume` field) and consumed by `web-ui`'s `StatusBar.tsx` to show an honest pre-toggle warning for cursor rather than a silent degrade discovered only after switching. The toggle is never disabled by this flag — it only changes the copy.
 
-**Important caveat on the agy plugin (flag for human review before shipping):**
-unlike claude (an npm-installable, Anthropic-affiliated adapter) and
-cursor/opencode (first-party native ACP subcommands on binaries this plugin
-already required), agy's only available ACP adapter is a **third-party,
-single-maintainer npm package** (`antigravity-acp`, not published by
-Google/Zed/agentclientprotocol), built on **Bun** — it introduces a brand-new
-system-level runtime dependency (`bun`/`bunx`) that nothing else in this
-stack needs, and it carries the supply-chain trust profile of an individual
-maintainer's package rather than a vendor-backed one. The live spike
-(`initialize` + `session/new` + `session/prompt`, no auth hang) succeeded on
-the machine this was implemented on, but this trade-off was not something the
-original plan anticipated and deserves an explicit go/no-go from a human
-before agy's ACP path ships to real users.
+**Caveat on the agy plugin (RESOLVED):** agy's ACP adapter was originally a
+**third-party, single-maintainer npm package** (`antigravity-acp`, not published
+by Google/Zed/agentclientprotocol), built on **Bun** — it introduced a brand-new
+system-level runtime dependency (`bun`/`bunx`) that nothing else in this stack
+needed, plus the supply-chain trust profile of an individual maintainer's
+package. That dependency has been **removed**: agy's ACP is now driven by the
+**openab `agy-acp`** Rust binary, vendored as a pinned git submodule
+(`rust/vendor/openab`), compiled standalone at build time, and spawned by the
+daemon over stdio ACP. It is MIT-licensed, and the `bun` runtime requirement is
+gone entirely. The only adapter-specific runtime knob is `AGY_ACP_BIN` (binary
+path) — see `vst-agy-acp` for resolution.
 
 ## Commit map (PR #29 → diagram)
 
