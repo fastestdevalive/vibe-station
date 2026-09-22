@@ -9,7 +9,9 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use vst_agents::agy::{agy_log_path, create_agy_plugin, poll_log_for_conversation_id};
+use vst_agents::agy::{
+    agy_log_path, create_agy_plugin, parse_agy_models_output, poll_log_for_conversation_id,
+};
 use vst_agents::home::with_home;
 use vst_agents::plugin::{CaptureArgs, CaptureNativeChatIdArgs, ComposePromptInput};
 use vst_agents::AgentPlugin;
@@ -266,6 +268,60 @@ fn agy_log_path_is_per_session() {
             .join("agy-logs")
             .join("abc.log")
     );
+}
+
+/// Real captured `agy models` output (14 current models, includes the
+/// non-tab "Fetching..." status line) — verified live against an
+/// authenticated `agy` install. Regression-guards the stale hardcoded
+/// `AGY_MODELS` const this replaced.
+#[test]
+fn parse_agy_models_output_extracts_display_names_and_skips_status_line() {
+    let stdout = "Fetching available models...\n\
+        gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n\
+        gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n\
+        gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n\
+        gemini-3.7-flash-high\tGemini 3.7 Flash (High)\n\
+        gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)\n\
+        gemini-3.7-flash-low\tGemini 3.7 Flash (Low)\n\
+        gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n\
+        gemini-3.6-flash-medium\tGemini 3.6 Flash (Medium)\n\
+        gemini-3.6-flash-low\tGemini 3.6 Flash (Low)\n\
+        gemini-3.1-pro-high\tGemini 3.1 Pro (High)\n\
+        gemini-3.1-pro-low\tGemini 3.1 Pro (Low)\n\
+        claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n\
+        claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)\n\
+        gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n";
+
+    let models = parse_agy_models_output(stdout);
+
+    assert_eq!(
+        models,
+        vec![
+            "Gemini 3.8 Flash (High)",
+            "Gemini 3.8 Flash (Medium)",
+            "Gemini 3.8 Flash (Low)",
+            "Gemini 3.7 Flash (High)",
+            "Gemini 3.7 Flash (Medium)",
+            "Gemini 3.7 Flash (Low)",
+            "Gemini 3.6 Flash (High)",
+            "Gemini 3.6 Flash (Medium)",
+            "Gemini 3.6 Flash (Low)",
+            "Gemini 3.1 Pro (High)",
+            "Gemini 3.1 Pro (Low)",
+            "Claude Sonnet 4.6 (Thinking)",
+            "Claude Opus 4.6 (Thinking)",
+            "GPT-OSS 120B (Medium)",
+        ]
+    );
+    // The "Fetching..." status line has no tab and must not appear.
+    assert!(!models.iter().any(|m| m.contains("Fetching")));
+}
+
+#[test]
+fn parse_agy_models_output_handles_empty_and_whitespace_only() {
+    assert!(parse_agy_models_output("").is_empty());
+    assert!(parse_agy_models_output("Fetching available models...\n").is_empty());
+    assert!(parse_agy_models_output("no tab here at all").is_empty());
 }
 
 #[tokio::test]

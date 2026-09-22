@@ -40,19 +40,45 @@ fn num(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
-/// Exact display names as printed by `agy models` (`AGY_MODELS`).
-pub const AGY_MODELS: [&str; 8] = [
-    "Gemini 3.5 Flash (Low)",
-    "Gemini 3.5 Flash (Medium)",
-    "Gemini 3.5 Flash (High)",
-    "Gemini 3.1 Pro (Low)",
-    "Gemini 3.1 Pro (High)",
-    "Claude Sonnet 4.6 (Thinking)",
-    "Claude Opus 4.6 (Thinking)",
-    "GPT-OSS 120B (Medium)",
-];
-
+/// Fallback default model, used before a live `list_models()` fetch has ever
+/// run (e.g. to pick an initial `--model` for a brand-new session). Not a
+/// model *list* — see `list_models()` below for the live, non-stale source
+/// of truth. This value is still current as of writing (present in `agy
+/// models`' live output), but isn't re-validated at runtime; if agy ever
+/// retires it, the daemon just passes a `--model` agy no longer recognizes
+/// on first spawn, which agy itself will report as its own CLI error.
 pub const AGY_DEFAULT_MODEL: &str = "Gemini 3.1 Pro (High)";
+
+/// Parse `agy models`' stdout into the flat list of selectable model
+/// strings `list_models()` returns.
+///
+/// Output shape (real example, verified against an authenticated `agy`):
+/// ```text
+/// Fetching available models...
+/// gemini-3.1-pro-high	Gemini 3.1 Pro (High)
+/// gemini-3.1-pro-low	Gemini 3.1 Pro (Low)
+/// claude-sonnet-4-6	Claude Sonnet 4.6 (Thinking)
+/// ```
+/// One model per line, `<id>\t<display-name>`. The leading "Fetching..."
+/// status line has no tab and is naturally dropped by requiring a
+/// `split_once('\t')` to succeed — no special-casing it as a "header".
+///
+/// Returns the **display-name** column, not the id — `agy` accepts the
+/// display name directly as `--model "<name>"` (verified), and every
+/// existing caller (the stale `AGY_MODELS` const this replaces, the
+/// mode-picker UI, `session/setConfigOption`) already expects that format.
+/// Each line — including every Low/Medium/High reasoning-effort variant —
+/// becomes its own flat entry; this deliberately does NOT group/expand
+/// variants, matching how every other plugin already bakes its own variant
+/// concept into flat strings (e.g. claude's `"sonnet[1m]"` vs `"sonnet"`).
+pub fn parse_agy_models_output(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(_id, display_name)| display_name.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
 
 // Rich Chat (ACP) is driven by the openab `agy-acp` binary (vendored
 // submodule), not a bun/npm package. Its path is resolved by `vst-agy-acp`.
@@ -400,10 +426,70 @@ impl AgentPlugin for AgyPlugin {
     }
 
     fn list_models(&self) -> AsyncResult<ListModelsResult> {
+        // Mirrors opencode.rs's list_models(): shell out to the CLI's own
+        // "list models" command instead of a hardcoded, inevitably-stale
+        // const (that's exactly what this replaced — `AGY_MODELS` still
+        // listed "Gemini 3.5 Flash", which current `agy models` no longer
+        // returns at all).
         Box::pin(async move {
-            ListModelsResult {
-                models: AGY_MODELS.iter().map(|s| s.to_string()).collect(),
-                error: None,
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                // `resolve_agy_binary()`, not a bare "agy" — every other agy
+                // spawn path (get_launch_command, get_restore_command,
+                // compose_launch_prompt) honors AGY_BIN, a documented
+                // dev-sandbox override (docker-compose.dev.yml); a bare PATH
+                // lookup here would fail with a misleading "check that the
+                // CLI is installed" error whenever AGY_BIN points somewhere
+                // not on PATH.
+                tokio::process::Command::new(resolve_agy_binary())
+                    .arg("models")
+                    .output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let models = parse_agy_models_output(&stdout);
+                    ListModelsResult {
+                        models,
+                        error: None,
+                    }
+                }
+                Ok(Ok(output)) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    eprintln!(
+                        "[cli-models] agy fetch failed: status={} stderr={}",
+                        output.status,
+                        stderr.trim()
+                    );
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
+                Ok(Err(err)) => {
+                    eprintln!("[cli-models] agy fetch failed to spawn: {err}");
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
+                Err(_timeout) => {
+                    eprintln!("[cli-models] agy fetch timed out after 15s");
+                    ListModelsResult {
+                        models: vec![],
+                        error: Some(
+                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
+                                .to_string(),
+                        ),
+                    }
+                }
             }
         })
     }
