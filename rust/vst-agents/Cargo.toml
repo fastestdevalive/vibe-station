@@ -25,6 +25,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Boundary row). Bump only via a deliberate, reviewed amendment, never a
 # routine `cargo update`.
 agent-client-protocol = "=2.1.0"
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

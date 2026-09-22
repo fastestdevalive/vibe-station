@@ -150,6 +150,10 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   useEffect(() => {
     setAtBottom(true);
   }, [sessionId, enabled]);
+  const [steerNotice, setSteerNotice] = useState<string | null>(null);
+  useEffect(() => {
+    setSteerNotice(null);
+  }, [sessionId]);
   const [displayTurnState, setDisplayTurnState] = useState(meta?.turnState);
   useEffect(() => {
     const id = setTimeout(() => setDisplayTurnState(meta?.turnState), 250);
@@ -389,17 +393,50 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           </div>
         ) : sessionId ? (
           <div className="chat-pane__composer">
+            {steerNotice ? (
+              <div className="chat-steer-notice" role="status">
+                <span>{steerNotice}</span>
+                <button
+                  type="button"
+                  className="chat-steer-notice__dismiss"
+                  aria-label="Dismiss notice"
+                  onClick={() => setSteerNotice(null)}
+                >
+                  ✕
+                </button>
+              </div>
+            ) : null}
             <TodoStrip events={events} liveState={liveState} />
             <Composer
             key={`${sessionId}:${composerKey}`}
             api={api}
             sessionId={sessionId}
             textareaRef={composerRef}
-            onSend={(message, ids, queue) => {
+            onSend={async (message, ids, queue) => {
               setSalvage(null);
-              return send(message, ids, queue);
+              setSteerNotice(null);
+              // Mirrors the daemon's OTHER can_attempt_steer conditions
+              // (json_agent_session/queue.rs) that `meta.canSteer` doesn't
+              // encode: an attachment or an already-queued turn always
+              // enqueues by design, not because steering failed. This still
+              // can't see `first_turn_done`, so a first-turn mid-send can
+              // still false-positive; that gap needs a daemon-side signal.
+              const expectedSteer =
+                turnActive &&
+                (meta?.canSteer ?? false) &&
+                !queue &&
+                ids.length === 0 &&
+                (meta?.queueDepth ?? 0) === 0;
+              const requestSessionId = sessionId;
+              const delivery = await send(message, ids, queue);
+              if (requestSessionId !== sessionId) return; // switched sessions mid-send
+              if (expectedSteer && delivery === "queued") {
+                setSteerNotice("Couldn't steer this turn — queued instead");
+              }
             }}
             busy={turnActive}
+            // Safe fallback to false if canSteer is omitted on initial REST load;
+            // live `session:meta` updates supply the authoritative value mid-turn.
             canSteer={meta?.canSteer ?? false}
             onStop={() => void stop()}
             commands={meta?.commands}
