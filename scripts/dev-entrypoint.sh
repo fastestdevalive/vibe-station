@@ -95,7 +95,30 @@ seed_writable_home /seed/gemini /home/vst/.gemini "antigravity antigravity-brows
 # authenticated. `~/.claude.json` (a SIBLING FILE, not inside `~/.claude`)
 # carries onboarding/telemetry state claude checks on startup — seeded
 # separately since `seed_writable_home` only handles directories.
-seed_writable_home /seed/claude /home/vst/.claude "projects file-history"
+#
+# Auth: a copied `.credentials.json` is a SNAPSHOT of the host's live OAuth
+# grant, and Claude rotates refresh tokens on every refresh — whichever side
+# (host or sandbox) refreshes first revokes the other's copy. In practice the
+# sandbox dies a few hours in with "OAuth session expired and could not be
+# refreshed" (and if the sandbox wins the race, the HOST gets logged out
+# instead). The fix is a long-lived, non-rotating token from
+# `claude setup-token`, passed in as CLAUDE_CODE_OAUTH_TOKEN (see
+# scripts/dev-sandbox.sh for where it's read from). When it's set,
+# `.credentials.json` is deliberately NOT copied, so the sandbox never holds
+# a second copy of the host's rotating grant at all.
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  # Empty-but-set (compose's `${VAR:-}` default) must not look like a token.
+  unset CLAUDE_CODE_OAUTH_TOKEN
+  echo "claude: WARNING — CLAUDE_CODE_OAUTH_TOKEN not set; falling back to a copy of the host's ~/.claude/.credentials.json, which stops working the next time either side refreshes its token (typically within hours). Run 'claude setup-token' on the host — see scripts/dev-sandbox.sh." >&2
+  seed_writable_home /seed/claude /home/vst/.claude "projects file-history"
+else
+  echo "claude: using CLAUDE_CODE_OAUTH_TOKEN (long-lived token; host .credentials.json not copied)"
+  export CLAUDE_CODE_OAUTH_TOKEN
+  seed_writable_home /seed/claude /home/vst/.claude "projects file-history .credentials.json"
+  # A container restart (not recreate) keeps an older seed that may still
+  # hold a stale, rotated-out snapshot — drop it so it can't shadow the token.
+  rm -f /home/vst/.claude/.credentials.json
+fi
 if [ -f /seed/claude.json ] && [ ! -f /home/vst/.claude.json ]; then
   cp /seed/claude.json /home/vst/.claude.json 2>/dev/null || true
   chown vst:vst /home/vst/.claude.json 2>/dev/null || true
