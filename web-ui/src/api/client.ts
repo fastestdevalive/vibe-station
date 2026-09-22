@@ -23,6 +23,7 @@ import type {
   DiskUsageResponse,
   DraftConfig,
   EnableTailscaleResponse,
+  FileSearchResult,
   FileScope,
   FsCheckResponse,
   FsCompleteResponse,
@@ -149,9 +150,17 @@ export function createClientApi() {
   const subRefs = new Map<string, number>();
   /** Active file/tree watchers — replayed on WS reconnect so the daemon's
    *  per-connection chokidar state survives a drop. Keyed by stringified
-   *  payload to deduplicate. */
+   *  payload to deduplicate. Each map is refcounted (see `*WatchCounts` below):
+   *  the replay entry is only deleted when the LAST consumer unwatches, so one
+   *  consumer's `*:unwatch` can't kill the replay entry another still-mounted
+   *  consumer depends on. */
   const fileWatches = new Map<string, { worktreeId: string; path: string }>();
   const treeWatches = new Map<string, { worktreeId: string }>();
+  /** Refcount per watch key (matching `fileWatches`/`treeWatches` keys): how
+   *  many consumers currently hold a subscription. The replay maps above only
+   *  drop their entry when the count returns to zero. */
+  const fileWatchCounts = new Map<string, number>();
+  const treeWatchCounts = new Map<string, number>();
   /** Refcounted JSON-chat subscriptions — multiple components can subscribe to
    *  the same sessionId without one cleanup tearing down the others.
    *  Map<sessionId, { refs, sinceSeq? }>; chat:open sent on 0→1, chat:close sent on 1→0.
@@ -265,6 +274,17 @@ export function createClientApi() {
           const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
           if (msg.type) {
             emit(msg as WSEvent);
+            // Phase 5 (file-watch leak fix): a failed `file:watch`/`tree:watch`
+            // (e.g. once accumulated leaks exhaust the OS's
+            // `fs.inotify.max_user_instances`) is surfaced by the daemon as a
+            // `system:error` frame. It has no dedicated UI subscription, so log
+            // it — a dead/failed watch is otherwise completely invisible to the
+            // user (the "file stopped live-updating" bug with no signal).
+            if (msg.type === "system:error") {
+              console.warn(
+                `[vst] system:error: ${(msg as { message?: string }).message ?? "(no message)"}`,
+              );
+            }
             // REGRESSION — remote socket cycling (see daemon/src/ws/connection.ts
             // header). The stored `sinceSeq` cursor must advance from BOTH live
             // `session:message` events AND `chat:replay` frames, otherwise a
@@ -305,11 +325,31 @@ export function createClientApi() {
         // Replay file/tree watches — daemon's per-connection chokidar state
         // is gone after a drop, so without this the FilePreviewPane silently
         // stops receiving file:changed events until the user remounts it.
-        for (const w of fileWatches.values()) {
-          socket.send(JSON.stringify({ type: "file:watch", worktreeId: w.worktreeId, path: w.path }));
+        //
+        // Replay each key `count` times (not once), matching the number of
+        // local subscribers this client had before the drop. The daemon's
+        // `retain_file_watcher`/`retain_tree_watcher` only ever take ONE
+        // GLOBAL ref per (connection, key) — a repeat `*:watch` for a key
+        // this (new, post-reconnect) connection already holds locally just
+        // bumps its own local refcount, it never re-touches the shared
+        // registry — so this rebuilds the connection's local refcount to
+        // match reality without over-incrementing the global one. Without
+        // this, a key with 2 local subscribers (e.g. two open
+        // FilePreviewPanes on the same file) comes back from a reconnect
+        // with local refcount 1: the FIRST of those panes to unmount/unwatch
+        // then releases the connection's only global ref and closes the
+        // watcher out from under the still-mounted second one.
+        for (const [key, w] of fileWatches.entries()) {
+          const count = fileWatchCounts.get(key) ?? 1;
+          for (let i = 0; i < count; i++) {
+            socket.send(JSON.stringify({ type: "file:watch", worktreeId: w.worktreeId, path: w.path }));
+          }
         }
-        for (const w of treeWatches.values()) {
-          socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
+        for (const [key, w] of treeWatches.entries()) {
+          const count = treeWatchCounts.get(key) ?? 1;
+          for (let i = 0; i < count; i++) {
+            socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
+          }
         }
         // Re-open JSON chats so the daemon re-subscribes this connection and
         // replays the transcript (chat:replay) after a reconnect.  Use the
@@ -849,6 +889,22 @@ export function createClientApi() {
       return parseJson<SearchResult>(res);
     },
 
+    /** Query the daemon's server-owned, incrementally-updated filename index.
+     *  Worktree-scope only — there is no `/projects/:id/file-search` route. */
+    async fileSearch(
+      worktreeId: string,
+      q: string,
+      limit: number | undefined,
+      signal?: AbortSignal,
+    ): Promise<FileSearchResult> {
+      const params = new URLSearchParams({ q });
+      if (limit != null) params.set("limit", String(limit));
+      const res = await apiFetch(`${fileBase("worktree", worktreeId)}/file-search?${params}`, {
+        signal,
+      });
+      return parseJson<FileSearchResult>(res);
+    },
+
     async getGutter(
       worktreeId: string,
       path: string,
@@ -1023,19 +1079,37 @@ export function createClientApi() {
       worktreeId?: string;
       path?: string;
     }): Promise<void> {
-      // Track watches so they can be re-sent on reconnect.
+      // Track watches so they can be re-sent on reconnect, refcounted so one
+      // consumer's unwatch doesn't drop the replay entry another still-mounted
+      // consumer needs (tree:watch has multiple simultaneous consumers; file:watch
+      // can too via two mounted FilePreviewPanes watching the same path).
       if (message.worktreeId) {
         if (message.type === "file:watch" && message.path) {
-          fileWatches.set(`${message.worktreeId}:${message.path}`, {
-            worktreeId: message.worktreeId,
-            path: message.path,
-          });
+          const k = `${message.worktreeId}:${message.path}`;
+          fileWatchCounts.set(k, (fileWatchCounts.get(k) ?? 0) + 1);
+          fileWatches.set(k, { worktreeId: message.worktreeId, path: message.path });
         } else if (message.type === "file:unwatch" && message.path) {
-          fileWatches.delete(`${message.worktreeId}:${message.path}`);
+          const k = `${message.worktreeId}:${message.path}`;
+          const c = (fileWatchCounts.get(k) ?? 1) - 1;
+          if (c <= 0) {
+            fileWatchCounts.delete(k);
+            fileWatches.delete(k);
+          } else {
+            fileWatchCounts.set(k, c);
+          }
         } else if (message.type === "tree:watch") {
-          treeWatches.set(message.worktreeId, { worktreeId: message.worktreeId });
+          const k = message.worktreeId;
+          treeWatchCounts.set(k, (treeWatchCounts.get(k) ?? 0) + 1);
+          treeWatches.set(k, { worktreeId: message.worktreeId });
         } else if (message.type === "tree:unwatch") {
-          treeWatches.delete(message.worktreeId);
+          const k = message.worktreeId;
+          const c = (treeWatchCounts.get(k) ?? 1) - 1;
+          if (c <= 0) {
+            treeWatchCounts.delete(k);
+            treeWatches.delete(k);
+          } else {
+            treeWatchCounts.set(k, c);
+          }
         }
       }
       await sendWs(message);

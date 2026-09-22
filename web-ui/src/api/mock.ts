@@ -33,6 +33,7 @@ import type {
   Project,
   ProjectBranchesResponse,
   SearchResult,
+  FileSearchResult,
   SendChatResponse,
   Session,
   SessionMeta,
@@ -980,6 +981,28 @@ export function createMockApi() {
       _scope: FileScope = "worktree",
     ): Promise<SearchResult> {
       return { files: [], truncated: false, totalMatches: 0 };
+    },
+
+    async fileSearch(
+      worktreeId: string,
+      _q: string,
+      _limit?: number,
+      _signal?: AbortSignal,
+    ): Promise<FileSearchResult> {
+      if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
+      const out: string[] = [];
+      const visited = new Set<string>();
+      const walk = (dir: string) => {
+        if (visited.has(dir)) return;
+        visited.add(dir);
+        const entries = treeStore[worktreeId]?.[dir] ?? [];
+        for (const e of entries) {
+          if (e.type === "dir") walk(e.path);
+          else out.push(e.path);
+        }
+      };
+      walk("");
+      return { files: out, truncated: false };
     },
 
     async getGutter(
