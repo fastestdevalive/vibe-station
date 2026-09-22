@@ -12,8 +12,7 @@ use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, TurnState}
 use super::{JsonAgentSession, QueuedTurn};
 use crate::{
     plugin::{TurnContext, TurnInput},
-    skill_resolution::{inject_attachments, resolve_skill_invocations},
-    user_skill_catalog::get_merged_skill_catalog,
+    skill_resolution::{get_merged_skill_catalog, inject_attachments, resolve_skill_invocations},
 };
 
 impl JsonAgentSession {

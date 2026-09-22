@@ -9,6 +9,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
+use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_routes::attachments::{
     pending_upload_ref_path, sanitize_filename, AttachmentRouteError, AttachmentRoutes, UploadPart,
@@ -20,7 +21,7 @@ use vst_routes::ordered_lists::{OrderedListsRouteError, OrderedListsRoutes};
 use vst_routes::settings::{
     default_projects_dir, default_skill_paths, SettingsRouteError, SettingsRoutes,
 };
-use vst_routes::skills::{parse_skill_frontmatter, scan_skill_directory, SkillsRoutes};
+use vst_routes::skills::SkillsRoutes;
 use vst_store::StoreHandle;
 use vst_types::domain::{
     Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
@@ -450,7 +451,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
 #[tokio::test]
 async fn test_skills_frontmatter_and_directory_scanning() {
     let valid_fm = "---\nname: my-skill\ndescription: \"Awesome skill\"\nargument-hint: [target]\n---\n# My Skill";
-    let parsed = parse_skill_frontmatter(valid_fm).unwrap();
+    let parsed = skill_resolution::parse_skill_frontmatter(valid_fm).unwrap();
     assert_eq!(parsed.get("name").map(String::as_str), Some("my-skill"));
     assert_eq!(
         parsed.get("description").map(String::as_str),
@@ -462,7 +463,7 @@ async fn test_skills_frontmatter_and_directory_scanning() {
     );
 
     // No frontmatter
-    assert!(parse_skill_frontmatter("# No FM").is_none());
+    assert!(skill_resolution::parse_skill_frontmatter("# No FM").is_none());
 
     let tmp = tempdir().unwrap();
     let skill_dir = tmp.path().join("skills-dir");
@@ -489,25 +490,32 @@ async fn test_skills_frontmatter_and_directory_scanning() {
     let s3 = skill_dir.join("not-a-skill");
     tokio::fs::create_dir_all(&s3).await.unwrap();
 
-    let (entries, status) = scan_skill_directory(&skill_dir).await;
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name, "skill-one");
-    assert_eq!(entries[0].description, "First");
-    assert_eq!(status.skill_count, 1);
-    assert!(status.error.is_some()); // Skipped report
+    let result = skill_resolution::scan_skill_directory(&skill_dir);
+    assert_eq!(result.entries.len(), 1);
+    assert_eq!(result.entries[0].name, "skill-one");
+    assert_eq!(result.entries[0].description.as_deref(), Some("First"));
+    assert_eq!(result.status.skill_count, 1);
+    assert!(result.status.error.is_some()); // Skipped report
 
     // Non-existent directory returns missing: true, no 500
     let missing_dir = tmp.path().join("does-not-exist");
-    let (m_entries, m_status) = scan_skill_directory(&missing_dir).await;
-    assert!(m_entries.is_empty());
-    assert_eq!(m_status.missing, Some(true));
-    assert!(m_status.error.is_none());
+    let m_result = skill_resolution::scan_skill_directory(&missing_dir);
+    assert!(m_result.entries.is_empty());
+    assert!(m_result.status.missing);
+    assert!(m_result.status.error.is_none());
 
-    // SkillsRoutes aggregate
-    let routes = SkillsRoutes::new(vec![skill_dir, missing_dir]);
+    // SkillsRoutes reads the shared, singleton catalog — seed it here.
+    skill_resolution::reset_skill_catalog_for_tests();
+    skill_resolution::set_skill_paths(&[
+        skill_dir.display().to_string(),
+        missing_dir.display().to_string(),
+    ])
+    .await;
+    let routes = SkillsRoutes::new();
     let res = routes.get_skills().await;
     assert_eq!(res.skills.len(), 1);
     assert_eq!(res.directories.len(), 2);
+    skill_resolution::reset_skill_catalog_for_tests();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 
 use vst_agents::skill_resolution::{
-    inject_attachments, merge_with_skill_catalog, resolve_skill_invocations,
+    inject_attachments, merge_with_skill_catalog, reset_skill_catalog_for_tests,
+    resolve_skill_invocations, MergedSkillEntry,
 };
-use vst_agents::user_skill_catalog::{reset_skill_catalog_for_tests, MergedSkillEntry};
 use vst_types::Attachment;
 
 fn entry(name: &str, path: Option<&str>) -> MergedSkillEntry {
