@@ -213,17 +213,38 @@ pub fn parse_opencode_stream_line(
 }
 
 /// The `vst-recorder.ts` opencode plugin file content.
+///
+/// Registers via the generic `event` hook, not a top-level `"session.created"`
+/// hook key — opencode 1.18.x never invokes that top-level key at all; only
+/// `event` fires, delivering `{ type: "session.created", properties: { info: { id } } }`.
+/// Verified live against opencode 1.18.32 (a probe plugin logging both hook
+/// shapes: `event` fired after the first message, the top-level hook never
+/// did). See .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B5/A1).
 const VST_RECORDER: &str = r#"import type { Plugin } from "@opencode-ai/plugin";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 export const VstRecorder: Plugin = async ({ directory }) => ({
-  "session.created": async (input) => {
+  event: async ({ event }) => {
+    if (event.type !== "session.created") return;
+    // Subagent sessions fire this same event with a parentID set — skip
+    // them, only the root session's id should ever be recorded. Without
+    // this, a subagent spawned later in the conversation would overwrite
+    // the token file with ITS session id, and a reader (capture_chat_id)
+    // would then bind the whole session to the wrong native conversation.
+    if (event.properties?.info?.parentID) return;
     const token = process.env.VST_SPAWN_TOKEN;
     if (!token) return;
+    const sessionId = event.properties?.info?.id;
+    if (!sessionId) return;
     const dir = join(directory, ".vibe-station", "agent-chat-ids");
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, token), input.sessionID);
+    const tokenPath = join(dir, token);
+    // Write-once: only the FIRST session.created for this token wins.
+    // capture_chat_id deletes the file after a successful read, so a
+    // pre-existing file here means a read is still pending, not stale.
+    if (existsSync(tokenPath)) return;
+    writeFileSync(tokenPath, sessionId);
   },
 });
 "#;
@@ -647,5 +668,27 @@ mod tests {
         assert_eq!(plugin.default_mode_icon(Some("gpt-5")), "opencode");
         // missing model -> opencode
         assert_eq!(plugin.default_mode_icon(None), "opencode");
+    }
+
+    /// Regression guard for
+    /// .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B5):
+    /// the recorder plugin MUST register via the generic `event` hook, not a
+    /// top-level `"session.created"` key — opencode 1.18.x never invokes the
+    /// latter at all (verified live), so the chat-id token file would
+    /// silently never get written.
+    #[test]
+    fn vst_recorder_uses_event_hook_not_top_level_session_created() {
+        assert!(
+            VST_RECORDER.contains("event: async"),
+            "recorder must register via the generic `event` hook"
+        );
+        assert!(
+            VST_RECORDER.contains(r#"event.type !== "session.created""#),
+            "recorder must branch on event.type, not a top-level hook key"
+        );
+        assert!(
+            !VST_RECORDER.contains(r#""session.created": async"#),
+            "must not use the dead top-level `\"session.created\"` hook key"
+        );
     }
 }
