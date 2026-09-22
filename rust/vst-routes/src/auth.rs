@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use vst_types::domain::{TokenPayload, TokenScope, VerifyErrorReason, VerifyResult};
 use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
 use vst_types::rest::shared::TokenSession;
-use vst_ws::broadcaster::WsHub;
+use vst_ws::broadcaster::{close_auth_expired, WsHub};
 
 pub const COOKIE_NAME: &str = "vst-session";
 pub const BROWSER_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -533,7 +533,9 @@ impl AuthRoutes {
         if let Some(hub) = &self.ws_hub {
             hub.for_each_connection(|conn| {
                 if conn.token_id().as_deref() == Some(target_token_id) {
-                    conn.sink().close(4403, "Session revoked");
+                    // This is an auth-caused close: emit 4401 so the client
+                    // shows the login screen instead of reconnecting in a loop.
+                    close_auth_expired(conn);
                     *found.borrow_mut() = true;
                 }
             });
@@ -578,9 +580,16 @@ impl AuthRoutes {
         }
 
         if let Some(hub) = &self.ws_hub {
+            // Bumping the browser epoch invalidates Browser-scope tokens, which
+            // is what the remote-session/QR path mints (mobile_auth.rs). Only
+            // Browser-scope sockets are closed here — Mobile tokens carry no
+            // epoch and aren't invalidated by this bump, so closing a Mobile
+            // socket would wrongly send its client to login while the token is
+            // still valid. This is an auth-caused close: use 4401 so the client
+            // shows the login screen.
             hub.for_each_connection(|conn| {
                 if conn.scope() == Some(TokenScope::Browser) {
-                    conn.sink().close(4403, "Session revoked");
+                    close_auth_expired(conn);
                 }
             });
         }
