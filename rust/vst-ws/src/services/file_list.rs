@@ -245,7 +245,7 @@ impl FileList {
     }
 }
 
-fn to_posix(p: &str) -> String {
+pub(crate) fn to_posix(p: &str) -> String {
     if std::path::MAIN_SEPARATOR == '/' {
         p.to_string()
     } else {

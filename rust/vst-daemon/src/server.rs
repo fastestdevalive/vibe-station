@@ -78,15 +78,16 @@ use vst_types::rest::tailscale::{
 };
 use vst_types::rest::worktrees::{
     ChangedPath, CommitsResult, CreateWorktreeBody, DiffStat, DiskUsage, FileListResult,
-    OpenFileBody, PatchWorktreeResult, PatchWorktreeToggleBody, PrLookupResult, RenameWorktreeBody,
-    RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult, SearchResult,
-    SubmodulesResult, WorktreeDoneResult,
+    FileSearchResult, OpenFileBody, PatchWorktreeResult, PatchWorktreeToggleBody, PrLookupResult,
+    RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
+    SearchResult, SubmodulesResult, WorktreeDoneResult,
 };
 use vst_types::ws::ClientMessage;
 use vst_ws::broadcaster::{spawn_event_fanout, WsHub};
 use vst_ws::connection::{WsConnection, WsSink};
-use vst_ws::handlers::file_watch::WatcherRegistry;
+use vst_ws::handlers::file_watch::{release_connection_file_watches, WatcherRegistry};
 use vst_ws::handlers::session_open::DirectStreamRegistry;
+use vst_ws::handlers::tree_watch::release_connection_tree_watches;
 use vst_ws::server::{dispatch, send_parse_error, DispatchContext};
 
 /// Options to build the Axum web application.
@@ -300,8 +301,13 @@ fn spawn_subagent_notify_listener(
     })
 }
 
-/// Build the full Axum router.
-pub fn build_app(opts: BuildServerOptions) -> Router {
+/// Build all of the daemon's shared application state — every service, route
+/// handler bundle, the WS `DispatchContext`, and `WorktreeRoutes`.
+///
+/// Extracted from `build_app` so tests can obtain an `AppState` (and therefore
+/// `dispatch_ctx`/`worktree_routes`) directly, which `build_app`'s
+/// `.with_state(state)` otherwise consumes and never returns.
+pub fn build_state(opts: BuildServerOptions) -> AppState {
     let ws_hub = Arc::new(WsHub::new());
     spawn_event_fanout(ws_hub.clone(), opts.broadcaster.clone());
 
@@ -407,8 +413,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         None
     });
 
-    let watchers: WatcherRegistry =
-        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let watchers: WatcherRegistry = Arc::new(std::sync::Mutex::new(Default::default()));
 
     let dispatch_ctx = DispatchContext {
         hub: ws_hub.clone(),
@@ -420,6 +425,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         direct_streams: direct_streams.clone(),
         watchers,
         resolve_worktree_root: worktree_path_resolver,
+        // SAME `Arc<FileSearchIndex>` as `worktree_routes.file_search` (Decision 4):
+        // the WS layer (tree_watch's on_changed/on_deleted) and the HTTP layer
+        // (WorktreeRoutes::file_search) must observe the same index instance.
+        file_search: worktree_routes.file_search.clone(),
     };
 
     let state = AppState {
@@ -453,6 +462,13 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         tailscale_routes,
         dispatch_ctx,
     };
+
+    state
+}
+
+/// Build the full Axum router.
+pub fn build_app(opts: BuildServerOptions) -> Router {
+    let state = build_state(opts);
 
     // CORS configuration: reflect origin (allow Any credentials), allow headers and methods
     let cors = CorsLayer::new()
@@ -505,6 +521,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/worktrees/:id/tree", get(handle_worktree_tree))
         .route("/worktrees/:id/file-list", get(handle_worktree_file_list))
         .route("/worktrees/:id/search", get(handle_worktree_search))
+        .route("/worktrees/:id/file-search", get(handle_worktree_file_search))
         .route("/worktrees/:id/files/*path", get(handle_worktree_get_file))
         .route("/worktrees/:id/gutter/*path", get(handle_worktree_gutter))
         .route("/worktrees/:id/diff/*path", get(handle_worktree_diff))
@@ -1204,6 +1221,17 @@ async fn handle_socket(
         }
     }
     dispatch_ctx.hub.unregister_connection(&conn);
+    // Release every file watcher this connection was still holding, so a
+    // reload / crashed tab / lost socket can't leak an inotify fd forever.
+    // Must run BEFORE `conn.cleanup()` clears the connection's watcher maps,
+    // or `file_watch_keys()` would report nothing to release.
+    release_connection_file_watches(&conn, &dispatch_ctx.watchers).await;
+    // Release every tree watcher this connection was still holding, so a
+    // reload / crashed tab / lost socket can't leak a watcher (or its inotify
+    // fds) forever. Must run BEFORE `conn.cleanup()` clears the connection's
+    // watcher maps, or `tree_watch_keys()` would report nothing to release.
+    release_connection_tree_watches(&conn, &dispatch_ctx.watchers, &dispatch_ctx.file_search)
+        .await;
     conn.cleanup().await;
     ready_state.store(3, Ordering::SeqCst);
     let _ = forwarder_handle.await;
@@ -1585,6 +1613,26 @@ async fn handle_worktree_search(
             query.glob.as_deref(),
             query.limit,
         )
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+#[derive(Deserialize)]
+struct FileSearchQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn handle_worktree_file_search(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<FileSearchQuery>,
+) -> Result<Json<FileSearchResult>, (StatusCode, Json<serde_json::Value>)> {
+    let q = query.q.as_deref().unwrap_or("");
+    state
+        .worktree_routes
+        .file_search(&id, q, query.limit)
         .await
         .map(Json)
         .map_err(worktree_err_to_response)

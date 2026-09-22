@@ -63,13 +63,14 @@ use vst_types::rest::projects::{TreeEntry, TreeEntryType};
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
-    DiskUsage, FileListResult, GutterResult, OpenFileBody, PatchWorktreeResult,
+    DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, PatchWorktreeResult,
     PatchWorktreeToggleBody, PendingFileOpens, PrInfo, PrInfoState, PrLookupResult,
     RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
     SearchFileMatches, SearchMatch, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
     WorktreeDoneResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
+use vst_ws::services::file_search::FileSearchIndex;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 
@@ -261,6 +262,7 @@ pub fn merge_numstat(
                 status: entry.status,
                 insertions,
                 deletions,
+                mtime_ms: None,
             }
         })
         .collect()
@@ -369,6 +371,7 @@ pub struct WorktreeRoutes {
     pub daemon_port: u16,
     pub pending_file_opens: PendingFileOpensQueue,
     pub file_list: Arc<FileList>,
+    pub file_search: Arc<FileSearchIndex>,
     pub paths: Paths,
 }
 
@@ -380,6 +383,7 @@ impl WorktreeRoutes {
         tmux: Tmux,
         daemon_port: u16,
     ) -> Self {
+        let file_list = Arc::new(FileList::new());
         Self {
             store,
             broadcaster,
@@ -388,7 +392,8 @@ impl WorktreeRoutes {
             tmux,
             daemon_port,
             pending_file_opens: PendingFileOpensQueue::new(),
-            file_list: Arc::new(FileList::new()),
+            file_list: file_list.clone(),
+            file_search: Arc::new(FileSearchIndex::new(file_list.clone())),
             paths: Paths::default(),
         }
     }
@@ -1413,6 +1418,22 @@ impl WorktreeRoutes {
         })
     }
 
+    // --- 11c. GET /worktrees/:id/file-search ---
+    pub async fn file_search(
+        &self,
+        wt_id: &str,
+        q: &str,
+        limit: Option<usize>,
+    ) -> Result<FileSearchResult, WorktreeRouteError> {
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let limit = limit.unwrap_or(50);
+        Ok(self
+            .file_search
+            .search(wt_id, &wt_path, q, limit)
+            .await)
+    }
+
     // --- 12. GET /worktrees/:id/files/* ---
     pub async fn get_file(
         &self,
@@ -1720,7 +1741,20 @@ impl WorktreeRoutes {
             }
         }
 
-        Ok(merge_numstat(entries, numstat))
+        let mut changed = merge_numstat(entries, numstat);
+        for c in &mut changed {
+            if c.status == "D" {
+                continue;
+            }
+            if let Ok(meta) = tokio::fs::metadata(wt_path.join(&c.path)).await {
+                c.mtime_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64);
+            }
+        }
+        Ok(changed)
     }
 
     // --- 15. GET /worktrees/:id/diffstat?scope=branch ---

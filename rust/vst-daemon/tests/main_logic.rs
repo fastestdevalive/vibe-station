@@ -3,10 +3,21 @@
 //! All tests use `tempfile::tempdir()` for isolation — never `~/.vibe-station`
 //! or port 7421.
 
+use std::sync::Arc;
+use std::time::Instant;
+
 use tempfile::tempdir;
+
+use vst_agents::json_agent_registry::JsonAgentRegistry;
+use vst_agents::json_agent_session::JsonAgentSession;
+use vst_git::paths::Paths;
+use vst_proc::tmux::Tmux;
+use vst_store::StoreHandle;
+use vst_types::events::Broadcaster;
 
 use vst_daemon::lock::{acquire_lock, release_lock};
 use vst_daemon::port::{find_free_port, port_is_free, PORT_SEARCH_RANGE};
+use vst_daemon::server::{build_state, BuildServerOptions};
 
 // ─── Port discovery ───────────────────────────────────────────────────────────
 
@@ -150,5 +161,49 @@ async fn acquire_lock_rejects_live_pid() {
     assert!(
         msg.contains("already running"),
         "error should mention 'already running', got: {msg}"
+    );
+}
+
+// ─── Shared-index wiring (Phase 3, 3.T5) ─────────────────────────────────────
+
+/// Build `BuildServerOptions` the same way `auth_middleware.rs`'s `make_opts`
+/// does — all state isolated in a temp dir, no real ports bound.
+fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
+    let store = StoreHandle::open(&tmp.join("test.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
+    BuildServerOptions {
+        port: 0,
+        auth_state: None,
+        no_auth: true,
+        dist_path: None,
+        persist_epoch: None,
+        store,
+        broadcaster,
+        json_registry,
+        tmux: Tmux::new(),
+        started_at: Instant::now(),
+        version: "test".to_string(),
+        paths: Paths::with_home(tmp.to_path_buf()),
+    }
+}
+
+/// Phase 3, 3.T5: `build_state` must wire ONE shared `Arc<FileSearchIndex>`
+/// across the WS `DispatchContext` and the HTTP `WorktreeRoutes` (Decision 4).
+/// Two separate instances would mean WS-driven index updates never reach
+/// HTTP-driven queries.
+#[tokio::test]
+async fn build_state_shares_one_file_search_index() {
+    let tmp = tempdir().unwrap();
+    let opts = make_opts(tmp.path());
+
+    let state = build_state(opts);
+
+    assert!(
+        Arc::ptr_eq(
+            &state.dispatch_ctx.file_search,
+            &state.worktree_routes.file_search
+        ),
+        "DispatchContext and WorktreeRoutes must share the same Arc<FileSearchIndex>"
     );
 }

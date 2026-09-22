@@ -135,13 +135,13 @@ fi
 AUTH_HEADER="Authorization: Bearer $TOKEN"
 
 # Skip if already registered.
-if curl -sf -H "$AUTH_HEADER" "$DAEMON_URL/projects" | grep -q '"file-search-demo"'; then
+if curl -sf -H "$AUTH_HEADER" "$DAEMON_URL/api/projects" | grep -q '"file-search-demo"'; then
   echo "[seed-file-search] project already registered, skipping"
   exit 0
 fi
 
 echo "[seed-file-search] registering project with daemon"
-curl -sf -X POST "$DAEMON_URL/projects" \
+curl -sf -X POST "$DAEMON_URL/api/projects" \
   -H "$AUTH_HEADER" \
   -H "Content-Type: application/json" \
   -d "{\"path\": \"$REPO_PATH\"}" \
