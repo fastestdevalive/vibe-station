@@ -1,0 +1,19 @@
+feature: reconnect-stale-state
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-167
+master: {prd: skipped, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: "3.T5"
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/wip/reconnect-stale-state/plan-reconnect-stale-state.md
+    phase_chain: [turn-implement]
+    impl_turn: null
+    review_history:
+      - phase: plan
+        model: claude-opus (mode-1783066047922-le9zj)
+        iterations: 2
+        verdict: APPROVE WITH CHANGES
+        note: plan drafted by claude-sonet subagent, reviewed by claude-opus subagent, adjustments incorporated by orchestrator

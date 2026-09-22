@@ -1222,6 +1222,178 @@ describe("TabsStrip", () => {
     });
   });
 
+  it("3.T1 — re-fetches localSessions on ws:open and drops a deleted session's tab", async () => {
+    // Phase 3: the tab strip only refetched on `worktreeId`/`kind` change, so a
+    // session deleted while offline survived as a tappable, inert ghost tab
+    // after a reconnect. A `ws:open` listener must re-run the same fetch and
+    // drop the gone session from the rendered strip, no prop/dep change needed.
+    const localApi = createMockApi();
+    const full = await localApi.listSessions("wt-1");
+    const removed = full.find((s) => s.type === "agent" && !s.isMain)!;
+    const reduced = full.filter((s) => s.id !== removed.id);
+
+    let calls = 0;
+    vi.spyOn(localApi, "listSessions").mockImplementation(() => {
+      calls += 1;
+      return Promise.resolve(calls === 1 ? structuredClone(full) : structuredClone(reduced));
+    });
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+
+    await act(async () => {
+      localApi.__test.emit({ type: "ws:open" });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
+  });
+
+  it("3.T3 — a stale (older) fetch response is discarded in favor of the newer call", async () => {
+    // Two overlapping fetchSessions calls (mount racing a near-simultaneous
+    // ws:open) have no ordering guarantee on which await resolves last. The
+    // request token must ensure the OLDER response (which still lists the
+    // deleted session) can't overwrite the NEWER one's pruned result.
+    const localApi = createMockApi();
+    const full = await localApi.listSessions("wt-1");
+    const removed = full.find((s) => s.type === "agent" && !s.isMain)!;
+    const reduced = full.filter((s) => s.id !== removed.id);
+
+    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
+    vi.spyOn(localApi, "listSessions").mockImplementation(
+      () =>
+        new Promise<Session[]>((resolve) => {
+          deferreds.push({ resolve });
+        }),
+    );
+
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(deferreds.length).toBe(1));
+
+    // Newer call (ws:open) starts while the first fetch is still pending.
+    await act(async () => {
+      localApi.__test.emit({ type: "ws:open" });
+    });
+    await waitFor(() => expect(deferreds.length).toBe(2));
+
+    // Resolve the SECOND (newer) call first — it prunes the deleted session.
+    await act(async () => {
+      deferreds[1]!.resolve(structuredClone(reduced));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+    });
+
+    // Now the FIRST (older, now-stale) call resolves. It must be discarded, so
+    // agent-2 must STAY gone — the stale full response must not resurrect it.
+    await act(async () => {
+      deferreds[0]!.resolve(structuredClone(full));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+  });
+
+  it("3.T4 — a stale response from a previous worktree does not overwrite the new worktree's tabs", async () => {
+    // Switching worktreeId re-runs the effect, and its cleanup bumps the token,
+    // so the old worktree's in-flight fetch — which would write worktree A's
+    // tabs into worktree B's strip — must be discarded.
+    const localApi = createMockApi();
+    const wt1 = await localApi.listSessions("wt-1");
+    const wt2 = await localApi.listSessions("wt-2");
+
+    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
+    vi.spyOn(localApi, "listSessions").mockImplementation(
+      () =>
+        new Promise<Session[]>((resolve) => {
+          deferreds.push({ resolve });
+        }),
+    );
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(deferreds.length).toBe(1));
+
+    // Switch to wt-2 while wt-1's fetch is still pending.
+    rerender(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-2" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(deferreds.length).toBe(2));
+
+    // Resolve wt-2's (newer) fetch first — its main agent tab renders.
+    await act(async () => {
+      deferreds[1]!.resolve(structuredClone(wt2));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: /^main\b/i })).toBeInTheDocument();
+    });
+
+    // Now wt-1's stale response resolves — it must not replace wt-2's tabs.
+    await act(async () => {
+      deferreds[0]!.resolve(structuredClone(wt1));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+  });
+
+  it("3.T5 — a stale fetch from a valid-worktree mount is discarded after switching to no worktree (early-return branch)", async () => {
+    // Switching to `worktreeId: undefined` (or project scope) takes the
+    // effect's early-return branch and never calls fetchSessions again, so the
+    // ONLY thing that invalidates the previous run's in-flight fetch is the
+    // cleanup's token bump. Verify the stale result is discarded.
+    const localApi = createMockApi();
+    const full = await localApi.listSessions("wt-1");
+
+    const deferreds: Array<{ resolve: (v: Session[]) => void }> = [];
+    vi.spyOn(localApi, "listSessions").mockImplementation(
+      () =>
+        new Promise<Session[]>((resolve) => {
+          deferreds.push({ resolve });
+        }),
+    );
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(deferreds.length).toBe(1));
+
+    // Re-render without a worktree — effect cleanup bumps the token, then the
+    // body early-returns (no new fetchSessions call).
+    rerender(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId={null} kind="agent" />
+      </MemoryRouter>,
+    );
+
+    // Resolve the original pending fetch; its result must be discarded.
+    await act(async () => {
+      deferreds[0]!.resolve(structuredClone(full));
+      await Promise.resolve();
+    });
+
+    // Neither of wt-1's agent tabs may appear.
+    expect(screen.queryByRole("tab", { name: /agent-2/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^main\b/i })).not.toBeInTheDocument();
+  });
+
   // ─── Mode icons + reset-menu full name (Phase 3) ─────────────────────────
 
   it("3.T1 — agent tabs render a mode icon and NO emoji channel marker; the reset popup shows the full name", async () => {

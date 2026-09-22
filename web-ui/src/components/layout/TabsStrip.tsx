@@ -372,6 +372,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
    *  in flight. See `mergeArrivedDuringFetch` below — without this, the fetch's
    *  older snapshot overwrites them and the tab never appears. */
   const arrivedDuringFetch = useRef<Session[]>([]);
+  const fetchTokenRef = useRef(0);
 
   useEffect(() => {
     if (isProject) return; // project scope derives from the server store above
@@ -380,11 +381,16 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       setSessionsLoaded(true);
       return;
     }
-    setSessionsLoaded(false);
     const matches = (s: Session) => s.type === kind;
-    arrivedDuringFetch.current = [];
-    void (async () => {
-      const all = await api.listSessions(worktreeId);
+    // Narrowed to non-null (guaranteed by the guard above) for fetchSessions' closure.
+    const wt = worktreeId;
+
+    async function fetchSessions(): Promise<void> {
+      const token = ++fetchTokenRef.current;
+      setSessionsLoaded(false);
+      arrivedDuringFetch.current = [];
+      const all = await api.listSessions(wt);
+      if (token !== fetchTokenRef.current) return; // superseded by a newer call
       // Union, never blind-replace. `session:created` can fire while this GET
       // is in flight, and the server snapshot it returns may predate the new
       // session — so `setSessions(ss)` alone silently drops a tab that was
@@ -408,8 +414,8 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         return;
       }
       const last = isAgent
-        ? store.lastSessionByWorktree[worktreeId]
-        : store.lastTerminalByWorktree[worktreeId];
+        ? store.lastSessionByWorktree[wt]
+        : store.lastTerminalByWorktree[wt];
       const main = isAgent ? ss.find((s) => s.isMain) : undefined;
       const pick =
         (last && ss.some((s) => s.id === last) ? last : null) ??
@@ -417,7 +423,9 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         ss[0]?.id ??
         null;
       if (pick) setActiveSession(pick);
-    })();
+    }
+
+    void fetchSessions();
 
     const offCreated = api.on("session:created", (ev) => {
       if (ev.type !== "session:created" || !ev.snapshot) return;
@@ -545,13 +553,22 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       setSessions((prev) => prev.map((s) => (s.id === ev.sessionId ? { ...s, state: "working" } : s)));
     });
 
+    // Re-fetch the worktree-scoped session list on every `ws:open` reconnect, so
+    // a session deleted while the client was offline disappears from the tab
+    // strip the same way the live `session:deleted` event already handles it.
+    const offReconnect = api.on("ws:open", () => {
+      void fetchSessions().catch(() => {});
+    });
+
     return () => {
+      fetchTokenRef.current++; // invalidate any fetch left in flight from this run
       offCreated();
       offDeleted();
       offUpdated();
       offState();
       offExited();
       offResumed();
+      offReconnect();
     };
   }, [api, worktreeId, kind, isAgent, isProject, setActiveSession]);
 

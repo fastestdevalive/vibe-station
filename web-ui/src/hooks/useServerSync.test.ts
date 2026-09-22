@@ -1,6 +1,8 @@
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
+import type { ApiInstance } from "@/api";
+import type { Session } from "@/api/types";
 import { useServerSync } from "./useServerSync";
 import { useServerStore } from "./useServerStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "./useStore";
@@ -151,9 +153,34 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {} });
   });
 
+  /**
+   * The source session these fixtures tile (`sess-source`) is not registered in
+   * the mock's own session store, so Phase 2's refetch pruning would treat its
+   * tile as a ghost and prune it on mount. Register it in the fetched list so
+   * the tile legitimately survives — mirroring production, where a tiled source
+   * session IS part of the REST session list.
+   */
+  async function mockSourcePresent(api: ApiInstance) {
+    const defaults = await api.listSessions();
+    const source: Session = {
+      id: SOURCE_ID,
+      worktreeId: "wt-1",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: SOURCE_ID,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    vi.spyOn(api, "listSessions").mockResolvedValue([...defaults, source]);
+  }
+
   it("4c.T1 — a session:created with parentSessionId matching exactly one workspace's tile auto-inserts a new tile there", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -177,6 +204,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   it("4c.T2 — a session:created with parentSessionId matching no tile anywhere results in no tile insert, no error (S5)", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -199,6 +227,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   it("4c.T3 — a session:created with parentSessionId absent behaves identically to pre-Phase-4 (no scan attempted, CUJ 6)", async () => {
     seedOneMatchingDoc();
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -235,6 +264,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     }));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -259,6 +289,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   it("auto-inserts a SAME-worktree child into the source worktree's scratch canvas", async () => {
     seedScratch("wt-1");
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -286,6 +317,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
   it("auto-inserts a CROSS-worktree child into the source worktree's scratch canvas, stamped with its own worktreeId", async () => {
     seedScratch("wt-1");
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -312,6 +344,7 @@ describe("useServerSync — session:created auto-insert (Phase 4c)", () => {
     seedScratch("wt-1");
     seedOneMatchingDoc();
     const api = createMockApi();
+    await mockSourcePresent(api);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -444,6 +477,23 @@ describe("useServerSync — worktree:deleted tools-tile cleanup", () => {
       },
     });
     const api = createMockApi();
+    // Register `sess-x` in the fetched list so Phase 2's refetch pruning doesn't
+    // treat the agent tile as a ghost on mount (it must survive for the
+    // worktree:deleted sweep to leave it alone).
+    const defaults = await api.listSessions();
+    const sessX: Session = {
+      id: "sess-x",
+      worktreeId: "wt-1",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-x",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    vi.spyOn(api, "listSessions").mockResolvedValue([...defaults, sessX]);
     renderHook(() => useServerSync(api));
     await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
 
@@ -525,6 +575,232 @@ describe("useServerSync — session:error gone translation", () => {
     });
 
     expect(useWorkspaceStore.getState().sessionStates["sess-main"]).toBe("not_started");
+  });
+});
+
+// --- Phase 2 (reconnect-stale-state): prune ghost canvas/tab tiles on the
+// reconnect refetch. refresh() now compares every tile-referenced sessionId
+// against the freshly-fetched (unscoped) list and prunes tiles for ids not in
+// it, merging in any session:created announced while the fetch was in flight.
+//
+// ⚠️ TEST-SETUP TRAP: `createSessionRepository`/`createWorktreeRepository`
+// capture `api.listSessions` at useMemo (mount) time, and refresh() auto-runs
+// once on mount. So EVERY spy/mock on listSessions must be installed BEFORE
+// renderHook/render. Tests that control the FIRST (mount-triggered) refresh
+// via a deferred promise must account for it explicitly. ---
+describe("useServerSync — Phase 2 prune ghost tiles on refetch", () => {
+  function baseSession(partial: Partial<Session>): Session {
+    return {
+      id: "sess-x",
+      worktreeId: "wt-1",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-x",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      ...partial,
+    };
+  }
+
+  /** Seed a scratch-canvas tile referencing `sessionId` in worktree `wtId`. */
+  function seedScratchTile(wtId: string, sessionId: string) {
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [wtId]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          scratchCanvas: {
+            mode: "free",
+            tiles: [{ id: `tile-${sessionId}`, kind: "agent", sessionId }],
+            tree: null,
+            freeRects: {},
+          },
+        },
+      },
+    });
+  }
+
+  beforeEach(() => {
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+    useWorkspaceStore.setState({ workspaceDocs: {}, layoutByWorktree: {}, sessionStates: {} });
+  });
+
+  it("2.T1 — prunes a tile whose sessionId is absent from the fresh list (post-reload/empty-store case)", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    seedScratchTile("wt-1", "sess-ghost");
+    vi.spyOn(api, "listSessions").mockResolvedValue(defaults);
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+    expect(canvas.tiles.some((t) => t.sessionId === "sess-ghost")).toBe(false);
+  });
+
+  it("2.T2 — leaves a tile untouched when its sessionId is still in the fresh list", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    const withGhost = [...defaults, baseSession({ id: "sess-ghost" })];
+    seedScratchTile("wt-1", "sess-ghost");
+    vi.spyOn(api, "listSessions").mockResolvedValue(withGhost);
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+    expect(canvas.tiles.some((t) => t.sessionId === "sess-ghost")).toBe(true);
+  });
+
+  it("2.T3 — a superseded session present in the fresh list is relinked, not pruned", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    const sOld = baseSession({ id: "S", supersededBy: "S2" });
+    const sNew = baseSession({ id: "S2" });
+    const list = [...defaults, sOld, sNew];
+    seedScratchTile("wt-1", "S");
+    vi.spyOn(api, "listSessions").mockResolvedValue(list);
+    const removeSpy = vi.spyOn(useWorkspaceStore.getState(), "removeTilesForSession");
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    expect(removeSpy).not.toHaveBeenCalledWith("S", expect.anything());
+  });
+
+  it("2.T4 — a session:created announced mid-fetch keeps its tile (merge-before-prune race)", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    // Source tile so the parent-tiling auto-insert fires for the announced child.
+    seedScratchTile("wt-1", "sess-main");
+    let resolveList!: (v: Session[]) => void;
+    const deferred = new Promise<Session[]>((resolve) => {
+      resolveList = resolve;
+    });
+    vi.spyOn(api, "listSessions").mockReturnValue(deferred);
+
+    renderHook(() => useServerSync(api));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "new1",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+        parentSessionId: "sess-main",
+        snapshot: baseSession({ id: "new1", state: "not_started", lifecycleState: "not_started" }),
+      });
+    });
+
+    resolveList(defaults);
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+    expect(canvas.tiles.some((t) => t.sessionId === "new1")).toBe(true);
+  });
+
+  it("2.T5 — a session in another worktree, still present in the full list, keeps its sessionStates entry", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    seedScratchTile("wt-1", "sess-ghost");
+    useWorkspaceStore.setState({ sessionStates: { "sess-wt2-main": "done" } });
+    vi.spyOn(api, "listSessions").mockResolvedValue(defaults);
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    expect(useWorkspaceStore.getState().sessionStates["sess-wt2-main"]).toBe("done");
+    const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]!.scratchCanvas!;
+    expect(canvas.tiles.some((t) => t.sessionId === "sess-ghost")).toBe(false);
+  });
+
+  it("2.T6 — the announced session's not_started sessionStates entry survives the prune", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    seedScratchTile("wt-1", "sess-main");
+    let resolveList!: (v: Session[]) => void;
+    const deferred = new Promise<Session[]>((resolve) => {
+      resolveList = resolve;
+    });
+    vi.spyOn(api, "listSessions").mockReturnValue(deferred);
+
+    renderHook(() => useServerSync(api));
+
+    act(() => {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: "new1",
+        worktreeId: "wt-1",
+        sessionType: "agent",
+        parentSessionId: "sess-main",
+        snapshot: baseSession({ id: "new1", state: "not_started", lifecycleState: "not_started" }),
+      });
+    });
+
+    resolveList(defaults);
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    expect(useWorkspaceStore.getState().sessionStates["new1"]).toBe("not_started");
+  });
+
+  it("2.T7 — a failed refresh clears the announced-guard, so a later refetch prunes a since-announced session", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    seedScratchTile("wt-1", "X");
+    // Mount refresh rejects; the swallow handler prevents an unhandled
+    // rejection from failing the test (refresh()'s `void refresh()` is
+    // pre-existing — it never attaches a catch).
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const spy = vi.spyOn(api, "listSessions").mockRejectedValueOnce(new Error("boom"));
+    try {
+      renderHook(() => useServerSync(api));
+      // Let the failed mount refresh's `finally` run (clears the guard map).
+      await new Promise((r) => setTimeout(r, 20));
+
+      // X is announced OUTSIDE any in-flight refresh — must NOT enter the guard.
+      act(() => {
+        api.__test.emit({
+          type: "session:created",
+          sessionId: "X",
+          worktreeId: "wt-1",
+          sessionType: "agent",
+          parentSessionId: "sess-main",
+          snapshot: baseSession({ id: "X", state: "not_started", lifecycleState: "not_started" }),
+        });
+      });
+
+      // Second refresh (ws:open) resolves with the full list minus X → X pruned.
+      spy.mockResolvedValue(defaults);
+      act(() => {
+        api.__test.emit({ type: "ws:open" });
+      });
+      await waitFor(() => {
+        const canvas = useWorkspaceStore.getState().layoutByWorktree["wt-1"]?.scratchCanvas;
+        expect(canvas?.tiles.some((t) => t.sessionId === "X")).toBe(false);
+      });
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("2.T8 — activeSessionId falls back to the ACTIVE worktree's main agent, never a cross-worktree one", async () => {
+    const api = createMockApi();
+    const defaults = await api.listSessions();
+    seedScratchTile("wt-1", "sess-ghost");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeSessionId: "sess-ghost",
+    });
+    // defaults contain sess-main (wt-1 isMain) and sess-wt2-main (wt-2 isMain).
+    vi.spyOn(api, "listSessions").mockResolvedValue(defaults);
+
+    renderHook(() => useServerSync(api));
+    await waitFor(() => expect(useServerStore.getState().loaded).toBe(true));
+
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
   });
 });
 
