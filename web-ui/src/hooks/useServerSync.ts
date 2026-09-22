@@ -25,6 +25,16 @@ import {
  */
 let inFlightRefresh: Promise<void> | null = null;
 
+/**
+ * Sessions announced via `session:created` while `refresh()`'s fetch is in
+ * flight (id -> full snapshot). Mirrors `TabsStrip.tsx`'s `arrivedDuringFetch`
+ * for the identical race: a tile inserted for a session created mid-fetch must
+ * not be treated as stale (and its `sessionStates` entry must not be pruned)
+ * just because the in-flight fetch response predates it. Cleared in
+ * `refresh()`'s `finally` alongside `inFlightRefresh`.
+ */
+let sessionsAnnouncedDuringRefresh = new Map<string, Session>();
+
 /** Dedup guard for `syncPinnedOrder`, mirroring `inFlightRefresh` above. */
 let inFlightPinnedOrderSync: Promise<void> | null = null;
 
@@ -103,15 +113,52 @@ export function useServerSync(api: ApiInstance): void {
           // this, a "done"/"exited" terminal state set by another client
           // while we were offline never overrides our cached "working"/
           // "idle" entry, and the rollup keeps showing the worktree active.
-          syncSessionsFromApi(sessions);
+          //
+          // Merge in any session announced via `session:created` while this
+          // fetch was in flight BEFORE pruning: a tile for a
+          // session created mid-fetch is not stale, and its `sessionStates`
+          // entry (still "not_started") must survive the wholesale prune
+          // below — a naive prune against the un-merged fetch response would
+          // wipe it, which the `known === "not_started"` spawn-race guards
+          // treat as "session gone".
+          const mergedSessions = [...sessions];
+          for (const [id, snapshot] of sessionsAnnouncedDuringRefresh) {
+            if (!sessions.some((s) => s.id === id)) mergedSessions.push(snapshot);
+          }
+          syncSessionsFromApi(mergedSessions, { prune: true });
+          // Prune ghost canvas/tab tiles: any tile whose sessionId is not in
+          // the fresh (merged) list is a session deleted while offline. Scope
+          // `removeTilesForSession`'s fallback lookup to the ACTIVE worktree —
+          // `activeSessionId` (the only thing `remainingSessions` is consulted
+          // for) always belongs to `activeWorktreeId`.
+          const freshIds = new Set(mergedSessions.map((s) => s.id));
+          const { layoutByWorktree, workspaceDocs, activeWorktreeId } = useWorkspaceStore.getState();
+          const tiledIds = new Set<string>();
+          for (const layout of Object.values(layoutByWorktree)) {
+            for (const tile of layout.scratchCanvas?.tiles ?? []) {
+              if (tile.sessionId) tiledIds.add(tile.sessionId);
+            }
+          }
+          for (const doc of Object.values(workspaceDocs)) {
+            for (const tile of doc.tiles) {
+              if (tile.sessionId) tiledIds.add(tile.sessionId);
+            }
+          }
+          const activeWorktreeSessions = mergedSessions.filter((s) => s.worktreeId === activeWorktreeId);
+          for (const staleId of tiledIds) {
+            if (freshIds.has(staleId)) continue;
+            useWorkspaceStore.getState().removeTilesForSession(staleId, activeWorktreeSessions);
+          }
           // Resolve any supersededBy chain this client missed the broadcast
           // for (offline during a reset, or the reset came from the CLI with
-          // no browser connected).
+          // no browser connected). Keeps using the ORIGINAL `sessions`, not
+          // `mergedSessions`.
           for (const { oldId, finalId } of resolveSupersededChains(sessions)) {
             useWorkspaceStore.getState().relinkSessionTiles(oldId, finalId);
           }
         } finally {
           inFlightRefresh = null;
+          sessionsAnnouncedDuringRefresh = new Map();
         }
       })();
       return inFlightRefresh;
@@ -189,6 +236,7 @@ export function useServerSync(api: ApiInstance): void {
           ...ev.snapshot,
           parentSessionId: ev.snapshot.parentSessionId ?? ev.parentSessionId ?? null,
         };
+        if (inFlightRefresh) sessionsAnnouncedDuringRefresh.set(snapshot.id, snapshot);
         applySessionCreated(snapshot);
         patchSessionState(snapshot.id, snapshot.state);
       }
@@ -270,6 +318,10 @@ export function useServerSync(api: ApiInstance): void {
     });
     const offSessDeleted = sessionRepo.on("session:deleted", (ev) => {
       if (ev.type === "session:deleted") {
+        // A create+delete for the same id inside one in-flight refresh() must
+        // not leave a stale sessionStates entry behind via the merge in
+        // refresh() — see sessionsAnnouncedDuringRefresh above.
+        sessionsAnnouncedDuringRefresh.delete(ev.sessionId);
         // Captured before `applySessionDeleted` removes it from the list —
         // needed below to scope the fallback-session lookup to the deleted
         // session's own worktree.
