@@ -28,6 +28,7 @@ use crate::handlers::session_open::{handle_session_open, DirectStreamRegistry};
 use crate::handlers::session_resize::handle_session_resize;
 use crate::handlers::subscribe::{handle_subscribe, handle_unsubscribe};
 use crate::handlers::tree_watch::{handle_tree_unwatch, handle_tree_watch};
+use crate::services::file_search::FileSearchIndex;
 
 /// Dependencies every WS handler needs, resolved once at server setup.
 #[derive(Clone)]
@@ -40,6 +41,10 @@ pub struct DispatchContext {
     pub direct_streams: DirectStreamRegistry,
     pub watchers: WatcherRegistry,
     pub resolve_worktree_root: WorktreePathResolver,
+    /// Server-driven Quick Open filename index — updated incrementally via
+    /// `insert`/`remove`/`merge_subtree` as the tree watcher below observes
+    /// filesystem changes.
+    pub file_search: Arc<FileSearchIndex>,
 }
 
 impl DispatchContext {
@@ -75,10 +80,17 @@ pub async fn dispatch(conn: &WsConnection, ctx: &DispatchContext, msg: &ClientMe
             handle_file_unwatch(conn, &ctx.watchers, msg).await;
         }
         ClientMessage::TreeWatch { .. } => {
-            handle_tree_watch(conn, &ctx.watchers, &ctx.resolve_worktree_root, msg).await;
+            handle_tree_watch(
+                conn,
+                &ctx.watchers,
+                &ctx.resolve_worktree_root,
+                &ctx.file_search,
+                msg,
+            )
+            .await;
         }
         ClientMessage::TreeUnwatch { .. } => {
-            handle_tree_unwatch(conn, &ctx.watchers, msg).await;
+            handle_tree_unwatch(conn, &ctx.watchers, &ctx.file_search, msg).await;
         }
         ClientMessage::ChatOpen { .. } => {
             handle_chat_open(

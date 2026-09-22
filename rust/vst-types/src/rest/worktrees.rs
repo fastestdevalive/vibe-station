@@ -130,6 +130,10 @@ pub struct ChangedPath {
     pub insertions: Option<i64>,
     /// Present only when numstat matched.
     pub deletions: Option<i64>,
+    /// File mtime (ms since epoch). Set only for `scope=local` entries whose
+    /// file still exists on disk (not deleted) — lets clients sort by most
+    /// recently touched.
+    pub mtime_ms: Option<i64>,
 }
 
 /// `GET /worktrees/:id/diffstat` — the `getDiffStat` result.
@@ -297,6 +301,14 @@ pub struct SearchResult {
     pub files: Vec<SearchFileMatches>,
     pub truncated: bool,
     pub total_matches: usize,
+}
+
+/// `GET /worktrees/:id/file-search` response.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResult {
+    pub files: Vec<String>,
+    pub truncated: bool,
 }
 
 /// `GET /worktrees/:id/gutter/*path` response — line-level git diff annotations.
