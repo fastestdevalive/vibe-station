@@ -88,6 +88,13 @@ jobs:
       - name: Download cloudflared binary
         run: bash scripts/download-cloudflared.sh --target ${{ matrix.target }}
 
+      # ── Bun (vendored claude-agent-acp install) ───────────────────────────
+      # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh,
+      # whose last step runs scripts/install-claude-acp-vendor.sh (`bun
+      # install`) — a bundle.resources input, so the build fails without bun.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       # ── Build Tauri app ───────────────────────────────────────────────────
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
