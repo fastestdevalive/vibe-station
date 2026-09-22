@@ -376,6 +376,28 @@ describe("TerminalPane", () => {
     });
   });
 
+  it("pinch/trackpad-zoom on the terminal host bumps the shared terminalFontScale (same control as Aa −/+)", async () => {
+    const open = vi.spyOn(api, "openSession");
+    const { container } = render(<TerminalPane api={api} sessionId="sess-main" />);
+    await waitFor(() => expect(open).toHaveBeenCalledWith("sess-main", 80, 24));
+
+    try {
+      const host = container.querySelector(".terminal-host") as HTMLElement;
+      expect(host).toBeTruthy();
+
+      const before = useWorkspaceStore.getState().terminalFontScale;
+      const ev = new WheelEvent("wheel", { deltaY: -100, ctrlKey: true, cancelable: true });
+      await act(async () => {
+        host.dispatchEvent(ev);
+      });
+
+      expect(ev.defaultPrevented).toBe(true);
+      expect(useWorkspaceStore.getState().terminalFontScale).toBeGreaterThan(before);
+    } finally {
+      useWorkspaceStore.setState({ terminalFontScale: 1 });
+    }
+  });
+
   it("ResizeObserver triggers fit and resizeSession", async () => {
     const resizeSpy = vi.spyOn(api, "resizeSession");
     render(<TerminalPane api={api} sessionId="sess-main" />);

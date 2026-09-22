@@ -66,7 +66,7 @@ export function CodeView({ code, language: languageProp, filePath, themeMode, no
         const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
         const modifierClass = gutterMark ? ` workspace-code-line--${gutterMark}` : "";
         return (
-          <div key={i} className={`workspace-code-line${modifierClass}`}>
+          <div key={i} className={`workspace-code-line${modifierClass}`} data-line={lineNum}>
             {!noGutter && (
               <span className="workspace-code-gutter" style={{ minWidth: `${gutterWidth + 2}ch` }}>
                 {lineNum}

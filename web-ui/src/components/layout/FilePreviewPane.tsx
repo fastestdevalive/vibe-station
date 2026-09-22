@@ -14,6 +14,7 @@ import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
 import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
 import { isImagePath } from "@/lib/imageFile";
+import { attachPinchZoom } from "@/lib/pinchZoom";
 import { languageForFilePath } from "@/components/preview/codeHighlight";
 import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@/preview/diffParser";
 
@@ -100,6 +101,41 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // contract (Phase 7, Requirement 5).
   const { lastChanged: treeLastChanged } = useTreeWatch(api, worktreeId, fileScope);
 
+  // Catch-up refetch on a WS reconnect (Phase 4 of the file-watch leak fix):
+  // while a file is open and the user doesn't navigate away, the ONLY thing
+  // that refreshes it is a `file:changed` push — and that watcher (and the
+  // whole daemon-side per-connection watch state) is lost on a socket drop.
+  // The client replays the watch on reconnect, but that only resumes LIVE
+  // updates going forward; it never fetches what changed DURING the
+  // disconnected window.
+  //
+  // Listens for `ws:open` (client.ts's own dedicated "a fresh handshake
+  // landed, refetch anything that might have drifted" event —
+  // `useServerSync.ts`/`modesStore.ts` already use it the same way) rather
+  // than raw connection-state transitions: `ws:open` is emitted only AFTER
+  // client.ts has already replayed `file:watch`/`tree:watch` for this
+  // connection (`client.ts`'s `onopen` handler sends the replay, THEN emits
+  // `ws:open`). Subscribing to the raw "online" transition instead (the
+  // first version of this fix did) races ahead of that replay — the daemon
+  // hasn't re-established its watch yet when the catch-up fetch fires, so an
+  // edit landing in that narrow window is missed by both the fetch and the
+  // not-yet-live watch.
+  //
+  // `ws:open` also fires on the very first connect, not just reconnects —
+  // skip that one (`seenFirstOpen`) since the mount-time fetch below already
+  // covers it; only bump on the SECOND and later opens (real reconnects).
+  const [reconnectTick, setReconnectTick] = useState(0);
+  const seenFirstOpenRef = useRef(false);
+  useEffect(() => {
+    return api.on("ws:open", () => {
+      if (!seenFirstOpenRef.current) {
+        seenFirstOpenRef.current = true;
+        return;
+      }
+      setReconnectTick((t) => t + 1);
+    });
+  }, [api]);
+
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
 
@@ -165,7 +201,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha]);
+  }, [api, bodyKey, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, commitSha, reconnectTick]);
 
   // Populate the content cache whenever a fresh load completes.
   useEffect(() => {
@@ -216,7 +252,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged]);
+  }, [api, worktreeId, path, fileScope, imageKey, lastChanged, treeLastChanged, reconnectTick]);
 
   // Fetch gutter marks (git add/modify/delete annotations) when viewing a plain
   // file in working-tree scope. Only scope="none" supports gutter marks; other
@@ -258,7 +294,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -268,20 +304,53 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // Effect-based restore relied on RAF + content load timing and was racy.
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const scrollKey = worktreeId && path ? `${worktreeId}:${path}` : null;
+  const pinchCleanupRef = useRef<(() => void) | null>(null);
+
+  // Line-jump highlight: briefly marks the target row so a jump to a line
+  // already on screen (no visible scroll) still reads as "something
+  // happened", and a jump that does scroll still shows exactly which row is
+  // the target once it stops moving.
+  const HIGHLIGHT_MS = 5_000;
+  const highlightedElRef = useRef<HTMLElement | null>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHighlight = useCallback(() => {
+    if (highlightTimeoutRef.current != null) {
+      clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+    highlightedElRef.current?.classList.remove("workspace-line-highlight");
+    highlightedElRef.current = null;
+  }, []);
+  useEffect(() => clearHighlight, [clearHighlight]);
 
   // Restore scroll the instant the body element mounts. Stored value comes
   // from the global store, kept fresh by the rAF-throttled onScroll handler.
   // Skip restore if pendingFileLine is set — that takes precedence.
+  //
+  // Also (re)attaches two-finger-pinch-to-zoom (touch + trackpad) on the same
+  // element — native listeners, not JSX props, because they need
+  // `{ passive: false }` to preventDefault() the browser/OS's own pinch-zoom
+  // (see `lib/pinchZoom.ts`).
   const setBodyRef = useCallback(
     (el: HTMLDivElement | null) => {
+      pinchCleanupRef.current?.();
+      pinchCleanupRef.current = null;
       bodyRef.current = el;
       if (el && scrollKey && pendingFileLine === null) {
         const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
         if (saved != null) el.scrollTop = saved;
       }
+      if (el) {
+        pinchCleanupRef.current = attachPinchZoom(el, (delta) => {
+          if (worktreeId) bumpPreviewFontForWorktree(worktreeId, delta);
+          else bumpPreviewFont(delta);
+        });
+      }
     },
-    [scrollKey, pendingFileLine],
+    [scrollKey, pendingFileLine, worktreeId, bumpPreviewFontForWorktree, bumpPreviewFont],
   );
+
+  useEffect(() => () => pinchCleanupRef.current?.(), []);
 
   // rAF-throttle persistence so a fast scroll doesn't fire setFileScroll
   // (and the persist middleware's localStorage write) hundreds of times.
@@ -335,10 +404,17 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // the same file/path — only on an actual scroll, or on discovering the
   // active file has moved on to a different path than this request was for
   // (stale — clearing here also prevents it from coincidentally matching an
-  // unrelated file's line numbers). `scope` is a dependency
-  // so switching into a view that DOES render `.workspace-code-line`s (e.g.
-  // Markdown → diff) gives this effect another chance instead of the
-  // jump-to-line intent being silently and permanently dropped.
+  // unrelated file's line numbers). `scope` is a dependency so switching
+  // into a different renderer gives this effect another chance instead of
+  // the jump-to-line intent being silently and permanently dropped.
+  //
+  // Both CodeView and DiffView tag their per-line row with `data-line`
+  // (CodeView: the file's own line number; DiffView: the NEW-side line
+  // number, i.e. the line as it exists now — a removed-only line has none).
+  // Matching on that attribute instead of parsing gutter text works
+  // regardless of which renderer is on screen — a plain `.workspace-code-line`
+  // gutter-text match only ever matched CodeView, so any file with diff mode
+  // on (DiffView's `.diff-line`/`.diff-gutter` markup) never scrolled at all.
   useEffect(() => {
     if (pendingFileLine === null || !bodyRef.current) return;
     if (path !== pendingLineForPathRef.current) {
@@ -346,24 +422,35 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       return;
     }
     if (!fileBody) return; // still loading this file's content
-    // Find the line element with the matching line number in the gutter.
-    const lineElements = bodyRef.current.querySelectorAll<HTMLElement>(".workspace-code-line");
-    let targetElement: HTMLElement | null = null;
-    for (const lineEl of lineElements) {
-      const gutterText = lineEl.querySelector<HTMLElement>(".workspace-code-gutter")?.textContent?.trim();
-      if (gutterText === String(pendingFileLine)) {
-        targetElement = lineEl;
-        break;
-      }
-    }
+    const targetElement = bodyRef.current.querySelector<HTMLElement>(`[data-line="${pendingFileLine}"]`);
     if (targetElement) {
+      // `block: "center"` measures against the pane's own current scroll
+      // container, so it already centers relative to whatever height is
+      // available right now (a resized pane, a collapsed panel, etc. all
+      // just work — no fixed pixel math needed here).
       targetElement.scrollIntoView({ block: "center" });
+      clearHighlight();
+      targetElement.classList.add("workspace-line-highlight");
+      highlightedElRef.current = targetElement;
+      highlightTimeoutRef.current = setTimeout(clearHighlight, HIGHLIGHT_MS);
+      // Persist the NEW position immediately, synchronously. Without this,
+      // clearing pendingFileLine below re-renders with it null, which makes
+      // the "re-apply scroll on content load" effect just above stop
+      // skipping itself and restore `scrollTop` from the STALE value it last
+      // saved (from before this jump) — visibly snapping straight back to
+      // wherever the file was scrolled before, as if the jump never
+      // happened. `handleScroll`'s own rAF-throttled save would fix this too,
+      // but only a frame late — after that effect has already stomped it.
+      if (worktreeId && scrollKey && path) {
+        useWorkspaceStore.getState().setFileScroll(worktreeId, path, bodyRef.current.scrollTop);
+      }
       clearPendingFileLine();
     }
     // else: leave pendingFileLine set — no matching line element exists in
-    // the CURRENT render (e.g. rendered Markdown), but one may appear on a
-    // later render of this same file (diff view enabled, etc.).
-  }, [pendingFileLine, fileBody, path, scope, clearPendingFileLine]);
+    // the CURRENT render (e.g. rendered Markdown, or a line outside every
+    // diff hunk while diff mode is on), but one may appear on a later
+    // render of this same file (diff mode toggled off, etc.).
+  }, [pendingFileLine, fileBody, path, scope, clearPendingFileLine, worktreeId, scrollKey, clearHighlight]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {

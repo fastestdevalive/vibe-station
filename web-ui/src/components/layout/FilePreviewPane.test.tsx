@@ -190,6 +190,35 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
     await waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
   });
 
+  it("scrolls a diff-mode (DiffView) render too — regression: DiffView's .diff-line/.diff-gutter markup used to never match the old gutter-text-only lookup", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: { "wt-1": "local" },
+      pendingFileLine: null,
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".diff-line")).toBeTruthy());
+    // Confirm this render is really DiffView, not CodeView (else the test
+    // wouldn't be exercising the regression at all).
+    expect(container.querySelector(".workspace-code-line")).toBeNull();
+
+    const scrollSpy = vi.fn();
+    for (const el of container.querySelectorAll(".diff-line")) {
+      (el as HTMLElement).scrollIntoView = scrollSpy;
+    }
+
+    act(() => {
+      useWorkspaceStore.setState({ pendingFileLine: 2 });
+    });
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: "center" }));
+    const target = container.querySelector('[data-line="2"]');
+    expect(target?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    await waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+  });
+
   it("does not scroll when pendingFileLine is null", async () => {
     const api = createMockApi();
     useWorkspaceStore.setState({
@@ -207,6 +236,46 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
     }
 
     expect(scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it("highlights the jumped-to line, removing the highlight after 5s (and never leaves two lines highlighted at once)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = createMockApi();
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        diffScopeByWorktree: {},
+        pendingFileLine: null,
+      });
+      const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+      await vi.waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+
+      act(() => {
+        useWorkspaceStore.setState({ pendingFileLine: 2 });
+      });
+      await vi.waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+
+      const line2 = container.querySelector('[data-line="2"]');
+      expect(line2).toHaveClass("workspace-line-highlight");
+      expect(container.querySelectorAll(".workspace-line-highlight")).toHaveLength(1);
+
+      // A second jump before the first highlight expires moves the highlight,
+      // never leaving two lines lit at once.
+      act(() => {
+        useWorkspaceStore.setState({ pendingFileLine: 1 });
+      });
+      await vi.waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+      expect(container.querySelector('[data-line="1"]')).toHaveClass("workspace-line-highlight");
+      expect(container.querySelectorAll(".workspace-line-highlight")).toHaveLength(1);
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(container.querySelectorAll(".workspace-line-highlight")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -326,5 +395,46 @@ describe("FilePreviewPane — 5.T4 (markdown raw-view toggle)", () => {
     expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /View source|View rendered markdown/ })).not.toBeInTheDocument();
     expect(container.querySelector(".preview-body")?.className).toContain("preview-body--code");
+  });
+});
+
+// File-watch leak fix, Phase 4 — catch-up refetch on a genuine WS reconnect.
+// While a file is open and the user doesn't navigate away, the only thing
+// that refreshes it is a `file:changed` push — lost across a socket drop
+// until the client replays the watch. `ws:open` (emitted by client.ts only
+// AFTER that replay is sent) triggers one extra fetch to catch up on
+// whatever changed during the disconnected window.
+describe("FilePreviewPane — file-watch leak fix Phase 4 (ws:open catch-up refetch)", () => {
+  it("does not refetch on the FIRST ws:open (mount already fetched fresh) but does on the SECOND (a real reconnect)", async () => {
+    const api = createMockApi();
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue("content");
+    const onSpy = vi.spyOn(api, "on");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+    });
+
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(getFileSpy).toHaveBeenCalledTimes(1));
+
+    const wsOpenCall = onSpy.mock.calls.find(([type]) => type === "ws:open");
+    expect(wsOpenCall, "FilePreviewPane must subscribe to ws:open").toBeTruthy();
+    const handler = wsOpenCall![1];
+
+    // First ws:open — the initial connect. Already covered by the mount
+    // fetch above; must NOT trigger a redundant extra fetch.
+    act(() => {
+      handler({ type: "ws:open" });
+    });
+    await Promise.resolve();
+    expect(getFileSpy).toHaveBeenCalledTimes(1);
+
+    // Second ws:open — an actual reconnect. Must trigger a fresh catch-up
+    // fetch, since content may have changed during the disconnected window.
+    act(() => {
+      handler({ type: "ws:open" });
+    });
+    await waitFor(() => expect(getFileSpy).toHaveBeenCalledTimes(2));
   });
 });

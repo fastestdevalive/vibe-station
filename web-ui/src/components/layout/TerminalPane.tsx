@@ -10,6 +10,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { useIsTouch } from "@/hooks/useIsTouch";
 import { useSessionOutput } from "@/hooks/useSubscription";
 import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
+import { attachPinchZoom } from "@/lib/pinchZoom";
 import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
@@ -137,6 +138,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   const markSessionAttached = useWorkspaceStore((s) => s.markSessionAttached);
   const clearSessionAttach = useWorkspaceStore((s) => s.clearSessionAttach);
   const terminalFontScale = useWorkspaceStore((s) => s.terminalFontScale);
+  const bumpTerminalFont = useWorkspaceStore((s) => s.bumpTerminalFont);
 
   const [atBottom, setAtBottom] = useState(true);
   const [resumePending, setResumePending] = useState(false);
@@ -441,6 +443,22 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       enableCopyModeScroll,
     });
 
+    // Two-finger pinch (touch) / trackpad pinch (ctrl+wheel) zoom, on the same
+    // shared `terminalFontScale` the Aa −/+ buttons already drive. Attached
+    // here (torn down/reattached alongside `term` on every session switch)
+    // rather than in its own effect, since `host` — not `hostRef`, to match
+    // `attachTouchScroll`'s own element-scoped attach right above — is only
+    // in scope inside this effect.
+    //
+    // Known overlap: `attachTouchScroll` above tracks single-finger vertical
+    // drags (scrollback / tmux copy-mode) via Pointer Events, and doesn't
+    // check for a second finger — a genuine two-finger pinch can therefore
+    // also nudge that gesture's tracked pointer. In practice a pinch's
+    // finger-spreading motion reads as the "horizontal" case that gesture
+    // already ignores, so this is a rare edge case, not a regression of
+    // normal one-finger scroll.
+    const cleanupPinchZoom = attachPinchZoom(host, (delta) => bumpTerminalFont(delta));
+
     const scrollSub = term.onScroll(() => {
       const b = term.buffer.active;
       setAtBottom(b.viewportY >= b.length - term.rows);
@@ -580,6 +598,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
       ro.disconnect();
       window.removeEventListener("resize", handleWindowResize);
       cleanupTouchScroll();
+      cleanupPinchZoom();
       if (roPendingRaf !== null) cancelAnimationFrame(roPendingRaf);
       void api.closeSession(activeSessionId);
       unsubTheme?.();

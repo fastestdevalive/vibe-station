@@ -3342,6 +3342,25 @@
   user-select: none;
 }
 
+/* Line-jump target (":N" in Quick Open, or any other jump-to-line caller) —
+ * briefly marks the row the view scrolled to, then fades. Two-class
+ * selectors so this reliably outranks the single-class
+ * `.workspace-code-line--*` / `.diff-line--*` background modifiers
+ * regardless of stylesheet order. `background-color` (not the `background`
+ * shorthand some of those use) so it layers additively rather than
+ * clobbering any background-image those rules might carry. The transition
+ * lives on the base classes so both the fade-in and the fade-out (on class
+ * removal, 10s later) animate. */
+.workspace-code-line,
+.diff-line {
+  transition: background-color 0.4s ease;
+}
+
+.workspace-code-line.workspace-line-highlight,
+.diff-line.workspace-line-highlight {
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 .dialog-overlay {
   position: fixed;
   inset: 0;
@@ -3961,9 +3980,20 @@ textarea.input {
   transition: background var(--transition-fast);
 }
 
-.quick-open-item:hover,
-.quick-open-item--selected {
+.quick-open-item:hover {
   background: var(--bg-hover);
+}
+
+/* Keyboard/active selection must read clearly against plain hover: an
+   accent-tinted fill plus an inset accent bar (inset shadow → no layout shift). */
+.quick-open-item--selected,
+.quick-open-item--selected:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.quick-open-item--selected .quick-open-file-name {
+  font-weight: var(--font-weight-semibold, 600);
 }
 
 .quick-open-file-name {
@@ -3983,6 +4013,64 @@ textarea.input {
 .quick-open-file-icon {
   flex-shrink: 0;
   opacity: 0.85;
+}
+
+.quick-open-chip {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold, 600);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: var(--border-width) solid color-mix(in srgb, var(--accent) 40%, transparent);
+  white-space: nowrap;
+}
+
+.quick-open-file-meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.quick-open-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: var(--border-width) solid var(--border-default);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.quick-open-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.quick-open-hint kbd {
+  font-family: inherit;
+  color: var(--fg-secondary, var(--fg-primary));
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+
+.quick-open-hint--action {
+  cursor: pointer;
+}
+
+.quick-open-hint--action:hover {
+  color: var(--fg-primary);
 }
 
 .quick-open-empty {
