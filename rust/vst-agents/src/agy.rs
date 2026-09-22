@@ -5,6 +5,12 @@
 //! `--log-file` for "Created/Streaming conversation <id>" lines. `bridged`
 //! two-session-identity strategy: implements `capture_native_chat_id`, not
 //! `supports_json_to_terminal_resume` (≡ `true`).
+//!
+//! Rich Chat (json channel) is driven over ACP by spawning the openab `agy-acp`
+//! adapter binary (vendored submodule, `vst-agy-acp` resolves its path) which
+//! itself spawns `agy -p`. The adapter's session store lives under
+//! `~/.vibe-station/agy-acp/` (handed to it via `AGY_ACP_STATE_DIR`); the
+//! native-chat-id bridge reads the same store.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -48,9 +54,8 @@ pub const AGY_MODELS: [&str; 8] = [
 
 pub const AGY_DEFAULT_MODEL: &str = "Gemini 3.1 Pro (High)";
 
-/// The pinned antigravity-acp adapter package (`ANTIGRAVITY_ACP_PACKAGE`),
-/// spawned via `bunx` (NOT plain `node` — see the TS comment on that).
-pub const ANTIGRAVITY_ACP_PACKAGE: &str = "antigravity-acp@1.1.0";
+// Rich Chat (ACP) is driven by the openab `agy-acp` binary (vendored
+// submodule), not a bun/npm package. Its path is resolved by `vst-agy-acp`.
 
 /// Default poll constants for chat-id capture.
 pub const CHAT_ID_POLL_TIMEOUT_MS: u64 = 30_000;
@@ -464,14 +469,30 @@ impl AgentPlugin for AgyPlugin {
         let (tx, rx) = mpsc::unbounded_channel();
         let params = RunTurnAcpParams {
             provider: NormalizedEventProvider::Agy,
-            build_spec: Box::new(|ctx| AcpLaunchSpec {
-                command: "bunx".to_string(),
-                args: vec![ANTIGRAVITY_ACP_PACKAGE.to_string()],
-                cwd: ctx.cwd.clone(),
-                env: HashMap::from([("AGY_BIN".to_string(), resolve_agy_binary())]),
-                // Phase 4.3 — never lets the connect/initialize hang indefinitely.
-                initialize_timeout_ms: Some(20_000),
-                prompt_timeout_ms: None,
+            build_spec: Box::new(|ctx| {
+                // The openab `agy-acp` binary must be present (built from the
+                // vendored submodule). If it isn't, use a clear sentinel so the
+                // spawn failure is diagnosable rather than a silent empty argv.
+                let adapter_bin = vst_agy_acp::agy_acp_bin()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "agy-acp".to_string());
+                AcpLaunchSpec {
+                    command: adapter_bin,
+                    args: Vec::new(),
+                    cwd: ctx.cwd.clone(),
+                    env: HashMap::from([
+                        // Point the adapter at the user's own agy install.
+                        ("AGY_BIN".to_string(), resolve_agy_binary()),
+                        // Point the adapter's session store at the harness-owned path.
+                        (
+                            vst_agy_acp::AGY_ACP_STATE_DIR_ENV.to_string(),
+                            vst_agy_acp::agy_acp_state_dir_env_value(),
+                        ),
+                    ]),
+                    // Phase 4.3 — never lets the connect/initialize hang indefinitely.
+                    initialize_timeout_ms: Some(20_000),
+                    prompt_timeout_ms: None,
+                }
             }),
             enrich: None,
             // agy spike (4.1b): Option B — the ACP session id does NOT

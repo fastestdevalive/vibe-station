@@ -16,6 +16,8 @@
 #      (vendor/claude-acp/node_modules, via install-claude-acp-vendor.sh) —
 #      tauri.conf.json's bundle.resources ships it as
 #      claude-acp-vendor/node_modules, so it must exist before bundling.
+#   7. Build the agy-acp adapter (vendored openab submodule, built in
+#      isolation) → desktop/src-tauri/binaries/agy-acp-<triple>
 #
 # Tauri resolves externalBin entries by appending the host triple, so the
 # triple suffix in the filename MUST match exactly what rustc reports.
@@ -133,6 +135,34 @@ bash "$SCRIPT_DIR/download-cloudflared.sh" --target "$TRIPLE"
 echo ""
 echo "==> Installing vendored claude-agent-acp adapter..."
 bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
+
+# ── Step 7: build agy-acp adapter (vendored submodule) ───────────────────────
+
+echo ""
+echo "==> Building agy-acp adapter (vendored openab submodule, in isolation)..."
+if [[ ! -d "$REPO_ROOT/rust/vendor/openab/agy-acp" ]]; then
+  echo "Error: agy-acp submodule not present at rust/vendor/openab. Clone it with:
+  git submodule update --init --recursive
+  (or clone the repo with --recurse-submodules)" >&2
+  exit 1
+fi
+cargo build --release --locked \
+  --manifest-path "$REPO_ROOT/rust/vendor/openab/agy-acp/Cargo.toml" \
+  --target-dir "$REPO_ROOT/rust/target/agy-acp"
+
+SRC_AGY_ACP="$REPO_ROOT/rust/target/agy-acp/release/agy-acp$EXE_SUFFIX"
+DEST_AGY_ACP="$BINARIES_DIR/agy-acp-$TRIPLE$EXE_SUFFIX"
+
+if [[ ! -f "$SRC_AGY_ACP" ]]; then
+  echo "Error: expected agy-acp binary at $SRC_AGY_ACP — build may have failed." >&2
+  exit 1
+fi
+
+echo ""
+echo "==> Copying agy-acp binary to binaries/..."
+cp "$SRC_AGY_ACP" "$DEST_AGY_ACP"
+chmod +x "$DEST_AGY_ACP"
+echo "    $(du -h "$DEST_AGY_ACP" | cut -f1)  $DEST_AGY_ACP"
 
 echo ""
 echo "==> prep-sidecar done!"

@@ -89,6 +89,10 @@ services:
       # to a copied .credentials.json snapshot that breaks at the next token
       # rotation — see the claude block in scripts/dev-entrypoint.sh.
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      # Point the daemon at the openab agy-acp adapter binary (mounted below).
+      # Build it with `pnpm build:rust` / scripts/prep-sidecar.sh, or override
+      # AGY_ACP_BIN if yours differs.
+      AGY_ACP_BIN: "/usr/local/bin/agy-acp"
     volumes:
       # Mount CLI binaries read-only so the daemon can shell out to them.
       # Paths use $HOME — override with OPENCODE_BIN, CURSOR_AGENT_VERSIONS, CLAUDE_BIN, AGY_BIN if yours differ.
@@ -151,6 +155,11 @@ services:
       # yours differ.
       - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
       - ${VST_RUST_CLI_BIN:-./rust/target/release/vst}:/usr/local/bin/vst-rust:ro
+
+      # agy-acp adapter binary (openab, vendored submodule) built by
+      # scripts/prep-sidecar.sh into ./rust/target/agy-acp/release/. Override
+      # with VST_AGY_ACP_BIN if yours differs.
+      - ${VST_AGY_ACP_BIN:-./rust/target/agy-acp/release/agy-acp}:/usr/local/bin/agy-acp:ro
 
       # Hot-reload: mount web source so Vite picks up changes instantly
       # (daemon changes still require a rebuild — see below)

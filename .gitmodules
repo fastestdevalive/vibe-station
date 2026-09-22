@@ -1,0 +1,6 @@
+[submodule "rust/vendor/openab"]
+	path = rust/vendor/openab
+	url = https://github.com/fastestdevalive/openab
+	# Only the pinned commit is needed; keep clones shallow to bound size.
+	shallow = true
+	branch = main

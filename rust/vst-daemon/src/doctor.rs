@@ -5,10 +5,11 @@
 //! - tmux on PATH
 //! - git >= 2.20
 //! - supported CLIs (claude, cursor, opencode, agy) on PATH (warn if missing)
-//! - bun on PATH (warn if missing; required for agy ACP)
+//! - bun on PATH (warn if missing; required for claude ACP)
 //! - claude-agent-acp vendor install present (warn if missing; the official
 //!   ACP adapter for Claude Rich Chat, run via `bun` — see
 //!   `scripts/install-claude-acp-vendor.sh`)
+//! - agy-acp adapter binary (warn if missing; required for agy Rich Chat/ACP)
 //! - orphan tmux sessions (vr-* whose project/session is not in store)
 //! - orphan worktree dirs (in store manifest but missing directory on disk)
 
@@ -224,22 +225,37 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         });
     }
 
-    // 4. bun (required for agy ACP, and now for Claude ACP too — see check 5)
+    // 4. bun (required for Claude ACP — see check 6)
     checks.push(if check_binary("bun") {
         DoctorCheck {
             name: "bun".to_string(),
             status: DoctorStatus::Ok,
-            message: "bun found on PATH (required for agy and claude Rich Chat / ACP)".to_string(),
+            message: "bun found on PATH (required for claude Rich Chat / ACP)".to_string(),
         }
     } else {
         DoctorCheck {
             name: "bun".to_string(),
             status: DoctorStatus::Warn,
-            message: "bun not found on PATH — agy and claude Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash".to_string(),
+            message: "bun not found on PATH — claude Rich Chat (ACP) will fail. Install: curl -fsSL https://bun.sh/install | bash".to_string(),
         }
     });
 
-    // 5. claude-agent-acp vendor install (the official ACP adapter for
+    // 5. agy-acp adapter binary (required for agy Rich Chat / ACP)
+    checks.push(if vst_agy_acp::agy_acp_available() {
+        DoctorCheck {
+            name: "agy-acp".to_string(),
+            status: DoctorStatus::Ok,
+            message: "agy-acp adapter binary found (required for agy Rich Chat/ACP)".to_string(),
+        }
+    } else {
+        DoctorCheck {
+            name: "agy-acp".to_string(),
+            status: DoctorStatus::Warn,
+            message: "agy-acp adapter binary not found — agy Rich Chat (ACP) will fail. Build it from the vendored submodule (rust/vendor/openab/agy-acp) or set AGY_ACP_BIN.".to_string(),
+        }
+    });
+
+    // 6. claude-agent-acp vendor install (the official ACP adapter for
     // Claude, run via `bun` — no system Node.js install needed; see
     // `rust/vst-agents/src/claude.rs::claude_acp_entry_path`).
     {
@@ -260,10 +276,10 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
         });
     }
 
-    // 6. Orphan tmux sessions
+    // 7. Orphan tmux sessions
     checks.push(check_orphan_sessions(store, tmux).await);
 
-    // 7. Orphan worktree dirs
+    // 8. Orphan worktree dirs
     checks.push(check_orphan_worktrees(store, paths).await);
 
     checks
