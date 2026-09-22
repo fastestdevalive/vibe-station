@@ -1171,7 +1171,7 @@ impl SessionRoutes {
             user_prompt: opts.prompt.clone(),
             rich_chat: false,
         });
-        spawn_session(&SpawnSessionOpts {
+        let captured_chat_id = spawn_session(&SpawnSessionOpts {
             project: &opts.project,
             worktree: Some(&worktree),
             session: &opts.session,
@@ -1183,7 +1183,11 @@ impl SessionRoutes {
             tmux: &self.tmux,
             direct_ptys: &self.direct_ptys,
         })
-        .await
+        .await?;
+        if let Some(id) = captured_chat_id {
+            self.persist_agent_chat_id(&opts.session.id, id).await;
+        }
+        Ok(())
     }
 
     async fn try_run_direct_agent_spawn_job(&self, opts: SpawnChannelOpts) -> Result<(), String> {
@@ -1196,7 +1200,7 @@ impl SessionRoutes {
             user_prompt: opts.prompt.clone(),
             rich_chat: false,
         });
-        spawn_session(&SpawnSessionOpts {
+        let captured_chat_id = spawn_session(&SpawnSessionOpts {
             project: &opts.project,
             worktree: None,
             session: &opts.session,
@@ -1208,7 +1212,11 @@ impl SessionRoutes {
             tmux: &self.tmux,
             direct_ptys: &self.direct_ptys,
         })
-        .await
+        .await?;
+        if let Some(id) = captured_chat_id {
+            self.persist_agent_chat_id(&opts.session.id, id).await;
+        }
+        Ok(())
     }
 
     /// `releaseIfRetiredDuringSpawn` — if the session is gone or done by the
@@ -1267,6 +1275,56 @@ impl SessionRoutes {
             .store
             .update_session_lifecycle(&project_id, session_id, lifecycle)
             .await;
+    }
+
+    /// Self-heal a chat id captured post-spawn (`capture_chat_id`, called
+    /// from `try_run_agent_spawn_job`/`try_run_direct_agent_spawn_job`,
+    /// which can't mutate `session` themselves — it's borrowed immutably
+    /// through `spawn_session`). Only ever writes when the field is still
+    /// unset; never overwrites. See
+    /// .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B6/A2).
+    async fn persist_agent_chat_id(&self, session_id: &str, agent_chat_id: String) {
+        let Some(ctx) = find_session_context(&self.store, session_id).await else {
+            return;
+        };
+        let sid = session_id.to_string();
+        let chat_id = agent_chat_id.clone();
+        match ctx {
+            SessionContext::Worktree {
+                project, worktree, ..
+            } => {
+                let wt_id = worktree.id.clone();
+                let _ = self
+                    .store
+                    .mutate_project(&project.id, move |p| {
+                        for wt in &mut p.worktrees {
+                            if wt.id == wt_id {
+                                for s in &mut wt.sessions {
+                                    if s.id == sid && s.agent_chat_id.is_none() {
+                                        s.agent_chat_id = Some(chat_id.clone());
+                                    }
+                                }
+                            }
+                        }
+                        Ok(p.clone())
+                    })
+                    .await;
+            }
+            SessionContext::Direct { project, .. } => {
+                let _ = self
+                    .store
+                    .mutate_project(&project.id, move |p| {
+                        for s in &mut p.direct_sessions {
+                            if s.id == sid && s.agent_chat_id.is_none() {
+                                s.agent_chat_id = Some(chat_id.clone());
+                            }
+                        }
+                        Ok(p.clone())
+                    })
+                    .await;
+            }
+            SessionContext::Global { .. } => {}
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -2467,7 +2525,16 @@ impl SessionRoutes {
             .map_err(ResumeError::Internal)?;
 
         let mut updated = session.clone();
-        if newly_captured_chat_id.is_some() {
+        // Self-heal only — never overwrite an already-known id (matches the
+        // guard every other capture call site in this file uses). Before
+        // spawn_session's fresh-launch branch threaded its own captured id
+        // back through, this path was unreachable with agent_chat_id
+        // already Some (the restore-argv branch already gates its own
+        // capture attempt on is_none()) — now that fresh-launch can also
+        // return a captured id (e.g. a plugin's provide_chat_id minting one
+        // unconditionally on every spawn), this needs its own explicit
+        // guard too.
+        if session.agent_chat_id.is_none() && newly_captured_chat_id.is_some() {
             updated.agent_chat_id = newly_captured_chat_id;
         }
         updated.lifecycle = SessionLifecycle {
@@ -2620,7 +2687,7 @@ impl SessionRoutes {
                 None
             };
             let plugin = resolve_plugin(mode.cli);
-            match worktree {
+            let captured = match worktree {
                 Some(w) => {
                     let built = build_prompt(&BuildPromptInput {
                         project: project.clone(),
@@ -2641,7 +2708,7 @@ impl SessionRoutes {
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
                     })
-                    .await?;
+                    .await?
                 }
                 None => {
                     let built = build_direct_prompt(&BuildDirectPromptInput {
@@ -2662,10 +2729,10 @@ impl SessionRoutes {
                         tmux: &self.tmux,
                         direct_ptys: &self.direct_ptys,
                     })
-                    .await?;
+                    .await?
                 }
-            }
-            return Ok((false, None));
+            };
+            return Ok((false, captured));
         }
 
         // Terminal session — spawn a new shell session (best-effort).
@@ -3568,7 +3635,7 @@ impl SessionRoutes {
                 }),
             };
 
-            spawn_session(&SpawnSessionOpts {
+            let captured_chat_id = spawn_session(&SpawnSessionOpts {
                 project,
                 worktree,
                 session,
@@ -3581,6 +3648,9 @@ impl SessionRoutes {
                 direct_ptys: &self.direct_ptys,
             })
             .await?;
+            if session.agent_chat_id.is_none() {
+                session.agent_chat_id = captured_chat_id;
+            }
         }
 
         Ok(())
@@ -3715,6 +3785,33 @@ impl SessionRoutes {
                     session.agent_chat_id = Some(refreshed_id);
                 }
 
+                // `refresh_chat_id_on_toggle` is `agy`'s mechanism (tails a
+                // per-session log file); plugins that don't implement it
+                // (default `None`) still need a chance to self-heal a
+                // never-captured id here — e.g. opencode, whose chat id is
+                // normally captured post-spawn/post-toggle via a workspace
+                // hook writing a token file (`capture_chat_id`). Without
+                // this, a session that never had `agent_chat_id` set during
+                // its whole tty phase stays `None` right up to the
+                // `import_native_history` call below, which then silently
+                // no-ops and the subsequent Rich Chat turn mints a brand-new
+                // native session instead of continuing this one. Self-heal
+                // only — never overwrite an already-known id.
+                // See .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B7).
+                if session.agent_chat_id.is_none() {
+                    if let Some(captured_id) = plugin
+                        .capture_chat_id(CaptureArgs {
+                            session: &session,
+                            project: &project,
+                            cwd: &cwd,
+                            worktree: worktree.as_ref(),
+                        })
+                        .await
+                    {
+                        session.agent_chat_id = Some(captured_id);
+                    }
+                }
+
                 session.tmux_name = json_tmux_name.clone();
                 session.channel = Some(new_channel);
                 session.use_tmux = new_use_tmux;
@@ -3797,8 +3894,15 @@ impl SessionRoutes {
                 Ok(res) => {
                     let cli_str = cli_name(provider_to_cli(res.mode.cli));
                     if has_native_history_importer(cli_str) {
-                        res.agent.import_native_history().await;
-                        history_imported = true;
+                        // Reflect the actual outcome, not just "this CLI has
+                        // an importer" — `import_native_history()` itself
+                        // returns `None` (no import even attempted, e.g. no
+                        // `agent_chat_id` yet) whenever the importer never
+                        // runs, which previously still reported
+                        // `history_imported: true` to the caller even though
+                        // zero events were imported. See
+                        // .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B2/A4).
+                        history_imported = res.agent.import_native_history().await.is_some();
                     }
                     res.agent.get_meta()
                 }
@@ -4191,9 +4295,25 @@ pub struct SpawnSessionOpts<'a> {
 
 /// `spawnSession` / `spawnDirectSession` orchestration from `services/spawn.ts`.
 /// Branches on `session.use_tmux`. Shared by worktree and direct sessions.
-pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
+///
+/// Returns the chat id captured during this spawn, if any (from
+/// `provide_chat_id` pre-spawn or `capture_chat_id` post-ready) — the
+/// session record is immutable here, so `spawn_session` cannot self-persist
+/// it; callers that have a mutable/persistable session must do so (see
+/// `RoutesInner::persist_agent_chat_id`, and the `session: &mut SessionRecord`
+/// resume/toggle paths that already had this ability). Previously this value
+/// was silently discarded for the fresh-create path — see
+/// .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B6/A2).
+pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<Option<String>, String> {
     let ctx = resolved_context_of(opts.project.clone(), opts.worktree.cloned());
     let cwd = ctx.cwd.clone();
+
+    // Pre-spawn: give the plugin a chance to write workspace hooks (e.g.
+    // opencode's vst-recorder.ts plugin file + slash command) BEFORE the
+    // process launches, mirroring the resume/toggle paths — without this,
+    // a freshly-created opencode session never gets the hook installed at
+    // all, so its chat id can never be captured for the rest of its life.
+    opts.plugin.setup_workspace_hooks(&cwd).await;
 
     let launch_cfg = LaunchConfig {
         project: opts.project.clone(),
@@ -4207,7 +4327,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
         model: opts.model.clone(),
     };
 
-    let pre_spawn_chat_id = opts
+    let mut captured_chat_id = opts
         .plugin
         .provide_chat_id(CaptureArgs {
             session: opts.session,
@@ -4216,11 +4336,6 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
             worktree: None,
         })
         .await;
-    if let Some(id) = pre_spawn_chat_id {
-        // The session record is immutable here; the caller persists chat ids
-        // via the plugin's own capture path on the post-ready side.
-        let _ = id;
-    }
 
     let data_dir = session_data_dir_for(&ctx, &opts.session.id);
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
@@ -4309,7 +4424,34 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
                 stream.write("\r");
             }
         }
-        return Ok(());
+        // MUST come after post_launch_input, not before: opencode (and
+        // similarly-shaped CLIs) only creates a native session in response
+        // to seeing an actual message — capturing before the initial prompt
+        // is delivered means there is nothing to capture yet, and the poll
+        // just times out. Verified live: capturing before delivery left
+        // agent_chat_id permanently None even after the CLI genuinely
+        // replied. See
+        // .vibekit/reports/2026-09-22-opencode-toggle-empty-then-syncs.md (B6/A2).
+        //
+        // Only attempt it when a message was actually delivered — a fresh
+        // session with no initial prompt never creates a native session at
+        // all, so `capture_chat_id`'s poll (a blocking 30s wait for most
+        // plugins) would always run to full timeout for nothing. This path
+        // is awaited inline by callers (e.g. `POST /sessions/:id/resume`),
+        // so an unconditional attempt here would add up to 30s of latency
+        // to every no-prompt spawn/resume.
+        if captured_chat_id.is_none() && composed.post_launch_input.is_some() {
+            captured_chat_id = opts
+                .plugin
+                .capture_chat_id(CaptureArgs {
+                    session: opts.session,
+                    project: opts.project,
+                    cwd: &cwd,
+                    worktree: opts.worktree,
+                })
+                .await;
+        }
+        return Ok(captured_chat_id);
     }
 
     // Tmux path.
@@ -4342,7 +4484,7 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
                 "[spawn] Skipping post-launch prompt for {}: pane {} is gone",
                 opts.session.id, opts.session.tmux_name
             );
-            return Ok(());
+            return Ok(captured_chat_id);
         }
         let _ = opts.tmux.paste_buffer(
             &opts.session.tmux_name,
@@ -4353,7 +4495,21 @@ pub async fn spawn_session(opts: &SpawnSessionOpts<'_>) -> Result<(), String> {
             let _ = opts.tmux.send_keys(&opts.session.tmux_name, "", true);
         }
     }
-    Ok(())
+    // MUST come after post_launch_input, not before, and only when a
+    // message was actually delivered — see the matching comment in the
+    // direct (non-tmux) branch above for why.
+    if captured_chat_id.is_none() && composed.post_launch_input.is_some() {
+        captured_chat_id = opts
+            .plugin
+            .capture_chat_id(CaptureArgs {
+                session: opts.session,
+                project: opts.project,
+                cwd: &cwd,
+                worktree: opts.worktree,
+            })
+            .await;
+    }
+    Ok(captured_chat_id)
 }
 
 /// Poll a tmux pane for a ready sentinel (bounded; timeout is the caller's

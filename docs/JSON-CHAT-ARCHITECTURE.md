@@ -17,7 +17,7 @@ flowchart TB
   subgraph PLUGINS["AgentPlugin — resolved once per action\nchat-id capture differs per CLI"]
     CLAUDE["claude\nSessionStart hook →\nsession-scoped file, single read"]
     CURSOR["cursor\ncreate-chat →\npre-minted BEFORE spawn"]
-    OPENCODE["opencode\nplugin hook session.created →\nsession-scoped file, polled 30s"]
+    OPENCODE["opencode\nplugin event hook (type===session.created) →\nsession-scoped file, polled 30s"]
     AGY["agy — no hook exists\n--log-file, polled 30s\n+ refreshChatIdOnToggle (tty→json)"]
   end
   ROUTES --> PLUGINS

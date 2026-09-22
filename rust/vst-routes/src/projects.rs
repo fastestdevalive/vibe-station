@@ -893,7 +893,10 @@ impl ProjectRoutes {
         };
 
         match spawn_session(&spawn_opts).await {
-            Ok(()) => {
+            Ok(captured_chat_id) => {
+                if main_session.agent_chat_id.is_none() {
+                    main_session.agent_chat_id = captured_chat_id;
+                }
                 main_session.lifecycle = SessionLifecycle {
                     state: LifecycleState::Working,
                     reason: None,
@@ -987,7 +990,10 @@ impl ProjectRoutes {
         };
 
         match spawn_session(&spawn_opts).await {
-            Ok(()) => {
+            Ok(captured_chat_id) => {
+                if session_record.agent_chat_id.is_none() {
+                    session_record.agent_chat_id = captured_chat_id;
+                }
                 session_record.lifecycle = SessionLifecycle {
                     state: LifecycleState::Working,
                     reason: None,
