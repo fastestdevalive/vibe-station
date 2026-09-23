@@ -1430,6 +1430,13 @@
 .chat-statusbar__state--error {
   color: var(--destructive-soft);
 }
+/* Queued count shown alongside the busy dots/Stop while a turn is running and
+   more turns are waiting behind it (surfaces `queue_depth` since turn_state
+   no longer flips to "queued" mid-turn). */
+.chat-statusbar__queued {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
 .chat-statusbar__stop {
   padding: 2px var(--space-2);
   font-size: var(--font-size-xs);
