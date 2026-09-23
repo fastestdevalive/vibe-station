@@ -68,6 +68,14 @@ echo "[dev-start] building vst-cli (debug)..."
 cargo build --manifest-path "$REPO_ROOT/rust/Cargo.toml" -p vst-cli
 VST_CLI_BIN="$REPO_ROOT/rust/target/debug/vst"
 
+# Build the agy-acp adapter so the dev daemon can resolve it via AGY_ACP_BIN
+# (Rich Chat with the agy CLI needs this binary; without it the spawn fails
+# before ACP's initialize handshake completes). build-agy-acp.sh prints the
+# resolved binary path on stdout and is a no-op-if-already-built in the sense
+# that cargo skips an up-to-date build.
+echo "[dev-start] building agy-acp adapter..."
+AGY_ACP_BIN="$(bash "$REPO_ROOT/scripts/build-agy-acp.sh")"
+
 # Build web-ui/dist so the daemon serves current UI to non-Vite clients from
 # the moment it starts, instead of a build left over from a previous session.
 echo "[dev-start] building web-ui/dist..."
@@ -89,7 +97,7 @@ CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '
