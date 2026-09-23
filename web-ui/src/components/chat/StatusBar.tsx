@@ -160,6 +160,18 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
             <WorkingDots />
           </span>
         ) : null}
+        {/* While a turn is running, the daemon no longer flips turn_state to
+         *  "queued" (queue.rs enqueue guard) — so the busy "Queued (n)" label
+         *  above never fires mid-turn. Surface the queued count here so a user
+         *  who enqueues while the agent is still working still gets visible
+         *  confirmation their message is queued, without it looking like the
+         *  agent paused. `queue` is the max of the optimistic bubble count and
+         *  `meta.queueDepth` (SessionMeta). */}
+        {busy && queue > 0 ? (
+          <span className="chat-statusbar__queued" role="status">
+            {queue} queued
+          </span>
+        ) : null}
         {busy && onStop ? (
           <button type="button" className="chat-statusbar__stop btn btn--secondary" onClick={onStop}>
             Stop

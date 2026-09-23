@@ -75,6 +75,23 @@ describe("StatusBar (5.T2)", () => {
     expect(container.querySelector(".chat-statusbar__state")).toBeNull();
   });
 
+  it("surfaces the queued count while busy, without showing the duplicate turn label", () => {
+    // Enqueueing while a turn runs no longer flips turn_state to "queued"
+    // (daemon queue.rs enqueue guard) — the busy "Queued (n)" label never
+    // fires mid-turn, so the footer surfaces queue_depth separately.
+    const { container } = render(
+      <StatusBar meta={meta({ turnState: "responding", queueDepth: 2 })} queueDepth={2} onStop={() => {}} />,
+    );
+    expect(screen.getByText("2 queued")).toBeTruthy();
+    expect(container.querySelector(".chat-statusbar__state")).toBeNull();
+    expect(screen.queryByText("Responding")).toBeNull();
+  });
+
+  it("shows NO queued indicator while busy when nothing is queued", () => {
+    const { container } = render(<StatusBar meta={meta({ turnState: "thinking" })} onStop={() => {}} />);
+    expect(container.querySelector(".chat-statusbar__queued")).toBeNull();
+  });
+
   it("keeps the turn label for non-busy states (no in-feed indicator to duplicate)", () => {
     const { container, rerender } = render(<StatusBar meta={meta({ turnState: "idle" })} onStop={() => {}} />);
     expect(screen.getByText("Ready")).toBeTruthy();
