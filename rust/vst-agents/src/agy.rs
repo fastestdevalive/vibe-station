@@ -628,6 +628,8 @@ impl AgentPlugin for AgyPlugin {
                 vec![ContentBlock::Text(TextContent::new(message))]
             }),
             emit_refusal_error: false,
+            stuck_turn_idle_ms: None,
+            stuck_turn_cancel_grace_ms: None,
         };
         tokio::spawn(run_turn_acp(tx, input, ctx, cancel, params));
         rx

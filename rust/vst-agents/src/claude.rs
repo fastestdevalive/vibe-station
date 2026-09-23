@@ -453,6 +453,8 @@ impl AgentPlugin for ClaudePlugin {
                 blocks
             }),
             emit_refusal_error: true,
+            stuck_turn_idle_ms: None,
+            stuck_turn_cancel_grace_ms: None,
         };
         tokio::spawn(run_turn_acp(tx, input, ctx, cancel, params));
         rx
