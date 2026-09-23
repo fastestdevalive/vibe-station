@@ -21,6 +21,7 @@ fn make_project(id: &str) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
@@ -72,6 +73,7 @@ fn project_with_session(project_id: &str, wt_id: &str, sess_id: &str) -> Project
             superseded_by: None,
             pr: None,
         }],
+        open_files: vec![],
     }];
     p
 }

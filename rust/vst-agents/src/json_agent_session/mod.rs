@@ -1145,6 +1145,7 @@ mod tests {
             worktrees: vec![],
             next_worktree_num: None,
             lsp_enabled: None,
+            open_files: vec![],
         };
 
         JsonAgentSession::new(JsonAgentSessionOptions {

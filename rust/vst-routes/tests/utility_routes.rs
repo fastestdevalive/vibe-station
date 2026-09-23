@@ -717,6 +717,7 @@ async fn test_attachments_upload_and_delete() {
         agent_seq: Some(1),
         lsp_enabled: None,
         sessions: vec![agent_session.clone(), term_session.clone()],
+        open_files: vec![],
     };
 
     let project = ProjectRecord {
@@ -732,6 +733,7 @@ async fn test_attachments_upload_and_delete() {
         worktrees: vec![worktree],
         next_worktree_num: Some(2),
         lsp_enabled: None,
+        open_files: vec![],
     };
 
     store.add_project(project.clone()).await.unwrap();

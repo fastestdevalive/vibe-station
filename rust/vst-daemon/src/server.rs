@@ -69,8 +69,8 @@ use vst_types::rest::modes::{
 use vst_types::rest::open::{OpenBody, OpenResult};
 use vst_types::rest::ordered_lists::{OrderedList, PutOrderedListBody, PutOrderedListResult};
 use vst_types::rest::projects::{
-    BranchesResult, CreateNewProjectBody, CreateNewProjectResult, CreateProjectBody,
-    PatchProjectBody, PatchProjectResult, TreeEntry,
+    BranchesResult, CreateNewProjectBody, CreateNewProjectResult, CreateProjectBody, GitInitResult,
+    OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult, TreeEntry,
 };
 use vst_types::rest::sessions::{
     ChatBody, DelinkResult, EditQueuedResult, EnqueueChatResult, HandoffResult, InputBody,
@@ -88,9 +88,10 @@ use vst_types::rest::tailscale::{
 };
 use vst_types::rest::worktrees::{
     ChangedPath, CommitsResult, CreateWorktreeBody, DiffStat, DiskUsage, FileListResult,
-    FileSearchResult, OpenFileBody, PatchWorktreeResult, PatchWorktreeToggleBody, PrLookupResult,
-    RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
-    SearchResult, SubmodulesResult, WorktreeDoneResult,
+    FileSearchResult, OpenFileBody, OpenFilesBody as WorktreeOpenFilesBody,
+    OpenFilesResult as WorktreeOpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody,
+    PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
+    ReorderWorktreeResult, SearchResult, SubmodulesResult, WorktreeDoneResult,
 };
 use vst_types::ws::{ClientMessage, WatchScope};
 use vst_ws::broadcaster::{close_auth_expired, spawn_event_fanout, WsHub};
@@ -578,6 +579,13 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/projects/:id/lsp/external-file/:token",
             get(handle_project_lsp_external_file),
         )
+        .route("/projects/:id/git-init", post(handle_git_init))
+        .route(
+            "/projects/:id/open-files",
+            get(handle_project_list_open_files)
+                .post(handle_project_open_file_durable)
+                .delete(handle_project_close_file_durable),
+        )
         // Worktrees
         .route(
             "/worktrees",
@@ -621,6 +629,12 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route(
             "/worktrees/:id/lsp/external-file/:token",
             get(handle_worktree_lsp_external_file),
+        )
+        .route(
+            "/worktrees/:id/open-files",
+            get(handle_worktree_list_open_files)
+                .post(handle_worktree_open_file_durable)
+                .delete(handle_worktree_close_file_durable),
         )
         // Sessions
         .route(
@@ -1178,7 +1192,10 @@ async fn handle_socket(
 
     // Replay pending navigate event if any
     if let Some(project_id) = open_routes.replay_navigate() {
-        conn.send(vst_types::ws::ServerMessage::Navigate { project_id });
+        conn.send(vst_types::ws::ServerMessage::Navigate {
+            project_id,
+            new_window: false,
+        });
     }
 
     // Outbound forwarder task
@@ -1643,6 +1660,66 @@ async fn handle_project_commits(
         .map_err(project_err_to_response)
 }
 
+async fn handle_git_init(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<GitInitResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .git_init(&id)
+        .await
+        .map(Json)
+        .map_err(|e| match e {
+            ProjectRouteError::NotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "NOT_FOUND" })),
+            ),
+            ProjectRouteError::GitInitFailed(m) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "GIT_INIT_FAILED", "message": m })),
+            ),
+            other => project_err_to_response(other),
+        })
+}
+
+async fn handle_project_list_open_files(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<OpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .list_open_files(&id)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_open_file_durable(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<OpenFilesBody>,
+) -> Result<Json<OpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .open_file_durable(&id, body)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_close_file_durable(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<OpenFilesBody>,
+) -> Result<Json<OpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .close_file_durable(&id, body)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
 fn project_err_to_response(err: ProjectRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         ProjectRouteError::Validation(m) => (
@@ -1675,6 +1752,10 @@ fn project_err_to_response(err: ProjectRouteError) -> (StatusCode, Json<serde_js
         ProjectRouteError::ServiceUnavailable(m) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": m })),
+        ),
+        ProjectRouteError::GitInitFailed(m) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "GIT_INIT_FAILED", "message": m })),
         ),
     }
 }
@@ -2378,6 +2459,44 @@ async fn handle_project_lsp_external_file(
     }
 }
 
+async fn handle_worktree_list_open_files(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<WorktreeOpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .list_open_files(&id)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+async fn handle_worktree_open_file_durable(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<WorktreeOpenFilesBody>,
+) -> Result<Json<WorktreeOpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .open_file_durable(&id, body)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+async fn handle_worktree_close_file_durable(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<WorktreeOpenFilesBody>,
+) -> Result<Json<WorktreeOpenFilesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .close_file_durable(&id, body)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
 fn worktree_err_to_response(err: WorktreeRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         WorktreeRouteError::Validation(m) => (
@@ -2403,6 +2522,10 @@ fn worktree_err_to_response(err: WorktreeRouteError) -> (StatusCode, Json<serde_
         WorktreeRouteError::WorktreeNotDone { sessions } => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "WORKTREE_NOT_DONE", "sessions": sessions })),
+        ),
+        WorktreeRouteError::NotGit => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "NOT_GIT" })),
         ),
         WorktreeRouteError::ServiceUnavailable(m) => (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -2584,6 +2707,10 @@ async fn handle_start_session(
             StartError::NotDrafting(m) | StartError::Validation(m) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),
+            ),
+            StartError::NotGit => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": "NOT_GIT" })),
             ),
             StartError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,

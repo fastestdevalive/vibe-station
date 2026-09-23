@@ -120,6 +120,8 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(db, "projects", "lspEnabled", "INTEGER")?;
     add_column_if_missing(db, "worktrees", "lspEnabled", "INTEGER")?;
     add_column_if_missing(db, "worktrees", "hiddenAt", "TEXT")?;
+    add_column_if_missing(db, "projects", "openFiles", "TEXT")?;
+    add_column_if_missing(db, "worktrees", "openFiles", "TEXT")?;
     add_column_if_missing(db, "sessions", "spawnedFrom", "TEXT")?;
     add_column_if_missing(db, "sessions", "supersededBy", "TEXT")?;
     add_column_if_missing(db, "sessions", "prState", "TEXT")?;

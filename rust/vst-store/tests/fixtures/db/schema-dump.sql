@@ -23,7 +23,7 @@ CREATE TABLE projects (
       hidden INTEGER NOT NULL DEFAULT 0,
       directSessionSeq INTEGER NOT NULL DEFAULT 0,
       nextWorktreeNum INTEGER NOT NULL DEFAULT 1
-    , lspEnabled INTEGER);
+    , lspEnabled INTEGER, openFiles TEXT);
 CREATE TABLE sessions (
       id TEXT PRIMARY KEY,
       worktreeId TEXT REFERENCES worktrees(id) ON DELETE CASCADE,
@@ -78,4 +78,4 @@ CREATE TABLE worktrees (
       terminalSeq INTEGER NOT NULL DEFAULT 0,
       agentSeq INTEGER NOT NULL DEFAULT 0,
       branchIsPlaceholder INTEGER NOT NULL DEFAULT 0
-    , lspEnabled INTEGER);
+    , lspEnabled INTEGER, openFiles TEXT);

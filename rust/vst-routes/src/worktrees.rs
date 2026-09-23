@@ -62,11 +62,11 @@ use vst_types::rest::projects::{TreeEntry, TreeEntryType};
 use vst_types::rest::shared::Worktree;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, CreateWorktreeBody, DiffStat, DiskDevice,
-    DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, PatchWorktreeResult,
-    PatchWorktreeToggleBody, PendingFileOpens, PrInfo, PrInfoState, PrLookupResult,
-    RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
-    SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
-    WorktreeDoneResult, WorktreeUsage,
+    DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, OpenFilesBody,
+    OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrInfo,
+    PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
+    ReorderWorktreeResult, SearchResult, SubmoduleInfo,
+    SubmoduleStatus, SubmodulesResult, WorktreeDoneResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::file_search::FileSearchIndex;
@@ -353,6 +353,8 @@ pub enum WorktreeRouteError {
     Unprocessable(String),
     #[error("Worktree not done: {sessions:?}")]
     WorktreeNotDone { sessions: Vec<String> },
+    #[error("Project is not a git repository")]
+    NotGit,
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
     #[error("Internal server error: {0}")]
@@ -369,6 +371,44 @@ impl From<crate::search_util::RgSearchError> for WorktreeRouteError {
                 WorktreeRouteError::Internal(msg)
             }
         }
+    }
+}
+
+/// Error from the shared git gate shared by both worktree-creation paths.
+pub(crate) enum GitGateError {
+    NotGit,
+    Internal(String),
+}
+
+/// R11 git gate shared by `WorktreeRoutes::create_worktree` and
+/// `SessionRoutes::start_new_worktree` — the two distinct code paths that can
+/// create a worktree. Both must hard-fail on a non-git project, but a project
+/// git-init'd out-of-band since registration must not require re-adding: re-check
+/// `is_git_repo` on the attempt that would otherwise fail, self-heal the
+/// remembered `is_git`/`default_branch` if it now is, and proceed. Returns the
+/// (possibly updated) project so the caller uses the fresh `is_git`/branch.
+pub(crate) async fn ensure_git_project(
+    store: &StoreHandle,
+    project: &ProjectRecord,
+) -> Result<ProjectRecord, GitGateError> {
+    if project.is_git {
+        return Ok(project.clone());
+    }
+    if vst_git::git::is_git_repo(&project.absolute_path).await {
+        let redetected = vst_git::git::detect_default_branch(&project.absolute_path).await;
+        let id_clone = project.id.clone();
+        store
+            .mutate_project(&id_clone, move |p| {
+                p.is_git = true;
+                p.default_branch = redetected
+                    .or_else(|| p.default_branch.clone())
+                    .or_else(|| Some("main".to_string()));
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| GitGateError::Internal(e.to_string()))
+    } else {
+        Err(GitGateError::NotGit)
     }
 }
 
@@ -513,16 +553,20 @@ impl WorktreeRoutes {
             }
         }
 
-        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+        let mut project = self.store.get_project(project_id).await.ok_or_else(|| {
             WorktreeRouteError::NotFound(format!("Project '{project_id}' not found"))
         })?;
 
-        if !project.is_git {
-            return Err(WorktreeRouteError::Validation(
-                "Worktrees require a git repository. Use direct sessions for non-git projects."
-                    .to_string(),
-            ));
-        }
+        // R11: a project git-init'd outside vibe-station since registration must
+        // not require re-adding — re-check on the attempt that would otherwise
+        // fail (shared with SessionRoutes::start_new_worktree via
+        // `ensure_git_project`).
+        project = ensure_git_project(&self.store, &project)
+            .await
+            .map_err(|e| match e {
+                GitGateError::NotGit => WorktreeRouteError::NotGit,
+                GitGateError::Internal(m) => WorktreeRouteError::Internal(m),
+            })?;
 
         if let Some(ref br) = branch_input {
             let valid = validate_branch(br);
@@ -1880,6 +1924,126 @@ impl WorktreeRoutes {
         let _ = self.find_project_for_worktree(wt_id).await?;
         self.pending_file_opens.clear(wt_id);
         Ok(())
+    }
+
+    // --- 22. GET /worktrees/:id/open-files (durable open-file set) ---
+    pub async fn list_open_files(&self, wt_id: &str) -> Result<OpenFilesResult, WorktreeRouteError> {
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt = project
+            .worktrees
+            .iter()
+            .find(|w| w.id == wt_id)
+            .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+        Ok(OpenFilesResult {
+            paths: wt.open_files.clone(),
+        })
+    }
+
+    // --- 23. POST /worktrees/:id/open-files (durable open-file set) ---
+    pub async fn open_file_durable(
+        &self,
+        wt_id: &str,
+        body: OpenFilesBody,
+    ) -> Result<OpenFilesResult, WorktreeRouteError> {
+        let path_str = body.path.trim();
+        if path_str.is_empty() {
+            return Err(WorktreeRouteError::Validation("path required".to_string()));
+        }
+
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let abs = resolve_inside_worktree(&wt_path, path_str)?;
+        let rel = abs
+            .strip_prefix(&wt_path)
+            .map_err(|_| {
+                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        let wt_id_owned = wt_id.to_string();
+        let rel_owned = rel.clone();
+        let updated = self
+            .store
+            .mutate_project(&project.id, move |p| {
+                let wt = p.worktrees.iter_mut().find(|w| w.id == wt_id_owned);
+                let Some(wt) = wt else {
+                    return Err(StoreError::Mutation("Worktree not found".to_string()));
+                };
+                if !wt.open_files.contains(&rel_owned) {
+                    wt.open_files.push(rel_owned);
+                }
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|_| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+
+        let wt = updated
+            .worktrees
+            .iter()
+            .find(|w| w.id == wt_id)
+            .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+        let paths = wt.open_files.clone();
+
+        self.broadcaster.send(ServerEvent::OpenFilesChanged {
+            worktree_id: Some(wt_id.to_string()),
+            project_id: None,
+            paths: paths.clone(),
+        });
+
+        Ok(OpenFilesResult { paths })
+    }
+
+    // --- 24. DELETE /worktrees/:id/open-files (durable open-file set) ---
+    pub async fn close_file_durable(
+        &self,
+        wt_id: &str,
+        body: OpenFilesBody,
+    ) -> Result<OpenFilesResult, WorktreeRouteError> {
+        let path_str = body.path.trim();
+        if path_str.is_empty() {
+            return Err(WorktreeRouteError::Validation("path required".to_string()));
+        }
+
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let wt_path = self.paths.worktree_path(&project.id, wt_id);
+        let abs = resolve_inside_worktree(&wt_path, path_str)?;
+        let rel = abs
+            .strip_prefix(&wt_path)
+            .map_err(|_| {
+                WorktreeRouteError::Unprocessable("path outside worktree root".to_string())
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        let wt_id_owned = wt_id.to_string();
+        let updated = self
+            .store
+            .mutate_project(&project.id, move |p| {
+                let wt = p.worktrees.iter_mut().find(|w| w.id == wt_id_owned);
+                let Some(wt) = wt else {
+                    return Err(StoreError::Mutation("Worktree not found".to_string()));
+                };
+                wt.open_files.retain(|f| f != &rel);
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|_| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+
+        let wt = updated
+            .worktrees
+            .iter()
+            .find(|w| w.id == wt_id)
+            .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+        let paths = wt.open_files.clone();
+
+        self.broadcaster.send(ServerEvent::OpenFilesChanged {
+            worktree_id: Some(wt_id.to_string()),
+            project_id: None,
+            paths: paths.clone(),
+        });
+
+        Ok(OpenFilesResult { paths })
     }
 
     // --- 22. GET /worktrees/:id/gutter/* ---

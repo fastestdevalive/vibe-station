@@ -49,7 +49,8 @@ use vst_types::domain::{
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::projects::{
     BranchesResult, CreateNewProjectBody, CreateNewProjectResult, CreateProjectBody,
-    PatchProjectBody, PatchProjectResult, TreeEntry, TreeEntryType,
+    GitInitResult, OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult,
+    TreeEntry, TreeEntryType,
 };
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
@@ -90,6 +91,8 @@ pub enum ProjectRouteError {
     Internal(String),
     #[error("Service unavailable: {0}")]
     ServiceUnavailable(String),
+    #[error("Git init failed: {0}")]
+    GitInitFailed(String),
 }
 
 impl From<crate::search_util::RgSearchError> for ProjectRouteError {
@@ -240,6 +243,183 @@ impl ProjectRoutes {
         })
     }
 
+    // ── 2b. POST /projects/:id/git-init ───────────────────────────────────
+    pub async fn git_init(&self, project_id: &str) -> Result<GitInitResult, ProjectRouteError> {
+        let project = self
+            .store
+            .get_project(project_id)
+            .await
+            .ok_or_else(|| ProjectRouteError::NotFound(format!("Project '{project_id}' not found")))?;
+
+        // Full project setup — not the bare `git init` — so the repo gets an
+        // initial commit and a `main` branch. A bare `git init` leaves the repo
+        // with no HEAD and no branch, so a subsequent worktree creation fails
+        // with "Base branch 'main' not found".
+        run_project_setup(&project.absolute_path)
+            .await
+            .map_err(|e| ProjectRouteError::GitInitFailed(e.to_string()))?;
+
+        let id_clone = project_id.to_string();
+        let dir_path = project.absolute_path.clone();
+        let redetected = detect_default_branch(&dir_path).await;
+        let mutated = self
+            .store
+            .mutate_project(&id_clone, move |p| {
+                p.is_git = true;
+                p.default_branch = redetected
+                    .or_else(|| p.default_branch.clone())
+                    .or_else(|| Some("main".to_string()));
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound(_) => {
+                    ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+                }
+                other => ProjectRouteError::Internal(other.to_string()),
+            })?;
+
+        // Keep other connected clients in sync with the git-ness flip.
+        let api_project = serialize_project(&mutated);
+        if let Ok(val) = serde_json::to_value(&api_project) {
+            if let Some(map) = val.as_object() {
+                self.broadcaster.send(ServerEvent::ProjectUpdated {
+                    project: map.clone(),
+                });
+            }
+        }
+
+        let default_branch = detect_default_branch(&mutated.absolute_path).await;
+
+        Ok(GitInitResult {
+            ok: true,
+            is_git: true,
+            default_branch,
+        })
+    }
+
+    // ── 2b. GET/POST/DELETE /projects/:id/open-files (durable open-file set) ─
+    pub async fn list_open_files(
+        &self,
+        project_id: &str,
+    ) -> Result<OpenFilesResult, ProjectRouteError> {
+        let project = self
+            .store
+            .get_project(project_id)
+            .await
+            .ok_or_else(|| {
+                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+            })?;
+        Ok(OpenFilesResult {
+            paths: project.open_files.clone(),
+        })
+    }
+
+    pub async fn open_file_durable(
+        &self,
+        project_id: &str,
+        body: OpenFilesBody,
+    ) -> Result<OpenFilesResult, ProjectRouteError> {
+        let path_str = body.path.trim();
+        if path_str.is_empty() {
+            return Err(ProjectRouteError::validation("path required"));
+        }
+
+        let project = self
+            .store
+            .get_project(project_id)
+            .await
+            .ok_or_else(|| {
+                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+            })?;
+        let root = Path::new(&project.absolute_path);
+        let abs = resolve_inside_dir(root, path_str)?;
+        let rel = abs
+            .strip_prefix(root)
+            .map_err(|_| {
+                ProjectRouteError::unprocessable("path outside project root", None)
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        let rel_owned = rel.clone();
+        let id_owned = project_id.to_string();
+        let mutated = self
+            .store
+            .mutate_project(project_id, move |p| {
+                if !p.open_files.contains(&rel_owned) {
+                    p.open_files.push(rel_owned);
+                }
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound(_) => {
+                    ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+                }
+                other => ProjectRouteError::Internal(other.to_string()),
+            })?;
+        let paths = mutated.open_files.clone();
+
+        self.broadcaster.send(ServerEvent::OpenFilesChanged {
+            worktree_id: None,
+            project_id: Some(id_owned),
+            paths: paths.clone(),
+        });
+
+        Ok(OpenFilesResult { paths })
+    }
+
+    pub async fn close_file_durable(
+        &self,
+        project_id: &str,
+        body: OpenFilesBody,
+    ) -> Result<OpenFilesResult, ProjectRouteError> {
+        let path_str = body.path.trim();
+        if path_str.is_empty() {
+            return Err(ProjectRouteError::validation("path required"));
+        }
+
+        let project = self
+            .store
+            .get_project(project_id)
+            .await
+            .ok_or_else(|| {
+                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+            })?;
+        let root = Path::new(&project.absolute_path);
+        let abs = resolve_inside_dir(root, path_str)?;
+        let rel = abs
+            .strip_prefix(root)
+            .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
+            .to_string_lossy()
+            .to_string();
+
+        let id_owned = project_id.to_string();
+        let mutated = self
+            .store
+            .mutate_project(project_id, move |p| {
+                p.open_files.retain(|f| f != &rel);
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound(_) => {
+                    ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+                }
+                other => ProjectRouteError::Internal(other.to_string()),
+            })?;
+        let paths = mutated.open_files.clone();
+
+        self.broadcaster.send(ServerEvent::OpenFilesChanged {
+            worktree_id: None,
+            project_id: Some(id_owned),
+            paths: paths.clone(),
+        });
+
+        Ok(OpenFilesResult { paths })
+    }
+
     // ── 3. POST /projects ─────────────────────────────────────────────────
     pub async fn create_project(
         &self,
@@ -366,6 +546,7 @@ impl ProjectRoutes {
             worktrees: vec![],
             next_worktree_num: Some(1),
             lsp_enabled: None,
+            open_files: vec![],
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {
@@ -562,6 +743,7 @@ impl ProjectRoutes {
             worktrees: vec![],
             next_worktree_num: Some(1),
             lsp_enabled: None,
+            open_files: vec![],
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {
@@ -723,6 +905,7 @@ impl ProjectRoutes {
                             agent_seq: Some(1),
                             lsp_enabled: None,
                             sessions: vec![main_session.clone()],
+                            open_files: vec![],
                         };
 
                         // `next_worktree_num` is already correctly bumped by the reservation

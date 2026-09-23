@@ -317,6 +317,7 @@ fn wt(id: &str, branch: &str, hidden_at: Option<&str>) -> WorktreeRecord {
         agent_seq: Some(0),
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec!["src/a.rs".into()],
     }
 }
 
@@ -337,9 +338,16 @@ fn worktree_round_trip() {
         agent_seq: Some(5),
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec!["src/a.rs".into()],
     };
     let row = worktree_to_row(&record, "proj-1");
     assert_eq!(row_to_worktree(&row, vec![]), record);
+
+    // A row with a NULL openFiles column deserializes to an empty list.
+    let mut null_row = row.clone();
+    null_row.open_files = None;
+    let reopened = row_to_worktree(&null_row, vec![]);
+    assert!(reopened.open_files.is_empty());
 }
 
 #[test]
@@ -368,6 +376,7 @@ fn project(id: &str, hidden: bool) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: Some(6),
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
@@ -393,6 +402,7 @@ fn project_omits_hidden_when_false() {
         worktrees: vec![],
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     };
     let row = project_to_row(&record);
     let back = row_to_project(&row, vec![], vec![]);

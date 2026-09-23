@@ -141,6 +141,7 @@ pub async fn create_worktree_record(
         agent_seq: Some(0),
         lsp_enabled: None,
         sessions,
+        open_files: vec![],
     };
 
     // Persist to manifest (structural change — immediate write).

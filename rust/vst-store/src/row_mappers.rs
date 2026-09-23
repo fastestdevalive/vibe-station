@@ -315,6 +315,13 @@ pub struct WorktreeRow {
     pub agent_seq: i64,
     pub branch_is_placeholder: i64,
     pub lsp_enabled: Option<i64>,
+    /// Durable open-file set, JSON array of relative paths.
+    pub open_files: Option<String>,
+}
+
+fn parse_open_files(s: Option<&str>) -> Vec<String> {
+    s.and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+        .unwrap_or_default()
 }
 
 pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> WorktreeRecord {
@@ -336,8 +343,10 @@ pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> Workt
         agent_seq: Some(row.agent_seq),
         lsp_enabled: row.lsp_enabled.map(row_to_bool),
         sessions,
+        open_files: parse_open_files(row.open_files.as_deref()),
     }
 }
+
 
 pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
     WorktreeRow {
@@ -355,6 +364,7 @@ pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
         agent_seq: w.agent_seq.unwrap_or(0),
         branch_is_placeholder: bool_to_row(w.branch_is_placeholder.unwrap_or(false)),
         lsp_enabled: w.lsp_enabled.map(bool_to_row),
+        open_files: Some(serde_json::to_string(&w.open_files).expect("open_files serializable")),
     }
 }
 
@@ -371,6 +381,8 @@ pub struct ProjectRow {
     pub direct_session_seq: i64,
     pub next_worktree_num: i64,
     pub lsp_enabled: Option<i64>,
+    /// Durable open-file set, JSON array of relative paths.
+    pub open_files: Option<String>,
 }
 
 pub fn row_to_project(
@@ -391,6 +403,7 @@ pub fn row_to_project(
         worktrees,
         next_worktree_num: Some(row.next_worktree_num),
         lsp_enabled: row.lsp_enabled.map(row_to_bool),
+        open_files: parse_open_files(row.open_files.as_deref()),
     }
 }
 
@@ -406,5 +419,6 @@ pub fn project_to_row(p: &ProjectRecord) -> ProjectRow {
         direct_session_seq: p.direct_session_seq.unwrap_or(0),
         next_worktree_num: p.next_worktree_num.unwrap_or(1),
         lsp_enabled: p.lsp_enabled.map(bool_to_row),
+        open_files: Some(serde_json::to_string(&p.open_files).expect("open_files serializable")),
     }
 }

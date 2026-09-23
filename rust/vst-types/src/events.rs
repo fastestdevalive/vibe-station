@@ -137,7 +137,21 @@ pub enum ServerEvent {
     FileOpen { worktree_id: String, path: String },
     /// Navigate to a project (vst open).
     #[serde(rename = "navigate", rename_all = "camelCase")]
-    Navigate { project_id: String },
+    Navigate {
+        project_id: String,
+        new_window: bool,
+    },
+    /// The durable open-file set changed (worktree- or project-scoped). Carries
+    /// the FULL updated list so a client can replace its cached array, not
+    /// apply a diff. Distinct from the one-shot `FileOpen` signal above.
+    #[serde(rename = "openFiles:changed", rename_all = "camelCase")]
+    OpenFilesChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+        paths: Vec<String>,
+    },
     /// The user's theme / markdown style changed.
     ///
     /// Narrow payload only — deliberately NOT the full `Settings` struct,

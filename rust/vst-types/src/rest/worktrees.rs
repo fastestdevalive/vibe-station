@@ -260,6 +260,21 @@ pub struct OpenFileBody {
     pub path: String,
 }
 
+/// `GET/POST/DELETE /worktrees/:id/open-files` response — the full updated
+/// list of open file paths, relative to the worktree root.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilesResult {
+    pub paths: Vec<String>,
+}
+
+/// `POST/DELETE /worktrees/:id/open-files` request body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilesBody {
+    pub path: String,
+}
+
 /// `GET /worktrees/:id/pending-file-opens` response.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

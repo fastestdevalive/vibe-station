@@ -32,8 +32,8 @@ use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::shared::Mode;
 use vst_types::rest::worktrees::{
-    CreateWorktreeBody, OpenFileBody, PatchWorktreeToggleBody, PrLookupResult, RenameWorktreeBody,
-    ReorderWorktreeBody,
+    CreateWorktreeBody, OpenFileBody, OpenFilesBody, PatchWorktreeToggleBody, PrLookupResult,
+    RenameWorktreeBody, ReorderWorktreeBody,
 };
 use vst_types::{
     Channel, CliId, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
@@ -133,6 +133,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         agent_seq: Some(1),
         lsp_enabled: None,
         sessions: vec![session],
+        open_files: vec![],
     };
 
     ProjectRecord {
@@ -148,6 +149,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         worktrees: vec![wt],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
@@ -200,6 +202,7 @@ async fn test_pure_helpers() {
         agent_seq: Some(1),
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec![],
     };
     let serialized = serialize_worktree("proj-x", &wt_rec);
     assert_eq!(serialized.id, "wt-x");
@@ -325,6 +328,7 @@ async fn test_create_worktree_validation_and_errors() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(non_git_proj).await.unwrap();
 
@@ -343,7 +347,7 @@ async fn test_create_worktree_validation_and_errors() {
         })
         .await
         .unwrap_err();
-    assert!(matches!(err, WorktreeRouteError::Validation(_)));
+    assert!(matches!(err, WorktreeRouteError::NotGit));
 }
 
 #[tokio::test]
@@ -373,6 +377,7 @@ async fn test_create_worktree_success_and_events() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(proj).await.unwrap();
 
@@ -452,6 +457,138 @@ async fn test_create_worktree_success_and_events() {
     assert_eq!(res2.id, "vs-2");
     assert_eq!(res2.branch, "feat/custom-branch");
     assert_eq!(res2.name.as_deref(), Some("Custom Worktree Name"));
+}
+
+#[tokio::test]
+async fn test_create_worktree_self_heals_is_git() {
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let repo_dir = tempdir().unwrap();
+    // git-init the directory directly, NOT through the route — simulating a
+    // project registered before the directory was git-init'd.
+    init_git_repo(repo_dir.path());
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+
+    // Project registered with is_git: false even though the dir is now a repo.
+    let proj = ProjectRecord {
+        id: "proj-self-heal".into(),
+        absolute_path: repo_dir.path().to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: false,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(proj).await.unwrap();
+
+    let res = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-self-heal".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/self-heal".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: Some("Self Heal".into()),
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(res.project_id, "proj-self-heal");
+    assert_eq!(res.branch, "feat/self-heal");
+
+    // Decision 7: the project's is_git flag must be persisted as true.
+    let p = store.get_project("proj-self-heal").await.unwrap();
+    assert!(p.is_git, "project is_git should self-heal to true");
+}
+
+#[tokio::test]
+async fn test_create_worktree_self_heal_refreshes_default_branch() {
+    // Fix 3: the Decision 7 self-heal must re-detect AND persist the default
+    // branch (not just flip is_git), so a stale/empty default_branch from
+    // registration time doesn't linger. Use a repo whose default branch is NOT
+    // `main` so we can prove the re-detection actually happened.
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let repo_dir = tempdir().unwrap();
+
+    let run = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo_dir.path())
+            .status()
+            .expect("git command failed");
+        assert!(status.success(), "git command {:?} failed", args);
+    };
+    run(&["init", "-b", "trunk"]);
+    run(&["config", "user.email", "test@example.com"]);
+    run(&["config", "user.name", "Test User"]);
+    std::fs::write(repo_dir.path().join("README.md"), "# Initial Commit\n").unwrap();
+    run(&["add", "."]);
+    run(&["commit", "-m", "Initial commit"]);
+
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+
+    // Project registered with is_git: false AND default_branch: None even
+    // though the dir is now a repo on `trunk`.
+    let proj = ProjectRecord {
+        id: "proj-branch-refresh".into(),
+        absolute_path: repo_dir.path().to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(proj).await.unwrap();
+
+    routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-branch-refresh".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/refresh".into()),
+            base_branch: Some("trunk".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: Some("Branch Refresh".into()),
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let p = store.get_project("proj-branch-refresh").await.unwrap();
+    assert!(p.is_git, "project is_git should self-heal to true");
+    assert_eq!(
+        p.default_branch.as_deref(),
+        Some("trunk"),
+        "default_branch should be re-detected and persisted, not left None"
+    );
 }
 
 #[tokio::test]
@@ -683,6 +820,7 @@ async fn test_git_surface_routes_on_real_repo() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(proj).await.unwrap();
 
@@ -1364,4 +1502,77 @@ async fn test_gutter_clean_file_and_traversal() {
         matches!(err, WorktreeRouteError::AccessDenied(_)),
         "path traversal should return AccessDenied, got: {err:?}"
     );
+}
+
+#[tokio::test]
+async fn test_open_files_append_is_idempotent() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    routes
+        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .await
+        .expect("open_file_durable should succeed");
+    let list = routes
+        .list_open_files("wt-1")
+        .await
+        .expect("list_open_files should succeed");
+    assert_eq!(list.paths, vec!["src/a.rs".to_string()]);
+
+    routes
+        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .await
+        .expect("re-opening the same path should succeed");
+    let list = routes
+        .list_open_files("wt-1")
+        .await
+        .expect("list_open_files should succeed");
+    assert_eq!(list.paths, vec!["src/a.rs".to_string()]);
+}
+
+#[tokio::test]
+async fn test_open_files_delete_removes_path() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    routes
+        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .await
+        .expect("open_file_durable should succeed");
+    routes
+        .close_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .await
+        .expect("close_file_durable should succeed");
+    let list = routes
+        .list_open_files("wt-1")
+        .await
+        .expect("list_open_files should succeed");
+    assert!(list.paths.is_empty());
+}
+
+#[tokio::test]
+async fn test_open_files_rejects_escaping_path() {
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let err = routes
+        .open_file_durable("wt-1", OpenFilesBody { path: "../../etc/passwd".into() })
+        .await
+        .expect_err("escaping path should be rejected");
+    assert!(
+        matches!(err, WorktreeRouteError::AccessDenied(_)),
+        "escaping path should return AccessDenied (same as open_file), got: {err:?}"
+    );
+
+    let list = routes
+        .list_open_files("wt-1")
+        .await
+        .expect("list_open_files should succeed");
+    assert!(list.paths.is_empty());
 }

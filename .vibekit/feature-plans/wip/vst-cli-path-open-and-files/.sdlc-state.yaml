@@ -1,0 +1,18 @@
+feature: vst-cli-path-open-and-files
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-174
+master: {prd: complete, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "7.T2"
+    awaiting_phase: implement
+    awaiting_artifact: ".vibekit/feature-plans/wip/vst-cli-path-open-and-files/plan-vst-cli-path-open-and-files.md"
+    impl_turn: {phase: 7, of: 7}
+    phase_chain: [plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null

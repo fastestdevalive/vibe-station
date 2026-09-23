@@ -61,6 +61,32 @@ pub struct BranchesResult {
     pub default_branch: Option<String>,
 }
 
+/// `POST /projects/:id/git-init` success.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInitResult {
+    pub ok: bool,
+    pub is_git: bool,
+    /// JSON null if the default branch can't be detected.
+    pub default_branch: Option<String>,
+}
+
+/// `GET/POST/DELETE /projects/:id/open-files` response — the full updated
+/// list of open file paths, relative to the project root.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilesResult {
+    pub paths: Vec<String>,
+}
+
+/// `POST/DELETE /projects/:id/open-files` request body.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFilesBody {
+    pub path: String,
+}
+
 /// `PATCH /projects/:id` request body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
