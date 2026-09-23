@@ -3,8 +3,8 @@
 use vst_cli::commands;
 use vst_cli::output::die;
 use vst_cli::program::{
-    self, AgentCommand, Command, DaemonCommand, FileCommand, ModeCommand, ProjectCommand,
-    TerminalCommand, WorktreeCommand,
+    self, AgentCommand, Command, DaemonCommand, FileCommand, FilesCommand, ModeCommand,
+    ProjectCommand, TerminalCommand, WorktreeCommand,
 };
 #[tokio::main]
 async fn main() {
@@ -16,8 +16,12 @@ async fn main() {
         Command::Help => {
             println!("{} — {}", program::NAME, program::DESCRIPTION);
         }
-        Command::Mode(mode_cmd) => match mode_cmd {
-            ModeCommand::Ls { args } => {
+        Command::Mode(mode_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("mode") {
+                eprintln!("{hint}");
+            }
+            match mode_cmd {
+                ModeCommand::Ls { args } => {
                 let opts = match commands::mode::ls::parse_mode_ls_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
@@ -47,8 +51,13 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::Agent(agent_cmd) => match agent_cmd {
+        Command::Agent(agent_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("agent") {
+                eprintln!("{hint}");
+            }
+            match agent_cmd {
             AgentCommand::Create { args } => {
                 let opts = match commands::agent::create::parse_agent_create_options(&args) {
                     Ok(o) => o,
@@ -170,8 +179,13 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::Terminal(terminal_cmd) => match terminal_cmd {
+        Command::Terminal(terminal_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("terminal") {
+                eprintln!("{hint}");
+            }
+            match terminal_cmd {
             TerminalCommand::Create { args } => {
                 let opts = match commands::terminal::create::parse_terminal_create_options(&args) {
                     Ok(o) => o,
@@ -244,8 +258,13 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::Worktree(wt_cmd) => match wt_cmd {
+        Command::Worktree(wt_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("worktree") {
+                eprintln!("{hint}");
+            }
+            match wt_cmd {
             WorktreeCommand::Create { args } => {
                 let opts = match commands::worktree::create::parse_worktree_create_options(&args) {
                     Ok(o) => o,
@@ -307,8 +326,13 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::Project(proj_cmd) => match proj_cmd {
+        Command::Project(proj_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("project") {
+                eprintln!("{hint}");
+            }
+            match proj_cmd {
             ProjectCommand::Add { args } => {
                 let opts = match commands::project::add::parse_project_add_options(&args) {
                     Ok(o) => o,
@@ -358,8 +382,13 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::File(file_cmd) => match file_cmd {
+        Command::File(file_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("file") {
+                eprintln!("{hint}");
+            }
+            match file_cmd {
             FileCommand::Open { args } => {
                 let opts = match commands::file::open::parse_file_open_options(&args) {
                     Ok(o) => o,
@@ -375,8 +404,53 @@ async fn main() {
                     Some(1),
                 );
             }
+            }
         },
-        Command::Daemon(daemon_cmd) => match daemon_cmd {
+        Command::Files(files_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("files") {
+                eprintln!("{hint}");
+            }
+            match files_cmd {
+            FilesCommand::Ls { args } => {
+                let opts = match commands::files::ls::parse_files_ls_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::files::ls::run_files_ls(opts).await {
+                    die(&err, Some(code));
+                }
+            }
+            FilesCommand::Open { args } => {
+                let opts = match commands::files::open::parse_files_open_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::files::open::run_files_open(opts).await {
+                    die(&err, Some(code));
+                }
+            }
+            FilesCommand::Close { args } => {
+                let opts = match commands::files::close::parse_files_close_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::files::close::run_files_close(opts).await {
+                    die(&err, Some(code));
+                }
+            }
+            FilesCommand::Unknown(args) => {
+                die(
+                    &format!("Unknown files command: {}", args.join(" ")),
+                    Some(1),
+                );
+            }
+            }
+        },
+        Command::Daemon(daemon_cmd) => {
+            if let Some(hint) = program::hint_if_dir_collision("daemon") {
+                eprintln!("{hint}");
+            }
+            match daemon_cmd {
             DaemonCommand::Status { json } => {
                 let opts = commands::daemon::status::DaemonStatusOptions { json };
                 if let Err((err, code)) = commands::daemon::status::run_daemon_status(opts).await {
@@ -388,6 +462,7 @@ async fn main() {
                     &format!("Unknown daemon command: {}", args.join(" ")),
                     Some(1),
                 );
+            }
             }
         },
         Command::Open(args) => {

@@ -18,6 +18,7 @@ pub enum Command {
     Terminal(TerminalCommand),
     Mode(ModeCommand),
     File(FileCommand),
+    Files(FilesCommand),
     Open(OpenArgs),
     Status(StatusArgs),
     Summary(SummaryArgs),
@@ -93,6 +94,14 @@ pub enum ModeCommand {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FileCommand {
     Open { args: Vec<String> },
+    Unknown(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FilesCommand {
+    Ls { args: Vec<String> },
+    Open { args: Vec<String> },
+    Close { args: Vec<String> },
     Unknown(Vec<String>),
 }
 
@@ -257,6 +266,21 @@ where
                 None => Command::File(FileCommand::Unknown(vec![])),
             }
         }
+        "files" => {
+            let sub = iter.next();
+            let rest: Vec<String> = iter.collect();
+            match sub.as_deref() {
+                Some("ls") => Command::Files(FilesCommand::Ls { args: rest }),
+                Some("open") => Command::Files(FilesCommand::Open { args: rest }),
+                Some("close") => Command::Files(FilesCommand::Close { args: rest }),
+                Some(other) => {
+                    let mut r = vec![other.to_string()];
+                    r.extend(rest);
+                    Command::Files(FilesCommand::Unknown(r))
+                }
+                None => Command::Files(FilesCommand::Unknown(vec![])),
+            }
+        }
         "open" => Command::Open(OpenArgs {
             args: iter.collect(),
         }),
@@ -269,10 +293,32 @@ where
         "doctor" => Command::Doctor(DoctorArgs {
             args: iter.collect(),
         }),
+        // R7: real subcommand names are already matched above this arm, so `other`
+        // here is guaranteed to not be a known subcommand — dispatch it as a bare
+        // path through the same OpenArgs the "open" subcommand uses. A `-`-prefixed
+        // token is never a path — leave it as Unknown so it errors as a bad flag,
+        // not a confusing "Unknown option" from inside open.rs's own parser.
+        other if !other.starts_with('-') => Command::Open(OpenArgs {
+            args: std::iter::once(other.to_string()).chain(iter).collect(),
+        }),
         other => {
             let mut all = vec![other.to_string()];
             all.extend(iter);
             Command::Unknown(all)
         }
+    }
+}
+
+/// Pure helper: if a directory with the given name exists in the current
+/// working directory, returns a hint telling the user to use `vst open <name>`
+/// instead of the (higher-precedence) subcommand of the same name. Returns
+/// `None` when no such directory exists.
+pub fn hint_if_dir_collision(name: &str) -> Option<String> {
+    if std::path::Path::new(name).is_dir() {
+        Some(format!(
+            "hint: \"{name}\" is also a directory here — use \"vst open {name}\" to open it instead"
+        ))
+    } else {
+        None
     }
 }

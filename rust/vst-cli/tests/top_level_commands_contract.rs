@@ -56,7 +56,9 @@ use vst_cli::commands::doctor::{
     find_serve_port, get_daemon_port_from_config, parse_doctor_options, parse_proxy_port,
     trim_trailing_dot, TailscaleServeJson,
 };
-use vst_cli::commands::open::{parse_open_options, post_open_at, resolve_path};
+use vst_cli::commands::open::{
+    open_http_exit_code, parse_open_options, post_open_at, resolve_path,
+};
 use vst_cli::commands::status::{parse_status_options, state_icon};
 use vst_cli::commands::summary::{build_summary_json, glyph_for_state, parse_summary_options};
 use vst_types::domain::{LifecycleState, SessionType};
@@ -355,6 +357,18 @@ fn test_open_parses_one_path() {
 }
 
 #[test]
+fn test_open_parses_force_create_flag() {
+    let with_flag =
+        parse_open_options(&["/some/dir".into(), "--force-create".into()]).expect("parse ok");
+    assert_eq!(with_flag.path.as_deref(), Some("/some/dir"));
+    assert!(with_flag.force_create, "force_create should be true with --force-create");
+
+    let without_flag = parse_open_options(&["/some/dir".into()]).expect("parse ok");
+    assert_eq!(without_flag.path.as_deref(), Some("/some/dir"));
+    assert!(!without_flag.force_create, "force_create should default to false");
+}
+
+#[test]
 fn test_open_rejects_unknown_flag() {
     let err = parse_open_options(&["--foo".into()]).expect_err("unknown flag");
     assert!(err.contains("Unknown"), "err was: {err}");
@@ -376,6 +390,42 @@ fn test_open_resolve_path_defaults_to_cwd() {
 fn test_open_resolve_path_absolute_unchanged() {
     let abs = resolve_path(Some("/tmp/definitely-absolute-dir"));
     assert!(abs.starts_with('/'), "abs: {abs}");
+}
+
+#[test]
+fn test_open_resolve_path_normalizes_dot_and_dotdot() {
+    // Fix 6: a relative path that doesn't exist yet (so canonicalize() fails)
+    // must be normalized lexically, so `vst ./new --force-create` and a later
+    // `vst new` (from the same cwd) resolve to the IDENTICAL absolute path
+    // string instead of the daemon seeing `/cwd/./new` vs `/cwd/new` as two
+    // different projects.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let original = std::env::current_dir().expect("original cwd");
+    std::env::set_current_dir(tmp.path()).expect("set cwd");
+
+    let result = resolve_path(Some("./sub/../target"));
+    let expected = tmp.path().join("target").to_string_lossy().to_string();
+    assert_eq!(result, expected, "normalized path should collapse ./ and ..");
+
+    let no_dot = resolve_path(Some("./new"));
+    assert_eq!(
+        no_dot,
+        tmp.path().join("new").to_string_lossy().to_string(),
+        "a bare ./ must normalize away"
+    );
+
+    std::env::set_current_dir(&original).expect("restore cwd");
+}
+
+#[test]
+fn test_open_http_exit_code_reserved_for_path_not_found() {
+    // Fix 5 (CUJ 2 / R5): exit code 2 is ONLY for the missing-path
+    // (`path_not_found`) case; any other daemon-side failure keeps code 1.
+    assert_eq!(open_http_exit_code("path_not_found"), 2);
+    assert_eq!(open_http_exit_code("bad path"), 1);
+    assert_eq!(open_http_exit_code("internal_error"), 1);
+    assert_eq!(open_http_exit_code("path_not_directory"), 1);
+    assert_eq!(open_http_exit_code(""), 1);
 }
 
 // ─── mock server helper ───────────────────────────────────────────────────────
@@ -404,13 +454,18 @@ async fn test_post_open_success_returns_project_id() {
         post(|AxumJson(body): AxumJson<Value>| async move {
             let path = body["path"].as_str().expect("path field");
             assert!(path.starts_with('/'), "should be absolute: {path}");
-            (StatusCode::OK, Json(json!({ "projectId": "proj-abc" })))
+            assert_eq!(
+                body["forceCreate"].as_bool(),
+                Some(false),
+                "forceCreate should be threaded through the body"
+            );
+            (StatusCode::OK, Json(json!({ "projectId": "proj-abc", "isGit": true })))
         }),
     );
     let addr = spawn_mock_server(router).await;
     let base = format!("http://{addr}");
 
-    let result = post_open_at(&base, None, "/abs/path").await;
+    let result = post_open_at(&base, None, "/abs/path", false).await;
     let project_id = match result {
         Ok(id) => id,
         Err(e) => panic!("expected Ok, got {e:?}"),
@@ -437,7 +492,7 @@ async fn test_post_open_error_surfaces_server_message() {
     let addr = spawn_mock_server(router).await;
     let base = format!("http://{addr}");
 
-    let result = post_open_at(&base, None, "/abs/path").await;
+    let result = post_open_at(&base, None, "/abs/path", false).await;
     let Err(failure) = result else {
         panic!("expected Err, got Ok");
     };

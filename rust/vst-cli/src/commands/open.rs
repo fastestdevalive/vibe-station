@@ -6,7 +6,7 @@
 //! `cli/src/commands/open.ts` (top-level `vst open` — distinct from
 //! `vst file open`, which is ported in `commands/file/open.rs`).
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use reqwest::Method;
@@ -20,21 +20,27 @@ use crate::output::{die, success};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OpenOptions {
     pub path: Option<String>,
+    pub force_create: bool,
 }
 
 pub fn parse_open_options(args: &[String]) -> Result<OpenOptions, String> {
     let mut positional = Vec::new();
+    let mut force_create = false;
     for arg in args {
-        if arg.starts_with('-') {
+        if arg == "--force-create" {
+            force_create = true;
+        } else if arg.starts_with('-') {
             return Err(format!("Unknown option: {arg}"));
+        } else {
+            positional.push(arg.clone());
         }
-        positional.push(arg.clone());
     }
     if positional.len() > 1 {
-        return Err("Usage: vst open [path]".to_string());
+        return Err("Usage: vst open [path] [--force-create]".to_string());
     }
     Ok(OpenOptions {
         path: positional.first().cloned(),
+        force_create,
     })
 }
 
@@ -51,7 +57,7 @@ pub fn resolve_path(target: Option<&str>) -> String {
                 Ok(abs) => abs.to_string_lossy().to_string(),
                 Err(_) => {
                     let cwd = std::env::current_dir().unwrap_or_default();
-                    cwd.join(t).to_string_lossy().to_string()
+                    normalize_lexically(&cwd.join(t)).to_string_lossy().to_string()
                 }
             }
         }
@@ -60,6 +66,29 @@ pub fn resolve_path(target: Option<&str>) -> String {
             cwd.to_string_lossy().to_string()
         }
     }
+}
+
+/// Lexically normalize a path, collapsing `.` and resolving `..` segments
+/// without touching the filesystem. `cwd.join("./new")` produces `/cwd/./new`,
+/// which a later canonicalizing caller (e.g. a fresh `vst new`) renders as
+/// `/cwd/new` — without normalization the daemon would see two different
+/// project paths for the same directory.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    // Leading `..` on an absolute path can't go above the root —
+                    // keep it so we never silently drop to a wrong location.
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Why a `POST /open` failed — distinguishes a hard error from a
@@ -74,14 +103,16 @@ pub enum OpenFailure {
     Http { status: u16, message: String },
 }
 
-/// Post `{ path }` to `/open` on the given base URL. Returns the project id.
+/// Post `{ path, force_create }` to `/open` on the given base URL. Returns the project id.
 pub async fn post_open_at(
     base_url: &str,
     token: Option<&str>,
     abs_path: &str,
+    force_create: bool,
 ) -> Result<String, OpenFailure> {
     let body = OpenBody {
         path: abs_path.to_string(),
+        force_create,
     };
     let result = daemon_request_with_base::<vst_types::rest::open::OpenResult, _>(
         base_url,
@@ -179,18 +210,22 @@ pub async fn poll_for_daemon(timeout: Duration) -> bool {
 
 pub async fn run_open(opts: OpenOptions) -> Result<(), (String, i32)> {
     let abs_path = resolve_path(opts.path.as_deref());
+    let force_create = opts.force_create;
 
     let base_url = get_daemon_url();
     let token = get_daemon_token();
 
     if let Some(url) = &base_url {
-        match post_open_at(url, token.as_deref(), &abs_path).await {
+        match post_open_at(url, token.as_deref(), &abs_path, force_create).await {
             Ok(project_id) => {
                 success(&format!("Opened project: {project_id}"));
                 return Ok(());
             }
             Err(OpenFailure::Http { message, .. }) => {
-                die(&format!("Failed to open project: {message}"), Some(1));
+                die(
+                    &open_failure_message(&message, &abs_path),
+                    Some(open_http_exit_code(&message)),
+                );
             }
             Err(_) => {
                 // NoDaemon or Connect — fall through to launch-and-retry.
@@ -217,20 +252,47 @@ pub async fn run_open(opts: OpenOptions) -> Result<(), (String, i32)> {
         ),
     };
     let retry_token = get_daemon_token();
-    match post_open_at(&retry_url, retry_token.as_deref(), &abs_path).await {
+    match post_open_at(&retry_url, retry_token.as_deref(), &abs_path, force_create).await {
         Ok(project_id) => {
             success(&format!("Opened project: {project_id}"));
             Ok(())
         }
         Err(OpenFailure::Http { message, .. }) => {
             die(
-                &format!("Failed to open project after app launch: {message}"),
-                Some(1),
+                &format!(
+                    "Failed to open project after app launch: {}",
+                    open_failure_message(&message, &abs_path)
+                ),
+                Some(open_http_exit_code(&message)),
             );
         }
         Err(_) => die(
             "Failed to open project after app launch: daemon unreachable.",
             Some(1),
         ),
+    }
+}
+
+/// Turn a daemon `POST /open` error message into a user-facing string. A
+/// `path_not_found` (missing path) is the one case that hints at `--force-create`.
+fn open_failure_message(message: &str, abs_path: &str) -> String {
+    if message == "path_not_found" {
+        format!(
+            "Path does not exist: {abs_path}\nUse --force-create to create it."
+        )
+    } else {
+        format!("Failed to open project: {message}")
+    }
+}
+
+/// Exit code for an `OpenFailure::Http` error. Exit code 2 is reserved for the
+/// one recoverable case the PRD's CUJ 2 / R5 defines — the target path doesn't
+/// exist (`path_not_found`), which hints at `--force-create`. Any other
+/// daemon-side failure keeps the generic nonzero code 1.
+pub fn open_http_exit_code(message: &str) -> i32 {
+    if message == "path_not_found" {
+        2
+    } else {
+        1
     }
 }

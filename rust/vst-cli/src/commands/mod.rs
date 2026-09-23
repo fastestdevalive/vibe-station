@@ -2,6 +2,7 @@ pub mod agent;
 pub mod daemon;
 pub mod doctor;
 pub mod file;
+pub mod files;
 pub mod mode;
 pub mod open;
 pub mod project;
