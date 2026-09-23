@@ -163,8 +163,28 @@ export interface WorkspaceState {
   /** Active *terminal* session shown in the bottom terminal dock. */
   activeTerminalSessionId: string | null;
   activeFilePath: string | null;
-  /** Pending line number to scroll to in FilePreviewPane after file load (transient). */
-  pendingFileLine: number | null;
+  /**
+   * A committed "jump to line" target (from `setActiveFilePathAtLine`) — carries
+   * its own `worktreeId`/`path` (mirrors `peekFile`'s shape) so FilePreviewPane
+   * can tell whether it still applies to the file currently on screen without a
+   * separate path-tracking ref. Deliberately NOT auto-cleared once scrolled-to
+   * (a `lastScrolledKeyRef` in FilePreviewPane prevents re-scrolling, not this
+   * field) — the target/match-text highlight stays visible for as long as the
+   * user is looking at that exact file, matching `peekFile`'s persistence.
+   * Explicitly cleared by the same commit/context-switch actions that clear
+   * `peekFile` (B1), so an unrelated later navigation can't resurrect a stale
+   * highlight. Single global slot, not per-worktree, same as `peekFile`.
+   */
+  pendingLineTarget: { worktreeId: string; path: string; line: number; matchText: string | null } | null;
+  /**
+   * Live "peek" preview state — a file/line the user has arrowed onto in a search
+   * results list but NOT committed to a tab. Distinct from `activeFilePath`/
+   * `pendingLineTarget` (committed state). Single global slot, not per-worktree;
+   * `worktreeId` is the same resolved context id FilePreviewPane's `worktreeId`
+   * prop uses. Explicitly cleared by the commit/context-switch actions in B1/B3;
+   * deliberately NOT persisted (excluded from `partialize` — see B3 note there).
+   */
+  peekFile: { worktreeId: string; path: string; line: number; matchText: string | null } | null;
   /** Open file tabs per worktree/direct-context (keyed by layout key). */
   openFileTabsByWorktree: Record<string, string[]>;
   /** Active tab index per worktree/direct-context; -1 means none active. */
@@ -198,6 +218,21 @@ export interface WorkspaceState {
    *  never flips the "Changes" flat-list / full-diff-preview mode on; that
    *  mode is controlled exclusively by the "Diff view" (GitCompare) button. */
   treeScopeByWorktree: Record<string, "local" | "branch">;
+  /** Which left-pane mode the Files tool shows per worktree/direct-context:
+   *  "tree" (default) or "search". Keyed by the same resolved context id as
+   *  `layoutKey` (activeWorktreeId ?? activeDirectContextId) — NOT a bare
+   *  activeWorktreeId, which is null for direct sessions (B5). */
+  filesLeftPaneMode: Record<string, "tree" | "search">;
+  /** Monotonic "focus the search query input" request counter, PER resolved
+   *  context id (worktree id or direct-session project id) — a canvas can
+   *  have multiple tools tiles (and so multiple mounted SearchPanels) open
+   *  simultaneously; keying by context id means Mod+Shift+F focuses only
+   *  the panel for the context it was actually invoked in, not every
+   *  mounted panel across every tile. Bumped by the Mod+Shift+F shortcut
+   *  (Phase 3.7/B4c) so the always-mounted SearchPanel can focus its input
+   *  even when it is already in search mode (a bare mode-transition effect
+   *  wouldn't fire, since the mode doesn't change). */
+  searchFocusSeq: Record<string, number>;
   previewFontScale: number;
   /** Per-worktree preview font scale for the tools pane (Files/VCS/Artifacts).
    *  Falls back to the global `previewFontScale` when a worktree has no entry. */
@@ -254,10 +289,14 @@ export interface WorkspaceState {
   setActiveFile: (path: string | null) => void;
   /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
   openFileTabNew: (worktreeId: string, path: string) => void;
-  /** Open path in a new tab and set the pending line number to scroll to (search/navigation intent). */
-  setActiveFilePathAtLine: (worktreeId: string, path: string, line: number) => void;
-  /** Clear the pending line flag after scrolling (transient state cleanup). */
-  clearPendingFileLine: () => void;
+  /** Open path in a new tab and set the pending line/match-text target to scroll to + highlight (search/navigation intent). */
+  setActiveFilePathAtLine: (worktreeId: string, path: string, line: number, matchText?: string) => void;
+  /** Clear the pending line-jump target (e.g. a fresh unrelated navigation should drop a stale highlight). */
+  clearPendingLineTarget: () => void;
+  /** Set the live peek preview (search-result arrow focus, not committed). */
+  setPeekFile: (peek: { worktreeId: string; path: string; line: number; matchText: string | null } | null) => void;
+  /** Clear the live peek preview. */
+  clearPeekFile: () => void;
   /** Close the tab at index idx; adjacent tab becomes active. Updates lastFileByWorktree. */
   closeFileTab: (worktreeId: string, idx: number) => void;
   /** Switch to existing tab at index idx. Updates lastFileByWorktree. */
@@ -269,6 +308,10 @@ export interface WorkspaceState {
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
+  /** Set the Files tool's left-pane mode for the given resolved context id. */
+  setFilesLeftPaneMode: (worktreeId: string, mode: "tree" | "search") => void;
+  /** Bump `searchFocusSeq` for one context id, to request that context's search query input be focused. */
+  requestSearchFocus: (contextId: string) => void;
   bumpPreviewFont: (delta: number) => void;
   /** Bump the preview font scale for a specific worktree's tools pane. */
   bumpPreviewFontForWorktree: (worktreeId: string, delta: number) => void;
@@ -612,7 +655,8 @@ const initial = {
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
-  pendingFileLine: null as number | null,
+  pendingLineTarget: null as { worktreeId: string; path: string; line: number; matchText: string | null } | null,
+  peekFile: null as { worktreeId: string; path: string; line: number; matchText: string | null } | null,
   openFileTabsByWorktree: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
@@ -625,6 +669,8 @@ const initial = {
   lastTerminalByWorktree: {} as Record<string, string>,
   diffScopeByWorktree: {} as Record<string, DiffScope>,
   treeScopeByWorktree: {} as Record<string, "local" | "branch">,
+  filesLeftPaneMode: {} as Record<string, "tree" | "search">,
+  searchFocusSeq: {} as Record<string, number>,
   previewFontScale: 1,
   previewFontScaleByWorktree: {} as Record<string, number>,
   fileTreeVisible: true,
@@ -793,6 +839,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeSessionId: defaultSessionId,
               activeTerminalSessionId: defaultTerminalId,
               activeFilePath: restoredFile,
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         // Restore the last file for this project context, mirroring what
@@ -800,7 +848,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // to leave activeFilePath at whatever the previous context had.
         setActiveDirectContext: (projectId) =>
           set((s) => {
-            if (projectId == null) return { activeDirectContextId: null };
+            if (projectId == null) return { activeDirectContextId: null, peekFile: null, pendingLineTarget: null };
             // Restore from tab array, same as setActiveWorktree (D11).
             const dcTabs = s.openFileTabsByWorktree[projectId] ?? [];
             const dcIdx = s.activeFileTabIdxByWorktree[projectId] ?? -1;
@@ -808,6 +856,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             return {
               activeDirectContextId: projectId,
               activeFilePath: restoredFile,
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         setActiveSession: (sessionId) =>
@@ -835,11 +885,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setActiveFile: (path) =>
           set((s) => {
             const key = layoutKey(s);
-            if (!key) return { activeFilePath: path };
+            if (!key) return { activeFilePath: path, peekFile: null, pendingLineTarget: null };
             if (path === null) {
               // Close active tab (D2)
               const idx = s.activeFileTabIdxByWorktree[key] ?? -1;
-              if (idx < 0) return { activeFilePath: null };
+              if (idx < 0) return { activeFilePath: null, peekFile: null, pendingLineTarget: null };
               const tabs = s.openFileTabsByWorktree[key] ?? [];
               const nextTabs = tabs.filter((_, i) => i !== idx);
               const nextIdx = nextTabs.length === 0 ? -1 : Math.min(idx, nextTabs.length - 1);
@@ -849,6 +899,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
                 lastFileByWorktree: newPath != null ? { ...s.lastFileByWorktree, [key]: newPath } : s.lastFileByWorktree,
+                peekFile: null,
+                pendingLineTarget: null,
               };
             }
             // Replace active tab (tree-navigation intent)
@@ -864,6 +916,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: alreadyOpen },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [key]: path },
+                peekFile: null,
+                pendingLineTarget: null,
               };
             }
             let nextTabs: string[];
@@ -880,6 +934,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
               lastFileByWorktree: { ...s.lastFileByWorktree, [key]: path },
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         openFileTabNew: (worktreeId, path) =>
@@ -891,6 +947,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+                peekFile: null,
+                pendingLineTarget: null,
               };
             }
             const nextTabs = [...tabs, path];
@@ -900,18 +958,22 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
               lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
-        setActiveFilePathAtLine: (worktreeId, path, line) =>
+        setActiveFilePathAtLine: (worktreeId, path, line, matchText) =>
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             const existingIdx = tabs.indexOf(path);
+            const target = { worktreeId, path, line, matchText: matchText ?? null };
             if (existingIdx >= 0) {
               return {
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
-                pendingFileLine: line,
+                pendingLineTarget: target,
+                peekFile: null,
               };
             }
             const nextTabs = [...tabs, path];
@@ -921,10 +983,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
               lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
-              pendingFileLine: line,
+              pendingLineTarget: target,
+              peekFile: null,
             };
           }),
-        clearPendingFileLine: () => set({ pendingFileLine: null }),
+        clearPendingLineTarget: () => set({ pendingLineTarget: null }),
+        setPeekFile: (peek) => set({ peekFile: peek }),
+        clearPeekFile: () => set({ peekFile: null }),
         closeFileTab: (worktreeId, idx) =>
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
@@ -947,6 +1012,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
               lastFileByWorktree: newPath != null ? { ...s.lastFileByWorktree, [worktreeId]: newPath } : s.lastFileByWorktree,
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         setActiveFileTabIdx: (worktreeId, idx) =>
@@ -958,6 +1025,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: path,
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: idx },
               lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         setFocusedPane: (id) => set({ focusedPane: id }),
@@ -976,6 +1045,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setTreeScopeForWorktree: (worktreeId, scope) =>
           set((s) => ({
             treeScopeByWorktree: { ...s.treeScopeByWorktree, [worktreeId]: scope },
+          })),
+        setFilesLeftPaneMode: (worktreeId, mode) =>
+          set((s) => ({
+            filesLeftPaneMode: { ...s.filesLeftPaneMode, [worktreeId]: mode },
+          })),
+        requestSearchFocus: (contextId) =>
+          set((s) => ({
+            searchFocusSeq: { ...s.searchFocusSeq, [contextId]: (s.searchFocusSeq[contextId] ?? 0) + 1 },
           })),
         bumpPreviewFont: (delta) =>
           set((s) => ({
@@ -1033,6 +1110,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: null,
               workspacePaneFullscreen: null,
               activeFileTabIdxByWorktree: nextIdxMap,
+              peekFile: null,
+              pendingLineTarget: null,
             };
           }),
         toggleDotFiles: () => set((s) => ({ showDotFiles: !s.showDotFiles })),
@@ -1602,6 +1681,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return p;
       },
       partialize: (s) => ({
+        // NOTE (B3): `peekFile`/`pendingLineTarget` are deliberately NOT in this
+        // allowlist — transient preview/jump-to-line state must never be
+        // persisted across reloads. Do NOT add either here; a future refactor
+        // that spreads `...s` here would silently start persisting stale state.
         layoutByWorktree: s.layoutByWorktree,
         activeProjectId: s.activeProjectId,
         activeWorktreeId: s.activeWorktreeId,
@@ -1618,6 +1701,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         lastTerminalByWorktree: s.lastTerminalByWorktree,
         diffScopeByWorktree: s.diffScopeByWorktree,
         treeScopeByWorktree: s.treeScopeByWorktree,
+        filesLeftPaneMode: s.filesLeftPaneMode,
         previewFontScale: s.previewFontScale,
         previewFontScaleByWorktree: s.previewFontScaleByWorktree,
         fileTreeVisible: s.fileTreeVisible,

@@ -150,8 +150,8 @@ describe("FilePreviewPane image files (3.T1 / TODO 2)", () => {
   });
 });
 
-describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click-through)", () => {
-  it("scrolls the matching line into view and clears pendingFileLine once consumed", async () => {
+describe("FilePreviewPane — 3.T4 (scroll to pendingLineTarget, from search click-through)", () => {
+  it("scrolls the matching line into view and highlights it; the target persists (not cleared) once consumed", async () => {
     const api = createMockApi();
     // "src/App.tsx" mock content is 3 lines (see mock.ts fileContents):
     //   1: export function App() {
@@ -161,7 +161,7 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
-      pendingFileLine: null,
+      pendingLineTarget: null,
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
@@ -174,20 +174,34 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
     }
 
     act(() => {
-      useWorkspaceStore.setState({ pendingFileLine: 2 });
+      useWorkspaceStore.setState({
+        pendingLineTarget: { worktreeId: "wt-1", path: "src/App.tsx", line: 2, matchText: null },
+      });
     });
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: "center" }));
 
-    // The line whose gutter reads "2" is the one that was scrolled to.
+    // The line whose gutter reads "2" is the one that was scrolled to, and it
+    // carries the line-highlight class.
     const lines = Array.from(container.querySelectorAll(".workspace-code-line"));
     const line2 = lines.find(
       (el) => el.querySelector(".workspace-code-gutter")?.textContent?.trim() === "2",
     );
     expect(line2?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    expect(line2).toHaveClass("workspace-code-line--target");
 
-    // Consumed — cleared back to null so a later render doesn't re-scroll.
-    await waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+    // Deliberately NOT cleared once consumed (unlike the old `pendingFileLine`
+    // self-clearing design) — the target/highlight persists for as long as the
+    // user is viewing that exact file, so live-review feedback ("the highlight
+    // should show when the file opens") holds true, not just for one frame.
+    await waitFor(() =>
+      expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+        worktreeId: "wt-1",
+        path: "src/App.tsx",
+        line: 2,
+        matchText: null,
+      }),
+    );
   });
 
   it("scrolls a diff-mode (DiffView) render too — regression: DiffView's .diff-line/.diff-gutter markup used to never match the old gutter-text-only lookup", async () => {
@@ -196,7 +210,7 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: { "wt-1": "local" },
-      pendingFileLine: null,
+      pendingLineTarget: null,
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => expect(container.querySelector(".diff-line")).toBeTruthy());
@@ -210,22 +224,47 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
     }
 
     act(() => {
-      useWorkspaceStore.setState({ pendingFileLine: 2 });
+      useWorkspaceStore.setState({
+        pendingLineTarget: { worktreeId: "wt-1", path: "src/App.tsx", line: 2, matchText: null },
+      });
     });
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: "center" }));
     const target = container.querySelector('[data-line="2"]');
     expect(target?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
-    await waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
   });
 
-  it("does not scroll when pendingFileLine is null", async () => {
+  it("renders the line-highlight AND matched-text mark end-to-end when pendingLineTarget carries matchText", async () => {
+    const api = createMockApi();
+    // "src/App.tsx" line 2 is `  return <div>hello</div>;` (mock.ts fileContents).
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      pendingLineTarget: { worktreeId: "wt-1", path: "src/App.tsx", line: 2, matchText: "hello" },
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+
+    await waitFor(() => {
+      const mark = container.querySelector("mark.workspace-code-match");
+      expect(mark).toBeTruthy();
+      expect(mark?.textContent).toBe("hello");
+    });
+    const lines = Array.from(container.querySelectorAll(".workspace-code-line"));
+    const line2 = lines.find(
+      (el) => el.querySelector(".workspace-code-gutter")?.textContent?.trim() === "2",
+    );
+    expect(line2).toHaveClass("workspace-code-line--target");
+  });
+
+  it("does not scroll when pendingLineTarget is null", async () => {
     const api = createMockApi();
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
-      pendingFileLine: null,
+      pendingLineTarget: null,
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
@@ -246,15 +285,17 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
         activeWorktreeId: "wt-1",
         activeFilePath: "src/App.tsx",
         diffScopeByWorktree: {},
-        pendingFileLine: null,
+        pendingLineTarget: null,
       });
       const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
       await vi.waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
 
       act(() => {
-        useWorkspaceStore.setState({ pendingFileLine: 2 });
+        useWorkspaceStore.setState({
+          pendingLineTarget: { worktreeId: "wt-1", path: "src/App.tsx", line: 2, matchText: null },
+        });
       });
-      await vi.waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+      await vi.waitFor(() => expect(container.querySelector('[data-line="2"]')).toHaveClass("workspace-line-highlight"));
 
       const line2 = container.querySelector('[data-line="2"]');
       expect(line2).toHaveClass("workspace-line-highlight");
@@ -263,9 +304,11 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingFileLine, from search click
       // A second jump before the first highlight expires moves the highlight,
       // never leaving two lines lit at once.
       act(() => {
-        useWorkspaceStore.setState({ pendingFileLine: 1 });
+        useWorkspaceStore.setState({
+          pendingLineTarget: { worktreeId: "wt-1", path: "src/App.tsx", line: 1, matchText: null },
+        });
       });
-      await vi.waitFor(() => expect(useWorkspaceStore.getState().pendingFileLine).toBeNull());
+      await vi.waitFor(() => expect(container.querySelector('[data-line="1"]')).toHaveClass("workspace-line-highlight"));
       expect(container.querySelector('[data-line="1"]')).toHaveClass("workspace-line-highlight");
       expect(container.querySelectorAll(".workspace-line-highlight")).toHaveLength(1);
 
@@ -436,5 +479,195 @@ describe("FilePreviewPane — file-watch leak fix Phase 4 (ws:open catch-up refe
       handler({ type: "ws:open" });
     });
     await waitFor(() => expect(getFileSpy).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-tracking)", () => {
+  it("renders peekFile's path when set and worktreeId matches, even though activeFilePath points elsewhere", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+    });
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    // Peek (README.md) wins over activeFilePath (src/App.tsx) when context-matched.
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument();
+    });
+  });
+
+  it("falls back to activeFilePath when peekFile is null", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      peekFile: null,
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+  });
+
+  it("falls back to activeFilePath when peekFile.worktreeId doesn't match this pane's worktreeId (B3)", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      // Peek is for a DIFFERENT worktree — must not leak into this pane.
+      peekFile: { worktreeId: "wt-2", path: "README.md", line: 1, matchText: null },
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    // Shows App.tsx (activeFilePath), NOT README.md (mismatched peek).
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+    expect(screen.queryByRole("heading", { name: "Demo" })).not.toBeInTheDocument();
+  });
+
+  it("controlled mode ignores peekFile entirely (peek never leaks into VcsCommitView)", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+    });
+    render(
+      <FilePreviewPane
+        api={api}
+        worktreeId="wt-1"
+        controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123" }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Commit diff")).toBeInTheDocument());
+  });
+
+  it("a peek-sourced scroll-to-line does not re-fire on an unrelated re-render once consumed (B2)", async () => {
+    // Regression coverage note: this used to toggle the markdown raw/formatted
+    // view (since removed from the component entirely) to force a re-render
+    // without changing the peek's `path#line` key. Re-setting `peekFile` to
+    // the exact same value is a more direct trigger for the same scenario —
+    // "some unrelated state change causes a re-render; the already-consumed
+    // key must not re-fire the scroll".
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "README.md",
+      diffScopeByWorktree: {},
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+      pendingLineTarget: null,
+    });
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument());
+
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      // Markdown's rendered view has no `.workspace-code-line` elements, so the
+      // initial peek scroll can't have fired yet — nothing to assert there.
+      expect(scrollSpy).not.toHaveBeenCalled();
+
+      // Re-set peekFile to the SAME value — a re-render with an unchanged key.
+      // Must not (re-)fire a scroll, since there's still no matching line
+      // element on screen (rendered Markdown never grows one for this key).
+      act(() => {
+        useWorkspaceStore.setState({
+          peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+        });
+      });
+      await Promise.resolve();
+      expect(scrollSpy).not.toHaveBeenCalled();
+    } finally {
+      scrollSpy.mockRestore();
+    }
+  });
+
+  it("B-1 — crossing to a new file at the SAME line number re-arms the scroll", async () => {
+    const api = createMockApi();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 1, matchText: null },
+      pendingLineTarget: null,
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      // Move the peek to a DIFFERENT file at the SAME line number (1). The line
+      // VALUE doesn't change (still 1), but the path does — this must re-arm the
+      // scroll (B-1); previously the path-capture effect only keyed on the line
+      // value, so it never re-ran and the stale-path guard silently dropped the
+      // scroll in the new file.
+      act(() => {
+        useWorkspaceStore.setState({
+          peekFile: { worktreeId: "wt-1", path: "src/main.tsx", line: 1, matchText: null },
+        });
+      });
+
+      // main.tsx (single line, gutter "1") must actually be scrolled to.
+      await waitFor(() => {
+        const lines = Array.from(container.querySelectorAll(".workspace-code-line"));
+        const mainLine = lines.find(
+          (el) => el.querySelector(".workspace-code-gutter")?.textContent?.trim() === "1",
+        );
+        expect(mainLine?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+      });
+    } finally {
+      scrollSpy.mockRestore();
+    }
+  });
+
+  it("B-2 — arrowing back UP to an already-visited line re-scrolls to it", async () => {
+    const api = createMockApi();
+    // A file with enough lines (1..40) so the multi-line peek scenario works.
+    const body = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+    const getFileSpy = vi.spyOn(api, "getFile").mockResolvedValue(body);
+
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/Big.ts",
+      diffScopeByWorktree: {},
+      peekFile: null,
+      pendingLineTarget: null,
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => expect(container.querySelector(".workspace-code-viewer")).toBeTruthy());
+
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+    try {
+      const goto = (line: number) => {
+        act(() => {
+          useWorkspaceStore.setState({ peekFile: { worktreeId: "wt-1", path: "src/Big.ts", line, matchText: null } });
+        });
+      };
+
+      // Arrow down through three matches: line 10, then 20, then 35.
+      goto(10);
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+      goto(20);
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(2));
+      goto(35);
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(3));
+
+      // Arrow back UP to line 10 — already visited (still in the last-scrolled
+      // history), but the request key changed away and back, so it MUST
+      // re-scroll (B-2). The old accumulating Set never forgot `path#10`, so it
+      // stayed parked at line 35.
+      scrollSpy.mockClear();
+      goto(10);
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+
+      const lines = Array.from(container.querySelectorAll(".workspace-code-line"));
+      const line10 = lines.find(
+        (el) => el.querySelector(".workspace-code-gutter")?.textContent?.trim() === "10",
+      );
+      expect(line10?.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    } finally {
+      scrollSpy.mockRestore();
+      getFileSpy.mockRestore();
+    }
   });
 });

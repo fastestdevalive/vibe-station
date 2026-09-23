@@ -869,3 +869,90 @@ describe("useWorkspaceStore - syncSessionsFromApi prune mode", () => {
     expect(useWorkspaceStore.getState().sessionStates["sess-a"]).toBe("exited");
   });
 });
+
+describe("useWorkspaceStore - peekFile slice", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      activeFilePath: "/a.ts",
+      openFileTabsByWorktree: { [W1]: ["/a.ts", "/b.ts"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+      peekFile: null,
+    });
+  });
+
+  const PEEK = { worktreeId: W1, path: "/b.ts", line: 42, matchText: null };
+
+  function seedPeek() {
+    useWorkspaceStore.getState().setPeekFile(PEEK);
+    expect(useWorkspaceStore.getState().peekFile).toEqual(PEEK);
+  }
+
+  it("setPeekFile sets the slice and clearPeekFile clears it, leaving other fields untouched", () => {
+    seedPeek();
+    useWorkspaceStore.getState().clearPeekFile();
+    const s = useWorkspaceStore.getState();
+    expect(s.peekFile).toBeNull();
+    expect(s.activeFilePath).toBe("/a.ts");
+    expect(s.activeFileTabIdxByWorktree[W1]).toBe(0);
+  });
+
+  it("setActiveFile clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().setActiveFile("/c.ts");
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("openFileTabNew clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().openFileTabNew(W1, "/c.ts");
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("setActiveFilePathAtLine clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().setActiveFilePathAtLine(W1, "/c.ts", 7);
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("setActiveFileTabIdx clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().setActiveFileTabIdx(W1, 1);
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("closeFileTab clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().closeFileTab(W1, 0);
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("setActiveWorktree clears peekFile on a context switch", () => {
+    seedPeek();
+    useWorkspaceStore.getState().setActiveWorktree(P1, W2, mockSessions(W2));
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("setActiveDirectContext clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().setActiveDirectContext("project-direct");
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("clearWorkspaceSelection clears peekFile", () => {
+    seedPeek();
+    useWorkspaceStore.getState().clearWorkspaceSelection();
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  it("peekFile is NOT persisted (excluded from partialize)", () => {
+    seedPeek();
+    // Trigger a persist pass and confirm peekFile isn't in the persisted payload.
+    useWorkspaceStore.getState().setActiveFile("/d.ts");
+    const persisted = JSON.parse(localStorage.getItem(useWorkspaceStore.persist.getOptions()?.name ?? "storage") ?? "{}");
+    expect(JSON.stringify(persisted.state ?? persisted)).not.toContain("peekFile");
+  });
+});
