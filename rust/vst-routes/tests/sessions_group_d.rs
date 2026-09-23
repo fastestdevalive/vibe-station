@@ -125,6 +125,7 @@ fn make_project(id: &str) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 

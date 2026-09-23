@@ -95,6 +95,7 @@ fn make_worktree(id: &str) -> WorktreeRecord {
         agent_seq: Some(1),
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec![],
     }
 }
 
@@ -112,6 +113,7 @@ fn make_project(id: &str) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
@@ -808,6 +810,34 @@ async fn start_unknown_entry_point_400() {
     };
     let err = r.start_session("s-draft", &body).await.unwrap_err();
     assert!(matches!(err, StartError::Validation(_)));
+}
+
+#[tokio::test]
+async fn start_worktree_new_on_nongit_project_returns_notgit() {
+    // R8/R9: the `/start` "new worktree" path (what DraftComposer's Tier1 flow
+    // calls, NOT WorktreeRoutes::create_worktree) must gate on git too — a
+    // non-git project must yield StartError::NotGit (mapped to 422 NOT_GIT)
+    // instead of reaching raw git commands and 500ing with "Failed to create
+    // worktree".
+    let (_d, store) = store();
+    let dir = tempdir().unwrap();
+    let mut p = make_project("p1");
+    p.absolute_path = dir.path().to_string_lossy().to_string();
+    p.is_git = false;
+    p.default_branch = None;
+    p.direct_sessions.push(drafting_session("s-draft", "p1", None));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut cfg = draft_config(DraftEntryPoint::Worktree, "m");
+    cfg.worktree_choice = Some(WorktreeChoice::New);
+    let body = StartDraftBody {
+        draft_prompt: "new worktree on non-git".into(),
+        draft_config: cfg,
+        skip_auto_turn: Some(true),
+    };
+    let err = r.start_session("s-draft", &body).await.unwrap_err();
+    assert!(matches!(err, StartError::NotGit));
 }
 
 #[tokio::test]

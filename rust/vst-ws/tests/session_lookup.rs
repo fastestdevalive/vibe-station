@@ -77,9 +77,11 @@ fn project(
             agent_seq: None,
             lsp_enabled: None,
             sessions: worktree_sessions,
+            open_files: vec![],
         }],
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 

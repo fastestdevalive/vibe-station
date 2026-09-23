@@ -26,6 +26,7 @@ fn make_project(path: &str) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
@@ -45,6 +46,7 @@ fn make_worktree() -> WorktreeRecord {
         agent_seq: None,
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec![],
     }
 }
 

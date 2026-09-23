@@ -84,10 +84,12 @@ fn project(id: &str, worktree_sessions: &[&str], direct_sessions: &[&str]) -> Pr
                     .iter()
                     .map(|s| session(s, id, Some(&format!("{id}-w1"))))
                     .collect(),
+                open_files: vec![],
             }]
         },
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 

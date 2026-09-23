@@ -96,6 +96,7 @@ use vst_ws::state::attachment_registry::AttachmentRegistry;
 use vst_ws::streams::pty_stream::PtySessionStream;
 
 use crate::modes::{find_mode, resolve_mode_id};
+use crate::worktrees::{ensure_git_project, GitGateError};
 
 pub use vst_types::rest::sessions::SessionOrDraft;
 
@@ -1847,6 +1848,16 @@ impl SessionRoutes {
         skip_auto_turn: bool,
         daemon_port: u16,
     ) -> Result<StartDraftResult, StartError> {
+        // R11: same git gate as WorktreeRoutes::create_worktree — a non-git
+        // project must not reach raw git commands here (which would 500), and a
+        // project git-init'd out-of-band self-heals into being usable.
+        let project = ensure_git_project(&self.store, project)
+            .await
+            .map_err(|e| match e {
+                GitGateError::NotGit => StartError::NotGit,
+                GitGateError::Internal(m) => StartError::Internal(m),
+            })?;
+
         let base_branch = draft_config
             .base_branch
             .clone()
@@ -4762,6 +4773,7 @@ pub enum StartError {
     NotFound(String),
     NotDrafting(String),
     Validation(String),
+    NotGit,
     Internal(String),
 }
 

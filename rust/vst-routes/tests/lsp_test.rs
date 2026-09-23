@@ -96,6 +96,7 @@ async fn test_lsp_root_matches_get_file_exactly() {
         agent_seq: Some(1),
         lsp_enabled: Some(true),
         sessions: vec![],
+        open_files: vec![],
     };
 
     let project_record = ProjectRecord {
@@ -111,6 +112,7 @@ async fn test_lsp_root_matches_get_file_exactly() {
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
 
     store.add_project(project_record).await.unwrap();
@@ -250,11 +252,13 @@ async fn test_4_t1_token_minting() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -388,11 +392,13 @@ async fn test_4_t2_external_file_serving_and_bogus_token() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -465,11 +471,13 @@ async fn test_4_t3_security_percent_encoded_path_traversal_is_opaque_token() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -531,11 +539,13 @@ async fn test_4_t4_security_symlink_to_deny_listed_prefix_rejected() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -618,11 +628,13 @@ async fn test_5_t1_references_pagination() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -762,11 +774,13 @@ async fn test_5_hover_signature_and_doc() {
             agent_seq: Some(1),
             sessions: vec![],
             lsp_enabled: Some(true),
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -872,6 +886,7 @@ async fn test_outline_unsupported_file() {
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
 
     store.add_project(project_record).await.unwrap();
@@ -1045,11 +1060,13 @@ async fn test_lsp_disabled_worktree_status_and_definition() {
             agent_seq: Some(1),
             lsp_enabled: Some(false), // Disabled!
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -1133,11 +1150,13 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -1264,11 +1283,13 @@ async fn test_3_t4_definition_fallback_when_disabled() {
             agent_seq: Some(1),
             lsp_enabled: Some(false), // Disabled
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(false),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 
@@ -1327,11 +1348,13 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
             agent_seq: Some(1),
             lsp_enabled: Some(true),
             sessions: vec![],
+            open_files: vec![],
         }],
         direct_sessions: vec![],
         direct_session_seq: Some(1),
         next_worktree_num: Some(1),
         lsp_enabled: Some(true),
+        open_files: vec![],
     };
     store.add_project(project_record).await.unwrap();
 

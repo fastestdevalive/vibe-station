@@ -8,6 +8,8 @@ use serde_with::skip_serializing_none;
 #[serde(rename_all = "camelCase")]
 pub struct OpenBody {
     pub path: String,
+    #[serde(default)]
+    pub force_create: bool,
 }
 
 /// `POST /open` success response.
@@ -15,6 +17,7 @@ pub struct OpenBody {
 #[serde(rename_all = "camelCase")]
 pub struct OpenResult {
     pub project_id: String,
+    pub is_git: bool,
 }
 
 /// `POST /open` error responses.

@@ -110,6 +110,7 @@ impl OpenRoutes {
         *self.last_navigate.lock().unwrap() = Some(replay);
         self.broadcaster.send(ServerEvent::Navigate {
             project_id: project_id.to_string(),
+            new_window: true,
         });
     }
 
@@ -129,7 +130,19 @@ impl OpenRoutes {
 
         let metadata = match tokio::fs::metadata(path).await {
             Ok(m) => m,
-            Err(_) => return Err(OpenRouteError::PathNotFound),
+            Err(_) => {
+                // R5: a missing path errors by default; `--force-create` creates it instead.
+                if body.force_create {
+                    tokio::fs::create_dir_all(path)
+                        .await
+                        .map_err(|e| OpenRouteError::Internal(e.to_string()))?;
+                    tokio::fs::metadata(path)
+                        .await
+                        .map_err(|e| OpenRouteError::Internal(e.to_string()))?
+                } else {
+                    return Err(OpenRouteError::PathNotFound);
+                }
+            }
         };
 
         if !metadata.is_dir() {
@@ -140,8 +153,9 @@ impl OpenRoutes {
         let all_projects = self.store.get_all_projects().await;
         if let Some(existing) = all_projects.iter().find(|p| p.absolute_path == raw_path) {
             let project_id = existing.id.clone();
+            let is_git = existing.is_git;
             self.emit_navigate(&project_id);
-            return Ok(OpenResult { project_id });
+            return Ok(OpenResult { project_id, is_git });
         }
 
         // Register new project
@@ -195,6 +209,7 @@ impl OpenRoutes {
             worktrees: vec![],
             next_worktree_num: Some(1),
             lsp_enabled: None,
+            open_files: vec![],
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {
@@ -205,6 +220,7 @@ impl OpenRoutes {
                 self.emit_navigate(&race_existing.id);
                 return Ok(OpenResult {
                     project_id: race_existing.id.clone(),
+                    is_git: race_existing.is_git,
                 });
             }
             return Err(OpenRouteError::Internal(format!(
@@ -224,6 +240,7 @@ impl OpenRoutes {
         self.emit_navigate(&record.id);
         Ok(OpenResult {
             project_id: record.id,
+            is_git: record.is_git,
         })
     }
 }

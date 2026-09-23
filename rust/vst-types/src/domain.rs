@@ -607,6 +607,8 @@ pub struct WorktreeRecord {
     /// Whether code navigation (LSP) is enabled.
     pub lsp_enabled: Option<bool>,
     pub sessions: Vec<SessionRecord>,
+    /// Durable set of currently-open file paths, relative to the worktree root.
+    pub open_files: Vec<String>,
 }
 
 /// Identifies which client minted a token.
@@ -676,4 +678,6 @@ pub struct ProjectRecord {
     pub next_worktree_num: Option<i64>,
     /// Whether code navigation (LSP) is enabled.
     pub lsp_enabled: Option<bool>,
+    /// Durable set of currently-open file paths, relative to the project root.
+    pub open_files: Vec<String>,
 }

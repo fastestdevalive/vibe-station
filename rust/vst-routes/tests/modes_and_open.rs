@@ -406,9 +406,11 @@ async fn test_modes_crud_lifecycle_and_events() {
             agent_seq: Some(2),
             lsp_enabled: None,
             sessions: vec![session1, session2_done],
+            open_files: vec![],
         }],
         next_worktree_num: Some(2),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(project).await.unwrap();
 
@@ -887,6 +889,7 @@ async fn test_open_validation_errors() {
     let err_empty = open_routes
         .open(OpenBody {
             path: "".to_string(),
+            force_create: false,
         })
         .await;
     assert!(
@@ -898,6 +901,7 @@ async fn test_open_validation_errors() {
     let err_rel = open_routes
         .open(OpenBody {
             path: "relative/path".to_string(),
+            force_create: false,
         })
         .await;
     assert!(
@@ -910,6 +914,7 @@ async fn test_open_validation_errors() {
     let err_not_found = open_routes
         .open(OpenBody {
             path: non_existent.to_string_lossy().to_string(),
+            force_create: false,
         })
         .await;
     assert!(
@@ -923,6 +928,7 @@ async fn test_open_validation_errors() {
     let err_not_dir = open_routes
         .open(OpenBody {
             path: file_path.to_string_lossy().to_string(),
+            force_create: false,
         })
         .await;
     assert!(
@@ -949,6 +955,7 @@ async fn test_open_upsert_and_new_project_with_replay() {
     let result = open_routes
         .open(OpenBody {
             path: abs_path.clone(),
+            force_create: false,
         })
         .await
         .expect("open should succeed on valid git directory");
@@ -974,9 +981,16 @@ async fn test_open_upsert_and_new_project_with_replay() {
                     Some("my-cool-project")
                 );
             }
-            ServerEvent::Navigate { project_id } => {
+            ServerEvent::Navigate {
+                project_id,
+                new_window,
+            } => {
                 saw_navigate = true;
                 assert_eq!(project_id, "my-cool-project");
+                assert!(
+                    new_window,
+                    "fresh broadcast should always set new_window = true"
+                );
             }
             _ => {}
         }
@@ -992,6 +1006,7 @@ async fn test_open_upsert_and_new_project_with_replay() {
     let result_upsert = open_routes
         .open(OpenBody {
             path: abs_path.clone(),
+            force_create: false,
         })
         .await
         .expect("upsert open should succeed");
@@ -1008,6 +1023,7 @@ async fn test_open_upsert_and_new_project_with_replay() {
     let result2 = open_routes
         .open(OpenBody {
             path: abs_path2.clone(),
+            force_create: false,
         })
         .await
         .expect("open second directory with same name should succeed");
@@ -1015,4 +1031,97 @@ async fn test_open_upsert_and_new_project_with_replay() {
     assert_eq!(result2.project_id, "my-cool-project-2");
     let all2 = store.get_all_projects().await;
     assert_eq!(all2.len(), 2);
+}
+
+#[tokio::test]
+async fn open_force_create_creates_missing_directory() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let open_routes = OpenRoutes::new(store, broadcaster);
+
+    let missing = dir.path().join("brand-new-dir");
+    assert!(
+        tokio::fs::metadata(&missing).await.is_err(),
+        "precondition: path should not exist yet"
+    );
+
+    let result = open_routes
+        .open(OpenBody {
+            path: missing.to_string_lossy().to_string(),
+            force_create: true,
+        })
+        .await
+        .expect("force_create should succeed on a missing path");
+
+    assert!(
+        tokio::fs::metadata(&missing).await.map(|m| m.is_dir()).unwrap_or(false),
+        "directory should now exist on disk"
+    );
+    assert_eq!(result.project_id, "brand-new-dir");
+}
+
+#[tokio::test]
+async fn open_missing_path_without_force_create_errors() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let open_routes = OpenRoutes::new(store, broadcaster);
+
+    let missing = dir.path().join("does-not-exist-either");
+
+    let err = open_routes
+        .open(OpenBody {
+            path: missing.to_string_lossy().to_string(),
+            force_create: false,
+        })
+        .await;
+    assert!(
+        matches!(err, Err(OpenRouteError::PathNotFound)),
+        "missing path without force_create should still return PathNotFound"
+    );
+
+    // Nothing should have been created on disk.
+    assert!(tokio::fs::metadata(&missing).await.is_err());
+}
+
+#[tokio::test]
+async fn open_result_is_git_reflects_directory_state() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let open_routes = OpenRoutes::new(store, broadcaster);
+
+    // Non-git directory -> is_git false
+    let non_git = dir.path().join("plain-dir");
+    std::fs::create_dir_all(&non_git).unwrap();
+    let non_git_path = non_git.to_string_lossy().to_string();
+    let non_git_result = open_routes
+        .open(OpenBody {
+            path: non_git_path.clone(),
+            force_create: false,
+        })
+        .await
+        .expect("open plain directory should succeed");
+    assert!(
+        !non_git_result.is_git,
+        "non-git directory should report is_git = false"
+    );
+
+    // Git directory -> is_git true
+    let git_dir = dir.path().join("git-dir");
+    std::fs::create_dir_all(&git_dir).unwrap();
+    init_git_repo(&git_dir);
+    let git_path = git_dir.to_string_lossy().to_string();
+    let git_result = open_routes
+        .open(OpenBody {
+            path: git_path.clone(),
+            force_create: false,
+        })
+        .await
+        .expect("open git directory should succeed");
+    assert!(
+        git_result.is_git,
+        "git directory should report is_git = true"
+    );
 }

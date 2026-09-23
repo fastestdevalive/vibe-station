@@ -101,6 +101,7 @@ fn make_worktree(id: &str) -> WorktreeRecord {
         agent_seq: Some(1),
         lsp_enabled: None,
         sessions: vec![],
+        open_files: vec![],
     }
 }
 
@@ -118,6 +119,7 @@ fn make_project(id: &str) -> ProjectRecord {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 

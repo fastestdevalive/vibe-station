@@ -266,7 +266,18 @@ pub enum ServerMessage {
     #[serde(rename = "remote:disconnected", rename_all = "camelCase")]
     RemoteDisconnected { token_id: String, connections: i64 },
     #[serde(rename = "navigate", rename_all = "camelCase")]
-    Navigate { project_id: String },
+    Navigate {
+        project_id: String,
+        new_window: bool,
+    },
+    #[serde(rename = "openFiles:changed", rename_all = "camelCase")]
+    OpenFilesChanged {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        worktree_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+        paths: Vec<String>,
+    },
     #[serde(rename = "pong")]
     Pong,
     #[serde(rename = "system:error")]

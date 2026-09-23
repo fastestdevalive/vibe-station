@@ -33,14 +33,15 @@ use vst_routes::projects::{
     assert_safe_to_delete, expand_tilde, resolve_inside_dir, serialize_project, ProjectRouteError,
     ProjectRoutes,
 };
-use vst_routes::worktrees::FileResponse;
+use vst_routes::worktrees::{FileResponse, WorktreeRoutes};
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::projects::{
     CreateNewProjectBody, CreateProjectBody, PatchProjectBody, StartAgent,
 };
 use vst_types::rest::shared::Mode;
-use vst_types::{CliId, ProjectRecord};
+use vst_types::rest::worktrees::CreateWorktreeBody;
+use vst_types::{Channel, CliId, ProjectRecord};
 
 fn test_env() -> (tempfile::TempDir, StoreHandle, Broadcaster, ProjectRoutes) {
     let dir = tempdir().unwrap();
@@ -154,6 +155,7 @@ async fn test_pure_helpers() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     let serialized = serialize_project(&rec);
     assert_eq!(serialized.id, "p-rec");
@@ -179,6 +181,7 @@ async fn test_list_projects_order() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     let p2 = ProjectRecord {
         id: "proj-a".into(),
@@ -193,6 +196,7 @@ async fn test_list_projects_order() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     let p3 = ProjectRecord {
         id: "proj-c".into(),
@@ -207,6 +211,7 @@ async fn test_list_projects_order() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
 
     store.add_project(p1).await.unwrap();
@@ -248,6 +253,7 @@ async fn test_list_project_branches() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p_non_git).await.unwrap();
 
@@ -273,12 +279,147 @@ async fn test_list_project_branches() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p_git).await.unwrap();
 
     let branches_res = routes.list_project_branches("real-git").await.unwrap();
     assert_eq!(branches_res.default_branch.as_deref(), Some("main"));
     assert!(branches_res.branches.contains(&"main".to_string()));
+}
+
+#[tokio::test]
+async fn test_git_init_initializes_and_persists() {
+    let (dir, store, broadcaster, routes) = test_env();
+    let mut rx = broadcaster.subscribe();
+
+    // 404 on missing project
+    let err = routes.git_init("missing").await.unwrap_err();
+    assert!(matches!(err, ProjectRouteError::NotFound(_)));
+
+    // Register a non-git project
+    let proj_dir = dir.path().join("not-yet-git");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let p = ProjectRecord {
+        id: "not-yet-git".into(),
+        absolute_path: proj_dir.to_string_lossy().into(),
+        prefix: "nyg".into(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(p).await.unwrap();
+
+    assert!(tokio::fs::metadata(proj_dir.join(".git")).await.is_err());
+
+    let res = routes.git_init("not-yet-git").await.unwrap();
+    assert!(res.ok);
+    assert!(res.is_git);
+    // Fix 1: the redetected default branch is returned (run_project_setup
+    // renames the branch to `main`), not `null`.
+    assert_eq!(res.default_branch.as_deref(), Some("main"));
+
+    // `.git/` exists on disk afterward
+    assert!(tokio::fs::metadata(proj_dir.join(".git")).await.is_ok());
+
+    // is_git AND default_branch persisted in the store
+    let persisted = store.get_project("not-yet-git").await.unwrap();
+    assert!(persisted.is_git);
+    assert_eq!(persisted.default_branch.as_deref(), Some("main"));
+
+    // Fix 4: a ProjectUpdated broadcast goes out to other connected clients.
+    let ev = rx.recv().await.expect("expected a ProjectUpdated broadcast");
+    match ev {
+        ServerEvent::ProjectUpdated { project } => {
+            assert_eq!(project.get("id").and_then(|v| v.as_str()), Some("not-yet-git"));
+            assert_eq!(project.get("isGit").and_then(|v| v.as_bool()), Some(true));
+        }
+        other => panic!("expected ProjectUpdated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_git_init_makes_project_usable_for_worktree_creation() {
+    // Fix 1 (BLOCKING): git_init must run FULL project setup (initial commit +
+    // `main` branch), not a bare `git init`, so a subsequent worktree creation
+    // against the recovered project actually succeeds instead of failing with
+    // "Base branch 'main' not found".
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "test-mode", CliId::Claude);
+
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(32);
+    let json_registry = Arc::new(JsonAgentRegistry::new());
+    let tmux = Tmux::new();
+    let project_paths = Paths::with_home(dir.path().join(".vibe-station"));
+    let proj_routes = ProjectRoutes::new(
+        store.clone(),
+        broadcaster.clone(),
+        json_registry.clone(),
+        tmux.clone(),
+        4000,
+    )
+    .with_paths(project_paths);
+
+    let proj_dir = dir.path().join("recovered");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let p = ProjectRecord {
+        id: "recovered".into(),
+        absolute_path: proj_dir.to_string_lossy().into(),
+        prefix: "rec".into(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    };
+    store.add_project(p).await.unwrap();
+
+    let res = proj_routes.git_init("recovered").await.unwrap();
+    assert_eq!(res.default_branch.as_deref(), Some("main"));
+
+    // Now a worktree CAN be created against the recovered project.
+    let mut wt_routes = WorktreeRoutes::new(
+        store.clone(),
+        broadcaster,
+        json_registry,
+        tmux,
+        4000,
+    );
+    wt_routes.paths = Paths::with_home(dir.path().join(".vst-wt"));
+
+    let created = wt_routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "recovered".into(),
+            mode_id: "test-mode".into(),
+            branch: Some("feat/recovered".into()),
+            base_branch: Some("main".into()),
+            prompt: None,
+            use_tmux: None,
+            channel: Some(Channel::Json),
+            name: Some("Recovered".into()),
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .expect("worktree creation should succeed against a git-init-recovered project");
+
+    assert_eq!(created.project_id, "recovered");
+    assert_eq!(created.branch, "feat/recovered");
 }
 
 #[tokio::test]
@@ -663,6 +804,7 @@ async fn test_patch_project_hidden() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 
@@ -725,6 +867,7 @@ async fn test_patch_project_lsp_enabled() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 
@@ -837,6 +980,7 @@ async fn test_delete_project() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 
@@ -886,6 +1030,7 @@ async fn test_tree_file_list_and_get_file() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 
@@ -949,6 +1094,7 @@ async fn register_git_project(
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 }
@@ -1178,6 +1324,7 @@ async fn test_non_git_project_short_circuit() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(p).await.unwrap();
 
@@ -1346,6 +1493,7 @@ async fn test_project_search_integration() {
         worktrees: vec![],
         next_worktree_num: Some(1),
         lsp_enabled: None,
+        open_files: vec![],
     };
     store.add_project(project).await.unwrap();
 

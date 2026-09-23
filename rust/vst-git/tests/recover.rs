@@ -136,9 +136,11 @@ fn make_record() -> ProjectRecord {
                     LifecycleState::Working,
                 ),
             ],
+            open_files: vec![],
         }],
         next_worktree_num: None,
         lsp_enabled: None,
+        open_files: vec![],
     }
 }
 
