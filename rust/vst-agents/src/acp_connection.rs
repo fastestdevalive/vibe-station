@@ -170,6 +170,10 @@ enum Command {
         session_id: String,
         prompt: Vec<ContentBlock>,
         result_tx: oneshot::Sender<Result<StopReason, AcpTransportError>>,
+        /// Identifies THIS turn's sink, so the completion handler can tell
+        /// whether `active_update` still points at it before clearing —
+        /// see the comment at the `SendPrompt` command-loop arm.
+        updates_tx: mpsc::UnboundedSender<SessionUpdate>,
     },
     Steer {
         blocks: Vec<ContentBlock>,
@@ -327,13 +331,15 @@ impl AcpTransport for AcpConnection {
         }
 
         // Route notifications for this turn into `updates_tx`; the actor
-        // clears the sink once the request resolves.
-        *self.0.shared.active_update.lock().unwrap() = Some(updates_tx);
+        // clears the sink once the request resolves — but only if it's
+        // still THIS turn's sink (see the `SendPrompt` command-loop arm).
+        *self.0.shared.active_update.lock().unwrap() = Some(updates_tx.clone());
 
         if !self.send(Command::SendPrompt {
             session_id: session_id.to_string(),
             prompt,
             result_tx,
+            updates_tx,
         }) {
             let _ = updates_rx;
             let mut guard = self.0.shared.active_update.lock().unwrap();
@@ -437,12 +443,15 @@ fn spawn_actor(
         // Notification handler: route session/update to the active prompt sink.
         let notif_shared = Arc::clone(&shared);
         let notif_handler = async move |notification: SessionNotification, _cx| {
-            // Any inbound notification counts as activity for the idle-timeout
-            // clock in `do_send_prompt`, whether or not a sink is currently
-            // attached (a sink is only attached while a prompt is in flight,
-            // which is exactly when this matters).
-            *notif_shared.last_activity.lock().unwrap() = Instant::now();
-            if let Some(tx) = notif_shared.active_update.lock().unwrap().as_ref() {
+            // Only count this as activity for `do_send_prompt`'s idle-timeout
+            // clock while a prompt sink is actually attached. A sink is
+            // attached only while a turn is in flight, so a stray/late
+            // notification arriving after a turn already ended (or before one
+            // starts) must not keep resetting the clock for a turn that isn't
+            // even running.
+            let guard = notif_shared.active_update.lock().unwrap();
+            if let Some(tx) = guard.as_ref() {
+                *notif_shared.last_activity.lock().unwrap() = Instant::now();
                 let _ = tx.send(notification.update);
             }
             Ok(())
@@ -658,6 +667,7 @@ async fn command_loop(
                 session_id,
                 prompt,
                 result_tx,
+                updates_tx,
             } => {
                 // Spawn the prompt request so the loop stays free to process
                 // `session/cancel` and `dispose` while the turn is in flight
@@ -666,18 +676,40 @@ async fn command_loop(
                 let timeout_ms = spec.prompt_timeout_ms;
                 let cx2 = cx.clone();
                 let shared2 = Arc::clone(&shared);
+                let updates_tx2 = updates_tx.clone();
                 let spawned = cx.spawn(async move {
                     let result =
                         do_send_prompt(&cx2, &shared2, &session_id, prompt, timeout_ms).await;
-                    // The turn is over — stop routing notifications to its sink.
-                    shared2.active_update.lock().unwrap().take();
+                    // The turn is over — stop routing notifications to its
+                    // sink, but ONLY if `active_update` still points at THIS
+                    // turn's sink. A caller (e.g. `run_turn_acp`'s stuck-turn
+                    // watchdog) may give up on this prompt's `result` early
+                    // and start a NEW turn while this one is still
+                    // completing in the background; if the next turn has
+                    // already installed its own sink, clearing here would
+                    // wipe it out from under the new turn and silently drop
+                    // its streamed updates.
+                    let mut guard = shared2.active_update.lock().unwrap();
+                    if guard
+                        .as_ref()
+                        .is_some_and(|cur| cur.same_channel(&updates_tx2))
+                    {
+                        guard.take();
+                    }
+                    drop(guard);
                     let _ = result_tx.send(result);
                     Ok(())
                 });
                 if spawned.is_err() {
                     // Connection is dead; clear the sink (the result channel is
                     // dropped, surfacing as a closed-receiver error to the caller).
-                    shared.active_update.lock().unwrap().take();
+                    let mut guard = shared.active_update.lock().unwrap();
+                    if guard
+                        .as_ref()
+                        .is_some_and(|cur| cur.same_channel(&updates_tx))
+                    {
+                        guard.take();
+                    }
                 }
             }
             Command::Cancel => {

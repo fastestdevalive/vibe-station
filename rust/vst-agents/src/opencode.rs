@@ -588,6 +588,8 @@ impl AgentPlugin for OpencodePlugin {
                 vec![ContentBlock::Text(TextContent::new(input.message.clone()))]
             }),
             emit_refusal_error: false,
+            stuck_turn_idle_ms: None,
+            stuck_turn_cancel_grace_ms: None,
         };
         tokio::spawn(async move {
             // Write the opencode config (best-effort — spawn proceeds without

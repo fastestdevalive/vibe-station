@@ -98,6 +98,8 @@ fn base_params(provider: NormalizedEventProvider, mode: &str) -> RunTurnAcpParam
             )]
         }),
         emit_refusal_error: false,
+        stuck_turn_idle_ms: None,
+        stuck_turn_cancel_grace_ms: None,
     }
 }
 
@@ -307,5 +309,81 @@ async fn cancel_stops_cleanly_without_error() {
     assert!(
         events.iter().all(|e| e.kind != NormalizedEventKind::Error),
         "a cancelled turn must not emit an error event"
+    );
+}
+
+/// The stuck-working watchdog: an adapter that streams a few updates then
+/// goes fully silent — never resolves `session/prompt`, and (via
+/// `prompt_stream_then_hang`, which never observes `session/cancel` either)
+/// never even acknowledges the daemon's own cancel. This is the exact shape
+/// observed in the field (claude-agent-acp abandoning a turn after mid-turn
+/// steering — see docs/STUCK-WORKING-WATCHDOG.md): no result, no error,
+/// nothing, forever, from the adapter's side. With the watchdog thresholds
+/// cranked down to milliseconds (the same override seam `prompt_timeout_ms`
+/// already uses on `AcpLaunchSpec`), `run_turn_acp` must still return with a
+/// terminal `result` event well within a bounded time — this is the
+/// contract that lets `drain_loop` ever reach its `WaitingForHuman` finally
+/// block instead of leaving the session pinned at `working`.
+#[tokio::test]
+async fn stuck_turn_watchdog_recovers_when_adapter_abandons_the_turn() {
+    let mut env = HashMap::new();
+    env.insert(
+        "FAKE_ACP_MODE".to_string(),
+        "prompt_stream_then_hang".to_string(),
+    );
+    env.insert("PROMPT_STREAM_INTERVAL_MS".to_string(), "5".to_string());
+    env.insert("PROMPT_STREAM_COUNT".to_string(), "3".to_string());
+    let spec = AcpLaunchSpec {
+        command: "node".to_string(),
+        args: vec![fake_agent()],
+        cwd: PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        env,
+        initialize_timeout_ms: None,
+        // Deliberately not overridden: this test's whole point is that the
+        // stuck-turn watchdog — not `do_send_prompt`'s hour-long idle net —
+        // is what recovers this turn.
+        prompt_timeout_ms: None,
+    };
+    let (ctx, captured) = ctx_with_spec(spec.clone());
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut params = base_params(NormalizedEventProvider::Claude, "prompt_stream_then_hang");
+    params.build_spec = Box::new(move |_ctx| spec.clone());
+    params.stuck_turn_idle_ms = Some(50);
+    params.stuck_turn_cancel_grace_ms = Some(50);
+
+    let start = std::time::Instant::now();
+    let task = tokio::spawn(run_turn_acp(
+        tx,
+        default_input(true),
+        ctx,
+        CancellationToken::new(),
+        params,
+    ));
+    task.await
+        .expect("run_turn_acp must return, not hang forever, once the adapter abandons the turn");
+    let elapsed = start.elapsed();
+    dispose_captured(&captured).await;
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "watchdog must recover well within its configured 50ms+50ms window, took {elapsed:?}"
+    );
+
+    let events = collect(&mut rx);
+    assert_eq!(
+        events.last().map(|e| e.kind),
+        Some(NormalizedEventKind::Result),
+        "an abandoned, never-cancel-acked turn must still emit a terminal result \
+         so drain_loop can reach its WaitingForHuman finally block"
+    );
+    // The 3 streamed chunks sent before the agent went silent must still
+    // have been delivered — the watchdog recovers the turn, it doesn't
+    // discard what already streamed.
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.kind == NormalizedEventKind::Text)
+            .count(),
+        3
     );
 }
