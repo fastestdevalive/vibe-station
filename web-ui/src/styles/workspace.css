@@ -2618,6 +2618,35 @@
   pointer-events: none;
 }
 
+/* Offline overlay (Phase 4.4): reuses the spawning layer's centring/backdrop
+   but must accept pointer events so the Retry button is clickable. */
+.terminal-offline-layer {
+  pointer-events: auto;
+}
+
+.terminal-offline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-size-sm);
+}
+
+.terminal-offline__retry {
+  border: none;
+  border-radius: 999px;
+  padding: 4px 14px;
+  cursor: pointer;
+  background: var(--bg-hover);
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-primary);
+}
+
+.terminal-offline__retry:hover {
+  background: var(--bg-active);
+}
+
 .spawning-placeholder {
   display: flex;
   flex-direction: column;
@@ -3891,6 +3920,29 @@ textarea.input {
 .conn-pill--connecting .conn-pill__dot,
 .conn-pill--offline .conn-pill__dot {
   animation: conn-pulse 1.2s ease-in-out infinite;
+}
+
+/* Terminal disconnected state: no pulse (not retrying), clearly distinct from
+   the amber "connecting/reconnecting" states. */
+.conn-pill--disconnected {
+  color: #dc2626; /* red */
+}
+
+.conn-pill__retry {
+  border: none;
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: var(--space-1);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  cursor: pointer;
+  background: var(--bg-hover, var(--bg-card));
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-primary);
+}
+
+.conn-pill__retry:hover {
+  background: var(--bg-active, var(--bg-hover));
 }
 
 @keyframes conn-pulse {

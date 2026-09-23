@@ -483,5 +483,36 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
     await waitFor(() => expect(api.sendChat).toHaveBeenCalled());
     expect(screen.queryByText("Couldn't steer this turn — queued instead")).toBeNull();
   });
+
+  it("4.T3: shows offline overlay when connState is not online", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("js-offline-test")} visible />);
+
+    // Initially online
+    expect(screen.queryByTestId("offline-overlay")).toBeNull();
+
+    // Connection drops to offline
+    act(() => {
+      api.mockSetConnectionState("offline");
+    });
+    const overlay = screen.getByTestId("offline-overlay");
+    expect(overlay).toBeInTheDocument();
+    expect(overlay).toHaveTextContent("Reconnecting…");
+
+    // Disconnected
+    act(() => {
+      api.mockSetConnectionState("disconnected");
+    });
+    const disconnectedOverlay = screen.getByTestId("offline-overlay");
+    expect(disconnectedOverlay).toBeInTheDocument();
+    expect(disconnectedOverlay).toHaveTextContent("Disconnected — Retry");
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+
+    // Reconnected
+    act(() => {
+      api.mockSetConnectionState("online");
+    });
+    expect(screen.queryByTestId("offline-overlay")).toBeNull();
+  });
 });
 

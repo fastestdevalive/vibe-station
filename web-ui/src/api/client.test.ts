@@ -40,6 +40,10 @@ vi.stubGlobal("window", {
   location: { origin: "http://localhost:3000" },
 });
 
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+});
+
 /**
  * Parse sent messages and filter to chat:open or chat:close for a session.
  */
@@ -54,18 +58,18 @@ function makeControllableWsFactory() {
   const sent: string[] = [];
   const sockets: Array<{
     readyState: number;
-    onopen: (() => void) | null;
+    onopen: (() => void | Promise<void>) | null;
     onclose: ((ev: { code: number }) => void) | null;
     onerror: (() => void) | null;
     onmessage: ((ev: { data: string }) => void) | null;
     send: (d: string) => void;
-    close: () => void;
+    close: (code?: number) => void;
   }> = [];
   class FakeWebSocket {
     static OPEN = 1;
     static CONNECTING = 0;
     readyState = 0;
-    onopen: (() => void) | null = null;
+    onopen: (() => void | Promise<void>) | null = null;
     onclose: ((ev: { code: number }) => void) | null = null;
     onerror: (() => void) | null = null;
     onmessage: ((ev: { data: string }) => void) | null = null;
@@ -75,9 +79,9 @@ function makeControllableWsFactory() {
     send(d: string) {
       sent.push(d);
     }
-    close() {
+    close(code = 1000) {
       this.readyState = 3;
-      this.onclose?.({ code: 1000 });
+      this.onclose?.({ code });
     }
   }
   return { FakeWebSocket, sockets, sent };
@@ -181,7 +185,7 @@ describe("socket-cycling fixes (sinceSeq cursor + backoff)", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(2);
     sockets[1]!.readyState = 1;
-    sockets[1]!.onopen!();
+    await sockets[1]!.onopen!();
     const reOpen = sent
       .map((s) => JSON.parse(s) as Record<string, unknown>)
       .find((m) => m.type === "chat:open" && m.sessionId === "sess-x");
@@ -225,6 +229,11 @@ describe("socket-cycling fixes (sinceSeq cursor + backoff)", () => {
  * entry early would silently strand it (the bug this pins).
  */
 describe("file:watch / tree:watch reconnect-replay refcounting", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   function fileWatchMsgs(sent: string[]) {
     return sent
       .map((s) => JSON.parse(s) as Record<string, unknown>)
@@ -240,7 +249,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
 
     api.startConnection();
     sockets[0]!.readyState = 1;
-    sockets[0]!.onopen!();
+    await sockets[0]!.onopen!();
     sent.splice(0);
 
     // Two consumers watch the same file path.
@@ -255,7 +264,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(2);
     sockets[1]!.readyState = 1;
-    sockets[1]!.onopen!();
+    await sockets[1]!.onopen!();
     expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(1);
 
     // The remaining consumer unwatches — count 1→0, entry dropped. Reconnect
@@ -266,7 +275,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(3);
     sockets[2]!.readyState = 1;
-    sockets[2]!.onopen!();
+    await sockets[2]!.onopen!();
     expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(0);
   });
 
@@ -294,7 +303,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
 
     api.startConnection();
     sockets[0]!.readyState = 1;
-    sockets[0]!.onopen!();
+    await sockets[0]!.onopen!();
     sent.splice(0);
 
     // Two consumers watch the same file path — count stays at 2, neither
@@ -307,7 +316,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(2);
     sockets[1]!.readyState = 1;
-    sockets[1]!.onopen!();
+    await sockets[1]!.onopen!();
 
     // The replay must send the key TWICE — once per local subscriber this
     // client had — not once per distinct key.
@@ -323,8 +332,187 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(3);
     sockets[2]!.readyState = 1;
-    sockets[2]!.onopen!();
+    await sockets[2]!.onopen!();
     expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(1);
+  });
+});
+
+describe("pong-liveness timeout (Phase 2)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("2.T1 — force-closes the socket if no inbound frame arrives within 2x PING_INTERVAL_MS of a ping", async () => {
+    vi.useFakeTimers();
+    const { FakeWebSocket, sockets, sent } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    sent.splice(0);
+
+    // Advance to trigger the 25s ping
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(sent.map((s) => JSON.parse(s))).toContainEqual({ type: "ping" });
+    expect(sockets[0]!.readyState).toBe(1);
+
+    // Advance 50s (2 * 25s) with NO inbound message. Socket must be closed locally.
+    await vi.advanceTimersByTimeAsync(50_000);
+    expect(sockets[0]!.readyState).toBe(3);
+  });
+
+  it("2.T2 — does NOT force-close when pong replies (or any frames) arrive in response to pings", async () => {
+    vi.useFakeTimers();
+    const { FakeWebSocket, sockets, sent } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    sent.splice(0);
+
+    // Advance to trigger first ping
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(sent.map((s) => JSON.parse(s))).toContainEqual({ type: "ping" });
+
+    // Respond with a pong before the 50s deadline
+    await vi.advanceTimersByTimeAsync(10_000);
+    sockets[0]!.onmessage!({ data: JSON.stringify({ type: "pong" }) });
+
+    // Advance past the 50s mark from the ping
+    await vi.advanceTimersByTimeAsync(45_000);
+    // Connection must still be open
+    expect(sockets[0]!.readyState).toBe(1);
+  });
+});
+
+describe("reconnect bounds and disconnected state (Phase 3)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("3.T2 — settles at 'disconnected' after exceeding MAX_RECONNECT_ATTEMPTS, and retryConnection() resets and reconnects", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    expect(api.getConnectionState()).toBe("online");
+
+    // Close initial socket
+    sockets[0]!.onclose!({ code: 1006 });
+    expect(api.getConnectionState()).toBe("offline");
+
+    // Cycle through 8 reconnect attempts (MAX_RECONNECT_ATTEMPTS = 8)
+    const delays = [1100, 1800, 3000, 5000, 8500, 14500, 15500, 15500];
+    for (let i = 1; i <= 8; i++) {
+      await vi.advanceTimersByTimeAsync(delays[i - 1]!);
+      expect(sockets.length).toBe(i + 1);
+      // Fail this attempt
+      sockets[i]!.onclose!({ code: 1006 });
+    }
+
+    // After 8 failures, the 9th scheduleReconnect exceeds MAX_RECONNECT_ATTEMPTS
+    expect(api.getConnectionState()).toBe("disconnected");
+
+    // Advancing timers further should NOT spawn any more sockets
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sockets.length).toBe(9);
+    expect(api.getConnectionState()).toBe("disconnected");
+
+    // Manual Retry: resets bounds and calls ensureWs() immediately
+    api.retryConnection();
+    expect(sockets.length).toBe(10);
+    expect(api.getConnectionState()).toBe("connecting");
+
+    // When new socket opens successfully, settles back to online
+    sockets[9]!.readyState = 1;
+    await sockets[9]!.onopen!();
+    expect(api.getConnectionState()).toBe("online");
+  });
+});
+
+describe("reconnect auth gate (Phase 4)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("4.T1 — on reconnect with rejected checkAuth(), closes with 4401, emits auth:expired, never flips to online or emits ws:open", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    const authExpiredSpy = vi.fn();
+    const wsOpenSpy = vi.fn();
+    api.on("auth:expired", authExpiredSpy);
+    api.on("ws:open", wsOpenSpy);
+
+    // Initial connection succeeds
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    expect(api.getConnectionState()).toBe("online");
+    expect(wsOpenSpy).toHaveBeenCalledTimes(1);
+
+    // Disconnect
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+
+    // Daemon restarted: checkAuth now fails (401)
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+
+    sockets[1]!.readyState = 1;
+    await sockets[1]!.onopen!();
+
+    // Must NOT emit ws:open or flip to online
+    expect(wsOpenSpy).toHaveBeenCalledTimes(1); // still only the initial one
+    expect(api.getConnectionState()).not.toBe("online");
+    // Must close with 4401 and trigger auth:expired
+    expect(sockets[1]!.readyState).toBe(3);
+    expect(authExpiredSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("4.T2 — on reconnect with valid checkAuth(), flips to online and emits ws:open exactly once", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    const wsOpenSpy = vi.fn();
+    api.on("ws:open", wsOpenSpy);
+
+    // Initial connection
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    await sockets[0]!.onopen!();
+    expect(wsOpenSpy).toHaveBeenCalledTimes(1);
+
+    // Disconnect
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+
+    // Valid auth on reconnect
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+    sockets[1]!.readyState = 1;
+    await sockets[1]!.onopen!();
+
+    expect(wsOpenSpy).toHaveBeenCalledTimes(2);
+    expect(api.getConnectionState()).toBe("online");
   });
 });
 

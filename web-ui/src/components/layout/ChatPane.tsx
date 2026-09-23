@@ -12,6 +12,7 @@ import { TodoStrip } from "@/components/chat/TodoStrip";
 import type { SkillEditorHandle } from "@/components/chat/SkillEditor";
 import { StatusBar, turnLabel } from "@/components/chat/StatusBar";
 import { SubagentRow, openSubagentSession } from "@/components/chat/SubagentRow";
+import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 
@@ -308,6 +309,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
 
   return (
     <div className="chat-pane" style={chatFontVars}>
+      <OfflineOverlay api={api} />
       {/* Non-scrolling wrapper whose box is exactly the scroll VIEWPORT — it,
           not `.chat-pane`, is the containing block for the floating
           jump-to-bottom button, so the button clears the footer (queued tray +

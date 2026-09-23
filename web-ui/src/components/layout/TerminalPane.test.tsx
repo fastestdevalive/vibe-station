@@ -452,4 +452,39 @@ describe("TerminalPane", () => {
     // After attach completes, spawning placeholder should be gone
     expect(screen.queryByRole("status")).toBeNull();
   });
+
+  it("4.T3: shows offline overlay when connState is not online, independent of attachPending", () => {
+    useWorkspaceStore.setState({
+      activeSessionId: "sess-main",
+      sessionStates: { "sess-main": "working" },
+      sessionAttachState: { "sess-main": "attached" },
+    });
+    render(<TerminalPane api={api} sessionId="sess-main" />);
+
+    // Initially online
+    expect(screen.queryByTestId("offline-overlay")).toBeNull();
+
+    // Drops to offline
+    act(() => {
+      api.mockSetConnectionState("offline");
+    });
+    const overlay = screen.getByTestId("offline-overlay");
+    expect(overlay).toBeInTheDocument();
+    expect(overlay).toHaveTextContent("Reconnecting…");
+
+    // Disconnected state
+    act(() => {
+      api.mockSetConnectionState("disconnected");
+    });
+    const disconnectedOverlay = screen.getByTestId("offline-overlay");
+    expect(disconnectedOverlay).toBeInTheDocument();
+    expect(disconnectedOverlay).toHaveTextContent("Disconnected — Retry");
+    expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+
+    // Reconnected
+    act(() => {
+      api.mockSetConnectionState("online");
+    });
+    expect(screen.queryByTestId("offline-overlay")).toBeNull();
+  });
 });

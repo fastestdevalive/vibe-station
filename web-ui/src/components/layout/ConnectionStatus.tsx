@@ -31,11 +31,15 @@ export function ConnectionStatus() {
   const label =
     state === "online"
       ? "Connected"
-      : state === "connecting" || !hasEverBeenOnline.current
-        ? "Connecting…"
-        : "Reconnecting…";
+      : state === "disconnected"
+        ? "Disconnected"
+        : state === "connecting" || !hasEverBeenOnline.current
+          ? "Connecting…"
+          : "Reconnecting…";
 
   const variant = state === "online" ? "online" : state;
+
+  const onRetry = () => api.retryConnection();
 
   return (
     <span
@@ -46,6 +50,16 @@ export function ConnectionStatus() {
     >
       <span className="conn-pill__dot" aria-hidden />
       <span className="conn-pill__label">{label}</span>
+      {state === "disconnected" && (
+        <button
+          type="button"
+          className="conn-pill__retry"
+          onClick={onRetry}
+          aria-label="Retry connection"
+        >
+          Retry
+        </button>
+      )}
     </span>
   );
 }
