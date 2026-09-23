@@ -46,6 +46,7 @@ use std::net::SocketAddr;
 
 use vst_cli::commands::daemon::status::parse_daemon_status_options;
 use vst_cli::commands::file::open::parse_file_open_options;
+use vst_cli::commands::files::ls::parse_files_ls_options;
 use vst_cli::commands::project::add::parse_project_add_options;
 use vst_cli::commands::project::create::parse_project_create_options;
 use vst_cli::commands::project::info::parse_project_info_options;
@@ -335,6 +336,44 @@ fn test_file_open_requires_two_args() {
 fn test_file_open_rejects_unknown_flags() {
     let err = parse_file_open_options(&["--foo".to_string()]).expect_err("unknown flag");
     assert!(err.contains("Unknown"), "err: {err}");
+}
+
+// ─── vst files command option parsing ─────────────────────────────────────────
+
+#[test]
+fn test_files_ls_requires_exactly_one_scope_flag() {
+    // --worktree alone is valid.
+    let opts = parse_files_ls_options(&["--worktree".to_string(), "wt-1".into()])
+        .expect("worktree scope ok");
+    assert_eq!(opts.scope.0, "wt-1");
+    assert_eq!(opts.scope.1, "worktrees");
+
+    // --project alone is valid.
+    let opts = parse_files_ls_options(&["--project".to_string(), "proj-1".into()])
+        .expect("project scope ok");
+    assert_eq!(opts.scope.0, "proj-1");
+    assert_eq!(opts.scope.1, "projects");
+
+    // Neither is an error.
+    let err = parse_files_ls_options(&[] as &[String]).expect_err("neither should fail");
+    assert!(err.contains("--worktree"), "err: {err}");
+
+    // Both is an error.
+    let err = parse_files_ls_options(&[
+        "--worktree".to_string(),
+        "wt-1".into(),
+        "--project".to_string(),
+        "proj-1".into(),
+    ])
+    .expect_err("both should fail");
+    assert!(err.contains("--worktree"), "err: {err}");
+}
+
+#[test]
+fn test_files_ls_rejects_positional_args() {
+    let err = parse_files_ls_options(&["--worktree".to_string(), "wt-1".into(), "extra".into()])
+        .expect_err("positional should fail");
+    assert!(err.contains("Usage"), "err: {err}");
 }
 
 // ─── Daemon status option parsing ─────────────────────────────────────────────

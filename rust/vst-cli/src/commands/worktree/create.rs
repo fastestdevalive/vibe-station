@@ -188,6 +188,14 @@ pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (Str
             error,
             conflict_with,
         } => {
+            if status == 422 && error == "NOT_GIT" {
+                return Err((
+                    "This project isn't a git repository. Worktrees require git — run `git init` \
+                     in the project directory, then retry."
+                        .to_string(),
+                    3,
+                ));
+            }
             let code = if status == 404 { 2 } else { 1 };
             if let Some(cw) = conflict_with {
                 die(&format!("{error}\nHint: {cw}"), Some(code));

@@ -49,7 +49,10 @@ use vst_cli::daemon_url::{get_daemon_token_from_home, get_daemon_url_from_home_a
 use vst_cli::output::format_table;
 use vst_cli::paths::daemon_log_path_from_home;
 use vst_cli::preflight::preflight_with_url;
-use vst_cli::program::{parse_args, AgentCommand, Command, DaemonCommand, WorktreeCommand};
+use vst_cli::program::{
+    hint_if_dir_collision, parse_args, AgentCommand, Command, DaemonCommand, OpenArgs,
+    WorktreeCommand,
+};
 use vst_cli::text_source::try_resolve_file_or_inline;
 
 #[test]
@@ -222,6 +225,58 @@ fn test_program_parse_args() {
             args: vec!["--json".to_string()]
         })
     );
+
+    // 2.T2: a bare non-subcommand token dispatches as a bare path (Command::Open).
+    let bare = parse_args(vec!["vst", "~/code/foo"]);
+    assert_eq!(
+        bare,
+        Command::Open(OpenArgs {
+            args: vec!["~/code/foo".to_string()]
+        })
+    );
+
+    // 2.T2: a `-`-prefixed unknown token stays Command::Unknown so it errors as a bad flag.
+    let bogus = parse_args(vec!["vst", "--bogus"]);
+    assert_eq!(bogus, Command::Unknown(vec!["--bogus".to_string()]));
+
+    // 2.T3: real subcommand names always win over path interpretation (R7) —
+    // "worktree ls --json" is never a bare path.
+    let precedence = parse_args(vec!["vst", "worktree", "ls", "--json"]);
+    assert_eq!(
+        precedence,
+        Command::Worktree(WorktreeCommand::Ls {
+            args: vec!["--json".to_string()]
+        })
+    );
+}
+
+#[test]
+fn test_hint_if_dir_collision() {
+    // Serialize the process-global cwd mutation against other tests.
+    use std::sync::Mutex;
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CWD_LOCK.lock().unwrap();
+
+    let original = std::env::current_dir().expect("current dir");
+
+    // With a `./session` directory present, the hint fires.
+    let dir_with = tempdir().expect("tempdir");
+    std::fs::create_dir(dir_with.path().join("session")).expect("mkdir session");
+    std::env::set_current_dir(dir_with.path()).expect("chdir with");
+    let hint = hint_if_dir_collision("session");
+    assert!(hint.is_some(), "expected a hint when ./session exists");
+    let hint = hint.expect("hint text");
+    assert!(
+        hint.contains("vst open session"),
+        "hint should mention `vst open session`, got: {hint}"
+    );
+
+    // Without a `./session` directory, no hint.
+    let dir_without = tempdir().expect("tempdir");
+    std::env::set_current_dir(dir_without.path()).expect("chdir without");
+    assert_eq!(hint_if_dir_collision("session"), None);
+
+    std::env::set_current_dir(original).expect("restore cwd");
 }
 
 #[tokio::test]
