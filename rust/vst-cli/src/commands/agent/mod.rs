@@ -11,3 +11,6 @@ pub mod send;
 pub mod stop;
 pub mod terminate;
 pub mod transcript;
+
+// Re-export agent function names for convenience
+pub use create::{parse_agent_create_options, run_agent_create, AgentCreateOptions};

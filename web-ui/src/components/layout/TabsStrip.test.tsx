@@ -1024,7 +1024,7 @@ describe("TabsStrip", () => {
 
   it("reflects a rename in real time from session:updated's name field, without a refetch", async () => {
     // Regression: renaming a session via PATCH .../rename (e.g. through the
-    // `/vst session rename` CLI/skill command, not just the inline UI editor)
+    // `vst agent rename`/`vst terminal rename` CLI/skill command, not just the inline UI editor)
     // was not reflected in the tab bar until a manual page refresh. At the
     // time, the tab rendered a separate server-computed `label` field, and
     // the `session:updated` broadcast only ever carried `name` — so the

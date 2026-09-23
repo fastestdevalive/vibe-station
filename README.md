@@ -179,22 +179,24 @@ One session per worktree is flagged **main**. Sessions are identified by an opaq
 
 ```bash
 # Second agent — e.g. tests while the main agent writes code
-vst session create <worktree-id> --type=agent --mode=<mode-id> --prompt="Write tests for the auth module"
+vst agent create <worktree-id> --mode=<mode-id> --prompt="Write tests for the auth module"
 
 # Plain terminal — no AI, just a shell in the worktree
-vst session create <worktree-id> --type=terminal
+vst terminal create <worktree-id>
 ```
 
 ```bash
-vst session ls --worktree=<worktree-id>
-vst session info <session-id>
-vst session rename <session-id> <name>
-vst session terminate [session-id]  # defaults to $VST_SESSION
-vst session reset <session-id>      # respawn the session fresh
-vst session handoff <session-id>    # generate a handoff summary
-vst session stop <session-id>       # abort the active Rich Chat turn, keep queued ones
-vst session attach <session-id>     # drop into the raw tmux session
+vst agent ls --worktree=<worktree-id>
+vst agent info <session-id>
+vst agent rename <session-id> <name>
+vst agent terminate [session-id]  # defaults to $VST_SESSION
+vst agent reset <session-id>      # respawn the session fresh
+vst agent handoff <session-id>    # generate a handoff summary
+vst agent stop <session-id>       # abort the active Rich Chat turn, keep queued ones
+vst agent attach <session-id>     # drop into the raw tmux session
 ```
+
+`vst terminal` supports the same `ls`/`info`/`rename`/`terminate`/`attach` subcommands for plain terminal sessions (no `reset`/`handoff`/`stop` — those are agent-turn concepts).
 
 Terminating the main session is allowed only when another live agent session exists in the worktree — that one is promoted to main. If it's the only agent, the request is rejected.
 
@@ -219,7 +221,7 @@ Every agent session runs on one of two channels:
 | **Terminal** | The agent's raw tmux PTY stream — exactly what you'd see in a shell |
 | **Rich Chat** | A structured JSON stream — tool calls, thinking blocks, and file attachments rendered as UI, not ANSI |
 
-Pick the channel when you create the agent (`--json` on the CLI, or the toggle in the new-agent dialog). Rich Chat is only offered for CLIs whose plugin reports structured-output support; the dialog tells you when it isn't available for the selected CLI.
+Pick the channel when you create the agent (`--channel=tmux|json` on the CLI — tmux is the default, or the toggle in the new-agent dialog). Rich Chat is only offered for CLIs whose plugin reports structured-output support; the dialog tells you when it isn't available for the selected CLI.
 
 ---
 
@@ -227,14 +229,14 @@ Pick the channel when you create the agent (`--json` on the CLI, or the toggle i
 
 ```bash
 # Inline
-vst session send <session-id> "Add error handling for the network timeout case"
+vst agent send <session-id> "Add error handling for the network timeout case"
 
 # From a file
-vst session send <session-id> --file=./instructions.md
+vst agent send <session-id> --file=./instructions.md
 
 # --wait is the default: block until the agent settles, then print the reply
-vst session send <session-id> "Refactor the data layer" --wait
-vst session send <session-id> "Fire and forget" --no-wait
+vst agent send <session-id> "Refactor the data layer" --wait
+vst agent send <session-id> "Fire and forget" --no-wait
 ```
 
 `--timeout <ms>` caps the wait (default 60000). `--queue` enqueues instead of steering a running Rich Chat turn.
@@ -244,8 +246,8 @@ vst session send <session-id> "Fire and forget" --no-wait
 ## Monitoring agents
 
 ```bash
-vst session output <session-id> --lines=100
-vst session transcript <session-id>
+vst agent output <session-id> --lines=100
+vst agent transcript <session-id>
 vst status
 vst status --project=my-app --json
 vst summary
@@ -267,7 +269,7 @@ vst summary
 ### Resuming exited sessions
 
 ```bash
-vst session restore <session-id>
+vst agent restore <session-id>
 ```
 
 Each plugin supplies its own restore command. Claude Code resumes with full conversation history via `claude --resume`; Cursor, OpenCode, and agy resume when a native chat/session ID was captured, and start fresh otherwise. A resumed session keeps the system prompt saved in its transcript, so edits to `AGENTS.md` between runs only land on a fresh spawn.
@@ -483,8 +485,9 @@ Four sibling directories at the root; three of them are pnpm workspace packages.
 ```
 vst project   add | create | rm | ls | info
 vst worktree  create | rm | rename | done | ls | info
-vst session   create | terminate | stop | reset | rename | ls | info
+vst agent     create | terminate | stop | reset | rename | ls | info
               attach | restore | output | transcript | send | handoff
+vst terminal  create | terminate | rename | ls | info | attach | output
 vst mode      add | rm | ls
 vst status    [--project] [--json]
 vst summary
