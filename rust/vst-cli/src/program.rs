@@ -14,7 +14,8 @@ pub enum Command {
     Daemon(DaemonCommand),
     Project(ProjectCommand),
     Worktree(WorktreeCommand),
-    Session(SessionCommand),
+    Agent(AgentCommand),
+    Terminal(TerminalCommand),
     Mode(ModeCommand),
     File(FileCommand),
     Open(OpenArgs),
@@ -52,7 +53,7 @@ pub enum WorktreeCommand {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum SessionCommand {
+pub enum AgentCommand {
     Create { args: Vec<String> },
     Ls { args: Vec<String> },
     Info { args: Vec<String> },
@@ -66,6 +67,18 @@ pub enum SessionCommand {
     Rename { args: Vec<String> },
     Send { args: Vec<String> },
     Stop { args: Vec<String> },
+    Unknown(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TerminalCommand {
+    Create { args: Vec<String> },
+    Ls { args: Vec<String> },
+    Info { args: Vec<String> },
+    Terminate { args: Vec<String> },
+    Attach { args: Vec<String> },
+    Output { args: Vec<String> },
+    Rename { args: Vec<String> },
     Unknown(Vec<String>),
 }
 
@@ -172,29 +185,48 @@ where
                 None => Command::Worktree(WorktreeCommand::Unknown(vec![])),
             }
         }
-        "session" => {
+        "agent" => {
             let sub = iter.next();
             let rest: Vec<String> = iter.collect();
             match sub.as_deref() {
-                Some("create") => Command::Session(SessionCommand::Create { args: rest }),
-                Some("ls") => Command::Session(SessionCommand::Ls { args: rest }),
-                Some("info") => Command::Session(SessionCommand::Info { args: rest }),
-                Some("terminate") => Command::Session(SessionCommand::Terminate { args: rest }),
-                Some("attach") => Command::Session(SessionCommand::Attach { args: rest }),
-                Some("restore") => Command::Session(SessionCommand::Restore { args: rest }),
-                Some("output") => Command::Session(SessionCommand::Output { args: rest }),
-                Some("transcript") => Command::Session(SessionCommand::Transcript { args: rest }),
-                Some("reset") => Command::Session(SessionCommand::Reset { args: rest }),
-                Some("handoff") => Command::Session(SessionCommand::Handoff { args: rest }),
-                Some("rename") => Command::Session(SessionCommand::Rename { args: rest }),
-                Some("send") => Command::Session(SessionCommand::Send { args: rest }),
-                Some("stop") => Command::Session(SessionCommand::Stop { args: rest }),
+                Some("create") => Command::Agent(AgentCommand::Create { args: rest }),
+                Some("ls") => Command::Agent(AgentCommand::Ls { args: rest }),
+                Some("info") => Command::Agent(AgentCommand::Info { args: rest }),
+                Some("terminate") => Command::Agent(AgentCommand::Terminate { args: rest }),
+                Some("attach") => Command::Agent(AgentCommand::Attach { args: rest }),
+                Some("restore") => Command::Agent(AgentCommand::Restore { args: rest }),
+                Some("output") => Command::Agent(AgentCommand::Output { args: rest }),
+                Some("transcript") => Command::Agent(AgentCommand::Transcript { args: rest }),
+                Some("reset") => Command::Agent(AgentCommand::Reset { args: rest }),
+                Some("handoff") => Command::Agent(AgentCommand::Handoff { args: rest }),
+                Some("rename") => Command::Agent(AgentCommand::Rename { args: rest }),
+                Some("send") => Command::Agent(AgentCommand::Send { args: rest }),
+                Some("stop") => Command::Agent(AgentCommand::Stop { args: rest }),
                 Some(other) => {
                     let mut r = vec![other.to_string()];
                     r.extend(rest);
-                    Command::Session(SessionCommand::Unknown(r))
+                    Command::Agent(AgentCommand::Unknown(r))
                 }
-                None => Command::Session(SessionCommand::Unknown(vec![])),
+                None => Command::Agent(AgentCommand::Unknown(vec![])),
+            }
+        }
+        "terminal" => {
+            let sub = iter.next();
+            let rest: Vec<String> = iter.collect();
+            match sub.as_deref() {
+                Some("create") => Command::Terminal(TerminalCommand::Create { args: rest }),
+                Some("ls") => Command::Terminal(TerminalCommand::Ls { args: rest }),
+                Some("info") => Command::Terminal(TerminalCommand::Info { args: rest }),
+                Some("terminate") => Command::Terminal(TerminalCommand::Terminate { args: rest }),
+                Some("attach") => Command::Terminal(TerminalCommand::Attach { args: rest }),
+                Some("output") => Command::Terminal(TerminalCommand::Output { args: rest }),
+                Some("rename") => Command::Terminal(TerminalCommand::Rename { args: rest }),
+                Some(other) => {
+                    let mut r = vec![other.to_string()];
+                    r.extend(rest);
+                    Command::Terminal(TerminalCommand::Unknown(r))
+                }
+                None => Command::Terminal(TerminalCommand::Unknown(vec![])),
             }
         }
         "mode" => {

@@ -3,8 +3,8 @@
 use vst_cli::commands;
 use vst_cli::output::die;
 use vst_cli::program::{
-    self, Command, DaemonCommand, FileCommand, ModeCommand, ProjectCommand, SessionCommand,
-    WorktreeCommand,
+    self, AgentCommand, Command, DaemonCommand, FileCommand, ModeCommand, ProjectCommand,
+    TerminalCommand, WorktreeCommand,
 };
 #[tokio::main]
 async fn main() {
@@ -48,46 +48,45 @@ async fn main() {
                 );
             }
         },
-        Command::Session(session_cmd) => match session_cmd {
-            SessionCommand::Create { args } => {
-                let opts = match commands::session::create::parse_session_create_options(&args) {
+        Command::Agent(agent_cmd) => match agent_cmd {
+            AgentCommand::Create { args } => {
+                let opts = match commands::agent::create::parse_agent_create_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::create::run_session_create(opts).await
-                {
+                if let Err((err, code)) = commands::agent::create::run_agent_create(opts).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Ls { args } => {
-                let opts = match commands::session::ls::parse_session_ls_options(&args) {
+            AgentCommand::Ls { args } => {
+                let opts = match commands::agent::ls::parse_session_ls_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::ls::run_session_ls(opts).await {
+                if let Err((err, code)) = commands::agent::ls::run_session_ls(opts).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Info { args } => {
-                let opts = match commands::session::info::parse_session_info_options(&args) {
+            AgentCommand::Info { args } => {
+                let opts = match commands::agent::info::parse_session_info_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::info::run_session_info(opts).await {
+                if let Err((err, code)) = commands::agent::info::run_session_info(opts).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Terminate { args } => {
+            AgentCommand::Terminate { args } => {
                 let id = args.first().cloned();
                 if let Err((err, code)) =
-                    commands::session::terminate::run_session_terminate(id).await
+                    commands::agent::terminate::run_session_terminate(id).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Attach { args } => {
+            AgentCommand::Attach { args } => {
                 let id = args.first().cloned().unwrap_or_default();
-                if let Err((err, code)) = commands::session::attach::run_session_attach(&id).await {
+                if let Err((err, code)) = commands::agent::attach::run_session_attach(&id).await {
                     if !err.is_empty() {
                         die(&err, Some(code));
                     } else {
@@ -95,79 +94,153 @@ async fn main() {
                     }
                 }
             }
-            SessionCommand::Restore { args } => {
+            AgentCommand::Restore { args } => {
                 let id = args.first().cloned().unwrap_or_default();
-                if let Err((err, code)) = commands::session::restore::run_session_restore(&id).await
+                if let Err((err, code)) = commands::agent::restore::run_session_restore(&id).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Output { args } => {
-                let opts = match commands::session::output::parse_session_output_options(&args) {
+            AgentCommand::Output { args } => {
+                let opts = match commands::agent::output::parse_session_output_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::output::run_session_output(opts).await
+                if let Err((err, code)) = commands::agent::output::run_session_output(opts).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Transcript { args } => {
+            AgentCommand::Transcript { args } => {
                 let opts =
-                    match commands::session::transcript::parse_session_transcript_options(&args) {
+                    match commands::agent::transcript::parse_session_transcript_options(&args) {
                         Ok(o) => o,
                         Err(err) => die(&err, Some(1)),
                     };
                 if let Err((err, code)) =
-                    commands::session::transcript::run_session_transcript(opts).await
+                    commands::agent::transcript::run_session_transcript(opts).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Reset { args } => {
-                let opts = match commands::session::reset::parse_session_reset_options(&args) {
+            AgentCommand::Reset { args } => {
+                let opts = match commands::agent::reset::parse_session_reset_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::reset::run_session_reset(opts).await {
+                if let Err((err, code)) = commands::agent::reset::run_session_reset(opts).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Handoff { args } => {
+            AgentCommand::Handoff { args } => {
                 let id = args.first().cloned().unwrap_or_default();
-                if let Err((err, code)) = commands::session::handoff::run_session_handoff(&id).await
+                if let Err((err, code)) = commands::agent::handoff::run_session_handoff(&id).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Rename { args } => {
-                let opts = match commands::session::rename::parse_session_rename_options(&args) {
+            AgentCommand::Rename { args } => {
+                let opts = match commands::agent::rename::parse_session_rename_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::rename::run_session_rename(opts).await
+                if let Err((err, code)) = commands::agent::rename::run_session_rename(opts).await
                 {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Send { args } => {
-                let opts = match commands::session::send::parse_session_send_options(&args) {
+            AgentCommand::Send { args } => {
+                let opts = match commands::agent::send::parse_session_send_options(&args) {
                     Ok(o) => o,
                     Err(err) => die(&err, Some(1)),
                 };
-                if let Err((err, code)) = commands::session::send::run_session_send(opts).await {
+                if let Err((err, code)) = commands::agent::send::run_session_send(opts).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Stop { args } => {
+            AgentCommand::Stop { args } => {
                 let id = args.first().cloned().unwrap_or_default();
-                if let Err((err, code)) = commands::session::stop::run_session_stop(&id).await {
+                if let Err((err, code)) = commands::agent::stop::run_session_stop(&id).await {
                     die(&err, Some(code));
                 }
             }
-            SessionCommand::Unknown(args) => {
+            AgentCommand::Unknown(args) => {
                 die(
-                    &format!("Unknown session command: {}", args.join(" ")),
+                    &format!("Unknown agent command: {}", args.join(" ")),
+                    Some(1),
+                );
+            }
+        },
+        Command::Terminal(terminal_cmd) => match terminal_cmd {
+            TerminalCommand::Create { args } => {
+                let opts = match commands::terminal::create::parse_terminal_create_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::terminal::create::run_terminal_create(opts).await
+                {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Ls { args } => {
+                let opts = match commands::agent::ls::parse_session_ls_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::agent::ls::run_session_ls(opts).await {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Info { args } => {
+                let opts = match commands::agent::info::parse_session_info_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::agent::info::run_session_info(opts).await {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Terminate { args } => {
+                let id = args.first().cloned();
+                if let Err((err, code)) =
+                    commands::agent::terminate::run_session_terminate(id).await
+                {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Attach { args } => {
+                let id = args.first().cloned().unwrap_or_default();
+                if let Err((err, code)) = commands::agent::attach::run_session_attach(&id).await {
+                    if !err.is_empty() {
+                        die(&err, Some(code));
+                    } else {
+                        std::process::exit(code);
+                    }
+                }
+            }
+            TerminalCommand::Output { args } => {
+                let opts = match commands::agent::output::parse_session_output_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::agent::output::run_session_output(opts).await
+                {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Rename { args } => {
+                let opts = match commands::agent::rename::parse_session_rename_options(&args) {
+                    Ok(o) => o,
+                    Err(err) => die(&err, Some(1)),
+                };
+                if let Err((err, code)) = commands::agent::rename::run_session_rename(opts).await
+                {
+                    die(&err, Some(code));
+                }
+            }
+            TerminalCommand::Unknown(args) => {
+                die(
+                    &format!("Unknown terminal command: {}", args.join(" ")),
                     Some(1),
                 );
             }

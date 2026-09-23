@@ -37,7 +37,7 @@
 //! - Returns `Err` on HTTP error status or connection failure.
 //!
 //! ### program.rs
-//! - Parses top-level subcommands: `daemon`, `project`, `worktree`, `session`, `mode`, `file`, `open`, `status`, `summary`, `doctor`.
+//! - Parses top-level subcommands: `daemon`, `project`, `worktree`, `agent`, `terminal`, `mode`, `file`, `open`, `status`, `summary`, `doctor`.
 //! - Parses version and help flags.
 
 use std::fs;
@@ -49,7 +49,7 @@ use vst_cli::daemon_url::{get_daemon_token_from_home, get_daemon_url_from_home_a
 use vst_cli::output::format_table;
 use vst_cli::paths::daemon_log_path_from_home;
 use vst_cli::preflight::preflight_with_url;
-use vst_cli::program::{parse_args, Command, DaemonCommand, SessionCommand, WorktreeCommand};
+use vst_cli::program::{parse_args, AgentCommand, Command, DaemonCommand, WorktreeCommand};
 use vst_cli::text_source::try_resolve_file_or_inline;
 
 #[test]
@@ -201,11 +201,11 @@ fn test_program_parse_args() {
     assert_eq!(d, Command::Daemon(DaemonCommand::Status { json: true }));
 
     let s = parse_args(vec![
-        "vst", "session", "send", "s-123", "hello", "world", "--wait",
+        "vst", "agent", "send", "s-123", "hello", "world", "--wait",
     ]);
     assert_eq!(
         s,
-        Command::Session(SessionCommand::Send {
+        Command::Agent(AgentCommand::Send {
             args: vec![
                 "s-123".to_string(),
                 "hello".to_string(),

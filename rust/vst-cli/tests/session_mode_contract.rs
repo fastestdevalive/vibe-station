@@ -9,9 +9,11 @@
 //! - `run_mode_add` posts CreateModeBody to `/modes`.
 //! - `run_mode_rm` confirms and sends DELETE `/modes/{id}`.
 //!
-//! ### Session commands
-//! - `parse_session_create_options` parses worktreeId, `--type`, `--mode`, `--prompt`, `--json`, `--parent`, `--no-parent`.
-//! - `run_session_create` rejects `--prompt` when type != "agent", defaults parent to $VST_SESSION.
+//! ### Agent commands
+//! - `parse_agent_create_options` parses worktreeId, `--channel`, `--mode`, `--prompt`, `--parent`, `--no-parent`.
+//! - `run_agent_create` validates channel is 'tmux' or 'json', defaults parent to $VST_SESSION.
+//! ### Terminal commands
+//! - `parse_terminal_create_options` parses worktreeId, `--parent`, `--no-parent`.
 //! - `parse_session_ls_options` parses `--worktree`, `--name`, `--json`.
 //! - `run_session_ls` filters by name client-side if provided.
 //! - `parse_session_info_options` parses session id and `--json`.
@@ -42,30 +44,31 @@ use tempfile::tempdir;
 
 use vst_cli::commands::mode::add::{parse_mode_add_options, run_mode_add, ModeAddOptions};
 use vst_cli::commands::mode::ls::{parse_mode_ls_options, run_mode_ls, ModeLsOptions};
-use vst_cli::commands::session::create::{
-    parse_session_create_options, run_session_create, SessionCreateOptions,
+use vst_cli::commands::agent::create::{
+    parse_agent_create_options, run_agent_create, AgentCreateOptions,
 };
-use vst_cli::commands::session::handoff::run_session_handoff;
-use vst_cli::commands::session::info::{
+use vst_cli::commands::agent::handoff::run_session_handoff;
+use vst_cli::commands::agent::info::{
     parse_session_info_options, run_session_info, SessionInfoOptions,
 };
-use vst_cli::commands::session::ls::{parse_session_ls_options, run_session_ls, SessionLsOptions};
-use vst_cli::commands::session::output::{
+use vst_cli::commands::agent::ls::{parse_session_ls_options, run_session_ls, SessionLsOptions};
+use vst_cli::commands::agent::output::{
     parse_session_output_options, run_session_output, SessionOutputOptions,
 };
-use vst_cli::commands::session::rename::{
+use vst_cli::commands::agent::rename::{
     parse_session_rename_options, run_session_rename, SessionRenameOptions,
 };
-use vst_cli::commands::session::reset::{
+use vst_cli::commands::agent::reset::{
     parse_session_reset_options, run_session_reset, SessionResetOptions,
 };
-use vst_cli::commands::session::restore::run_session_restore;
-use vst_cli::commands::session::send::parse_session_send_options;
-use vst_cli::commands::session::stop::run_session_stop;
-use vst_cli::commands::session::terminate::run_session_terminate;
-use vst_cli::commands::session::transcript::{
+use vst_cli::commands::agent::restore::run_session_restore;
+use vst_cli::commands::agent::send::parse_session_send_options;
+use vst_cli::commands::agent::stop::run_session_stop;
+use vst_cli::commands::agent::terminate::run_session_terminate;
+use vst_cli::commands::agent::transcript::{
     parse_session_transcript_options, run_session_transcript, SessionTranscriptOptions,
 };
+use vst_cli::commands::terminal::create::parse_terminal_create_options;
 
 #[test]
 fn test_mode_ls_options_parsing() {
@@ -99,34 +102,32 @@ fn test_mode_add_options_parsing() {
 }
 
 #[test]
-fn test_session_create_options_parsing() {
+fn test_agent_create_options_parsing() {
     let args = vec![
         "wt-100".to_string(),
-        "--type".to_string(),
-        "agent".to_string(),
         "--mode".to_string(),
         "code".to_string(),
         "--prompt".to_string(),
         "do work".to_string(),
-        "--json".to_string(),
+        "--channel".to_string(),
+        "json".to_string(),
         "--no-parent".to_string(),
     ];
-    let opts = parse_session_create_options(&args).expect("parse ok");
+    let opts = parse_agent_create_options(&args).expect("parse ok");
     assert_eq!(opts.worktree_id, "wt-100");
-    assert_eq!(opts.session_type, "agent");
     assert_eq!(opts.mode.as_deref(), Some("code"));
     assert_eq!(opts.prompt.as_deref(), Some("do work"));
-    assert!(opts.json);
+    assert_eq!(opts.channel, "json");
     assert!(opts.no_parent);
 
-    let opts_parent = parse_session_create_options(&[
+    let opts_parent = parse_agent_create_options(&[
         "wt-100".to_string(),
         "--parent=p-sess-1".to_string(),
     ])
     .expect("parse parent ok");
     assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
 
-    let opts_src_agent = parse_session_create_options(&[
+    let opts_src_agent = parse_agent_create_options(&[
         "wt-100".to_string(),
         "--source-agent".to_string(),
         "src-sess-2".to_string(),
@@ -134,7 +135,7 @@ fn test_session_create_options_parsing() {
     .expect("parse source-agent ok");
     assert_eq!(opts_src_agent.parent.as_deref(), Some("src-sess-2"));
 
-    let opts_project = parse_session_create_options(&[
+    let opts_project = parse_agent_create_options(&[
         "--project=proj-alpha".to_string(),
         "--parent=p-direct-1".to_string(),
         "--prompt=hello".to_string(),
@@ -146,20 +147,41 @@ fn test_session_create_options_parsing() {
 }
 
 #[test]
-fn test_session_create_prompt_terminal_rejected() {
-    let opts = SessionCreateOptions {
+fn test_agent_create_invalid_channel_rejected() {
+    let opts = AgentCreateOptions {
         worktree_id: "wt-1".to_string(),
-        session_type: "terminal".to_string(),
-        prompt: Some("not allowed".to_string()),
+        channel: "pty".to_string(),
         ..Default::default()
     };
     let res = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(run_session_create(opts));
+        .block_on(run_agent_create(opts));
     assert!(res.is_err());
     let (msg, code) = res.unwrap_err();
     assert_eq!(code, 1);
-    assert!(msg.contains("only apply to --type=agent"));
+    assert!(msg.contains("--channel must be 'tmux' or 'json'"));
+}
+
+#[test]
+fn test_terminal_create_options_parsing() {
+    let args = vec![
+        "wt-100".to_string(),
+        "--no-parent".to_string(),
+    ];
+    let opts = parse_terminal_create_options(&args).expect("parse ok");
+    assert_eq!(opts.worktree_id, "wt-100");
+    assert!(opts.no_parent);
+
+    let opts_parent = parse_terminal_create_options(&[
+        "wt-200".to_string(),
+        "--parent=p-sess-1".to_string(),
+    ])
+    .expect("parse parent ok");
+    assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
+
+    let err = parse_terminal_create_options(&[]);
+    assert!(err.is_err());
+    assert!(err.unwrap_err().contains("worktreeId is required"));
 }
 
 #[test]
@@ -574,14 +596,13 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
     assert!(err_msg.contains("already exists"));
 
     // Verify POST /sessions success
-    let sess_create_res = run_session_create(SessionCreateOptions {
+    let sess_create_res = run_agent_create(AgentCreateOptions {
         worktree_id: "wt-1".to_string(),
         project_id: None,
-        session_type: "agent".to_string(),
         mode: None,
         prompt: None,
         prompt_file: None,
-        json: true,
+        channel: "json".to_string(),
         parent: None,
         no_parent: true,
     })
@@ -589,14 +610,13 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
     assert!(sess_create_res.is_ok());
 
     // Verify POST /sessions 404
-    let sess_create_404 = run_session_create(SessionCreateOptions {
+    let sess_create_404 = run_agent_create(AgentCreateOptions {
         worktree_id: "wt-missing".to_string(),
         project_id: None,
-        session_type: "agent".to_string(),
         mode: None,
         prompt: None,
         prompt_file: None,
-        json: false,
+        channel: "tmux".to_string(),
         parent: None,
         no_parent: true,
     })

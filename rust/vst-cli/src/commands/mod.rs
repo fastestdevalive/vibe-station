@@ -1,10 +1,11 @@
+pub mod agent;
 pub mod daemon;
 pub mod doctor;
 pub mod file;
 pub mod mode;
 pub mod open;
 pub mod project;
-pub mod session;
 pub mod status;
 pub mod summary;
+pub mod terminal;
 pub mod worktree;

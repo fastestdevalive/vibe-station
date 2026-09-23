@@ -322,7 +322,7 @@ describe("openSubagentSession — classic vs workspace mode, cross-worktree guar
   });
 
   it("a terminal-type subagent activates the TERMINAL slot, never the agent slot", () => {
-    // `vst session create --type=terminal` also sets parentSessionId, so a
+    // `vst terminal create` also sets parentSessionId, so a
     // terminal child can appear as a row; pointing the agent pane at it would
     // render a terminal session through `agent:<id>`.
     const from = makeSession({ id: "p1", worktreeId: "wt-1" });

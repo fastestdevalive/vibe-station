@@ -28,18 +28,21 @@ User-facing binary: `vst`. Subcommand groups follow the noun-verb pattern (`vst 
 
 ### Sessions (= tabs)
 
+A session is always one of two kinds — an **agent** (`vst agent ...`) or a plain **terminal** with no agent attached (`vst terminal ...`). `ls`/`info`/`terminate`/`attach`/`output`/`rename` exist under both nouns and share the same underlying session id/lifecycle; `restore`/`transcript`/`send`/`stop`/`reset`/`handoff` are agent-only (turn/chat concepts that don't apply to a bare terminal).
+
 | Command | Args / Flags | Description |
 |---|---|---|
-| `vst session create` | `<worktree-id> --type=agent\|terminal [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--json]` | Add a session/tab to the worktree. `--mode` required when `--type=agent`. `--prompt`/`--prompt-file` sent to the new agent on first ready (agent type only). `--json` selects the JSON agent-chat channel (`channel: "json"`). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
-| `vst session ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions. `--worktree` defaults to `$VST_WORKTREE`. |
-| `vst session info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
-| `vst session terminate` | `[session-id]` | Terminate session. Rejected for `m` slot. `<session-id>` defaults to `$VST_SESSION` — the one destructive command that self-targets by default. |
-| `vst session attach` | `<session-id>` | Drop into the tmux session interactively. |
-| `vst session restore` | `<session-id>` | Resume an `exited` session (calls plugin's restore). |
-| `vst session output` | `<session-id> [--lines=<n>]` | Print recent output — pane text (tmux/pty) or assistant prose (Rich Chat/json). Default last 100 lines. Not an event log — see `session transcript`. |
-| `vst session transcript` | `<session-id> [--json]` | Print a Rich Chat (json) session's normalized event log (roles, tool calls, turn ids) — not prose. 404s on a tmux/pty session, which has no event log. `--json` emits raw NDJSON events. |
-| `vst session send` | `<session-id> [message...] [--file=<path>] [--attach=<path>...] [--queue] [--wait] [--timeout=<ms>]` | Send a message to a session (channel-agnostic). Steers a running Rich Chat turn by default; `--queue` opts out and enqueues FIFO instead. `--attach` stages a file for a Rich Chat turn (repeatable; errors on tmux/pty targets — not silently dropped). `--wait` blocks until the session settles (`idle`/`waiting_for_human`) and prints the reply. |
-| `vst session stop` | `<session-id>` | Abort the active Rich Chat turn (queued turns are kept). |
+| `vst agent create` | `<worktree-id> [--mode=<id>] [--prompt=<text>] [--prompt-file=<path>] [--channel=tmux\|json]` | Add an agent session to the worktree. `--mode` required. `--prompt`/`--prompt-file` sent to the new agent on first ready. `--channel` selects `tmux` (default) or `json` (Rich Chat, `channel: "json"`). Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
+| `vst terminal create` | `<worktree-id>` | Add a plain terminal tab to the worktree — no agent, no mode/prompt/channel flags. Prints new session id. `<worktree-id>` defaults to `$VST_WORKTREE`. |
+| `vst agent ls` / `vst terminal ls` | `[--worktree=<id>] [--project=<id>] [--json]` | List sessions of that kind. `--worktree` defaults to `$VST_WORKTREE`. |
+| `vst agent info` / `vst terminal info` | `<session-id> [--json]` | Session details (slot, type, mode, lifecycle, tmux name). |
+| `vst agent terminate` / `vst terminal terminate` | `[session-id]` | Terminate session. Rejected for `m` slot. `<session-id>` defaults to `$VST_SESSION` — the one destructive command that self-targets by default (agent only; a terminal id has no analogous "self"). |
+| `vst agent attach` / `vst terminal attach` | `<session-id>` | Drop into the tmux session interactively. |
+| `vst agent restore` | `<session-id>` | Resume an `exited` agent session (calls plugin's restore). |
+| `vst agent output` / `vst terminal output` | `<session-id> [--lines=<n>]` | Print recent output — pane text (tmux/pty) or assistant prose (Rich Chat/json). Default last 100 lines. Not an event log — see `agent transcript`. |
+| `vst agent transcript` | `<session-id> [--json]` | Print a Rich Chat (json) session's normalized event log (roles, tool calls, turn ids) — not prose. 404s on a tmux/pty session, which has no event log. `--json` emits raw NDJSON events. |
+| `vst agent send` | `<session-id> [message...] [--file=<path>] [--attach=<path>...] [--queue] [--wait] [--timeout=<ms>]` | Send a message to an agent session (channel-agnostic). Steers a running Rich Chat turn by default; `--queue` opts out and enqueues FIFO instead. `--attach` stages a file for a Rich Chat turn (repeatable; errors on tmux/pty targets — not silently dropped). `--wait` blocks until the session settles (`idle`/`waiting_for_human`) and prints the reply. |
+| `vst agent stop` | `<session-id>` | Abort the active Rich Chat turn (queued turns are kept). |
 
 ### Modes
 
@@ -135,7 +138,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | POST | `/sessions` | `{ worktreeId \| (target:"direct", projectId), type, modeId?, prompt?, channel? }` | `Session` | `type`: `agent` (requires `modeId`) or `terminal`. `prompt?` (agent only) delivered to the new agent via the plugin's `promptDelivery` mode. `channel?: "tmux"\|"pty"\|"json"` — `json` forces `useTmux=false` and renders as agent chat. |
 | DELETE | `/sessions/:id` | — | `{ ok }` | Rejected with 400 for the `m` slot (main is un-closeable). For a JSON session, aborts any active turn + kills its process group before purge. |
 | POST | `/sessions/:id/resume` | — | `Session` | Spawns new tmux + plugin's restore command for an `exited` session. |
-| POST | `/sessions/:id/send` | `{ data, sendEnter?, attachmentIds?, queue? }` | `{ ok }` | **Full-message send**, channel-agnostic: tmux/pty → named paste buffer (`tmux load-buffer -b _vst_send-<sid>` + `paste-buffer -b ... -d`, so it does not stomp on the user's clipboard); json → enqueues/steers a chat turn (steers by default unless `queue: true`). `attachmentIds` json-only — 400 on a tmux/pty target. Used by CLI (`vst session send`). There is no `/input` alias; the browser's WS `session:input` (per-keystroke typing) is a separate path. |
+| POST | `/sessions/:id/send` | `{ data, sendEnter?, attachmentIds?, queue? }` | `{ ok }` | **Full-message send**, channel-agnostic: tmux/pty → named paste buffer (`tmux load-buffer -b _vst_send-<sid>` + `paste-buffer -b ... -d`, so it does not stomp on the user's clipboard); json → enqueues/steers a chat turn (steers by default unless `queue: true`). `attachmentIds` json-only — 400 on a tmux/pty target. Used by CLI (`vst agent send`). There is no `/input` alias; the browser's WS `session:input` (per-keystroke typing) is a separate path. |
 | GET | `/sessions/:id/output` | `?lines=<n>` | `{ id, output: string }` | Recent output, channel-agnostic: tmux/pty pane capture, or json assistant prose (bounded by turns, not lines). Default `lines=100`, capped at 10000. Not an event log — see `/sessions/:id/transcript`. |
 
 ### JSON agent chat (`channel: "json"` sessions)
