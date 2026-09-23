@@ -26,10 +26,10 @@ use crate::plugin::{
     TurnContext, TurnInput,
 };
 
-/// Shell-quote a string by wrapping in single quotes (mirrors `sq` in shell.ts).
-fn sq(s: &str) -> String {
-    format!("'{s}'")
-}
+/// Shell-quote a string (escapes embedded `'`) — see [`vst_proc::sq`]. A
+/// local unescaped `'{s}'` here once broke any task prompt containing an
+/// apostrophe (`sh -lc` syntax error → pane dies instantly → `exited`).
+use vst_proc::sq;
 
 fn num(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
