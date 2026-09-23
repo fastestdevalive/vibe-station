@@ -40,12 +40,19 @@ interface FilePreviewPaneProps {
 
 export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
   const storePath = useWorkspaceStore((s) => s.activeFilePath);
-  const pendingFileLine = useWorkspaceStore((s) => s.pendingFileLine);
-  const clearPendingFileLine = useWorkspaceStore((s) => s.clearPendingFileLine);
+  const pendingLineTarget = useWorkspaceStore((s) => s.pendingLineTarget);
+  const peekFile = useWorkspaceStore((s) => s.peekFile);
   const scopeFromStore = useWorkspaceStore((s) =>
     worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
   );
-  const path = controlled ? controlled.path : storePath;
+  // Peek wins over the committed activeFilePath ONLY when set AND context-matched
+  // (B3): peekFile.worktreeId is the same resolved context id as this pane's
+  // `worktreeId` prop (worktree id OR direct-session project id).
+  const path = controlled
+    ? controlled.path
+    : peekFile && peekFile.worktreeId === worktreeId
+      ? peekFile.path
+      : storePath;
   // Project scope (direct sessions) has no git/diff — always plain file view.
   const scope: DiffScope = controlled
     ? controlled.scope
@@ -323,9 +330,48 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   }, []);
   useEffect(() => clearHighlight, [clearHighlight]);
 
+  // ── One effectiveLine / consumed-tracking mechanism for scroll-to-line (B2) ──
+  // A line-jump can come from EITHER `pendingLineTarget` (a committed open via
+  // setActiveFilePathAtLine) OR `peekFile` (a live peek while arrowing through
+  // search results) — both now carry their OWN `worktreeId`/`path`, so "does
+  // this target still apply to the file on screen" is a direct field
+  // comparison, same shape for both sources. (Previously only `peekFile` had
+  // this; `pendingFileLine` was a bare number with the path tracked
+  // separately via a ref that had to be captured/compared by hand — see the
+  // git history of this block for that older, more error-prone version.)
+  //
+  // `lastScrolledKeyRef` holds ONLY the single last `path#line` actually
+  // scrolled to (an accumulating Set would never forget a visited line and so
+  // break the ordinary "arrow back UP to an already-visited line" case — the
+  // Set would still hold `path#10` so re-visiting it would never re-scroll).
+  // A line is "already handled, don't re-fire" only when the current request
+  // key EXACTLY equals the last key we scrolled to: an unrelated re-render
+  // that leaves the request key unchanged (raw-markdown toggle, watcher
+  // refetch) is suppressed, but a request whose key changed away and came
+  // back (cursor moved off the line and back) re-scrolls.
+  //
+  // Neither source is nulled once consumed (scroll-once is enforced purely by
+  // `lastScrolledKeyRef`, not by clearing the store) — so the target/match
+  // highlight below stays visible for as long as the user is looking at that
+  // exact file, not just for the instant of the scroll.
+  const lastScrolledKeyRef = useRef<string | null>(null);
+  const peekActive =
+    !!peekFile && peekFile.worktreeId === worktreeId && peekFile.path === path;
+  const pendingActive =
+    !!pendingLineTarget && pendingLineTarget.worktreeId === worktreeId && pendingLineTarget.path === path;
+  const effectiveLine = peekActive ? peekFile!.line : pendingActive ? pendingLineTarget!.line : null;
+  const effectiveMatchText = peekActive
+    ? peekFile!.matchText
+    : pendingActive
+      ? pendingLineTarget!.matchText
+      : null;
+  const effectiveLineKey = effectiveLine != null ? `${path}#${effectiveLine}` : null;
+  const lineIsConsumed = effectiveLineKey == null || lastScrolledKeyRef.current === effectiveLineKey;
+
   // Restore scroll the instant the body element mounts. Stored value comes
   // from the global store, kept fresh by the rAF-throttled onScroll handler.
-  // Skip restore if pendingFileLine is set — that takes precedence.
+  // Skip restore while an *unconsumed* line-jump (from either source) is
+  // pending — that takes precedence.
   //
   // Also (re)attaches two-finger-pinch-to-zoom (touch + trackpad) on the same
   // element — native listeners, not JSX props, because they need
@@ -336,7 +382,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       pinchCleanupRef.current?.();
       pinchCleanupRef.current = null;
       bodyRef.current = el;
-      if (el && scrollKey && pendingFileLine === null) {
+      if (el && scrollKey && lineIsConsumed) {
         const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
         if (saved != null) el.scrollTop = saved;
       }
@@ -347,7 +393,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         });
       }
     },
-    [scrollKey, pendingFileLine, worktreeId, bumpPreviewFontForWorktree, bumpPreviewFont],
+    [scrollKey, lineIsConsumed, worktreeId, bumpPreviewFontForWorktree, bumpPreviewFont],
   );
 
   useEffect(() => () => pinchCleanupRef.current?.(), []);
@@ -382,31 +428,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // pre-content-load scrollTop assignment in setBodyRef gets clamped against
   // the OLD content's scrollHeight.
   useEffect(() => {
-    if (!bodyRef.current || !scrollKey || pendingFileLine !== null) return;
+    if (!bodyRef.current || !scrollKey || !lineIsConsumed) return;
     const saved = useWorkspaceStore.getState().fileScrollByKey[scrollKey];
     if (saved != null) bodyRef.current.scrollTop = saved;
-  }, [fileBody, diffBody, scrollKey, pendingFileLine]);
+  }, [fileBody, diffBody, scrollKey, lineIsConsumed]);
 
-  // Path the currently-pending scroll-to-line request was made for —
-  // captured the moment `pendingFileLine` transitions to a new value, so the
-  // effect below can tell "stale, the user moved to a different file" apart
-  // from "this file hasn't rendered a matching line yet" (e.g. a Markdown
-  // file renders MarkdownView — no `.workspace-code-line` elements — until
-  // the diff view is enabled).
-  const pendingLineForPathRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (pendingFileLine !== null) pendingLineForPathRef.current = path;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- capture `path` at the moment `pendingFileLine` is (re)set, not on every path change
-  }, [pendingFileLine]);
-
-  // Scroll to the pending line once its target line element exists, then
-  // clear it. Deliberately does NOT clear on a "not found YET" outcome for
-  // the same file/path — only on an actual scroll, or on discovering the
-  // active file has moved on to a different path than this request was for
-  // (stale — clearing here also prevents it from coincidentally matching an
-  // unrelated file's line numbers). `scope` is a dependency so switching
-  // into a different renderer gives this effect another chance instead of
-  // the jump-to-line intent being silently and permanently dropped.
+  // Scroll to the effective line once its target line element exists, then
+  // mark it consumed. Deliberately does NOT clear on a "not found YET"
+  // outcome — only records the scroll once it actually happens. `scope` is a
+  // dependency so switching into a different renderer gives this effect
+  // another chance instead of the jump-to-line intent being silently and
+  // permanently dropped. No stale-path handling needed here — both
+  // `peekActive`/`pendingActive` already gate `effectiveLine` on the target's
+  // own path matching the current `path`, so a target for a different file
+  // simply resolves `effectiveLine` to `null` and this effect no-ops.
   //
   // Both CodeView and DiffView tag their per-line row with `data-line`
   // (CodeView: the file's own line number; DiffView: the NEW-side line
@@ -416,13 +451,14 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // gutter-text match only ever matched CodeView, so any file with diff mode
   // on (DiffView's `.diff-line`/`.diff-gutter` markup) never scrolled at all.
   useEffect(() => {
-    if (pendingFileLine === null || !bodyRef.current) return;
-    if (path !== pendingLineForPathRef.current) {
-      clearPendingFileLine();
-      return;
-    }
+    if (effectiveLine === null || effectiveLineKey == null || !bodyRef.current) return;
+    // Already scrolled to this exact key — don't re-fire and yank the user's
+    // scroll on an unrelated re-render (watcher refetch, etc.) (B2). Re-arming
+    // to the SAME key away-and-back re-scrolls only when the key itself
+    // changed in between (B-2).
+    if (lineIsConsumed) return;
     if (!fileBody) return; // still loading this file's content
-    const targetElement = bodyRef.current.querySelector<HTMLElement>(`[data-line="${pendingFileLine}"]`);
+    const targetElement = bodyRef.current.querySelector<HTMLElement>(`[data-line="${effectiveLine}"]`);
     if (targetElement) {
       // `block: "center"` measures against the pane's own current scroll
       // container, so it already centers relative to whatever height is
@@ -434,23 +470,28 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       highlightedElRef.current = targetElement;
       highlightTimeoutRef.current = setTimeout(clearHighlight, HIGHLIGHT_MS);
       // Persist the NEW position immediately, synchronously. Without this,
-      // clearing pendingFileLine below re-renders with it null, which makes
-      // the "re-apply scroll on content load" effect just above stop
-      // skipping itself and restore `scrollTop` from the STALE value it last
-      // saved (from before this jump) — visibly snapping straight back to
-      // wherever the file was scrolled before, as if the jump never
+      // marking the key consumed below re-renders with `lineIsConsumed` true,
+      // which makes the "re-apply scroll on content load" effect just above
+      // stop skipping itself and restore `scrollTop` from the STALE value it
+      // last saved (from before this jump) — visibly snapping straight back
+      // to wherever the file was scrolled before, as if the jump never
       // happened. `handleScroll`'s own rAF-throttled save would fix this too,
       // but only a frame late — after that effect has already stomped it.
       if (worktreeId && scrollKey && path) {
         useWorkspaceStore.getState().setFileScroll(worktreeId, path, bodyRef.current.scrollTop);
       }
-      clearPendingFileLine();
+      lastScrolledKeyRef.current = effectiveLineKey;
     }
-    // else: leave pendingFileLine set — no matching line element exists in
+    // else: leave effectiveLine pending — no matching line element exists in
     // the CURRENT render (e.g. rendered Markdown, or a line outside every
-    // diff hunk while diff mode is on), but one may appear on a later
-    // render of this same file (diff mode toggled off, etc.).
-  }, [pendingFileLine, fileBody, path, scope, clearPendingFileLine, worktreeId, scrollKey, clearHighlight]);
+    // diff hunk while diff mode is on), but one may appear on a later render
+    // of this same file (diff mode toggled off, etc.).
+    // `lineIsConsumed` (read above) is derived from `lastScrolledKeyRef` (a
+    // ref, not state/props) fresh on every render; it can't itself trigger a
+    // re-render, so listing it below would not change when this effect
+    // fires — only `effectiveLineKey` changing (already listed) can.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -585,7 +626,17 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         </div>
       );
     }
-    return <CodeView code={fileBody} language={languageForFilePath(path)} filePath={path} themeMode={themeMode} gutterMarks={gutterMarks ?? undefined} />;
+    return (
+      <CodeView
+        code={fileBody}
+        language={languageForFilePath(path)}
+        filePath={path}
+        themeMode={themeMode}
+        gutterMarks={gutterMarks ?? undefined}
+        highlightLine={effectiveLine}
+        highlightMatchText={effectiveMatchText}
+      />
+    );
   })();
 
   const useCodeChrome = scope === "local" || scope === "branch" || scope === "commit" || (!isMd && !isImage && scope === "none");

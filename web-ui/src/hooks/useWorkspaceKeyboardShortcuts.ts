@@ -124,8 +124,26 @@ export function useWorkspaceKeyboardShortcuts(
       if (e.shiftKey) {
         const k = e.key.length === 1 ? e.key.toUpperCase() : e.key;
         if (k === "F") {
+          // ⌘/Ctrl+Shift+F — Files tab + rail search mode (Phase 3.7). Search is
+          // no longer a separate tool tab; repoint to the Files tab's rail.
+          // Keyed by the same resolved context id as FilesPanel's read
+          // (activeWorktreeId ?? activeDirectContextId, B5) so it works for
+          // direct sessions too; focuses the query input via a store request
+          // (B4c — always-mounting removed the remount+autoFocus combo the
+          // shortcut relied on today).
           e.preventDefault();
-          setToolPanelTab("search");
+          const state = useWorkspaceStore.getState();
+          const key = state.activeWorktreeId ?? state.activeDirectContextId;
+          if (key) {
+            setToolPanelTab("files");
+            // B3: the search body lives inside the shell's left pane, which is
+            // unmounted when the file tree is collapsed — so switching to search
+            // mode must first make the tree pane visible, or the input we're about
+            // to focus won't be mounted.
+            if (!state.fileTreeVisible) state.toggleFileTree();
+            state.setFilesLeftPaneMode(key, "search");
+            state.requestSearchFocus(key);
+          }
         } else if (k === "Z") {
           e.preventDefault();
           if (!canvasMode) toggleTerminalDock();

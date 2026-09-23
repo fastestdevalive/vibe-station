@@ -2237,6 +2237,55 @@
   background: var(--bg-hover);
 }
 
+/* Layout-orientation toggle attached to the "Files" tab button itself — a
+ * separately-clickable icon on its right edge (same `role="button"` +
+ * stopPropagation span pattern as `.tab__close` above, not a nested
+ * <button>, since HTML forbids nesting interactive controls). More visible
+ * by default than `.tab__close` (0.6 vs 0) since it's a real, frequently-used
+ * control rather than an incidental dismiss action. */
+/* Wraps the "Files" tab button + its layout-toggle button as one visual
+ * unit — a real sibling <button>, not a descendant of `.tab`, since the
+ * toggle needs its own independently-focusable control (see the JSX
+ * comment in ToolPanel.tsx for why nesting inside `.tab` was rejected). */
+.tool-panel__files-tab-wrap {
+  display: flex;
+  align-items: stretch;
+}
+
+.tab__layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.6;
+  margin: auto var(--space-2) auto 0;
+  padding: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.tab__layout-toggle svg {
+  flex-shrink: 0;
+}
+
+/* Reveal at full opacity when hovering anywhere in the grouped tab item, or
+ * when the Files tab itself is active — `~` targets the toggle as the
+ * active tab BUTTON's general sibling (they're siblings inside the wrap,
+ * not parent/child, so a descendant selector wouldn't match). */
+.tool-panel__files-tab-wrap:hover .tab__layout-toggle,
+.tab[data-active="true"] ~ .tab__layout-toggle {
+  opacity: 1;
+}
+
+.tab__layout-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
 .tab--icon {
   padding: 0;
 }
@@ -2742,6 +2791,24 @@
   border-left: 4px solid rgb(220, 38, 38);
   border-top: 3px solid transparent;
   border-bottom: 3px solid transparent;
+}
+
+/* Two-part jump-to-line highlight (search result opened / peeked): the whole
+ * TARGET LINE gets a background tint (like `.tree-row--cursor`/search's own
+ * `--cursor` rows), and the specific MATCHED substring within it gets a
+ * second, stronger mark — mirrors `.search-panel__match-text mark`'s styling
+ * so the two highlight concepts read as the same visual language across the
+ * results list and the opened file. `.workspace-code-line` repeated to match
+ * `:hover`'s specificity so hovering the target line doesn't blank the tint. */
+.workspace-code-line.workspace-code-line--target {
+  background: var(--bg-active);
+}
+
+.workspace-code-match {
+  background: var(--accent);
+  color: var(--bg-primary);
+  border-radius: 2px;
+  padding: 0 1px;
 }
 
 .workspace-code-content {
@@ -4635,6 +4702,42 @@ a.dashboard-card.dashboard-card--session {
   border-color: var(--accent);
 }
 
+/* Wraps just the query input (not the case/regex/word toggles) so the clear
+ * button can be absolutely positioned over its right edge. */
+.search-panel__input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-panel__input-wrap .search-panel__input {
+  width: 100%;
+  padding-right: 26px;
+}
+
+.search-panel__clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.search-panel__clear:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
 .search-panel__toggles {
   display: flex;
   flex-shrink: 0;
@@ -4798,6 +4901,31 @@ a.dashboard-card.dashboard-card--session {
   padding: var(--space-1) var(--space-2);
   color: var(--fg-muted);
   font-size: var(--font-size-xs);
+}
+
+/* Phase 3 (B8) — the roving-nav results list (mirrors the tree's scroll
+ * container) and the visible keyboard cursor highlight for header/match rows
+ * (mirrors `.tree-row--cursor` at :1966). */
+.search-panel__results-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+}
+
+.search-panel__file-header--cursor,
+.search-panel__match-row--cursor {
+  background: var(--bg-active);
+}
+
+/* Rows are real <button>s that receive DOM focus during roving nav — suppress
+ * the browser's default focus ring so only the `--cursor` background above
+ * shows (mirrors `[role="tree"] .tree-row:focus` at :1934). Without this, a
+ * focused row showed both the background highlight AND a 4-edge focus
+ * outline. */
+.search-panel__file-header:focus,
+.search-panel__match-row:focus {
+  outline: none;
 }
 
 /* ── VCS tool: vertical commit graph, most-recent first ─────────────────────── */
@@ -5484,6 +5612,75 @@ a.dashboard-card.dashboard-card--session {
   flex-direction: column;
 }
 
+/* Phase 3 (B8) — outer row: the full-height FilesLeftRail to the LEFT of the
+ * whole MasterDetailShell column, a structural sibling not a nested child. */
+.files-panel__row {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.files-panel__row .files-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Phase 3 (B8) — the 3-icon rail: panel-visibility toggle · ⊟ tree · 🔍
+ * search. (The layout-orientation icon originally sketched into this rail
+ * has since moved to the top-level "Files" tab button — see
+ * `.tab__layout-toggle`.) */
+.files-left-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-shrink: 0;
+  width: 36px;
+  padding: var(--space-1) 0;
+  background: var(--bg-secondary);
+  border-right: var(--border-width) solid var(--border-default);
+}
+
+.files-left-rail__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.files-left-rail__btn:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.files-left-rail__btn--active {
+  background: var(--bg-active);
+  color: var(--fg-primary);
+}
+
+/* Phase 3 (Requirement 9) — always-mounted tree/search bodies inside
+ * FilesLeftPane: the inactive one is CSS-hidden (display:none, never a
+ * `hidden` attribute) so neither unmounts on a rail-mode switch. */
+.files-left-pane__body {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.files-left-pane__body.files-left-pane__hidden {
+  display: none;
+}
+
 .files-panel__preview-only {
   flex: 1;
   min-height: 0;
@@ -5526,6 +5723,18 @@ a.dashboard-card.dashboard-card--session {
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
+/* The icon is a flex item of a `display: flex` button sitting in an
+ * otherwise tightly-packed topbar row — without an explicit flex-shrink
+ * override it can get visually squashed (observed shrinking a 15x15 icon
+ * down to ~9px wide) even though the button itself has plenty of room to
+ * show it at full size. Refusing to shrink keeps it at the size its own
+ * width/height attributes (set via lucide-react's `size` prop) specify,
+ * regardless of how constrained the row is. */
+.files-topbar__tree-toggle svg,
+.files-topbar__add svg {
+  flex-shrink: 0;
+}
+
 .files-topbar__tree-toggle:hover {
   background: var(--bg-hover);
   color: var(--fg-primary);
@@ -5538,7 +5747,14 @@ a.dashboard-card.dashboard-card--session {
 .files-topbar__tabs {
   display: flex;
   align-items: stretch;
-  flex: 1;
+  /* NOT flex:1 — this row has a trailing sibling (the "+" add-file button)
+   * that must sit right next to the tabs, not get pushed to the far edge of
+   * the window by an empty gap. `flex: 0 1 auto` sizes to content (so the
+   * button sits adjacent) while still allowing this container to SHRINK
+   * below its content's natural width — required for `overflow-x: auto` to
+   * actually kick in once there are enough tabs to overflow the available
+   * space. */
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5578,6 +5794,18 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-primary);
   border-bottom-color: var(--accent);
   background: var(--bg-tertiary);
+}
+
+/* The dedicated search-preview tab (live-review feedback) — visually
+ * distinct from a real tab (italic name, dashed underline instead of the
+ * solid accent one) so it reads as "not actually open", matching the
+ * peek/pin distinction already established elsewhere in this feature. */
+.files-topbar__tab--preview .files-topbar__tab-name {
+  font-style: italic;
+}
+
+.files-topbar__tab--preview[data-active] {
+  border-bottom-style: dashed;
 }
 
 .files-topbar__tab-name {

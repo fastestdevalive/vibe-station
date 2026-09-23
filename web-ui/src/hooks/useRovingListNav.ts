@@ -14,6 +14,10 @@ export interface UseRovingListNavOptions {
   onOpen: (path: string) => void;
   /** Called on ArrowRight/ArrowLeft for a row with `expandable: true`. */
   onToggle?: (path: string) => void;
+  /** Called when ArrowUp finds the cursor already AT the first row, or ArrowDown
+   *  finds it already AT the last row — a genuine boundary, never a no-op. Guarded
+   *  so an empty `rows` array (cursor not positioned anywhere) never fires it. */
+  onBoundary?: (edge: "top" | "bottom") => void;
   /** When true, ArrowUp/ArrowDown also call `onOpen` for non-expandable rows,
    *  giving instant preview-as-you-navigate behaviour (like VSCode's explorer). */
   openOnArrow?: boolean;
@@ -89,6 +93,11 @@ export function useRovingListNav(
         if (next) {
           setCursorPath(next.path);
           if (opts.openOnArrow && !next.expandable) opts.onOpen(next.path);
+        } else if (idx >= 0 && idx === rows.length - 1) {
+          // idx === rows.length - 1 means a real "bottom" boundary — guards out
+          // the empty-rows case (idx < 0, next undefined) which is NOT a boundary,
+          // just nothing to navigate at all.
+          opts.onBoundary?.("bottom");
         }
         break;
       }
@@ -98,6 +107,12 @@ export function useRovingListNav(
         if (prev) {
           setCursorPath(prev.path);
           if (opts.openOnArrow && !prev.expandable) opts.onOpen(prev.path);
+        } else if (idx === 0) {
+          // idx === 0 means a real "top" boundary (not "nothing cursored yet",
+          // which idx < 0 already redirects to rows[0] above, and not "rows is
+          // empty", where idx is also < 0) — only fire once the cursor is
+          // genuinely AT the first row and can't move further up.
+          opts.onBoundary?.("top");
         }
         break;
       }

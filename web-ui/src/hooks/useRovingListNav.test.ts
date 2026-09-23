@@ -104,4 +104,53 @@ describe("useRovingListNav", () => {
     act(() => result.current.handleKeyDown(key(" ")));
     expect(onOpen).toHaveBeenCalledWith("c");
   });
+
+  it("ArrowUp at the first row calls onBoundary('top')", () => {
+    const onOpen = vi.fn();
+    const onBoundary = vi.fn();
+    const { result } = renderHook(() =>
+      useRovingListNav(ROWS, { onOpen, onBoundary }),
+    );
+
+    act(() => result.current.setCursorPath("a"));
+    act(() => result.current.handleKeyDown(key("ArrowUp")));
+    expect(onBoundary).toHaveBeenCalledWith("top");
+  });
+
+  it("ArrowDown at the last row calls onBoundary('bottom')", () => {
+    const onOpen = vi.fn();
+    const onBoundary = vi.fn();
+    const { result } = renderHook(() =>
+      useRovingListNav(ROWS, { onOpen, onBoundary }),
+    );
+
+    act(() => result.current.setCursorPath("c"));
+    act(() => result.current.handleKeyDown(key("ArrowDown")));
+    expect(onBoundary).toHaveBeenCalledWith("bottom");
+  });
+
+  it("onBoundary is never called for an empty rows array on either Arrow key", () => {
+    const onOpen = vi.fn();
+    const onBoundary = vi.fn();
+    const { result } = renderHook(() =>
+      useRovingListNav([], { onOpen, onBoundary }),
+    );
+
+    act(() => result.current.handleKeyDown(key("ArrowUp")));
+    act(() => result.current.handleKeyDown(key("ArrowDown")));
+    expect(onBoundary).not.toHaveBeenCalled();
+  });
+
+  it("ArrowUp before the first row is reached does NOT call onBoundary('top')", () => {
+    const onOpen = vi.fn();
+    const onBoundary = vi.fn();
+    const { result } = renderHook(() =>
+      useRovingListNav(ROWS, { onOpen, onBoundary }),
+    );
+
+    // No cursor yet: ArrowUp from "nothing cursored" seeds to rows[0], not a boundary.
+    act(() => result.current.handleKeyDown(key("ArrowUp")));
+    expect(result.current.cursorPath).toBe("a");
+    expect(onBoundary).not.toHaveBeenCalled();
+  });
 });

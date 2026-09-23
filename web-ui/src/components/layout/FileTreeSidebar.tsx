@@ -1,4 +1,4 @@
-import { File, FileText, Folder, FolderOpen, GitCompare } from "lucide-react";
+import { File, FileText, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { ChangedPathEntry, DiffScope, FileScope, GitStatusChar, TreeEntry } from "@/api/types";
@@ -6,7 +6,7 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { useTreeWatch } from "@/hooks/useSubscription";
 import { useRovingListNav, type RovingRow } from "@/hooks/useRovingListNav";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
-import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
+import { FileTreeHeader } from "@/components/layout/FileTreeHeader";
 
 /** Sort folders before files, then alphabetical (case-insensitive). */
 function sortEntries(entries: TreeEntry[]): TreeEntry[] {
@@ -108,8 +108,6 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
   const setFocusedPane = useWorkspaceStore((s) => s.setFocusedPane);
-  const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
-  const setTreeScopeForWorktree = useWorkspaceStore((s) => s.setTreeScopeForWorktree);
 
   const scopeRaw = useWorkspaceStore((s) =>
     activeWorktreeId ? s.diffScopeByWorktree[activeWorktreeId] : undefined,
@@ -428,39 +426,6 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     el?.scrollIntoView({ block: "nearest" });
   }, [activeFilePath]);
 
-  function setScope(next: DiffScope) {
-    if (activeWorktreeId) setDiffScopeForWorktree(activeWorktreeId, next);
-  }
-
-  function toggleDiffMode() {
-    if (scope === "none") {
-      // Entering diff mode: seed the Changes list's scope FROM the plain
-      // tree's current scope, so it opens showing the same local/branch
-      // selection the user just had (rather than silently reverting to
-      // "local").
-      setScope(treeScope);
-    } else {
-      // Leaving diff mode: mirror the live diff-mode scope back into the
-      // plain tree's own slice, so returning to the tree preserves whatever
-      // scope was active in the Changes list.
-      if (activeWorktreeId) setTreeScopeForWorktree(activeWorktreeId, scope === "branch" ? "branch" : "local");
-      setScope("none");
-    }
-  }
-
-  // Header selector's onChange: routes to whichever store slice is currently
-  // "live" — the shared diff `scope` while the flat Changes list is showing
-  // (unchanged behavior), or the tree-only `treeScope` while browsing the
-  // plain tree, so picking a scope there never flips diff mode on (Task A.2).
-  function handleTreeScopeChipChange(next: DiffScope) {
-    if (next !== "local" && next !== "branch") return;
-    if (diffMode) {
-      setScope(next);
-    } else if (activeWorktreeId) {
-      setTreeScopeForWorktree(activeWorktreeId, next);
-    }
-  }
-
   if (!activeWorktreeId) {
     return (
       <div className="pane pane-stack">
@@ -472,33 +437,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
 
   return (
     <div className="pane pane-stack">
-      <div className="pane-header pane-header--compact file-tree-sidebar-header">
-        <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>
-        <div className="file-tree-sidebar-header__tail">
-          {/* One scope selector, always visible in the Files header — not
-              gated on diff mode — working in both plain-tree and Changes-list
-              mode (Task A.2). Git-only; hidden for project (direct-session)
-              scope, same as the diff-view toggle below. */}
-          {!isProject ? (
-            <div className="file-tree-scope-slot">
-              <DiffScopeSelector scope={effectiveTreeScope} onChange={handleTreeScopeChipChange} />
-            </div>
-          ) : null}
-          {/* Diff view is git-only; hidden for project (direct-session) scope. */}
-          {!isProject ? (
-            <button
-              type="button"
-              className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
-              aria-pressed={diffMode}
-              aria-label={diffMode ? "Diff view on" : "Diff view off"}
-              title="Toggle diff view"
-              onClick={toggleDiffMode}
-            >
-              <GitCompare size={15} strokeWidth={2} />
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <FileTreeHeader contextId={activeWorktreeId} isProject={isProject} />
       <div
         style={{ flex: 1, overflow: "auto", padding: "var(--space-2)" }}
         role={diffMode ? undefined : "tree"}
