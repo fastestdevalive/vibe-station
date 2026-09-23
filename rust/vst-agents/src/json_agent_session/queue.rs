@@ -82,7 +82,15 @@ impl JsonAgentSession {
                 attachments,
                 fork_from_chat_id,
             });
-            if queue_position > 0 {
+            // Only flip to Queued when nothing is running. While a turn is
+            // actively streaming (`s.running`), `queue_position` is always
+            // >= 1 (the active turn counts as position 1), so clobbering
+            // `turn_state` here would wrongly mask the running turn's real
+            // state (Thinking/Responding/Tool) as "paused/Queued". In that
+            // case `queue_depth` (s.queue.len(), sent via SessionMeta)
+            // already communicates how many are queued; leave turn_state
+            // untouched. Mirrors sync_idle_state_inner's `if s.running`.
+            if !s.running && queue_position > 0 {
                 s.turn_state = TurnState::Queued;
             }
         }

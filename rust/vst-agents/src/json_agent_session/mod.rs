@@ -1016,3 +1016,188 @@ pub(super) fn now_ms() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::plugin::{
+        AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
+        PromptDelivery, ReadySignal, TurnContext, TurnInput,
+    };
+
+    struct NoopPlugin;
+
+    impl AgentPlugin for NoopPlugin {
+        fn name(&self) -> &str {
+            "noop"
+        }
+        fn default_model(&self) -> &str {
+            "noop-model"
+        }
+        fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+            "noop"
+        }
+        fn prompt_delivery(&self) -> PromptDelivery {
+            PromptDelivery::Inline
+        }
+        fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+            vec![]
+        }
+        fn get_environment(&self, _cfg: &LaunchConfig) -> BTreeMap<String, String> {
+            BTreeMap::new()
+        }
+        fn get_ready_signal(&self) -> ReadySignal {
+            ReadySignal {
+                sentinel: None,
+                fallback_ms: 0,
+            }
+        }
+        fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+            ComposePromptResult::default()
+        }
+        fn list_models(&self) -> crate::plugin::AsyncResult<ListModelsResult> {
+            Box::pin(async { ListModelsResult::default() })
+        }
+        fn supports_json(&self) -> bool {
+            true
+        }
+        fn run_turn(
+            &self,
+            _input: TurnInput,
+            _ctx: TurnContext,
+            _cancel: CancellationToken,
+        ) -> tokio::sync::mpsc::UnboundedReceiver<NormalizedEvent> {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            // Never emits — lets a test drive the queue/state without racing.
+            std::mem::drop(tx);
+            rx
+        }
+    }
+
+    fn session() -> JsonAgentSession {
+        let dir = tempfile::tempdir().unwrap();
+        let _home = crate::home::with_home(dir.path().to_path_buf());
+        let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+        let (tx, _rx) = tokio::sync::broadcast::channel(64);
+
+        let session_rec = SessionRecord {
+            id: "s1".into(),
+            worktree_id: None,
+            project_id: "p1".into(),
+            is_main: false,
+            sort_order: 0.0,
+            r#type: vst_types::SessionType::Agent,
+            mode_id: None,
+            name: None,
+            name_source: None,
+            tmux_name: "vst-s1".into(),
+            use_tmux: true,
+            channel: None,
+            lifecycle: vst_types::SessionLifecycle {
+                state: vst_types::LifecycleState::Working,
+                reason: None,
+                last_transition_at: "2026-01-01T00:00:00.000Z".into(),
+            },
+            transcript_ref: None,
+            agent_chat_id: None,
+            acp_session_id: None,
+            model_override: None,
+            pinned_at: None,
+            initial_prompt: None,
+            draft_prompt: None,
+            draft_config: None,
+            archived_at: None,
+            handoff_summary: None,
+            parent_session_id: None,
+            superseded_by: None,
+            pr: None,
+        };
+        let project_rec = ProjectRecord {
+            id: "p1".into(),
+            absolute_path: "/repos/p1".into(),
+            prefix: "vs".into(),
+            is_git: true,
+            default_branch: Some("main".into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            hidden: None,
+            direct_sessions: vec![],
+            direct_session_seq: None,
+            worktrees: vec![],
+            next_worktree_num: None,
+        };
+
+        JsonAgentSession::new(JsonAgentSessionOptions {
+            project: project_rec,
+            worktree: None,
+            session: session_rec,
+            plugin: Arc::new(NoopPlugin),
+            daemon_port: 0,
+            cli: NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle,
+            broadcaster: vst_types::Broadcaster(tx),
+        })
+    }
+
+    /// Enqueuing while a turn is RUNNING must not clobber the running turn's
+    /// real state (Thinking/Responding/Tool) to Queued. The queued item count
+    /// is surfaced via `queue_depth`, which must reflect it independently.
+    #[test]
+    fn enqueue_while_running_preserves_turn_state_and_tracks_queue_depth() {
+        let s = session();
+        {
+            let mut st = s.0.state.lock().unwrap();
+            st.running = true;
+            st.turn_state = TurnState::Thinking;
+        }
+
+        s.enqueue("msg while running".into(), vec![], None, None);
+
+        let meta = s.get_meta();
+        assert_eq!(
+            meta.turn_state,
+            TurnState::Thinking,
+            "running turn_state must not be clobbered to Queued"
+        );
+        assert_eq!(meta.queue_depth, 1, "queued item must be counted");
+    }
+
+    /// Enqueuing while NOT running must still set turn_state to Queued when the
+    /// new turn lands behind already-queued work (regression guard — the fix
+    /// must not break the existing correct not-running behaviour).
+    #[tokio::test]
+    async fn enqueue_while_not_running_still_sets_queued() {
+        let s = session();
+        // Simulate a non-empty queue with nothing running (e.g. mid-drain
+        // between turns / after a hold), so the new turn lands at position > 0.
+        {
+            let mut st = s.0.state.lock().unwrap();
+            st.running = false;
+            st.queue.push_back(QueuedTurn {
+                turn_id: "existing".into(),
+                enqueue_order: 0,
+                raw_message: "existing".into(),
+                attachments: vec![],
+                fork_from_chat_id: None,
+            });
+        }
+
+        s.enqueue("msg while idle".into(), vec![], None, None);
+
+        let meta = s.get_meta();
+        assert_eq!(
+            meta.turn_state,
+            TurnState::Queued,
+            "not-running enqueue behind queued work must set Queued"
+        );
+        assert_eq!(meta.queue_depth, 2, "both queued items must be counted");
+    }
+}
