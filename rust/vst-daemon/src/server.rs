@@ -18,6 +18,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -468,7 +469,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
-        dist_path: opts.dist_path,
+        dist_path: opts.dist_path.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
         persist_epoch: opts.persist_epoch,
         store: opts.store,
         broadcaster: opts.broadcaster,
@@ -727,6 +728,7 @@ async fn auth_middleware(
     let mut req = req;
     let original_uri = req.uri().clone();
     let mut path = original_uri.path().to_string();
+    let original_path = path.clone();
 
     // Vite dev proxy compatibility: rewrite /api/* -> /*
     if path.starts_with("/api/") {
@@ -830,19 +832,29 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Exempt routes (health, ws, mobile-auth stay at root; auth/logout is under /api)
+    // Exempt routes (health, ws, mobile-auth stay at root; auth/logout is under
+    // /api). Note: `path` has already been rewritten `/api/*` -> `/*` above, so
+    // the logout key matches its post-rewrite form `/auth/logout`.
     let key = format!("{} {}", method, path);
     if key == "GET /health"
         || key == "GET /ws"
-        || key == "POST /api/auth/logout"
+        || key == "POST /auth/logout"
         || key == "GET /mobile-auth"
     {
         return next.run(req).await;
     }
 
-    // Static assets / fallback
-    if method == Method::GET
-        && (path.starts_with("/assets/") || path == "/" || path == "/index.html")
+    // SPA fallback exemption: any GET/HEAD that isn't an API or protocol path
+    // falls through to handle_fallback (which serves the hardened dist). This
+    // broadens the old "/, /index.html, /assets/*" list so every SPA deep link
+    // renders the app's own login screen (via the client's checkAuth) even with
+    // an invalid/revoked token. `/api/*` is excluded by the ORIGINAL (pre-rewrite)
+    // path so API routes stay token-protected; `/ws` and `/mobile-auth` keep their
+    // explicit exemptions above and are additionally excluded here defensively.
+    if (method == Method::GET || method == Method::HEAD)
+        && !original_path.starts_with("/api/")
+        && original_path != "/ws"
+        && original_path != "/mobile-auth"
     {
         return next.run(req).await;
     }
@@ -3280,14 +3292,26 @@ async fn handle_fallback(State(state): State<AppState>, req: Request) -> Respons
     };
 
     let path = req.uri().path().trim_start_matches('/');
-    let target = dist.join(path);
 
-    if target.is_file() {
-        if let Ok(bytes) = tokio::fs::read(&target).await {
-            let mime = mime_guess::from_path(&target)
-                .first_or_octet_stream()
-                .to_string();
-            return ([(header::CONTENT_TYPE, mime)], bytes).into_response();
+    // Path-traversal guard: URL-decode the path, reject any segment equal to
+    // `..` (covers both literal and percent-encoded encodings), then
+    // canonicalize and require the result to stay under `dist` before serving.
+    let Ok(decoded) = percent_decode_str(path).decode_utf8() else {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    };
+    if decoded.split('/').any(|seg| seg == "..") {
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
+    }
+
+    let target = dist.join(decoded.as_ref());
+    if let Ok(canonical) = target.canonicalize() {
+        if canonical.starts_with(dist) && canonical.is_file() {
+            if let Ok(bytes) = tokio::fs::read(&canonical).await {
+                let mime = mime_guess::from_path(&canonical)
+                    .first_or_octet_stream()
+                    .to_string();
+                return ([(header::CONTENT_TYPE, mime)], bytes).into_response();
+            }
         }
     }
 

@@ -129,11 +129,17 @@ function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-export type ConnectionState = "online" | "connecting" | "offline";
+export type ConnectionState = "online" | "connecting" | "offline" | "disconnected";
 export type AuthEvent = { type: "auth:expired" };
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 15000;
+/** Reconnect give-up bound (Phase 3): after this many consecutive failed
+ *  reconnect attempts, or this much elapsed time since the last successful
+ *  connection, settle into the terminal `"disconnected"` state and wait for a
+ *  manual Retry instead of retrying forever. */
+const MAX_RECONNECT_ATTEMPTS = 8;
+const MAX_RECONNECT_ELAPSED_MS = 90_000;
 /** How long a connection must stay up (no reconnect) before the reconnect
  *  backoff is reset to `INITIAL_BACKOFF_MS` (socket-cycling fix). */
 const STABLE_BACKOFF_RESET_MS = 10_000;
@@ -144,7 +150,22 @@ export function createClientApi() {
   /** Set when a socket opens; resets `backoffMs` once the connection has been
    *  stable for `STABLE_BACKOFF_RESET_MS` (see `onopen`). Cleared on close. */
   let stableTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Timestamp of the last inbound WS frame from ANY socket. Any frame counts
+   *  as liveness (not just an explicit `pong`) so a chatty connection never
+   *  false-positives a dead socket. Used by the pong-liveness deadline to
+   *  force-close a socket that has gone silent (daemon crash with no close
+   *  frame) instead of waiting for the OS-level TCP timeout. */
+  let lastFrameAt = Date.now();
   let backoffMs = INITIAL_BACKOFF_MS;
+  /** Phase 3: consecutive failed reconnect attempts since the last successful
+   *  connection, and when that give-up window started. Used by `scheduleReconnect`
+   *  to settle into `"disconnected"` once the bound is exceeded. */
+  let reconnectAttempts = 0;
+  let reconnectCycleStart: number | null = null;
+  /** Phase 4: true once this client has successfully opened a socket before.
+   *  The very first connection has no prior token to re-verify, so only
+   *  reconnects gate on a `checkAuth()` before flipping to `"online"`. */
+  let hasConnectedBefore = false;
   /** Ref-counted subs: multiple components can sub to the same sessionId without
    *  one cleanup tearing down the others. */
   const subRefs = new Map<string, number>();
@@ -180,6 +201,18 @@ export function createClientApi() {
 
   function scheduleReconnect() {
     if (reconnectTimer) return;
+    // Phase 3: bounded retry. Once the attempt count or elapsed time since the
+    // last successful connection exceeds the bound, stop retrying and settle
+    // into the terminal "disconnected" state (a manual Retry is required).
+    if (reconnectCycleStart == null) reconnectCycleStart = Date.now();
+    reconnectAttempts += 1;
+    if (
+      reconnectAttempts > MAX_RECONNECT_ATTEMPTS ||
+      Date.now() - reconnectCycleStart > MAX_RECONNECT_ELAPSED_MS
+    ) {
+      setConnState("disconnected");
+      return;
+    }
     const jitter = Math.random() * 0.3 * backoffMs;
     const delay = backoffMs + jitter;
     backoffMs = Math.min(MAX_BACKOFF_MS, Math.round(backoffMs * 1.7));
@@ -249,6 +282,19 @@ export function createClientApi() {
     }
   }
 
+  /** Returns true if the current session cookie is valid. Shared by `api.checkAuth`
+   *  and the reconnect gate in `onopen` (Phase 4), so the post-reconnect auth check
+   *  is the exact same call `useAuth`'s `ws:open` recheck would have made. */
+  async function checkAuthNow(): Promise<boolean> {
+    try {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/auth/check`);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   function ensureWs(): Promise<void> {
     if (ws?.readyState === WebSocket.OPEN) return Promise.resolve();
     if (wsReadyPromise) return wsReadyPromise;
@@ -270,6 +316,7 @@ export function createClientApi() {
       }
       ws = socket;
       socket.onmessage = (ev) => {
+        lastFrameAt = Date.now();
         try {
           const msg = JSON.parse(String(ev.data)) as WSEvent & { type?: string };
           if (msg.type) {
@@ -305,7 +352,30 @@ export function createClientApi() {
           /* ignore */
         }
       };
-      socket.onopen = () => {
+      socket.onopen = async () => {
+        lastFrameAt = Date.now();
+        // Phase 4: on a reconnect (not the very first connection), re-verify
+        // auth BEFORE flipping to "online" / emitting ws:open. A daemon restart
+        // mints a fresh daemon_token, so a reconnected socket can be accepted at
+        // the WS-upgrade layer yet still be unauthenticated — without this gate
+        // onopen would briefly flash "Connected" and fire REST refetches that all
+        // 401 before the real 4401 close lands a moment later.
+        const isReconnect = hasConnectedBefore;
+        if (isReconnect) {
+          const stillAuthed = await checkAuthNow();
+          // Socket died or was replaced while awaiting auth — do not act on a
+          // since-closed socket (the daemon's 4401 close can land during the await).
+          if (ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+          if (!stillAuthed) {
+            // Reuse the existing 4401 -> auth:expired -> LoginScreen path rather
+            // than inventing a second auth-failure mechanism.
+            socket.close(4401);
+            return;
+          }
+        }
+        hasConnectedBefore = true;
+        reconnectAttempts = 0;
+        reconnectCycleStart = null;
         // REGRESSION — socket cycling: the backoff was reset to INITIAL_BACKOFF_MS
         // here, so a connection that dropped and reconnected every ~1s never grew
         // its backoff — it stayed a 1s strobe forever (handshake always succeeds,
@@ -1422,7 +1492,7 @@ export function createClientApi() {
       };
     },
 
-    on(type: WSEvent["type"] | "*", handler: (e: WSEvent) => void): () => void {
+    on(type: WSEvent["type"] | "auth:expired" | "ws:open" | "*", handler: (e: WSEvent) => void): () => void {
       const key = type;
       if (!listeners.has(key)) listeners.set(key, new Set());
       listeners.get(key)!.add(handler);
@@ -1440,6 +1510,19 @@ export function createClientApi() {
       void ensureWs();
     },
 
+    /** Manually retry the connection after it settled into `"disconnected"`.
+     *  Resets the reconnect-attempt bound and immediately (re)connects. */
+    retryConnection(): void {
+      reconnectAttempts = 0;
+      reconnectCycleStart = null;
+      backoffMs = INITIAL_BACKOFF_MS;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      void ensureWs();
+    },
+
     // ── Auth ──────────────────────────────────────────────────────────────────
 
     /** Clear the session cookie (server side). */
@@ -1450,13 +1533,7 @@ export function createClientApi() {
 
     /** Returns true if the current session cookie is valid. */
     async checkAuth(): Promise<boolean> {
-      try {
-        const root = baseUrl();
-        const res = await apiFetch(`${root}/auth/check`);
-        return res.ok;
-      } catch {
-        return false;
-      }
+      return checkAuthNow();
     },
 
     // ── Mobile / tunnel ───────────────────────────────────────────────────────
@@ -1551,8 +1628,23 @@ export function createClientApi() {
   // that used to start the whole cycling loop.
   const PING_INTERVAL_MS = 25_000;
   setInterval(() => {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "ping" }));
+    const s = ws;
+    if (s?.readyState === WebSocket.OPEN) {
+      const sentAt = Date.now();
+      s.send(JSON.stringify({ type: "ping" }));
+      // Pong-liveness deadline (Decision 3): armed per-ping, relative to when
+      // THIS ping went out, and only for the socket that sent it. If no inbound
+      // frame (any frame counts as liveness) arrives within 2x the interval, the
+      // daemon has likely died without a close frame — force-close locally so
+      // the existing onclose -> offline -> scheduleReconnect path takes over.
+      // Arming relative to `sentAt` (not wall-clock since the last pong) means a
+      // Chrome-throttled background tab that stretches its interval to ~1/min
+      // doesn't false-positive a dead connection on wake.
+      setTimeout(() => {
+        if (ws === s && s.readyState === WebSocket.OPEN && lastFrameAt < sentAt) {
+          s.close();
+        }
+      }, PING_INTERVAL_MS * 2);
     }
   }, PING_INTERVAL_MS);
 

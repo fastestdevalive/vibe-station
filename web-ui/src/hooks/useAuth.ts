@@ -39,7 +39,7 @@ export function useAuth(): AuthState {
   // check so a race between Tauri window open and daemon startup self-heals
   // instead of leaving the user stuck on the LoginScreen until they reload.
   useEffect(() => {
-    return api.on("ws:open" as Parameters<typeof api.on>[0], () => {
+    return api.on("ws:open", () => {
       if (!authed) {
         void runCheck();
       }
@@ -48,7 +48,7 @@ export function useAuth(): AuthState {
 
   // Listen for WS 4401 close — session expired mid-use
   useEffect(() => {
-    return api.on("auth:expired" as Parameters<typeof api.on>[0], () => {
+    return api.on("auth:expired", () => {
       setAuthed(false);
     });
   }, []);

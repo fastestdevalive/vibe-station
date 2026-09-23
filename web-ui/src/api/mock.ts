@@ -54,6 +54,7 @@ import type {
   Worktree,
 } from "./types";
 import { ApiError } from "./errors";
+import type { ConnectionState } from "./client";
 
 function nowIso() {
   return new Date().toISOString();
@@ -79,6 +80,8 @@ export function createMockApi() {
    *  `updateSettings` calls within a single mock instance so `getSettings`
    *  reflects a prior PATCH, mirroring the real daemon. */
   const mockSettings: { themeId?: string; markdownStyle?: MarkdownStyle } = {};
+  let connState: ConnectionState = "online";
+  const connListeners = new Set<(s: ConnectionState) => void>();
 
   const projects: Project[] = [
     {
@@ -1695,7 +1698,7 @@ export function createMockApi() {
       };
     },
 
-    on(type: WSEvent["type"] | "*", handler: (e: WSEvent) => void): () => void {
+    on(type: WSEvent["type"] | "auth:expired" | "ws:open" | "*", handler: (e: WSEvent) => void): () => void {
       if (!listeners.has(type)) listeners.set(type, new Set());
       listeners.get(type)!.add(handler);
       return () => {
@@ -1707,12 +1710,23 @@ export function createMockApi() {
     },
 
     startConnection(): void {},
-    getConnectionState(): "online" | "connecting" | "offline" {
-      return "online";
+    getConnectionState(): ConnectionState {
+      return connState;
     },
-    subscribeConnection(handler: (s: "online" | "connecting" | "offline") => void): () => void {
-      handler("online");
-      return () => {};
+    subscribeConnection(handler: (s: ConnectionState) => void): () => void {
+      handler(connState);
+      connListeners.add(handler);
+      return () => {
+        connListeners.delete(handler);
+      };
+    },
+    retryConnection(): void {
+      connState = "connecting";
+      for (const h of connListeners) h(connState);
+    },
+    mockSetConnectionState(s: ConnectionState): void {
+      connState = s;
+      for (const h of connListeners) h(connState);
     },
 
     // Auth — mock always succeeds (no auth in test/mock mode)

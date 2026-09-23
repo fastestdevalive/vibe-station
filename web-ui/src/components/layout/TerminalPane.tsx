@@ -13,6 +13,7 @@ import { attachTouchScroll } from "@/lib/terminal-touch-scroll";
 import { attachPinchZoom } from "@/lib/pinchZoom";
 import { attachMobileInputFix } from "@/lib/mobile-input-fix";
 import { createInputDebugger, isInputDebugEnabled, type InputDebugger } from "@/lib/input-debug";
+import { OfflineOverlay } from "./OfflineOverlay";
 import { SpawningPlaceholder } from "./SpawningPlaceholder";
 import { useThemeStore } from "@/hooks/useThemeStore";
 import { themeById, defaultThemeId } from "@/theme/registry";
@@ -142,6 +143,7 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
 
   const [atBottom, setAtBottom] = useState(true);
   const [resumePending, setResumePending] = useState(false);
+
 
   // `sessionStates` is the LIVE map (WS `session:state`/`session:exited`/
   // `session:resumed` + the REST overlay on every reconnect). It can legitimately
@@ -696,6 +698,12 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
   // push to "exited" — the deliberate state must win over the side effect.
   const bannerMsg = state === "done" ? "Session marked done." : "Session exited.";
 
+  // Offline overlay (Phase 4.4): shown whenever the WS isn't online, as long as
+  // there is a live session to attach to and the pane hasn't been released /
+  // is showing a resume banner. Independent of `attachPending` or `showSpawningOverlay`
+  // — a daemon crash or disconnect must show the offline overlay rather than frozen content.
+  const showOfflineOverlay = mountTerminal && !showBanner;
+
   return (
     <div className="terminal-pane-root">
       {showBanner ? (
@@ -754,6 +762,8 @@ export function TerminalPane({ api, sessionId, session, channelToggle, focusOnMo
             <SpawningPlaceholder reason={spawnReason} />
           </div>
         ) : null}
+
+        {showOfflineOverlay ? <OfflineOverlay api={api} /> : null}
 
         {mountTerminal ? (
           <div
