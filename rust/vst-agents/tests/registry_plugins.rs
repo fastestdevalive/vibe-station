@@ -109,6 +109,27 @@ mod claude_plugin {
         assert!(result.post_launch_input.is_none());
     }
 
+    /// Regression: a task prompt containing an apostrophe ("don't") used to be
+    /// wrapped in unescaped single quotes, so `sh -lc` hit a syntax error and
+    /// the tmux pane died instantly — the agent never started, and resume
+    /// (which replays the same initial prompt) died the same way.
+    #[test]
+    fn compose_launch_prompt_escapes_apostrophe_in_task() {
+        let result = create_claude_plugin()
+            .compose_launch_prompt(compose_input(Some("we don't need (that)")));
+        let shell_line = result.shell_line.unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-n", "-c", &shell_line])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "shell line must parse: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(shell_line.contains(r"'we don'\''t need (that)'"));
+    }
+
     #[test]
     fn compose_launch_prompt_no_task() {
         let result = create_claude_plugin().compose_launch_prompt(compose_input(None));
