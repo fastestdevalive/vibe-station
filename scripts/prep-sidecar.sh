@@ -137,26 +137,16 @@ echo "==> Installing vendored claude-agent-acp adapter..."
 bash "$SCRIPT_DIR/install-claude-acp-vendor.sh"
 
 # ── Step 7: build agy-acp adapter (vendored submodule) ───────────────────────
+# Delegate the build to the shared scripts/build-agy-acp.sh (which verifies the
+# submodule, builds in isolation, and prints the resolved binary path on
+# stdout). Windows is not a supported host triple for the agy-acp adapter yet,
+# so we take the shared script's unix path as-is for the source binary and only
+# apply the triple suffix to the bundled DEST filename.
 
 echo ""
 echo "==> Building agy-acp adapter (vendored openab submodule, in isolation)..."
-if [[ ! -d "$REPO_ROOT/rust/vendor/openab/agy-acp" ]]; then
-  echo "Error: agy-acp submodule not present at rust/vendor/openab. Clone it with:
-  git submodule update --init --recursive
-  (or clone the repo with --recurse-submodules)" >&2
-  exit 1
-fi
-cargo build --release --locked \
-  --manifest-path "$REPO_ROOT/rust/vendor/openab/agy-acp/Cargo.toml" \
-  --target-dir "$REPO_ROOT/rust/target/agy-acp"
-
-SRC_AGY_ACP="$REPO_ROOT/rust/target/agy-acp/release/agy-acp$EXE_SUFFIX"
+SRC_AGY_ACP="$(bash "$SCRIPT_DIR/build-agy-acp.sh")"
 DEST_AGY_ACP="$BINARIES_DIR/agy-acp-$TRIPLE$EXE_SUFFIX"
-
-if [[ ! -f "$SRC_AGY_ACP" ]]; then
-  echo "Error: expected agy-acp binary at $SRC_AGY_ACP — build may have failed." >&2
-  exit 1
-fi
 
 echo ""
 echo "==> Copying agy-acp binary to binaries/..."

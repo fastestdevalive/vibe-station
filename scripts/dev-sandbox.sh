@@ -169,10 +169,27 @@ case "$CMD" in
       exit 1
     fi
 
+    # The dev sandbox mounts the host agy-acp adapter binary into the container
+    # (docker-compose.dev.yml binds ${VST_AGY_ACP_BIN:-...} → /usr/local/bin/agy-acp).
+    # If the host never built it, that bind mount silently points at an empty
+    # directory and agy Rich Chat fails before ACP's initialize handshake — so
+    # build it via the shared script unless it already exists and is executable.
+    if [ ! -x "./rust/target/agy-acp/release/agy-acp" ]; then
+      echo "Host agy-acp binary not found. Building it via scripts/build-agy-acp.sh..."
+      bash scripts/build-agy-acp.sh
+    fi
+
+    if [ ! -x "./rust/target/agy-acp/release/agy-acp" ]; then
+      echo "error: expected agy-acp binary at ./rust/target/agy-acp/release/agy-acp." >&2
+      exit 1
+    fi
+
     export VST_RUST_DAEMON_BIN="$RUST_DAEMON_BIN"
     export VST_RUST_CLI_BIN="$RUST_CLI_BIN"
+    export VST_AGY_ACP_BIN="./rust/target/agy-acp/release/agy-acp"
     echo "    daemon: RUST ($RUST_DAEMON_BIN)"
     echo "    cli:    RUST ($RUST_CLI_BIN)"
+    echo "    agy-acp: RUST ($VST_AGY_ACP_BIN)"
     # demo-seed.sh and seed-file-search-demo.sh guard themselves
     # independently (a $VST/.seeded marker vs. a project-registration check)
     # — neither knows about the other, so switching --seed on a worktree-name

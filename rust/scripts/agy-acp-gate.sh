@@ -67,13 +67,10 @@ fi
 echo "   ok"
 
 echo "== build agy-acp in isolation =="
-cargo build --release --locked --manifest-path "$SUB/Cargo.toml" --target-dir "$TARGET_DIR"
-
-BIN="$TARGET_DIR/release/agy-acp"
-if [[ ! -x "$BIN" ]]; then
-  echo "FAIL: expected binary at $BIN" >&2
-  exit 1
-fi
+# Delegate the build to the shared scripts/build-agy-acp.sh (which verifies the
+# submodule, builds in isolation, and guarantees an executable binary — it
+# prints the resolved path on stdout and exits non-zero otherwise).
+BIN="$(bash scripts/build-agy-acp.sh)"
 echo "   built: $BIN"
 
 echo "== contract test: agy-acp initialize round-trip =="
