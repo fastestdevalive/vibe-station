@@ -1,0 +1,27 @@
+feature: code-nav-lsp-outline
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-176
+created: 2026-09-22T00:00:00Z
+
+master:
+  prd: complete
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "6.T6"
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: {phase: 6, of: 6}
+    phase_chain: [prd, plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: null
+      returned_at: null
+      verified_by: main-session
+    commit: "33cecaa1 (rust), 48009a4a (web-ui)"

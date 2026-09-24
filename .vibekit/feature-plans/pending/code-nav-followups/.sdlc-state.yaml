@@ -1,0 +1,14 @@
+feature: code-nav-followups
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-176
+master: {prd: null, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: "4.T7"
+    phase_chain: [plan, turn-implement]
+    mode: verifying
+    awaiting_phase: review
+    awaiting_artifact: .vibekit/feature-plans/pending/code-nav-followups/plan-code-nav-followups.md
+    impl_turn: {phase: 4, of: 4, complete: true}
