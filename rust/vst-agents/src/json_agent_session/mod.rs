@@ -79,6 +79,13 @@ pub struct NoticeSlotInner {
     pub children: Vec<(String, String)>,
 }
 
+/// The in-flight turn currently executing.
+#[derive(Clone)]
+pub(super) struct ActiveTurn {
+    pub(super) turn_id: String,
+    pub(super) cancel: CancellationToken,
+}
+
 impl NoticeSlotInner {
     pub fn new(child_id: String, child_name: String) -> Self {
         Self {
@@ -160,7 +167,7 @@ pub(super) struct State {
     pub(super) holds: HashMap<String, HeldTurn>,
     pub(super) enqueue_counter: u64,
     pub(super) running: bool,
-    pub(super) active_cancel: Option<CancellationToken>,
+    pub(super) active_turn: Option<ActiveTurn>,
     pub(super) aborted_since_last_drain: bool,
     pub(super) promoted_notice: bool,
     pub(super) active_fork_from_chat_id: Option<String>,
@@ -336,7 +343,7 @@ impl JsonAgentSession {
             holds: HashMap::new(),
             enqueue_counter: 0,
             running: false,
-            active_cancel: None,
+            active_turn: None,
             aborted_since_last_drain: false,
             promoted_notice: false,
             active_fork_from_chat_id: None,
@@ -446,6 +453,7 @@ impl JsonAgentSession {
             ),
             commands,
             notice_slot: notice_slot_meta,
+            active_turn_id: s.active_turn.as_ref().map(|t| t.turn_id.clone()),
         }
     }
 
@@ -809,28 +817,34 @@ impl JsonAgentSession {
 
     /// "Send now" on the pending notice slot.
     pub fn promote_notice_slot(&self) {
-        {
+        let active_turn_to_stop = {
             let mut s = self.0.state.lock().unwrap();
             if s.notice_slot.is_none() {
                 return;
             }
             s.promoted_notice = true;
+            s.active_turn.as_ref().map(|t| t.turn_id.clone())
+        };
+        if let Some(target) = active_turn_to_stop {
+            self.stop_active_turn(Some(&target));
         }
-        self.stop_active_turn();
         self.kick_drain();
     }
 
     /// Dismiss the pending notice slot silently.
     pub fn dismiss_notice_slot(&self) {
-        let was_active = {
+        let active_turn_to_stop = {
             let mut s = self.0.state.lock().unwrap();
             s.notice_slot = None;
             s.promoted_notice = false;
-            let wa = s.active_notice.is_some();
-            wa
+            if s.active_notice.is_some() {
+                s.active_turn.as_ref().map(|t| t.turn_id.clone())
+            } else {
+                None
+            }
         };
-        if was_active {
-            self.stop_active_turn();
+        if let Some(target) = active_turn_to_stop {
+            self.stop_active_turn(Some(&target));
         }
         self.emit_meta();
     }

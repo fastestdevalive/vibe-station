@@ -403,3 +403,217 @@ describe("useChat snapshot cache", () => {
     expect(ids.indexOf("e5")).toBeLessThan(ids.indexOf("e6"));
   });
 });
+
+describe("useChat stop turn scoping", () => {
+  it("stop() calls stopChat with activeTurnId from meta and sets stopPending", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          activeTurnId: "turn-xyz",
+        },
+      });
+    });
+
+    expect(result.current.stopPending).toBe(false);
+
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    expect(api.stopChat).toHaveBeenCalledWith("s1", "turn-xyz");
+    expect(result.current.stopPending).toBe(true);
+
+    // Stop stays disabled until activeTurnId changes or clears
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          activeTurnId: "turn-xyz",
+        },
+      });
+    });
+    expect(result.current.stopPending).toBe(true);
+
+    // Active turn changes to next turn
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          activeTurnId: "turn-next",
+        },
+      });
+    });
+    expect(result.current.stopPending).toBe(false);
+  });
+
+  it("stopPending clears when activeTurnId becomes undefined or empty", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          activeTurnId: "turn-abc",
+        },
+      });
+    });
+
+    await act(async () => {
+      await result.current.stop();
+    });
+    expect(result.current.stopPending).toBe(true);
+
+    // Session goes idle (activeTurnId undefined)
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "idle",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+        },
+      });
+    });
+    expect(result.current.stopPending).toBe(false);
+  });
+
+  it("stopPending clears when stopChat request rejects", async () => {
+    const api = makeApi();
+    api.stopChat = vi.fn(async () => {
+      throw new Error("Network error");
+    });
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          activeTurnId: "turn-fail",
+        },
+      });
+    });
+
+    await expect(
+      act(async () => {
+        await result.current.stop();
+      }),
+    ).rejects.toThrow("Network error");
+
+    expect(result.current.stopPending).toBe(false);
+  });
+
+  it("stopPending stays active during unscoped stop until turnState is no longer busy", async () => {
+    const api = makeApi();
+    const { result } = renderHook(() => useChat(api as unknown as ApiInstance, "s1", true));
+
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "thinking",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+          // no activeTurnId
+        },
+      });
+    });
+
+    await act(async () => {
+      await result.current.stop();
+    });
+
+    expect(api.stopChat).toHaveBeenCalledWith("s1", undefined);
+    expect(result.current.stopPending).toBe(true);
+
+    // Still busy -> stays pending
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "responding",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+        },
+      });
+    });
+    expect(result.current.stopPending).toBe(true);
+
+    // Turn finishes -> idle -> clears pending
+    act(() => {
+      api.emit({
+        type: "session:meta",
+        sessionId: "s1",
+        meta: {
+          sessionId: "s1",
+          channel: "json",
+          cli: "claude",
+          turnState: "idle",
+          queueDepth: 0,
+          queuedTurnIds: [],
+          editingTurnIds: [],
+        },
+      });
+    });
+    expect(result.current.stopPending).toBe(false);
+  });
+});

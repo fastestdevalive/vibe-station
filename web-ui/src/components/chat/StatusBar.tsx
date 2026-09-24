@@ -11,6 +11,8 @@ interface StatusBarProps {
   queueDepth?: number;
   /** Runs while a turn is active. */
   onStop?: () => void;
+  /** True while a stop request is pending/in flight. */
+  stopPending?: boolean;
   /** When provided (with sessionId), the model becomes a live switcher. */
   api?: ApiInstance;
   sessionId?: string;
@@ -61,7 +63,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
  * branching). Fields absent from `meta` (e.g. costUsd, contextWindow) hide
  * gracefully.
  */
-export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBottom = true, fontControls }: StatusBarProps) {
+export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sessionId, atBottom = true, fontControls }: StatusBarProps) {
   const usage = meta?.usage;
   const state = meta?.turnState;
   const queue = Math.max(queueDepth, meta?.queueDepth ?? 0);
@@ -173,7 +175,12 @@ export function StatusBar({ meta, queueDepth = 0, onStop, api, sessionId, atBott
           </span>
         ) : null}
         {busy && onStop ? (
-          <button type="button" className="chat-statusbar__stop btn btn--secondary" onClick={onStop}>
+          <button
+            type="button"
+            className="chat-statusbar__stop btn btn--secondary"
+            onClick={onStop}
+            disabled={stopPending}
+          >
             Stop
           </button>
         ) : null}

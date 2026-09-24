@@ -70,7 +70,7 @@ use vst_types::rest::sessions::{
     PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody, PatchModelResult,
     PinBody, PinResult, RenameSessionBody, RenameSessionResult, ReorderSessionBody,
     ReorderSessionResult, ResetBody, ResubmitBody, SessionListItem, SessionOrDraft, SessionOutput,
-    StartDraftBody, StartDraftResult, TurnActionResult,
+    StartDraftBody, StartDraftResult, StopTurnResult, TurnActionResult,
 };
 use vst_types::rest::settings::{PatchSettingsBody, PatchSettingsResult, Settings};
 use vst_types::rest::shared::{Mode, Project, Worktree};
@@ -604,6 +604,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             post(handle_promote_notice),
         )
         .route("/sessions/:id/chat/stop", post(handle_stop_active_turn))
+        .route(
+            "/sessions/:id/chat/stop/:turnId",
+            post(handle_stop_active_turn_with_id),
+        )
         .route(
             "/sessions/:id/chat/queue/:turnId",
             delete(handle_cancel_queued_turn),
@@ -2351,12 +2355,24 @@ async fn handle_promote_notice(
 async fn handle_stop_active_turn(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
-) -> Result<Json<OkResult>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<StopTurnResult>, (StatusCode, Json<serde_json::Value>)> {
     state
         .session_routes
-        .stop_active_turn(&id)
+        .stop_active_turn(&id, None)
         .await
-        .map(|res| Json(OkResult { ok: res.ok }))
+        .map(Json)
+        .map_err(chat_err_to_response)
+}
+
+async fn handle_stop_active_turn_with_id(
+    State(state): State<AppState>,
+    axum::extract::Path((id, turn_id)): axum::extract::Path<(String, String)>,
+) -> Result<Json<StopTurnResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .session_routes
+        .stop_active_turn(&id, Some(&turn_id))
+        .await
+        .map(Json)
         .map_err(chat_err_to_response)
 }
 

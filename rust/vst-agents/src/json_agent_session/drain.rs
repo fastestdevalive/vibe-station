@@ -169,12 +169,12 @@ impl JsonAgentSession {
         let cancel = CancellationToken::new();
         {
             let mut s = self.0.state.lock().unwrap();
-            s.active_cancel = Some(cancel.clone());
+            s.active_turn = Some(super::ActiveTurn {
+                turn_id: turn.turn_id.clone(),
+                cancel: cancel.clone(),
+            });
             // A real turn closes any open out-of-band burst.
             s.out_of_band_turn_id = None;
-        }
-        {
-            let mut s = self.0.state.lock().unwrap();
             s.turn_state = TurnState::Thinking;
         }
         self.emit_meta();
@@ -312,7 +312,7 @@ impl JsonAgentSession {
         }
         {
             let mut s = self.0.state.lock().unwrap();
-            s.active_cancel = None;
+            s.active_turn = None;
             s.active_fork_from_chat_id = None;
             s.live_pids.clear();
         }

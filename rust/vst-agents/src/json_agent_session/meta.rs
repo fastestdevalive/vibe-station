@@ -88,5 +88,6 @@ pub fn assemble_meta(opts: &MetaOptions, found: &TranscriptMeta) -> SessionMeta 
         can_steer: None,
         commands,
         notice_slot: None,
+        active_turn_id: None,
     }
 }

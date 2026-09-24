@@ -20,6 +20,8 @@ interface ComposerProps {
   /** A turn is active — show Stop instead of disabling. */
   busy?: boolean;
   onStop?: () => void;
+  /** True while a stop request is pending/in flight. */
+  stopPending?: boolean;
   /** When true and busy, the send button label indicates steering instead of queuing. */
   canSteer?: boolean;
   /** Disable input entirely (e.g. session not ready). */
@@ -49,6 +51,7 @@ export function Composer({
   onSend,
   busy,
   onStop,
+  stopPending,
   canSteer,
   disabled,
   initialText,
@@ -215,7 +218,13 @@ export function Composer({
             📎
           </button>
           {busy && nothingTyped && !justSent ? (
-            <button type="button" className="chat-composer__stop" onClick={onStop} aria-label="Stop turn">
+            <button
+              type="button"
+              className="chat-composer__stop"
+              onClick={onStop}
+              aria-label="Stop turn"
+              disabled={stopPending}
+            >
               Stop
             </button>
           ) : (

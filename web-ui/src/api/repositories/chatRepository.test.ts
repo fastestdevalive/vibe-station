@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { createChatRepository } from "./chatRepository";
 
@@ -37,5 +37,15 @@ describe("createChatRepository", () => {
     expect(viaRepo).toMatchObject({ turnId: expect.any(String), queuePosition: 0 });
     const viaApi = await api.sendChat("sess-main", "hello again");
     expect(viaApi).toMatchObject({ turnId: expect.any(String), queuePosition: 0 });
+  });
+
+  it("stopChat forwards sessionId and optional turnId to api", async () => {
+    const api = createMockApi();
+    const stopSpy = vi.spyOn(api, "stopChat");
+    const repo = createChatRepository(api);
+    await repo.stopChat("sess-1", "turn-123");
+    expect(stopSpy).toHaveBeenCalledWith("sess-1", "turn-123");
+    await repo.stopChat("sess-2");
+    expect(stopSpy).toHaveBeenCalledWith("sess-2");
   });
 });

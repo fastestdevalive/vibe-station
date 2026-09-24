@@ -50,6 +50,8 @@ export interface UseChatResult {
   send: (message: string, attachmentIds?: string[], queue?: boolean) => Promise<"queued" | "steered" | undefined>;
   /** Abort the active turn (keeps queued turns). */
   stop: () => Promise<void>;
+  /** True while a stop request is in flight for the active turn. */
+  stopPending: boolean;
   /** Cancel one queued (not-yet-started) turn. */
   cancelQueued: (turnId: string) => Promise<void>;
   /** Withdraw a queued turn for editing (opens the inline editor). */
@@ -105,6 +107,8 @@ export function useChat(
   const [hasMore, setHasMore] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [editingDrafts, setEditingDrafts] = useState<Record<string, EditingDraft>>({});
+  const [stoppingTurnId, setStoppingTurnId] = useState<string | null>(null);
+  const stopPending = stoppingTurnId !== null;
 
   /** turnIds that have an authoritative `user` event — used to dedupe optimistic
    *  bubbles when the daemon echo lands (possibly before `send` resolves). */
@@ -202,6 +206,7 @@ export function useChat(
       setHasMore(false);
       setLoadingEarlier(false);
       setEditingDrafts({});
+      setStoppingTurnId(null);
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
@@ -408,10 +413,35 @@ export function useChat(
     [chatRepo, sessionId],
   );
 
+  useEffect(() => {
+    if (stoppingTurnId !== null) {
+      if (stoppingTurnId === "__unscoped__") {
+        // Un-scoped fallback stop: keep pending while busy, clear when idle/error
+        const isBusy =
+          meta?.turnState === "thinking" || meta?.turnState === "responding" || meta?.turnState === "tool";
+        if (!isBusy) {
+          setStoppingTurnId(null);
+        }
+      } else if (!meta?.activeTurnId || meta.activeTurnId !== stoppingTurnId) {
+        setStoppingTurnId(null);
+      }
+    }
+  }, [meta?.activeTurnId, meta?.turnState, stoppingTurnId]);
+
   const stop = useCallback(async () => {
     if (!sessionId) return;
-    await chatRepo.stopChat(sessionId);
-  }, [chatRepo, sessionId]);
+    const targetTurnId = meta?.activeTurnId;
+    // When activeTurnId is known, track it specifically so stopPending clears
+    // when activeTurnId changes or clears. When activeTurnId is absent (fallback path),
+    // track "__unscoped__" so stop button stays disabled while the session is busy.
+    setStoppingTurnId(targetTurnId ?? "__unscoped__");
+    try {
+      await chatRepo.stopChat(sessionId, targetTurnId);
+    } catch (err) {
+      setStoppingTurnId(null);
+      throw err;
+    }
+  }, [chatRepo, meta?.activeTurnId, sessionId]);
 
   const cancelQueued = useCallback(
     async (turnId: string) => {
@@ -526,6 +556,7 @@ export function useChat(
     editingDrafts,
     send,
     stop,
+    stopPending,
     cancelQueued,
     editQueued,
     saveEdit,

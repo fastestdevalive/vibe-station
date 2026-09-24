@@ -73,6 +73,7 @@ fn emit_meta_fans_out_to_meta_listeners() {
         can_steer: None,
         commands: None,
         notice_slot: None,
+        active_turn_id: None,
     };
     stream.emit_meta(&meta);
     assert_eq!(*seen.lock().unwrap(), vec!["sess-1".to_string()]);
@@ -112,6 +113,7 @@ fn message_and_meta_channels_are_distinct() {
         can_steer: None,
         commands: None,
         notice_slot: None,
+        active_turn_id: None,
     };
     stream.emit_meta(&meta);
 

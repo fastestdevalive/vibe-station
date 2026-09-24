@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@/api/types";
@@ -248,5 +248,23 @@ describe("StatusBar busy dots when scrolled away", () => {
     render(<StatusBar meta={busyMeta} onStop={() => {}} />);
     const stopBtn = screen.getByRole("button", { name: /stop/i });
     expect(stopBtn.textContent).toBe("Stop");
+  });
+
+  it("Stop button is disabled when stopPending is true", () => {
+    render(<StatusBar meta={busyMeta} onStop={() => {}} stopPending />);
+    const stopBtn = screen.getByRole("button", { name: /stop/i }) as HTMLButtonElement;
+    expect(stopBtn.disabled).toBe(true);
+  });
+
+  it("Stop button click is ignored when stopPending is true (double-click prevention)", () => {
+    const onStop = vi.fn();
+    const { rerender } = render(<StatusBar meta={busyMeta} onStop={onStop} />);
+    const stopBtn = screen.getByRole("button", { name: /stop/i });
+    fireEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    rerender(<StatusBar meta={busyMeta} onStop={onStop} stopPending />);
+    fireEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 });
