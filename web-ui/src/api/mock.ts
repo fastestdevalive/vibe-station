@@ -274,6 +274,10 @@ export function createMockApi() {
     "README.md": `diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n # Demo\n+added line\n`,
   };
 
+  /** In-memory durable open-file set per worktree/project id (mock of the
+   *  daemon's `openFiles` column), used by listOpenFiles/openFileDurable/closeFileDurable. */
+  const mockOpenFiles: Record<string, Set<string>> = {};
+
   const listeners = new Map<string, Set<(ev: WSEvent) => void>>();
   const outputTimers = new Map<string, ReturnType<typeof setInterval>>();
   const subscribed = new Set<string>();
@@ -420,6 +424,16 @@ export function createMockApi() {
         .map((w) => w.baseBranch);
       const branches = [...new Set([defaultBranch, ...others, "feature/example"])].filter(Boolean) as string[];
       return { branches, defaultBranch };
+    },
+
+    async gitInitProject(
+      projectId: string,
+    ): Promise<{ ok: true; isGit: true; defaultBranch: string | null }> {
+      const project = projects.find((p) => p.id === projectId);
+      if (!project) throw new ApiError("not found", 404);
+      project.isGit = true;
+      project.defaultBranch = project.defaultBranch ?? "main";
+      return { ok: true, isGit: true, defaultBranch: project.defaultBranch };
     },
 
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
@@ -1022,6 +1036,24 @@ export function createMockApi() {
       };
       walk("");
       return { files: out, truncated: false, source: "node" };
+    },
+
+    async listOpenFiles(id: string, _scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const tabs = mockOpenFiles[id];
+      if (!tabs) throw new ApiError("not found", 404);
+      return { paths: [...tabs] };
+    },
+
+    async openFileDurable(id: string, path: string, _scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const set = (mockOpenFiles[id] ??= new Set<string>());
+      set.add(path);
+      return { paths: [...set] };
+    },
+
+    async closeFileDurable(id: string, path: string, _scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const set = mockOpenFiles[id];
+      if (set) set.delete(path);
+      return { paths: [...(set ?? [])] };
     },
 
     async search(

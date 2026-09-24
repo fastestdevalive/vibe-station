@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ApiInstance } from "@/api";
-import type { DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
+import type { CreateWorktreeBody, DraftConfig, Mode, Project, Session, Settings, SupportedCli, Worktree } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { Input } from "../ui/Input";
 import { Radio } from "../ui/Radio";
@@ -11,6 +11,7 @@ import { SkillEditor, type SkillEditorHandle } from "../chat/SkillEditor";
 import { AttachmentPicker } from "../chat/AttachmentPicker";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import { NewModeDialog } from "../dialogs/NewModeDialog";
+import { NonGitWorktreeDialog } from "../dialogs/NonGitWorktreeDialog";
 import { ProjectCombobox } from "./ProjectCombobox";
 import { isAbsoluteQuery, type Mode_ } from "./draftComposerHelpers";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -33,6 +34,39 @@ function errorMessage(err: unknown, fallback: string): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
+
+/** True when an `ApiError` carries the daemon's machine-readable `NOT_GIT` sentinel
+ *  (422 `{"error":"NOT_GIT"}`, Phase 3). `ApiError.message` is the raw response body
+ *  text, so the caller must `JSON.parse` it — there is no pre-parsed field. */
+function isNotGitError(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  try {
+    const parsed = JSON.parse(err.message) as { error?: string };
+    return parsed?.error === "NOT_GIT";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Phase 4/3 (CUJ 3): the ORIGINAL request held while the NonGitWorktreeDialog
+ * recovery flow runs. Discriminates the two call sites that can hit a 422
+ * NOT_GIT so `handleNonGitConfirm` knows how to re-issue the retry:
+ *  - `"worktree"`: `startTier2NewProject`'s direct `api.createWorktree(payload)`.
+ *  - `"start-draft"`: `startTier1` / `startTier1ForProject`'s `api.startDraft(...)`,
+ *    which the daemon now ALSO gates on the project being git (Tier 1). Holds the
+ *    exact params so the same call can be re-issued unchanged after git-init.
+ */
+type PendingNonGit =
+  | { kind: "worktree"; payload: CreateWorktreeBody }
+  | {
+      kind: "start-draft";
+      projectId: string;
+      sessionId: string;
+      draftConfig: DraftConfig;
+      prompt: string;
+      skipAutoTurn: boolean;
+    };
 
 /**
  * Full-pane draft composer for the Instant Draft Agent feature — replaces all
@@ -145,6 +179,11 @@ function DraftComposerInner({
   const [error, setError] = useState<string | null>(null);
   const [newModeOpen, setNewModeOpen] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Phase 4 (CUJ 3): the ORIGINAL request held while the NonGitWorktreeDialog
+  // recovery flow runs. Non-null → the dialog is open. Discriminated union
+  // covering BOTH worktree-creation entry points (Tier 2's createWorktree and
+  // Tier 1's startDraft) that can hit a 422 NOT_GIT.
+  const [pendingNonGitPayload, setPendingNonGitPayload] = useState<PendingNonGit | null>(null);
 
   // Global entry only — the currently selected existing project, and whether
   // the user is creating a brand-new project by name.
@@ -430,11 +469,31 @@ function DraftComposerInner({
     setError(null);
     setSubmitting(true);
     try {
-      const res = await api.startDraft(draftSessionId, {
-        draftPrompt: prompt,
-        draftConfig: currentConfig,
-        skipAutoTurn: isJson,
-      });
+      let res: Awaited<ReturnType<typeof api.startDraft>>;
+      try {
+        res = await api.startDraft(draftSessionId, {
+          draftPrompt: prompt,
+          draftConfig: currentConfig,
+          skipAutoTurn: isJson,
+        });
+      } catch (err) {
+        // The daemon ALSO gates Tier-1 startDraft on the project being git
+        // (mirrors POST /worktrees's NOT_GIT). Route it to the same recovery
+        // dialog (CUJ 3) instead of the generic error. `finally` below resets
+        // `submitting`; the dialog drives git-init + the retry.
+        if (isNotGitError(err) && session?.projectId) {
+          setPendingNonGitPayload({
+            kind: "start-draft",
+            projectId: session.projectId,
+            sessionId: draftSessionId,
+            draftConfig: currentConfig,
+            prompt,
+            skipAutoTurn: isJson,
+          });
+          return;
+        }
+        throw err;
+      }
       // Register a brand-new worktree (entryPoint "worktree"/"new") in the
       // store immediately, the same way startTier2NewProject does for its own
       // createWorktree call below — this response is the only place the web-ui
@@ -544,10 +603,8 @@ function DraftComposerInner({
         return;
       }
 
-      let worktreeId: string | undefined;
-      let sessionId: string | undefined;
-      if (useWorktree && project.isGit) {
-        const wt = await api.createWorktree({
+      if (useWorktree) {
+        const payload: CreateWorktreeBody = {
           projectId: project.id,
           branch: branch.trim() || undefined,
           baseBranch: baseBranch.trim() || project.defaultBranch,
@@ -559,15 +616,21 @@ function DraftComposerInner({
           // showed a terminal session spawning).
           channel: currentConfig.channel,
           skipAutoTurn: true,
-        });
-        worktreeId = wt.id;
-        sessionId = wt.mainSessionId ?? undefined;
-        // Register the worktree in the store before navigating so URL sync
-        // (and the subsequent `session:created` WS event) can select it. Without
-        // this the /worktree/:id read effect found nothing and the write effect
-        // rewrote the URL to a bare /worktree, so the UI never landed on the
-        // newly created agent (issue: "UI didn't navigate to the new agent").
-        useServerStore.getState().applyWorktreeCreated(wt);
+        };
+        try {
+          const wt = await api.createWorktree(payload);
+          await finishWorktreeStart(wt);
+        } catch (err) {
+          if (isNotGitError(err)) {
+            // Non-git project (422 NOT_GIT): hold the ORIGINAL payload and hand
+            // off to the recovery dialog (CUJ 3) instead of silently falling
+            // through to a direct session. Abort this submit; the dialog drives
+            // git-init + the retry, and `finally` below resets `submitting`.
+            setPendingNonGitPayload({ kind: "worktree", payload });
+            return;
+          }
+          throw err;
+        }
       } else {
         const sess = await api.createDirectSession({
           target: "direct",
@@ -578,28 +641,107 @@ function DraftComposerInner({
           channel: currentConfig.channel,
           skipAutoTurn: true,
         });
-        sessionId = sess.id;
+        const sessionId = sess.id;
         // Same as the worktree branch: register the direct session before
         // navigating so the /session/:id route doesn't bounce to the dashboard
         // (the redirect effect redirects when the session isn't in the store).
         useServerStore.getState().applySessionCreated(sess);
+        if (isJson && sessionId) {
+          await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
+        }
+        clearGlobalDraft();
+        if (isTier1 && draftSessionId && !session?.projectId) {
+          useServerStore.getState().applySessionDeleted(draftSessionId);
+          void api.terminateSession(draftSessionId).catch(() => {});
+        }
+        committedRef.current = true;
+        onStarted({ worktreeId: undefined, sessionId });
       }
-      if (isJson && sessionId) {
-        await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
-      }
-      clearGlobalDraft();
-      // If we were started from a server-backed global draft (Tier 1, no project),
-      // terminate that orphaned draft record now that we've promoted to a real session.
-      if (isTier1 && draftSessionId && !session?.projectId) {
-        useServerStore.getState().applySessionDeleted(draftSessionId);
-        void api.terminateSession(draftSessionId).catch(() => {});
-      }
-      committedRef.current = true;
-      onStarted({ worktreeId, sessionId: sessionId ?? undefined });
     } catch (err) {
       setError(errorMessage(err, "Failed to create project."));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Phase 4 (CUJ 3): the shared post-success handler for the worktree branch of
+  // `startTier2NewProject` AND the NonGitWorktreeDialog retry. Registers the
+  // freshly-created worktree, then runs the same trailing promotion steps a
+  // direct session takes (JSON first turn, global-draft cleanup, onStarted).
+  async function finishWorktreeStart(wt: Worktree) {
+    // Register the worktree in the store before navigating so URL sync
+    // (and the subsequent `session:created` WS event) can select it. Without
+    // this the /worktree/:id read effect found nothing and the write effect
+    // rewrote the URL to a bare /worktree, so the UI never landed on the
+    // newly created agent (issue: "UI didn't navigate to the new agent").
+    useServerStore.getState().applyWorktreeCreated(wt);
+    const sessionId = wt.mainSessionId ?? undefined;
+    if (isJson && sessionId) {
+      await sendJsonFirstTurn(api, sessionId, prompt.trim(), files);
+    }
+    clearGlobalDraft();
+    // If we were started from a server-backed global draft (Tier 1, no project),
+    // terminate that orphaned draft record now that we've promoted to a real session.
+    if (isTier1 && draftSessionId && !session?.projectId) {
+      useServerStore.getState().applySessionDeleted(draftSessionId);
+      void api.terminateSession(draftSessionId).catch(() => {});
+    }
+    committedRef.current = true;
+    onStarted({ worktreeId: wt.id, sessionId: sessionId ?? undefined });
+  }
+
+  // Phase 4 (CUJ 3): git-init the project, then apply THIS client's own HTTP
+  // response to the store immediately (`isGit`/`defaultBranch`) rather than
+  // waiting on our own `ProjectUpdated` WS echo — per the "Draft promotion...
+  // HTTP response must be self-sufficient" invariant. Rejects on git-init
+  // failure so the dialog shows an inline error (CUJ 3 error path).
+  async function gitInitAndApply(projectId: string) {
+    const res = await api.gitInitProject(projectId);
+    const cur = useServerStore.getState().projects.find((p) => p.id === projectId);
+    if (cur) {
+      useServerStore.getState().applyProjectUpdated({
+        ...cur,
+        isGit: res.isGit,
+        ...(res.defaultBranch ? { defaultBranch: res.defaultBranch } : {}),
+      });
+    }
+    return res;
+  }
+
+  // Phase 4 (CUJ 3): NonGitWorktreeDialog "Run git init and continue". Git-inits
+  // the project, then re-issues the SAME original request — no flow restart
+  // (R10) — for whichever entry point hit NOT_GIT (Tier 2 createWorktree or
+  // Tier 1 startDraft).
+  async function handleNonGitConfirm() {
+    const pending = pendingNonGitPayload;
+    if (!pending) return;
+    await gitInitAndApply(pending.kind === "worktree" ? pending.payload.projectId : pending.projectId);
+    if (pending.kind === "worktree") {
+      const wt = await api.createWorktree(pending.payload);
+      setPendingNonGitPayload(null);
+      await finishWorktreeStart(wt);
+    } else {
+      const res = await api.startDraft(pending.sessionId, {
+        draftPrompt: pending.prompt,
+        draftConfig: pending.draftConfig,
+        skipAutoTurn: pending.skipAutoTurn,
+      });
+      setPendingNonGitPayload(null);
+      // Same post-start handling `startTier1`/`startTier1ForProject` run:
+      // register a freshly-created worktree, patch the session record, JSON
+      // first turn, then onStarted — so the pane lands on the agent.
+      if (res.worktree) {
+        useServerStore.getState().applyWorktreeCreated(res.worktree);
+      }
+      useServerStore.getState().applySessionUpdated(pending.sessionId, {
+        channel: pending.draftConfig.channel,
+        ...(pending.draftConfig.modeId ? { modeId: pending.draftConfig.modeId } : {}),
+      });
+      if (pending.skipAutoTurn) {
+        await sendJsonFirstTurn(api, pending.sessionId, pending.prompt, files);
+      }
+      committedRef.current = true;
+      onStarted({ worktreeId: res.worktreeId, sessionId: pending.sessionId });
     }
   }
 
@@ -634,11 +776,29 @@ function DraftComposerInner({
       committedRef.current = true;
       if (opts?.andStart) {
         try {
-          await api.startDraft(sess.id, {
-            draftPrompt: prompt.trim(),
-            draftConfig: currentConfig,
-            skipAutoTurn: isJson,
-          });
+          try {
+            await api.startDraft(sess.id, {
+              draftPrompt: prompt.trim(),
+              draftConfig: currentConfig,
+              skipAutoTurn: isJson,
+            });
+          } catch (startErr) {
+            if (isNotGitError(startErr)) {
+              // The daemon gates Tier-1 startDraft on the project being git.
+              // Route to the recovery dialog (CUJ 3) — do NOT delete the
+              // session here: the retry re-issues startDraft on the SAME one.
+              setPendingNonGitPayload({
+                kind: "start-draft",
+                projectId: p.id,
+                sessionId: sess.id,
+                draftConfig: currentConfig,
+                prompt: prompt.trim(),
+                skipAutoTurn: isJson,
+              });
+              return;
+            }
+            throw startErr;
+          }
           if (isJson) {
             await sendJsonFirstTurn(api, sess.id, prompt.trim(), files);
           }
@@ -662,11 +822,7 @@ function DraftComposerInner({
 
   const title = "New agent";
 
-  const sessionProject = isTier1
-    ? (projects.find((p) => p.id === session?.projectId) ?? null)
-    : selectedProject;
-
-  const showWorktreeFields = entryPoint !== "tab" && useWorktree && (sessionProject?.isGit ?? true);
+  const showWorktreeFields = entryPoint !== "tab" && useWorktree;
 
   return (
     <div className="draft-composer">
@@ -983,6 +1139,12 @@ function DraftComposerInner({
           }}
         />
       ) : null}
+
+      <NonGitWorktreeDialog
+        open={pendingNonGitPayload !== null}
+        onConfirm={handleNonGitConfirm}
+        onCancel={() => setPendingNonGitPayload(null)}
+      />
 
       <ConfirmDialog
         open={confirmDiscard}

@@ -569,6 +569,17 @@ export function createClientApi() {
       return parseJson<ProjectBranchesResponse>(res);
     },
 
+    async gitInitProject(
+      projectId: string,
+    ): Promise<{ ok: true; isGit: true; defaultBranch: string | null }> {
+      const root = baseUrl();
+      const res = await apiFetch(
+        `${root}/projects/${encodeURIComponent(projectId)}/git-init`,
+        { method: "POST" },
+      );
+      return parseJson<{ ok: true; isGit: true; defaultBranch: string | null }>(res);
+    },
+
     async createWorktree(body: CreateWorktreeBody): Promise<Worktree> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/worktrees`, {
@@ -984,6 +995,32 @@ export function createClientApi() {
     ): Promise<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }> {
       const res = await apiFetch(`${fileBase(scope, worktreeId)}/file-list`, { signal });
       return parseJson<{ files: string[]; truncated: boolean; source: "ripgrep" | "node" }>(res);
+    },
+
+    /** Durable open-file set — the same `openFiles` state `vst files ls` reads. */
+    async listOpenFiles(id: string, scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const res = await apiFetch(`${fileBase(scope, id)}/open-files`);
+      return parseJson<{ paths: string[] }>(res);
+    },
+
+    /** Add a path to the durable open-file set; returns the full updated list. */
+    async openFileDurable(id: string, path: string, scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const res = await apiFetch(`${fileBase(scope, id)}/open-files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      return parseJson<{ paths: string[] }>(res);
+    },
+
+    /** Remove a path from the durable open-file set; returns the full updated list. */
+    async closeFileDurable(id: string, path: string, scope: FileScope = "worktree"): Promise<{ paths: string[] }> {
+      const res = await apiFetch(`${fileBase(scope, id)}/open-files`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      return parseJson<{ paths: string[] }>(res);
     },
 
     async search(

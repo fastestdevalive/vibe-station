@@ -53,3 +53,27 @@ export function usePendingFileOpens(api: ApiInstance, worktreeId: string | null)
     })();
   }, [api, worktreeId, openFileTabNew, setToolPanelTab]);
 }
+
+/**
+ * Durable-state sync (Phase 7): a second connected client (e.g. the CLI)
+ * changed the durable open-file set via open/close. Replace this client's
+ * cached tab list for that scope with the full updated list the event carries
+ * — this is how R12's "same state the web UI shows" stays shared.
+ *
+ * Deliberately an ALWAYS-MOUNTED hook (invoked once near the app root, not from
+ * FilesPanel): a CLI-driven open/close must reach the store even while the
+ * Files tool tab is closed, or the change would be silently dropped.
+ */
+export function useOpenFilesChanged(api: ApiInstance): void {
+  useEffect(() => {
+    const unsub = api.on("openFiles:changed", (ev: WSEvent) => {
+      if (ev.type !== "openFiles:changed") return;
+      const id = ev.worktreeId ?? ev.projectId;
+      if (!id) return;
+      useWorkspaceStore.setState((s) => ({
+        openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [id]: ev.paths },
+      }));
+    });
+    return unsub;
+  }, [api]);
+}
