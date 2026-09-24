@@ -81,7 +81,8 @@ use vst_types::rest::sessions::{
     Delivery, DraftTarget, EditQueuedResult, EnqueueChatResult, HandoffResult, InputBody,
     PatchChannelBody, PatchChannelResult, PatchDraftBody, PatchModelBody, PatchModelResult,
     PinResult, RenameSessionResult, ReorderSessionResult, ResetBody, ResetResult, ResubmitBody,
-    SessionOutput, SincePage, StartDraftBody, StartDraftResult, TranscriptPage, TurnActionResult,
+    SessionOutput, SincePage, StartDraftBody, StartDraftResult, StopTurnResult, TranscriptPage,
+    TurnActionResult,
 };
 use vst_types::rest::shared::{GlobalDraft, Mode, Session};
 use vst_types::{
@@ -3343,18 +3344,23 @@ impl SessionRoutes {
         Ok(())
     }
 
-    /// `POST /sessions/:id/chat/stop` — abort the ACTIVE turn, keep queued
-    /// turns (D8/13). No-op (200) when only queued turns exist; 409 when no
-    /// JSON agent has ever run for this session.
-    pub async fn stop_active_turn(&self, id: &str) -> Result<ChatActionResult, ChatRouteError> {
+    /// `POST /sessions/:id/chat/stop` or `POST /sessions/:id/chat/stop/:turnId` — abort
+    /// the ACTIVE turn, keep queued turns (D8/13). No-op (200 with stopped:false)
+    /// when only queued turns exist or when turn_id does not match the active turn;
+    /// 409 when no JSON agent has ever run for this session.
+    pub async fn stop_active_turn(
+        &self,
+        id: &str,
+        turn_id: Option<&str>,
+    ) -> Result<StopTurnResult, ChatRouteError> {
         let _ctx = find_json_session_context(&self.store, id)
             .await
             .ok_or_else(|| ChatRouteError::NotFound(format!("Session '{id}' not found")))?;
         let Some(agent) = self.json_registry.get(id) else {
             return Err(ChatRouteError::NoActiveTurn("No active turn".to_string()));
         };
-        agent.stop_active_turn();
-        Ok(ChatActionResult { ok: true })
+        let stopped = agent.stop_active_turn(turn_id);
+        Ok(StopTurnResult { ok: true, stopped })
     }
 
     /// `DELETE /sessions/:id/chat/queue/:turnId` — cancel ONE queued
@@ -3932,6 +3938,7 @@ impl SessionRoutes {
                         can_steer: None,
                         commands: None,
                         notice_slot: None,
+                        active_turn_id: None,
                     }
                 }
             }
@@ -3961,6 +3968,7 @@ impl SessionRoutes {
                 can_steer: None,
                 commands: None,
                 notice_slot: None,
+                active_turn_id: None,
             }
         };
 

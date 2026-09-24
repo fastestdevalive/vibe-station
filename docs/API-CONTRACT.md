@@ -146,7 +146,7 @@ Base URL: `http://localhost:<port>` (default `7421`). v1 is **localhost-bound, n
 | Method | Path | Query / Body | Returns | Notes |
 |---|---|---|---|---|
 | POST | `/sessions/:id/chat` | `{ message, attachmentIds? }` | `202 { turnId, queuePosition }` | **Always accepted** — never 409. Queued FIFO behind a running turn. 400 on empty message / unknown attachment; 404 unknown session. |
-| POST | `/sessions/:id/chat/stop` | — | `{ ok }` | Aborts the **active** turn (queued turns kept). 409 if no JSON agent has run; no-op 200 when only queued turns exist. |
+| POST | `/sessions/:id/chat/stop`<br>`/sessions/:id/chat/stop/:turnId` | — | `StopTurnResult { ok, stopped }` | Aborts the **active** turn (queued turns kept). When `:turnId` is provided, stops only if that turn is currently running (stale turn returns `stopped: false` without aborting newly promoted queued turns). 409 if no JSON agent has run; no-op 200 `{ ok: true, stopped: false }` when only queued turns exist or session is idle. |
 | DELETE | `/sessions/:id/chat/queue/:turnId` | — | `{ ok }` | Cancels one not-yet-started queued turn. 404 if not queued. |
 | POST | `/sessions/:id/attachments` | `multipart/form-data` `files[]` | `201 { attachments: Attachment[] }` | Saved under `sessionDataDir/uploads/` (outside the checkout). 413 too big; 400 no files. |
 | GET | `/sessions/:id/transcript` | — | `{ events: NormalizedEvent[] }` | Full normalized history (replay / fallback). **404** if the target session's channel is not `json` (a tmux/pty session has no event log — was previously a convincing empty `200 {events:[]}`). |

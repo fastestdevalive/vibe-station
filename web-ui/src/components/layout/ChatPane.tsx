@@ -130,6 +130,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     editingDrafts,
     send,
     stop,
+    stopPending,
     cancelQueued,
     editQueued,
     saveEdit,
@@ -379,7 +380,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
           meta={meta}
           queueDepth={trayRows.length}
           atBottom={atBottom}
-          onStop={() => void stop()}
+          onStop={() => void stop().catch(() => {})}
+          stopPending={stopPending}
           api={api}
           {...(sessionId ? { sessionId } : {})}
           fontControls={
@@ -462,7 +464,8 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
             // Safe fallback to false if canSteer is omitted on initial REST load;
             // live `session:meta` updates supply the authoritative value mid-turn.
             canSteer={meta?.canSteer ?? false}
-            onStop={() => void stop()}
+            onStop={() => void stop().catch(() => {})}
+            stopPending={stopPending}
             commands={meta?.commands}
             focusOnMount={focusOnMount && !isTouch}
             {...(salvage ? { initialText: salvage.text, initialAttachments: salvage.attachments } : {})}

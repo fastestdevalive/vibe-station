@@ -186,6 +186,7 @@ fn session_meta_roundtrips_notice_slot_shape() {
         can_steer: None,
         commands: None,
         notice_slot: None,
+        active_turn_id: None,
     };
     meta.notice_slot = Some(vst_types::NoticeSlot {
         children: BTreeMap::from([("c1".into(), "Child One".into())]),
@@ -194,4 +195,35 @@ fn session_meta_roundtrips_notice_slot_shape() {
     let ns = meta.notice_slot.unwrap();
     assert_eq!(ns.children.get("c1").map(|s| s.as_str()), Some("Child One"));
     assert!(ns.running);
+}
+
+#[test]
+fn session_meta_omits_active_turn_id_when_none() {
+    let meta = SessionMeta {
+        session_id: "sess".into(),
+        channel: Channel::Json,
+        mode_id: None,
+        mode_name: None,
+        cli: "claude".into(),
+        model: None,
+        turn_state: TurnState::Idle,
+        queue_depth: 0,
+        queued_turn_ids: vec![],
+        editing_turn_ids: vec![],
+        usage: None,
+        cwd: None,
+        can_steer: None,
+        commands: None,
+        notice_slot: None,
+        active_turn_id: None,
+    };
+    let json = serde_json::to_string(&meta).unwrap();
+    assert!(!json.contains("activeTurnId"));
+
+    let with_turn = SessionMeta {
+        active_turn_id: Some("turn-123".into()),
+        ..meta
+    };
+    let json_with_turn = serde_json::to_string(&with_turn).unwrap();
+    assert!(json_with_turn.contains("\"activeTurnId\":\"turn-123\""));
 }

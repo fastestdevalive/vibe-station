@@ -392,3 +392,12 @@ pub struct DelinkResult {}
 pub struct DraftSessionPromotionResult {
     pub ok: bool,
 }
+
+/// `POST /sessions/:id/chat/stop` or `/sessions/:id/chat/stop/:turnId` result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopTurnResult {
+    pub ok: bool,
+    pub stopped: bool,
+}
+

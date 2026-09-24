@@ -458,6 +458,8 @@ pub struct SessionMeta {
     pub commands: Option<Vec<Command>>,
     /// Active notice slot (pending or running).
     pub notice_slot: Option<NoticeSlot>,
+    /// The currently active turn id, if any.
+    pub active_turn_id: Option<String>,
 }
 
 /// The `noticeSlot` sub-object of `SessionMeta`.

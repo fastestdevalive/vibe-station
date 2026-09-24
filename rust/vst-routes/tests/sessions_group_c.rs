@@ -399,7 +399,7 @@ async fn promote_notice_idempotent_no_agent_ok() {
 async fn stop_missing_404() {
     let (_d, store) = store();
     let r = routes(store.clone());
-    let err = r.stop_active_turn("nope").await.unwrap_err();
+    let err = r.stop_active_turn("nope", None).await.unwrap_err();
     assert!(not_found(&err));
 }
 
@@ -411,8 +411,61 @@ async fn stop_no_agent_409() {
     add_project(&store, p).await;
 
     let r = routes(store.clone());
-    let err = r.stop_active_turn("s1").await.unwrap_err();
+    let err = r.stop_active_turn("s1", None).await.unwrap_err();
     assert!(matches!(err, ChatRouteError::NoActiveTurn(_)));
+}
+
+#[tokio::test]
+async fn stop_turn_scoped_missing_404() {
+    let (_d, store) = store();
+    let r = routes(store.clone());
+    let err = r.stop_active_turn("nope", Some("turn-1")).await.unwrap_err();
+    assert!(not_found(&err));
+}
+
+#[tokio::test]
+async fn stop_turn_scoped_no_agent_409() {
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r.stop_active_turn("s1", Some("turn-1")).await.unwrap_err();
+    assert!(matches!(err, ChatRouteError::NoActiveTurn(_)));
+}
+
+#[tokio::test]
+async fn stop_turn_scoped_stale_turn_returns_stopped_false() {
+    let dir = tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let plugin = Arc::from(vst_agents::resolve_plugin(vst_types::CliId::Claude));
+    let session = vst_agents::json_agent_session::JsonAgentSession::new(
+        vst_agents::json_agent_session::JsonAgentSessionOptions {
+            project: make_project("p1"),
+            worktree: None,
+            session: json_session("s1", "p1"),
+            plugin,
+            daemon_port: 0,
+            cli: vst_types::NormalizedEventProvider::Claude,
+            model: None,
+            mode_id: None,
+            mode_name: None,
+            store_handle: store.clone(),
+            broadcaster: vst_types::Broadcaster(tokio::sync::broadcast::channel(16).0),
+        },
+    );
+    r.json_registry.set("s1".to_string(), Arc::new(session));
+
+    let res = r.stop_active_turn("s1", Some("stale-turn-id")).await.unwrap();
+    assert!(res.ok);
+    assert!(!res.stopped);
 }
 
 // ---------------------------------------------------------------------------

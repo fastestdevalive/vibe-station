@@ -1293,12 +1293,15 @@ export function createClientApi() {
     },
 
     /** Abort the active turn (keeps queued turns). */
-    async stopChat(sessionId: string): Promise<{ ok: true }> {
+    async stopChat(sessionId: string, turnId?: string): Promise<{ ok: true; stopped?: boolean }> {
       const root = baseUrl();
-      const res = await apiFetch(`${root}/sessions/${encodeURIComponent(sessionId)}/chat/stop`, {
+      const path = turnId
+        ? `${root}/sessions/${encodeURIComponent(sessionId)}/chat/stop/${encodeURIComponent(turnId)}`
+        : `${root}/sessions/${encodeURIComponent(sessionId)}/chat/stop`;
+      const res = await apiFetch(path, {
         method: "POST",
       });
-      return parseJson<{ ok: true }>(res);
+      return parseJson<{ ok: true; stopped?: boolean }>(res);
     },
 
     /** Dismiss the pending notice slot (subagent-ux-v2). Idempotent — 204 if no slot. */

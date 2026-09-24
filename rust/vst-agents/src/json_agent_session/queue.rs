@@ -103,7 +103,7 @@ impl JsonAgentSession {
     }
 
     /// Submit a user turn, steering it mid-turn when possible. Steers iff ALL
-    /// are true: running, active_cancel not cancelled, queue empty, no
+    /// are true: running, active_turn not cancelled, queue empty, no
     /// attachments, not first turn pending, and the connection is alive and
     /// supports steering.
     pub async fn submit(
@@ -116,9 +116,9 @@ impl JsonAgentSession {
         let can_attempt_steer = {
             let s = self.0.state.lock().unwrap();
             s.running
-                && s.active_cancel
+                && s.active_turn
                     .as_ref()
-                    .map_or(false, |c| !c.is_cancelled())
+                    .map_or(false, |t| !t.cancel.is_cancelled())
                 && s.queue.is_empty()
                 && attachments.is_empty()
                 && s.first_turn_done
@@ -171,7 +171,7 @@ impl JsonAgentSession {
             }
             s.live_pids.clear();
             s.aborted_since_last_drain = true; // FIX-G
-            let c = s.active_cancel.take();
+            let c = s.active_turn.take().map(|t| t.cancel);
             s.turn_state = TurnState::Idle;
             c
         };
@@ -182,38 +182,40 @@ impl JsonAgentSession {
     }
 
     /// Stop the active turn only, keeping queued turns (Decision 8).
+    /// If `expected` is Some, aborts only if the active turn matches that turn id.
     /// Returns true when there was an active turn to abort.
-    pub fn stop_active_turn(&self) -> bool {
-        let cancel = {
-            let mut s = self.0.state.lock().unwrap();
-            if !s.running {
+    ///
+    /// Note: `aborted_since_last_drain` (which defers notice slots until user interaction)
+    /// is set only when an active turn is actually cancelled, preventing a stale stop from
+    /// inadvertently holding back subsequent notice slots.
+    pub fn stop_active_turn(&self, expected: Option<&str>) -> bool {
+        let mut s = self.0.state.lock().unwrap();
+        if !s.running {
+            return false;
+        }
+        let Some(active) = &s.active_turn else {
+            return false;
+        };
+        if let Some(expected_id) = expected {
+            if active.turn_id != expected_id {
                 return false;
             }
-            // If there's an ACP connection: cancel only the in-flight prompt,
-            // never kill the process group (Decision 3).
-            let has_connection = s.connection.as_ref().map_or(false, |c| c.is_alive());
-            let conn = if has_connection {
-                s.connection.clone()
-            } else {
-                None
-            };
-            if !has_connection {
-                // Legacy per-turn spawn: kill the whole descendant tree.
-                for pid in s.live_pids.iter().copied().collect::<Vec<_>>() {
-                    super::pids::kill_process_tree(std::iter::once(pid));
-                }
+        }
+        let cancel = active.cancel.clone();
+
+        // If there's an ACP connection: cancel only the in-flight prompt,
+        // never kill the process group (Decision 3).
+        let has_connection = s.connection.as_ref().map_or(false, |c| c.is_alive());
+        if !has_connection {
+            // Legacy per-turn spawn: kill the whole descendant tree.
+            for pid in s.live_pids.iter().copied().collect::<Vec<_>>() {
+                super::pids::kill_process_tree(std::iter::once(pid));
             }
-            s.aborted_since_last_drain = true; // FIX-G
-            let c = s.active_cancel.clone();
-            (c, conn)
-        };
-        let (c_opt, conn_opt) = cancel;
-        if let Some(conn) = conn_opt {
+        } else if let Some(conn) = &s.connection {
             conn.cancel_active_prompt();
         }
-        if let Some(c) = c_opt {
-            c.cancel();
-        }
+        s.aborted_since_last_drain = true; // FIX-G
+        cancel.cancel();
         true
     }
 
@@ -368,7 +370,7 @@ impl JsonAgentSession {
     /// Splice a queued turn to the front and abort the active turn so it runs
     /// next immediately ("Send now" / promote).
     pub fn promote_queued_turn(&self, turn_id: &str) -> bool {
-        {
+        let active_turn_to_stop = {
             let mut s = self.0.state.lock().unwrap();
             let Some(idx) = s.queue.iter().position(|t| t.turn_id == turn_id) else {
                 return false;
@@ -378,9 +380,12 @@ impl JsonAgentSession {
                 s.queue.push_front(turn);
                 // hold the lock here only for the reorder; drop before emit_meta
             }
-        }
+            s.active_turn.as_ref().map(|t| t.turn_id.clone())
+        };
         self.emit_meta();
-        self.stop_active_turn();
+        if let Some(target) = active_turn_to_stop {
+            self.stop_active_turn(Some(&target));
+        }
         self.kick_drain();
         true
     }

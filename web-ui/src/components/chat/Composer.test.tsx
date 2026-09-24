@@ -143,6 +143,26 @@ describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () =
     expect(screen.queryByLabelText(/queues after current turn/i)).toBeNull();
   });
 
+  it("renders Stop button disabled when stopPending is true", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-busy-stop" onSend={vi.fn()} busy onStop={vi.fn()} stopPending />);
+    const stopBtn = screen.getByRole("button", { name: "Stop turn" }) as HTMLButtonElement;
+    expect(stopBtn.disabled).toBe(true);
+  });
+
+  it("double-click on Stop button only triggers onStop once when disabled while pending", () => {
+    const api = createMockApi();
+    const onStop = vi.fn();
+    const { rerender } = render(<Composer api={api} sessionId="s-busy-stop" onSend={vi.fn()} busy onStop={onStop} />);
+    const stopBtn = screen.getByRole("button", { name: "Stop turn" });
+    fireEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
+
+    rerender(<Composer api={api} sessionId="s-busy-stop" onSend={vi.fn()} busy onStop={onStop} stopPending />);
+    fireEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   it("busy=true, text ready → Send (queue variant) renders instead of Stop, and clicking it calls onSend", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());

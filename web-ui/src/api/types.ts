@@ -439,6 +439,8 @@ export interface SessionMeta {
   /** Populated while a notice slot is pending or running (subagent-ux-v2).
    *  `running: true` while the notice LLM turn is active. */
   noticeSlot?: { children: Record<string, string>; running: boolean };
+  /** The currently active turn id, if any. */
+  activeTurnId?: string;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */

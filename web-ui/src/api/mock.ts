@@ -1501,8 +1501,8 @@ export function createMockApi() {
       return { turnId, queuePosition: 0 };
     },
 
-    async stopChat(_sessionId: string): Promise<{ ok: true }> {
-      return { ok: true };
+    async stopChat(_sessionId: string, _turnId?: string): Promise<{ ok: true; stopped?: boolean }> {
+      return { ok: true, stopped: true };
     },
 
     async dismissNotice(_sessionId: string): Promise<void> {
