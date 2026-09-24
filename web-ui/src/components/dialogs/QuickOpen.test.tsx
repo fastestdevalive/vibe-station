@@ -215,6 +215,26 @@ describe("QuickOpen", () => {
     expect(screen.queryByText("modified")).not.toBeInTheDocument();
   });
 
+  it("2.T12: under project scope, changed files come first in the list", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "fileSearch").mockResolvedValue({ files: [], truncated: false });
+    vi.spyOn(api, "fileList").mockResolvedValue({ files: [], truncated: false, source: "node" });
+    vi.spyOn(api, "listChangedPaths").mockResolvedValue([
+      { path: "src/fresh.ts", status: "?", mtimeMs: 3000 },
+      { path: "src/edited.ts", status: "M", mtimeMs: 1000 },
+    ]);
+
+    await setup(api, { worktreeId: "proj-1", scope: "project" });
+
+    await screen.findByText("fresh.ts");
+    await waitFor(() => {
+      const names = Array.from(document.querySelectorAll(".quick-open-file-name")).map((n) => n.textContent);
+      expect(names).toEqual(["fresh.ts", "edited.ts"]);
+    });
+    expect(screen.getByText("new")).toBeInTheDocument();
+    expect(screen.getByText("modified")).toBeInTheDocument();
+  });
+
   it("5.T5: selecting a file from worktree-scope results opens it via openFileTabNew", async () => {
     const api = createMockApi();
     vi.spyOn(api, "fileSearch").mockResolvedValue({ files: ["src/App.tsx"], truncated: false });
@@ -302,14 +322,31 @@ describe("QuickOpen", () => {
     );
   });
 
-  it("5.T7b: project scope never sends tree:watch (no daemon-side watcher there)", async () => {
+  it("5.T7b: project scope sends tree:watch with scope=project", async () => {
     const api = createMockApi();
     vi.spyOn(api, "fileList").mockResolvedValue({ files: [], truncated: false, source: "node" });
     const send = vi.spyOn(api, "send");
 
-    render(<QuickOpen api={api} worktreeId="proj-1" open onClose={vi.fn()} scope="project" />);
-    await screen.findByPlaceholderText(/Search files by name/);
+    const { rerender } = render(
+      <QuickOpen api={api} worktreeId="proj-1" open onClose={vi.fn()} scope="project" />,
+    );
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({
+        type: "tree:watch",
+        worktreeId: "proj-1",
+        scope: "project",
+      }),
+    );
 
-    expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "tree:watch" }));
+    rerender(
+      <QuickOpen api={api} worktreeId="proj-1" open={false} onClose={vi.fn()} scope="project" />,
+    );
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({
+        type: "tree:unwatch",
+        worktreeId: "proj-1",
+        scope: "project",
+      }),
+    );
   });
 });

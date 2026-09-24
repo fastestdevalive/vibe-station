@@ -53,12 +53,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     : peekFile && peekFile.worktreeId === worktreeId
       ? peekFile.path
       : storePath;
-  // Project scope (direct sessions) has no git/diff — always plain file view.
-  const scope: DiffScope = controlled
-    ? controlled.scope
-    : fileScope === "project"
-      ? "none"
-      : (scopeFromStore ?? "none");
+  // Project scope (direct sessions) can enter diff mode too, via the Files
+  // header's "Diff view" toggle — it's always "local" there (no branch
+  // concept), same source (`diffScopeByWorktree`) as worktree scope.
+  const scope: DiffScope = controlled ? controlled.scope : (scopeFromStore ?? "none");
   const commitSha = controlled?.commitSha;
   const previewFontScaleGlobal = useWorkspaceStore((s) => s.previewFontScale);
   const previewFontScaleByWorktree = useWorkspaceStore((s) => s.previewFontScaleByWorktree);
@@ -162,19 +160,20 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           // Decision 4: plain preview also fetches the local diff (best-effort
           // — an untracked/non-git file must not block the plain preview) so
           // it can show the same diff-stat + scope toggle diff mode has.
-          // Project scope has no notion of a git diff against a worktree
-          // (`worktreeId` here is actually a *project* id in that case) — a
-          // diff fetch there is a guaranteed 404, so skip it entirely rather
-          // than firing a call that can only fail.
+          // `GET /projects/:id/diff/*path?scope=local` exists for project
+          // scope too (same as worktree scope) — no reason to skip it here;
+          // without this fetch, diffStats fell back to
+          // syntheticUntrackedHunks(fileBody), which shows every file as if
+          // it were entirely new ("+N −0") regardless of its real git status.
           const [text, d] = await Promise.all([
             api.getFile(worktreeId, path, fileScope),
-            fileScope === "project" ? Promise.resolve(null) : api.getDiff(worktreeId, path, "local").catch(() => null),
+            api.getDiff(worktreeId, path, "local", undefined, fileScope).catch(() => null),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "local") {
           const [text, d] = await Promise.all([
-            api.getFile(worktreeId, path),
-            api.getDiff(worktreeId, path, "local"),
+            api.getFile(worktreeId, path, fileScope),
+            api.getDiff(worktreeId, path, "local", undefined, fileScope),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else if (scope === "branch") {
@@ -183,15 +182,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           // serves from disk — so branch scope can fetch file content
           // unconditionally, exactly like local scope, no new endpoint.
           const [text, d] = await Promise.all([
-            api.getFile(worktreeId, path),
-            api.getDiff(worktreeId, path, "branch"),
+            api.getFile(worktreeId, path, fileScope),
+            api.getDiff(worktreeId, path, "branch", undefined, fileScope),
           ]);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: d });
         } else {
           // scope === "commit" — a single commit's diff against its parent
           // (or the empty tree for a root commit). No plain file content:
           // the commit view is diff-only, same as branch scope used to be.
-          const d = await api.getDiff(worktreeId, path, "commit", commitSha);
+          const d = await api.getDiff(worktreeId, path, "commit", commitSha, fileScope);
           if (!cancelled) setLoaded({ key: bodyKey, fileBody: null, diffBody: d });
         }
       } catch (e) {

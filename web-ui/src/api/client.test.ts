@@ -335,6 +335,131 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await sockets[2]!.onopen!();
     expect(fileWatchMsgs(sent).filter((m) => m.worktreeId === "wt1" && m.path === "a.rs")).toHaveLength(1);
   });
+
+  // Phase 1 (direct-session file-git parity) — a project-scope watch registered
+  // before a disconnect must be replayed WITH `scope: "project"` on reconnect,
+  // not silently dropped to worktree-scope (which the daemon's
+  // `#[serde(default)]` would default to). This pins 1.7's replay-path edit:
+  // the reconnect replay must reproduce the exact message shape it watched with
+  // originally, including the `scope` field when it was present.
+  it("replays a project-scope file watch with scope=project on reconnect", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { FakeWebSocket, sockets, sent } = makeControllableWsFactory();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const api = createClientApi();
+
+    api.startConnection();
+    sockets[0]!.readyState = 1;
+    sockets[0]!.onopen!();
+    sent.splice(0);
+
+    await api.send({ type: "file:watch", worktreeId: "proj1", path: "a.rs", scope: "project" });
+
+    sent.splice(0);
+    sockets[0]!.onclose!({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sockets.length).toBe(2);
+    sockets[1]!.readyState = 1;
+    sockets[1]!.onopen!();
+
+    const replayed = fileWatchMsgs(sent).filter((m) => m.worktreeId === "proj1" && m.path === "a.rs");
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.scope).toBe("project");
+  });
+});
+
+/**
+ * Phase 3 (direct-session file-git parity) — the actual client URL-building fix:
+ * project-scope git-status / commits calls must route to `/projects/:id/...`
+ * instead of `/worktrees/:id/...`. Every component test mocks the API object's
+ * methods directly, so nothing pins that `client.ts`'s URL logic itself produces
+ * the right path. These stub `fetch` directly and assert the URL.
+ */
+describe("project-scope URL routing (git-status / commits)", () => {
+  let api: ReturnType<typeof createClientApi>;
+
+  beforeEach(() => {
+    api = createClientApi();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("listChangedPaths project scope hits /api/projects/<id>/changed-paths", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listChangedPaths("proj1", "local", undefined, "project");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/projects/proj1/changed-paths");
+  });
+
+  it("listChangedPaths default scope (worktree) hits /api/worktrees/<id>/changed-paths", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listChangedPaths("wt1", "local");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/changed-paths");
+  });
+
+  it("listCommits project scope hits /api/projects/<id>/commits", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ commits: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listCommits("proj1", 200, "project");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/projects/proj1/commits");
+  });
+
+  it("listCommits default scope (worktree) hits /api/worktrees/<id>/commits", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ commits: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.listCommits("wt1");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/commits");
+  });
+
+  it("getDiff project scope hits /api/projects/<id>/diff/<path>", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(new Response("a diff", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getDiff("proj1", "a.rs", "local", undefined, "project");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/projects/proj1/diff/a.rs");
+  });
+
+  it("getDiff default scope (worktree) hits /api/worktrees/<id>/diff/<path>", async () => {
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValue(new Response("a diff", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.getDiff("wt1", "a.rs", "local");
+    const url = fetchMock.mock.calls[0]![0] as string;
+    expect(url).toContain("/api/worktrees/wt1/diff/a.rs");
+  });
 });
 
 describe("pong-liveness timeout (Phase 2)", () => {

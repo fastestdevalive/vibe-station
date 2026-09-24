@@ -175,8 +175,11 @@ export function createClientApi() {
    *  the replay entry is only deleted when the LAST consumer unwatches, so one
    *  consumer's `*:unwatch` can't kill the replay entry another still-mounted
    *  consumer depends on. */
-  const fileWatches = new Map<string, { worktreeId: string; path: string }>();
-  const treeWatches = new Map<string, { worktreeId: string }>();
+  const fileWatches = new Map<
+    string,
+    { worktreeId: string; path: string; scope?: "worktree" | "project" }
+  >();
+  const treeWatches = new Map<string, { worktreeId: string; scope?: "worktree" | "project" }>();
   /** Refcount per watch key (matching `fileWatches`/`treeWatches` keys): how
    *  many consumers currently hold a subscription. The replay maps above only
    *  drop their entry when the count returns to zero. */
@@ -412,13 +415,26 @@ export function createClientApi() {
         for (const [key, w] of fileWatches.entries()) {
           const count = fileWatchCounts.get(key) ?? 1;
           for (let i = 0; i < count; i++) {
-            socket.send(JSON.stringify({ type: "file:watch", worktreeId: w.worktreeId, path: w.path }));
+            socket.send(
+              JSON.stringify({
+                type: "file:watch",
+                worktreeId: w.worktreeId,
+                path: w.path,
+                ...(w.scope ? { scope: w.scope } : {}),
+              }),
+            );
           }
         }
         for (const [key, w] of treeWatches.entries()) {
           const count = treeWatchCounts.get(key) ?? 1;
           for (let i = 0; i < count; i++) {
-            socket.send(JSON.stringify({ type: "tree:watch", worktreeId: w.worktreeId }));
+            socket.send(
+              JSON.stringify({
+                type: "tree:watch",
+                worktreeId: w.worktreeId,
+                ...(w.scope ? { scope: w.scope } : {}),
+              }),
+            );
           }
         }
         // Re-open JSON chats so the daemon re-subscribes this connection and
@@ -895,14 +911,12 @@ export function createClientApi() {
       filePath: string,
       scope: "local" | "branch" | "commit",
       sha?: string,
+      fileScope: FileScope = "worktree",
     ): Promise<string> {
       const path = filePath.replace(/^\/+/, "");
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
-      const root = baseUrl();
-      const res = await apiFetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/diff/${path}?${q}`,
-      );
+      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/diff/${path}?${q}`);
       const text = await res.text();
       if (!res.ok) {
         if (res.status === 422) {
@@ -990,13 +1004,11 @@ export function createClientApi() {
       worktreeId: string,
       scope: "local" | "branch" | "commit" = "local",
       sha?: string,
+      fileScope: FileScope = "worktree",
     ): Promise<ChangedPathEntry[]> {
       const q = new URLSearchParams({ scope });
       if (scope === "commit" && sha) q.set("sha", sha);
-      const root = baseUrl();
-      const res = await apiFetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/changed-paths?${q}`,
-      );
+      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/changed-paths?${q}`);
       return parseJson<ChangedPathEntry[]>(res);
     },
 
@@ -1012,12 +1024,9 @@ export function createClientApi() {
     },
 
     /** Commit history for the worktree, most-recent-first, with per-commit diffstat. */
-    async listCommits(worktreeId: string, limit = 200): Promise<CommitLogEntry[]> {
-      const root = baseUrl();
+    async listCommits(worktreeId: string, limit = 200, fileScope: FileScope = "worktree"): Promise<CommitLogEntry[]> {
       const q = new URLSearchParams({ limit: String(limit) });
-      const res = await apiFetch(
-        `${root}/worktrees/${encodeURIComponent(worktreeId)}/commits?${q}`,
-      );
+      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/commits?${q}`);
       const { commits } = await parseJson<{ commits: CommitLogEntry[] }>(res);
       return commits;
     },
@@ -1148,6 +1157,7 @@ export function createClientApi() {
       type: "file:watch" | "file:unwatch" | "tree:watch" | "tree:unwatch" | "ping";
       worktreeId?: string;
       path?: string;
+      scope?: "worktree" | "project";
     }): Promise<void> {
       // Track watches so they can be re-sent on reconnect, refcounted so one
       // consumer's unwatch doesn't drop the replay entry another still-mounted
@@ -1157,7 +1167,11 @@ export function createClientApi() {
         if (message.type === "file:watch" && message.path) {
           const k = `${message.worktreeId}:${message.path}`;
           fileWatchCounts.set(k, (fileWatchCounts.get(k) ?? 0) + 1);
-          fileWatches.set(k, { worktreeId: message.worktreeId, path: message.path });
+          fileWatches.set(k, {
+            worktreeId: message.worktreeId,
+            path: message.path,
+            ...(message.scope ? { scope: message.scope } : {}),
+          });
         } else if (message.type === "file:unwatch" && message.path) {
           const k = `${message.worktreeId}:${message.path}`;
           const c = (fileWatchCounts.get(k) ?? 1) - 1;
@@ -1170,7 +1184,10 @@ export function createClientApi() {
         } else if (message.type === "tree:watch") {
           const k = message.worktreeId;
           treeWatchCounts.set(k, (treeWatchCounts.get(k) ?? 0) + 1);
-          treeWatches.set(k, { worktreeId: message.worktreeId });
+          treeWatches.set(k, {
+            worktreeId: message.worktreeId,
+            ...(message.scope ? { scope: message.scope } : {}),
+          });
         } else if (message.type === "tree:unwatch") {
           const k = message.worktreeId;
           const c = (treeWatchCounts.get(k) ?? 1) - 1;

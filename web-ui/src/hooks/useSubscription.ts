@@ -101,11 +101,13 @@ export function useFileWatch(
 ) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
-    // The daemon only watches worktree paths; project-scoped (direct-session)
-    // files have no watcher, so skip the subscription entirely.
-    if (scope === "project") return undefined;
     if (!worktreeId || !path) return undefined;
-    void api.send({ type: "file:watch", worktreeId, path });
+    void api.send({
+      type: "file:watch",
+      worktreeId,
+      path,
+      ...(scope === "project" ? { scope: "project" as const } : {}),
+    });
     const bump = (ev: WSEvent) => {
       if ((ev.type === "file:changed" || ev.type === "file:deleted") && ev.worktreeId === worktreeId && ev.path === path) {
         setLastChanged(Date.now());
@@ -116,7 +118,12 @@ export function useFileWatch(
     return () => {
       offChanged();
       offDeleted();
-      void api.send({ type: "file:unwatch", worktreeId, path });
+      void api.send({
+        type: "file:unwatch",
+        worktreeId,
+        path,
+        ...(scope === "project" ? { scope: "project" as const } : {}),
+      });
     };
   }, [api, path, worktreeId, scope]);
   return { lastChanged };
@@ -211,16 +218,22 @@ export function useTreeWatch(
 ) {
   const [lastChanged, setLastChanged] = useState(0);
   useEffect(() => {
-    // No daemon-side tree watcher for project scope (direct sessions).
-    if (scope === "project") return undefined;
     if (!worktreeId) return undefined;
-    void api.send({ type: "tree:watch", worktreeId });
+    void api.send({
+      type: "tree:watch",
+      worktreeId,
+      ...(scope === "project" ? { scope: "project" as const } : {}),
+    });
     const off = api.on("tree:changed", (ev) => {
       if (ev.type === "tree:changed" && ev.worktreeId === worktreeId) setLastChanged(Date.now());
     });
     return () => {
       off();
-      void api.send({ type: "tree:unwatch", worktreeId });
+      void api.send({
+        type: "tree:unwatch",
+        worktreeId,
+        ...(scope === "project" ? { scope: "project" as const } : {}),
+      });
     };
   }, [api, worktreeId, scope]);
   return { lastChanged };

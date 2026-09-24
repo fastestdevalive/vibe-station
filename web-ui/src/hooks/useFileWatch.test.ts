@@ -26,4 +26,27 @@ describe("useFileWatch", () => {
     });
     expect(result.current.lastChanged).toBeGreaterThan(before);
   });
+
+  it("sends file watch with scope=project for project scope", async () => {
+    const api = createMockApi();
+    const send = vi.spyOn(api, "send");
+    const { unmount } = renderHook(() => useFileWatch(api, "proj1", "README.md", "project"));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({
+        type: "file:watch",
+        worktreeId: "proj1",
+        path: "README.md",
+        scope: "project",
+      }),
+    );
+    unmount();
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({
+        type: "file:unwatch",
+        worktreeId: "proj1",
+        path: "README.md",
+        scope: "project",
+      }),
+    );
+  });
 });

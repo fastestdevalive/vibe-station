@@ -27,4 +27,17 @@ describe("useTreeWatch", () => {
     });
     expect(result.current.lastChanged).toBeGreaterThan(before);
   });
+
+  it("sends tree watch with scope=project for project scope", async () => {
+    const api = createMockApi();
+    const send = vi.spyOn(api, "send");
+    const { unmount } = renderHook(() => useTreeWatch(api, "proj1", "project"));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({ type: "tree:watch", worktreeId: "proj1", scope: "project" }),
+    );
+    unmount();
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith({ type: "tree:unwatch", worktreeId: "proj1", scope: "project" }),
+    );
+  });
 });

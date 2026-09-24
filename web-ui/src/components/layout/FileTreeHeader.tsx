@@ -7,8 +7,10 @@ interface FileTreeHeaderProps {
   /** Browsing context id (worktree id, or project id for direct sessions) —
    *  used to read/write the per-context scope slices. */
   contextId: string | null;
-  /** Project scope (direct sessions) has no git/diff — hides the scope chips
-   *  and diff-view toggle. */
+  /** Project scope (direct sessions) has no branch concept — hides the
+   *  local/branch scope chips (always local), but the diff-view toggle
+   *  itself still shows: a direct session's git status is always "local",
+   *  so there's nothing to pick, just something to view. */
   isProject?: boolean;
 }
 
@@ -28,7 +30,7 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
     contextId ? s.diffScopeByWorktree[contextId] : undefined,
   );
   // Project scope has no git/diff — force plain file view.
-  const scope: DiffScope = isProject ? "none" : (scopeRaw ?? "none");
+  const scope: DiffScope = scopeRaw ?? "none";
 
   // Separate local/branch scope for the PLAIN tree (diff mode off) — kept in
   // its own store slice so picking "branch" here never flips `scope` (which
@@ -95,19 +97,19 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
             <DiffScopeSelector scope={effectiveTreeScope} onChange={handleTreeScopeChipChange} />
           </div>
         ) : null}
-        {/* Diff view is git-only; hidden for project (direct-session) scope. */}
-        {!isProject ? (
-          <button
-            type="button"
-            className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
-            aria-pressed={diffMode}
-            aria-label={diffMode ? "Diff view on" : "Diff view off"}
-            title="Toggle diff view"
-            onClick={toggleDiffMode}
-          >
-            <GitCompare size={15} strokeWidth={2} />
-          </button>
-        ) : null}
+        {/* Diff view works for project scope too — it's always local scope
+            there (no branch concept), so only the chip selector above is
+            gated on isProject, not this toggle. */}
+        <button
+          type="button"
+          className={`file-tree-diff-toggle ${diffMode ? "file-tree-diff-toggle--on" : ""}`}
+          aria-pressed={diffMode}
+          aria-label={diffMode ? "Diff view on" : "Diff view off"}
+          title="Toggle diff view"
+          onClick={toggleDiffMode}
+        >
+          <GitCompare size={15} strokeWidth={2} />
+        </button>
       </div>
     </div>
   );

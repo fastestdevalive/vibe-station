@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
-import type { ChangedPathEntry } from "@/api/types";
+import type { ChangedPathEntry, FileScope } from "@/api/types";
 import { ChangedFileList } from "@/components/layout/ChangedFileList";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { MasterDetailShell } from "@/components/layout/MasterDetailShell";
@@ -13,6 +13,9 @@ interface VcsCommitViewProps {
   sha: string;
   /** Returns to the commit graph (VcsPanel). */
   onBack: () => void;
+  /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId`
+   *  indexes into. Threaded into the changed-paths fetch and `FilePreviewPane`. */
+  scope?: FileScope;
 }
 
 /** First 7 chars — matches `CommitLogEntry.shortSha`'s convention closely
@@ -28,7 +31,7 @@ function shortSha(sha: string): string {
  * open file / diff scope. Owns its own `selectedPath` state — nothing here
  * touches `useWorkspaceStore`'s `activeFilePath`/`diffScopeByWorktree`.
  */
-export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewProps) {
+export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree" }: VcsCommitViewProps) {
   const [entries, setEntries] = useState<ChangedPathEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
     setSelectedPath(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(worktreeId, "commit", sha);
+        const list = await api.listChangedPaths(worktreeId, "commit", sha, scope);
         if (!cancelled) {
           setEntries(list);
           setLoading(false);
@@ -57,7 +60,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, sha]);
+  }, [api, worktreeId, sha, scope]);
 
   const topbarExtra = (
     <div className="files-topbar__breadcrumb">
@@ -83,6 +86,7 @@ export function VcsCommitView({ api, worktreeId, sha, onBack }: VcsCommitViewPro
         <FilePreviewPane
           api={api}
           worktreeId={worktreeId}
+          scope={scope}
           controlled={{ path: selectedPath, scope: "commit", commitSha: sha }}
         />
       }
