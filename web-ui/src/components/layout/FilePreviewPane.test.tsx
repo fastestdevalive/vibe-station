@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { GutterResult } from "@/api/types";
 import { createMockApi } from "@/api/mock";
@@ -585,7 +585,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
-      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null, source: "search" },
     });
     render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     // Peek (README.md) wins over activeFilePath (src/App.tsx) when context-matched.
@@ -613,7 +613,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
       // Peek is for a DIFFERENT worktree — must not leak into this pane.
-      peekFile: { worktreeId: "wt-2", path: "README.md", line: 1, matchText: null },
+      peekFile: { worktreeId: "wt-2", path: "README.md", line: 1, matchText: null, source: "search" },
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
     // Shows App.tsx (activeFilePath), NOT README.md (mismatched peek).
@@ -627,7 +627,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
-      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null, source: "search" },
     });
     render(
       <FilePreviewPane
@@ -651,7 +651,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       activeWorktreeId: "wt-1",
       activeFilePath: "README.md",
       diffScopeByWorktree: {},
-      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+      peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null, source: "search" },
       pendingLineTarget: null,
     });
     render(<FilePreviewPane api={api} worktreeId="wt-1" />);
@@ -668,7 +668,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       // element on screen (rendered Markdown never grows one for this key).
       act(() => {
         useWorkspaceStore.setState({
-          peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null },
+          peekFile: { worktreeId: "wt-1", path: "README.md", line: 1, matchText: null, source: "search" },
         });
       });
       await Promise.resolve();
@@ -684,7 +684,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       activeWorktreeId: "wt-1",
       activeFilePath: "src/App.tsx",
       diffScopeByWorktree: {},
-      peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 1, matchText: null },
+      peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 1, matchText: null, source: "search" },
       pendingLineTarget: null,
     });
     const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
@@ -699,7 +699,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
       // scroll in the new file.
       act(() => {
         useWorkspaceStore.setState({
-          peekFile: { worktreeId: "wt-1", path: "src/main.tsx", line: 1, matchText: null },
+          peekFile: { worktreeId: "wt-1", path: "src/main.tsx", line: 1, matchText: null, source: "search" },
         });
       });
 
@@ -736,7 +736,7 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
     try {
       const goto = (line: number) => {
         act(() => {
-          useWorkspaceStore.setState({ peekFile: { worktreeId: "wt-1", path: "src/Big.ts", line, matchText: null } });
+          useWorkspaceStore.setState({ peekFile: { worktreeId: "wt-1", path: "src/Big.ts", line, matchText: null, source: "search" } });
         });
       };
 
@@ -767,3 +767,130 @@ describe("FilePreviewPane — Phase 2 peekFile (B3 precedence + B2 consumed-trac
     }
   });
 });
+
+describe("FilePreviewPane — 2.9 (back/forward buttons and keyboard shortcuts)", () => {
+  const api = createMockApi();
+
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+      peekFile: null,
+      backStack: {},
+      forwardStack: {},
+    });
+  });
+
+  it("renders back and forward buttons disabled when stacks are empty", async () => {
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+    });
+  });
+
+  it("enables back button when backStack has entries and triggers navigateBack on click", async () => {
+    const navigateBackSpy = vi.fn();
+    useWorkspaceStore.setState({
+      backStack: {
+        "wt-1": [
+          {
+            kind: "committed",
+            worktreeId: "wt-1",
+            path: "README.md",
+            line: null,
+          },
+        ],
+      },
+      navigateBack: navigateBackSpy,
+    });
+
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    const backBtn = await screen.findByRole("button", { name: "Back" });
+    expect(backBtn).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
+
+    backBtn.click();
+    expect(navigateBackSpy).toHaveBeenCalledWith("wt-1");
+  });
+
+  it("enables forward button when forwardStack has entries and triggers navigateForward on click", async () => {
+    const navigateForwardSpy = vi.fn();
+    useWorkspaceStore.setState({
+      forwardStack: {
+        "wt-1": [
+          {
+            kind: "committed",
+            worktreeId: "wt-1",
+            path: "README.md",
+            line: null,
+          },
+        ],
+      },
+      navigateForward: navigateForwardSpy,
+    });
+
+    render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    const fwdBtn = await screen.findByRole("button", { name: "Forward" });
+    expect(fwdBtn).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
+
+    fwdBtn.click();
+    expect(navigateForwardSpy).toHaveBeenCalledWith("wt-1");
+  });
+
+  it("keyboard shortcuts Alt+Shift+ArrowLeft and Alt+Shift+ArrowRight trigger back and forward navigation", async () => {
+    const navigateBackSpy = vi.fn();
+    const navigateForwardSpy = vi.fn();
+    useWorkspaceStore.setState({
+      backStack: {
+        "wt-1": [
+          {
+            kind: "committed",
+            worktreeId: "wt-1",
+            path: "README.md",
+            line: null,
+          },
+        ],
+      },
+      forwardStack: {
+        "wt-1": [
+          {
+            kind: "committed",
+            worktreeId: "wt-1",
+            path: "src/App.tsx",
+            line: null,
+          },
+        ],
+      },
+      navigateBack: navigateBackSpy,
+      navigateForward: navigateForwardSpy,
+    });
+
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    const pane = container.querySelector(".preview-pane") as HTMLElement;
+    expect(pane).toBeTruthy();
+
+    // Alt+Shift+ArrowLeft triggers navigateBack
+    act(() => {
+      fireEvent.keyDown(pane, {
+        key: "ArrowLeft",
+        altKey: true,
+        shiftKey: true,
+      });
+    });
+    expect(navigateBackSpy).toHaveBeenCalledWith("wt-1");
+
+    // Alt+Shift+ArrowRight triggers navigateForward
+    act(() => {
+      fireEvent.keyDown(pane, {
+        key: "ArrowRight",
+        altKey: true,
+        shiftKey: true,
+      });
+    });
+    expect(navigateForwardSpy).toHaveBeenCalledWith("wt-1");
+  });
+});
+

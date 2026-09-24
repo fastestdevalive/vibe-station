@@ -12,6 +12,8 @@ describe("FileTreeSidebar", () => {
     useWorkspaceStore.setState({
       activeWorktreeId: "wt-1",
       activeSessionId: "sess-main",
+      activeFilePath: null,
+      peekFile: null,
       showDotFiles: true,
       diffScopeByWorktree: {},
       treeScopeByWorktree: {},
@@ -42,6 +44,42 @@ describe("FileTreeSidebar", () => {
     await screen.findByText("README.md");
     await user.click(screen.getByText("README.md"));
     expect(useWorkspaceStore.getState().activeFilePath).toBe("README.md");
+  });
+
+  it("2.T6 — clicking a file while a peek is active records that peek onto backStack", async () => {
+    const user = userEvent.setup();
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      peekFile: {
+        worktreeId: "wt-1",
+        path: "src/peek.ts",
+        line: 10,
+        matchText: null,
+        source: "definition",
+      },
+      backStack: {},
+      forwardStack: {},
+    });
+
+    render(<FileTreeSidebar api={api} />);
+    await screen.findByText("README.md");
+    await user.click(screen.getByText("README.md"));
+
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("README.md");
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+    // Recorded the active peek onto backStack
+    expect(useWorkspaceStore.getState().backStack["wt-1"]).toHaveLength(1);
+    expect(useWorkspaceStore.getState().backStack["wt-1"]![0]).toEqual({
+      kind: "peek",
+      value: {
+        worktreeId: "wt-1",
+        path: "src/peek.ts",
+        line: 10,
+        matchText: null,
+        source: "definition",
+      },
+    });
   });
 
   describe("Phase 8 — arrow-key roving navigation", () => {

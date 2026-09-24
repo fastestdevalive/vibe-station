@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach } from "vitest";
 import { createMockApi } from "@/api/mock";
@@ -123,14 +123,14 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       // Set the peek AFTER SearchPanel's empty-query mount effect has run (it
       // clears peek on mount), so we're testing a live peek's persistence.
       useWorkspaceStore.setState({
-        peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null },
+        peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" },
       });
 
       await user.click(screen.getByRole("button", { name: "Search files" }));
-      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null });
+      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
 
       await user.click(screen.getByRole("button", { name: "Switch to file tree" }));
-      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null });
+      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
     });
   });
 
@@ -174,7 +174,7 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       // Set the peek AFTER SearchPanel's empty-query mount effect has run (it
       // clears peek on mount, same race the 3.T3 test above avoids).
       useWorkspaceStore.setState({
-        peekFile: { worktreeId: "wt-1", path: "src/main.tsx", line: 5, matchText: null },
+        peekFile: { worktreeId: "wt-1", path: "src/main.tsx", line: 5, matchText: null, source: "search" },
       });
 
       await screen.findByRole("tablist", { name: "Open files" });
@@ -203,6 +203,108 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       render(<FilesPanel api={api} worktreeId="wt-1" />);
       await screen.findByText("App.tsx");
       expect(screen.queryByRole("button", { name: "Close search preview" })).not.toBeInTheDocument();
+    });
+
+    // 2.T5 — double-clicking the preview tab promotes it into openFileTabsByWorktree;
+    // a subsequent pushJump to that same path skips the peek slot and scrolls the existing tab instead (R3)
+    it("2.T5 — double-clicking preview tab promotes to permanent tab; subsequent pushJump skips peek slot", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        openFileTabsByWorktree: { "wt-1": ["src/App.tsx"] },
+        activeFileTabIdxByWorktree: { "wt-1": 0 },
+        fileTreeVisible: true,
+      });
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("App.tsx");
+
+      act(() => {
+        useWorkspaceStore.setState({
+          peekFile: {
+            worktreeId: "wt-1",
+            path: "src/main.tsx",
+            line: 5,
+            matchText: null,
+            source: "definition",
+          },
+        });
+      });
+
+      const previewTab = await screen.findByRole("tab", { name: /main\.tsx/ });
+      expect(previewTab).toBeInTheDocument();
+
+      // Double-click preview tab promotes it to permanent tab
+      await user.dblClick(previewTab);
+
+      // peekFile is cleared and src/main.tsx is now in openFileTabsByWorktree
+      expect(useWorkspaceStore.getState().peekFile).toBeNull();
+      expect(useWorkspaceStore.getState().openFileTabsByWorktree["wt-1"]).toContain("src/main.tsx");
+      expect(useWorkspaceStore.getState().activeFilePath).toBe("src/main.tsx");
+
+      // Subsequent pushJump to src/main.tsx skips peek slot and scrolls the existing tab
+      act(() => {
+        useWorkspaceStore.getState().pushJump({
+          worktreeId: "wt-1",
+          path: "src/main.tsx",
+          line: 12,
+          matchText: null,
+          source: "definition",
+        });
+      });
+
+      expect(useWorkspaceStore.getState().peekFile).toBeNull();
+      expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+        worktreeId: "wt-1",
+        path: "src/main.tsx",
+        line: 12,
+        matchText: null,
+      });
+    });
+
+    // 4.T5 — external peek shows the "outside workspace" badge with displayPath;
+    // double-click does not promote it (assert openFileTabsByWorktree unchanged)
+    it("4.T5 — external peek renders 'outside workspace' badge with displayPath and double-click does not promote it", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        openFileTabsByWorktree: { "wt-1": ["src/App.tsx"] },
+        activeFileTabIdxByWorktree: { "wt-1": 0 },
+        fileTreeVisible: true,
+      });
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("App.tsx");
+
+      act(() => {
+        useWorkspaceStore.setState({
+          peekFile: {
+            worktreeId: "wt-1",
+            path: "tokio/src/lib.rs",
+            line: 10,
+            matchText: null,
+            source: "definition",
+            external: {
+              token: "test-token-123",
+              displayPath: "tokio::runtime::Runtime",
+            },
+          },
+        });
+      });
+
+      // Assert badge is visible and displayPath is rendered
+      expect(await screen.findByText("tokio::runtime::Runtime")).toBeInTheDocument();
+      expect(screen.getByText("outside workspace")).toBeInTheDocument();
+
+      const previewTab = screen.getByRole("tab", { name: /tokio::runtime::Runtime/ });
+      expect(previewTab).toBeInTheDocument();
+
+      // Double-click preview tab does NOT promote to permanent tab
+      await user.dblClick(previewTab);
+
+      // peekFile is still active, openFileTabsByWorktree is unchanged
+      expect(useWorkspaceStore.getState().peekFile).not.toBeNull();
+      expect(useWorkspaceStore.getState().openFileTabsByWorktree["wt-1"]).toEqual(["src/App.tsx"]);
     });
   });
 });

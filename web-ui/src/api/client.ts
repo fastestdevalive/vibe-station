@@ -9,6 +9,7 @@ import type {
   CommitLogEntry,
   GutterResult,
   LocalQrResponse,
+  LspLanguageSurveyResponse,
   MobileQrResponse,
   PrInfo,
   PrLookupResult,
@@ -98,12 +99,12 @@ function wsUrl() {
  * Base path for file-browsing endpoints. Worktree scope is git-aware; project
  * scope serves plain files from the project base dir (direct sessions).
  */
-function fileBase(scope: FileScope, id: string): string {
+export function fileBase(scope: FileScope, id: string): string {
   const seg = scope === "project" ? "projects" : "worktrees";
   return `${baseUrl()}/${seg}/${encodeURIComponent(id)}`;
 }
 
-async function parseJson<T>(res: Response): Promise<T> {
+export async function parseJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
     throw new ApiError(text || res.statusText, res.status);
@@ -117,7 +118,7 @@ async function parseJson<T>(res: Response): Promise<T> {
  *  drop the cookie. When running inside the Tauri shell, also sends the
  *  injected VST_TOKEN as a Bearer header so the daemon can identify the
  *  request as 'tauri'-scoped rather than a generic loopback caller. */
-function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   const token = tauriToken();
   const authHeaders: Record<string, string> = token
     ? { Authorization: `Bearer ${token}` }
@@ -540,6 +541,17 @@ export function createClientApi() {
       return parseJson<{ ok: true; project: Project }>(res);
     },
 
+    async setProjectLspEnabled(id: string, enabled: boolean): Promise<Project> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/projects/${encodeURIComponent(id)}/lsp-enabled`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await parseJson<{ ok: true; project: Project }>(res);
+      return data.project;
+    },
+
     async listWorktrees(projectId?: string): Promise<Worktree[]> {
       const root = baseUrl();
       const url = projectId
@@ -605,6 +617,12 @@ export function createClientApi() {
       return parseJson<DiskUsageResponse>(res);
     },
 
+    async getLspLanguages(): Promise<LspLanguageSurveyResponse> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/lsp/languages`);
+      return parseJson<LspLanguageSurveyResponse>(res);
+    },
+
     /**
      * Mark every agent session in a worktree done and RELEASE the worktree's
      * runtime resources: agent panes/processes are killed, terminals are killed
@@ -659,6 +677,17 @@ export function createClientApi() {
         body: JSON.stringify({ hidden: false }),
       });
       return parseJson<{ ok: true; worktree: Worktree }>(res);
+    },
+
+    async setWorktreeLspEnabled(id: string, enabled: boolean): Promise<Worktree> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(id)}/lsp-enabled`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await parseJson<{ ok: true; worktree: Worktree }>(res);
+      return data.worktree;
     },
 
     /** Cosmetic rename (F2). Empty string clears back to the default (falls back to `branch`). */

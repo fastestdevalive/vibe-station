@@ -72,4 +72,24 @@ describe("FilesLeftRail", () => {
     expect(useWorkspaceStore.getState().fileTreeVisible).toBe(true);
     expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("tree");
   });
+
+  it("5.10: clicking the references icon calls setFilesLeftPaneMode(wt, 'references')", async () => {
+    const user = userEvent.setup();
+    render(<FilesLeftRail worktreeId={WT} />);
+
+    await user.click(screen.getByRole("button", { name: "References" }));
+
+    expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("references");
+    expect(screen.getByRole("button", { name: "References" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("6.8: clicking the outline icon calls setFilesLeftPaneMode(wt, 'outline')", async () => {
+    const user = userEvent.setup();
+    render(<FilesLeftRail worktreeId={WT} />);
+
+    await user.click(screen.getByRole("button", { name: "Outline" }));
+
+    expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("outline");
+    expect(screen.getByRole("button", { name: "Outline" })).toHaveAttribute("aria-pressed", "true");
+  });
 });

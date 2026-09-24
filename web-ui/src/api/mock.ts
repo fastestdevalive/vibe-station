@@ -9,6 +9,7 @@ import type {
   CliId,
   CommitLogEntry,
   LocalQrResponse,
+  LspLanguageSurveyResponse,
   MarkdownStyle,
   MobileQrResponse,
   NormalizedEvent,
@@ -93,6 +94,7 @@ export function createMockApi() {
       defaultBranch: "main",
       createdAt: nowIso(),
       hidden: false,
+      lspEnabled: false,
     },
     {
       id: "proj-b",
@@ -103,6 +105,7 @@ export function createMockApi() {
       defaultBranch: "develop",
       createdAt: nowIso(),
       hidden: false,
+      lspEnabled: false,
     },
   ];
 
@@ -117,6 +120,7 @@ export function createMockApi() {
       pinnedAt: null,
       hiddenAt: null,
       sortOrder: 1,
+      lspEnabled: false,
     },
     {
       id: "wt-2",
@@ -128,6 +132,7 @@ export function createMockApi() {
       pinnedAt: null,
       hiddenAt: null,
       sortOrder: 2,
+      lspEnabled: false,
     },
     {
       id: "wt-3",
@@ -139,6 +144,7 @@ export function createMockApi() {
       pinnedAt: null,
       hiddenAt: null,
       sortOrder: 1,
+      lspEnabled: false,
     },
   ];
 
@@ -355,6 +361,7 @@ export function createMockApi() {
         defaultBranch: "main",
         createdAt: nowIso(),
         hidden: false,
+        lspEnabled: false,
       };
       projects.push(newProject);
       emit({ type: "project:created", project: structuredClone(newProject) });
@@ -384,6 +391,14 @@ export function createMockApi() {
         emit({ type: "project:updated", project: structuredClone(project) });
       }
       return { ok: true, project: structuredClone(project) };
+    },
+
+    async setProjectLspEnabled(id: string, enabled: boolean): Promise<Project> {
+      const project = projects.find((p) => p.id === id);
+      if (!project) throw new ApiError("not found", 404);
+      project.lspEnabled = enabled;
+      emit({ type: "project:updated", project: structuredClone(project) });
+      return structuredClone(project);
     },
 
     async listWorktrees(projectId?: string): Promise<Worktree[]> {
@@ -423,6 +438,7 @@ export function createMockApi() {
         pinnedAt: null,
         hiddenAt: null,
         mainSessionId: `${wtId}-m`,
+        lspEnabled: false,
       };
       worktrees.push(wt);
       treeStore[wt.id] = {
@@ -482,6 +498,29 @@ export function createMockApi() {
           id: wt.id,
           diskBytes: (i + 1) * 400 * 1024 * 1024, // 400 MB, 800 MB, ...
         })),
+      };
+    },
+
+    async getLspLanguages(): Promise<LspLanguageSurveyResponse> {
+      return {
+        languages: [
+          { language: "rust", displayName: "Rust", command: "rust-analyzer", installedOnHost: true, installCommand: null, installNote: null },
+          { language: "go", displayName: "Go", command: "gopls", installedOnHost: true, installCommand: null, installNote: null },
+          { language: "python", displayName: "Python", command: "pyright-langserver", installedOnHost: false, installCommand: "npm install -g pyright", installNote: null },
+          { language: "typescript", displayName: "TypeScript / JavaScript", command: "typescript-language-server", installedOnHost: false, installCommand: "npm install -g typescript-language-server typescript", installNote: null },
+          { language: "cpp", displayName: "C / C++", command: "clangd", installedOnHost: false, installCommand: null, installNote: "Debian/Ubuntu: apt install clangd — macOS: brew install llvm (adds clangd to PATH via llvm/bin)" },
+          { language: "zig", displayName: "Zig", command: "zls", installedOnHost: false, installCommand: null, installNote: "See https://github.com/zigtools/zls#installation" },
+          { language: "latex", displayName: "LaTeX", command: "texlab", installedOnHost: false, installCommand: "cargo install texlab", installNote: "macOS alternative: brew install texlab" },
+          { language: "kotlin", displayName: "Kotlin", command: "kotlin-language-server", installedOnHost: false, installCommand: null, installNote: "brew install kotlin-language-server, or see https://github.com/fwcd/kotlin-language-server#installation" },
+          { language: "bash", displayName: "Bash", command: "bash-language-server", installedOnHost: false, installCommand: "npm install -g bash-language-server", installNote: null },
+          { language: "lua", displayName: "Lua", command: "lua-language-server", installedOnHost: false, installCommand: null, installNote: "macOS: brew install lua-language-server — Linux: see https://github.com/LuaLS/lua-language-server#installation" },
+          { language: "ruby", displayName: "Ruby", command: "solargraph", installedOnHost: false, installCommand: "gem install solargraph", installNote: null },
+          { language: "java", displayName: "Java", command: "jdtls", installedOnHost: false, installCommand: null, installNote: "brew install jdtls, or see https://github.com/eclipse-jdtls/eclipse.jdt.ls" },
+          { language: "csharp", displayName: "C#", command: "omnisharp", installedOnHost: false, installCommand: null, installNote: "brew install omnisharp, or see https://github.com/OmniSharp/omnisharp-roslyn#installation" },
+          { language: "html", displayName: "HTML", command: "vscode-html-language-server", installedOnHost: false, installCommand: "npm install -g vscode-langservers-extracted", installNote: null },
+          { language: "css", displayName: "CSS", command: "vscode-css-language-server", installedOnHost: false, installCommand: "npm install -g vscode-langservers-extracted", installNote: null },
+          { language: "json", displayName: "JSON", command: "vscode-json-language-server", installedOnHost: false, installCommand: "npm install -g vscode-langservers-extracted", installNote: null },
+        ],
       };
     },
 
@@ -551,6 +590,14 @@ export function createMockApi() {
         emit({ type: "worktree:updated", worktree: structuredClone(wt) });
       }
       return { ok: true, worktree: structuredClone(wt) };
+    },
+
+    async setWorktreeLspEnabled(id: string, enabled: boolean): Promise<Worktree> {
+      const wt = worktrees.find((w) => w.id === id);
+      if (!wt) throw new ApiError("not found", 404);
+      wt.lspEnabled = enabled;
+      emit({ type: "worktree:updated", worktree: structuredClone(wt) });
+      return structuredClone(wt);
     },
 
     async renameWorktree(id: string, name: string): Promise<{ ok: true; name: string | null }> {
@@ -1300,6 +1347,7 @@ export function createMockApi() {
         defaultBranch: "main",
         createdAt: nowIso(),
         hidden: false,
+        lspEnabled: false,
       };
       projects.push(newProject);
       emit({ type: "project:created", project: structuredClone(newProject) });
@@ -1321,6 +1369,7 @@ export function createMockApi() {
             pinnedAt: null,
             hiddenAt: null,
             sortOrder: Date.now(),
+            lspEnabled: false,
           };
           worktrees.push(wt);
           treeStore[wt.id] = { "": [] };

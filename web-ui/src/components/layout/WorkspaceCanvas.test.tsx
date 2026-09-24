@@ -174,6 +174,7 @@ describe("WorkspaceCanvas - Windows picker cross-worktree note", () => {
       isGit: true,
       createdAt: new Date().toISOString(),
       hidden: false,
+      lspEnabled: false,
     };
     const directSession = {
       id: "sess-direct-1",

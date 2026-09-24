@@ -1,5 +1,5 @@
-import { FolderTree, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { FolderTree, List, ListTree, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { useWorkspaceStore, type FilesLeftPaneMode } from "@/hooks/useStore";
 
 interface FilesLeftRailProps {
   /** Resolved context id: worktree id or direct-session project id. */
@@ -7,16 +7,9 @@ interface FilesLeftRailProps {
 }
 
 /**
- * Persistent 3-icon rail for the Files tool (confirmed rail mockup, report
- * Addendum, plus a post-review addition): panel-visibility toggle, ⊟ tree,
- * 🔍 search. Full-height sibling of the whole MasterDetailShell column
- * inside FilesPanel, NOT nested inside the shell (Architecture Diagram
- * structural note, B8). No owned state — reads/writes the store. The
- * panel-visibility toggle is the SAME control MasterDetailShell's topbar
- * used to render (relocated here, not duplicated — Decision 8/B6). The
- * layout-orientation toggle that used to live here as well has since moved
- * on (through two more homes) to attach directly to the top-level "Files"
- * tab button itself — see ToolPanel.tsx's `.tab__layout-toggle`.
+ * Persistent rail for the Files tool: panel-visibility toggle,
+ * tree, search, outline, references. Full-height sibling of the whole MasterDetailShell column
+ * inside FilesPanel.
  */
 export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId] ?? "tree");
@@ -24,12 +17,7 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const toggleFileTree = useWorkspaceStore((s) => s.toggleFileTree);
 
-  // B3: the rail is a sibling OUTSIDE MasterDetailShell, whose left pane (which
-  // hosts BOTH the tree and search bodies — FilesLeftPane always mounts them)
-  // is unmounted whenever `fileTreeVisible` is false. A rail click that switches
-  // modes would otherwise write state but show nothing. Ensure the tree pane is
-  // visible before switching, so the target mode actually renders.
-  const switchMode = (next: "tree" | "search") => {
+  const switchMode = (next: FilesLeftPaneMode) => {
     if (!fileTreeVisible) toggleFileTree();
     setFilesLeftPaneMode(worktreeId, next);
   };
@@ -65,6 +53,26 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
         onClick={() => switchMode("search")}
       >
         <Search size={16} />
+      </button>
+      <button
+        type="button"
+        className={`files-left-rail__btn${mode === "outline" ? " files-left-rail__btn--active" : ""}`}
+        aria-label="Outline"
+        aria-pressed={mode === "outline"}
+        title="Outline"
+        onClick={() => switchMode("outline")}
+      >
+        <ListTree size={16} />
+      </button>
+      <button
+        type="button"
+        className={`files-left-rail__btn${mode === "references" ? " files-left-rail__btn--active" : ""}`}
+        aria-label="References"
+        aria-pressed={mode === "references"}
+        title="References"
+        onClick={() => switchMode("references")}
+      >
+        <List size={16} />
       </button>
     </div>
   );

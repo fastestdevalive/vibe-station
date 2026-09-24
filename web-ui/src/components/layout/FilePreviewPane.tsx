@@ -2,6 +2,7 @@ import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
 import type { DiffScope, FileScope } from "@/api/types";
+import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
@@ -21,12 +22,8 @@ import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@
 /** Decision 6 — bypasses the global store's `activeFilePath`/`diffScopeByWorktree`
  *  slices so a caller outside the Files tab (the VCS commit view) doesn't steal
  *  focus from / clobber whatever the Files tab has open. */
-export interface FilePreviewControlled {
-  path: string | null;
-  scope: DiffScope;
-  /** Required when `scope === "commit"` — the commit sha to diff against its parent. */
-  commitSha?: string;
-}
+import { usePreviewedPath, type FilePreviewControlled } from "@/hooks/usePreviewedPath";
+export type { FilePreviewControlled };
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
@@ -39,30 +36,41 @@ interface FilePreviewPaneProps {
 }
 
 export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree", controlled }: FilePreviewPaneProps) {
-  const storePath = useWorkspaceStore((s) => s.activeFilePath);
   const pendingLineTarget = useWorkspaceStore((s) => s.pendingLineTarget);
   const peekFile = useWorkspaceStore((s) => s.peekFile);
-  const scopeFromStore = useWorkspaceStore((s) =>
-    worktreeId ? s.diffScopeByWorktree[worktreeId] : undefined,
-  );
-  // Peek wins over the committed activeFilePath ONLY when set AND context-matched
-  // (B3): peekFile.worktreeId is the same resolved context id as this pane's
-  // `worktreeId` prop (worktree id OR direct-session project id).
-  const path = controlled
-    ? controlled.path
-    : peekFile && peekFile.worktreeId === worktreeId
-      ? peekFile.path
-      : storePath;
-  // Project scope (direct sessions) can enter diff mode too, via the Files
-  // header's "Diff view" toggle — it's always "local" there (no branch
-  // concept), same source (`diffScopeByWorktree`) as worktree scope.
-  const scope: DiffScope = controlled ? controlled.scope : (scopeFromStore ?? "none");
+
+  const previewInfo = usePreviewedPath(worktreeId, fileScope, controlled);
+  const { path, scope, external } = previewInfo;
+  const isExternalPeek = Boolean(external);
+  const externalToken = external?.token;
   const commitSha = controlled?.commitSha;
   const previewFontScaleGlobal = useWorkspaceStore((s) => s.previewFontScale);
   const previewFontScaleByWorktree = useWorkspaceStore((s) => s.previewFontScaleByWorktree);
   const previewFontScale = (worktreeId ? previewFontScaleByWorktree[worktreeId] : undefined) ?? previewFontScaleGlobal;
   const bumpPreviewFontForWorktree = useWorkspaceStore((s) => s.bumpPreviewFontForWorktree);
   const bumpPreviewFont = useWorkspaceStore((s) => s.bumpPreviewFont);
+
+  const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
+  const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
+  const layoutKey = worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "";
+  const canGoBack = useWorkspaceStore((s) => !controlled && (s.backStack[layoutKey]?.length ?? 0) > 0);
+  const canGoForward = useWorkspaceStore((s) => !controlled && (s.forwardStack[layoutKey]?.length ?? 0) > 0);
+  const navigateBack = useWorkspaceStore((s) => s.navigateBack);
+  const navigateForward = useWorkspaceStore((s) => s.navigateForward);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (e.key === "ArrowLeft" || e.code === "ArrowLeft") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (canGoBack) navigateBack(layoutKey);
+      } else if (e.key === "ArrowRight" || e.code === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (canGoForward) navigateForward(layoutKey);
+      }
+    }
+  };
 
   const { theme } = useTheme();
   const themeMode = theme;
@@ -77,7 +85,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // A watcher-triggered refetch keeps the same key, so the old body stays on
   // screen until the fresh one lands — no "Loading…" flash on every save.
   const bodyKey =
-    worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}` : null;
+    worktreeId && path ? `${fileScope}\0${worktreeId}\0${path}\0${scope}\0${commitSha ?? ""}\0${externalToken ?? ""}` : null;
   const [loaded, setLoaded] = useState<{ key: string; fileBody: string | null; diffBody: string | null } | null>(null);
   // Cache the last 10 file bodies so switching back to a tab shows content
   // immediately without a loading flash. Without this, bodyKey mismatches
@@ -98,7 +106,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
   const [imageFullscreen, setImageFullscreen] = useState(false);
   const [gutterMarks, setGutterMarks] = useState<Map<number, "added" | "modified" | "deleted"> | null>(null);
-  const { lastChanged } = useFileWatch(api, worktreeId, path, fileScope);
+  const { lastChanged } = useFileWatch(api, worktreeId, isExternalPeek ? null : path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
   // watchFile() watches the parent dir): a tree-level change to this
   // worktree also nudges the fetch effect, even if the per-file watcher
@@ -156,7 +164,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     setTooLarge(false);
     void (async () => {
       try {
-        if (scope === "none") {
+        if (isExternalPeek && externalToken) {
+          const text = await getExternalFile(api, fileScope, worktreeId, externalToken);
+          if (!cancelled) setLoaded({ key: bodyKey, fileBody: text, diffBody: null });
+        } else if (scope === "none") {
           // Decision 4: plain preview also fetches the local diff (best-effort
           // — an untracked/non-git file must not block the plain preview) so
           // it can show the same diff-stat + scope toggle diff mode has.
@@ -547,6 +558,28 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // for it. File name + panel controls live on the Files bar above.
   const diffInfo = (
     <div className="preview-diffinfo">
+      <div className="preview-nav" role="navigation" aria-label="Preview navigation">
+        <button
+          type="button"
+          className="preview-nav__btn"
+          aria-label="Back"
+          title="Back (Alt+Shift+←)"
+          disabled={!canGoBack}
+          onClick={() => navigateBack(layoutKey)}
+        >
+          ◀
+        </button>
+        <button
+          type="button"
+          className="preview-nav__btn"
+          aria-label="Forward"
+          title="Forward (Alt+Shift+→)"
+          disabled={!canGoForward}
+          onClick={() => navigateForward(layoutKey)}
+        >
+          ▶
+        </button>
+      </div>
       {diffStats ? (
         <span className="preview-diffinfo__stats" aria-label="Diff line counts">
           <span className="preview-diffinfo__stats-plus">+{diffStats.additions}</span>{" "}
@@ -635,8 +668,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         </div>
       );
     }
+    const lspFileRef: LspFileRef = external
+      ? { kind: "external", token: external.token }
+      : { kind: "workspace", path: path! };
     return (
       <CodeView
+        api={api}
+        worktreeId={worktreeId}
+        scope={fileScope}
+        lspFileRef={lspFileRef}
         code={fileBody}
         language={languageForFilePath(path)}
         filePath={path}
@@ -666,7 +706,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   );
 
   return (
-    <div className="pane pane-stack" style={{ position: "relative" }}>
+    <div
+      className="pane pane-stack preview-pane"
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      style={{ position: "relative" }}
+    >
       {diffInfo}
       {fontOverlay}
       <div

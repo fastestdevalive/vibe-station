@@ -3027,6 +3027,556 @@
   color: var(--fg-primary);
 }
 
+.workspace-code-viewer[data-lsp-armed="true"],
+.workspace-code-viewer[data-lsp-armed="true"] * {
+  cursor: pointer;
+}
+
+/* IntelliJ/Android-Studio-style go-to-def cue: the specific identifier under
+ * the pointer while armed (not the whole line/container) gets underlined and
+ * recolored — computed client-side via word-boundary hit-testing, no LSP
+ * round-trip per mouse move (CodeView.tsx's updateHoveredSymbolAt). */
+.workspace-code-symbol-hover {
+  color: var(--fg-accent, #58a6ff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ── LSP Go-to-Definition Cues & Picker ───────────────── */
+
+.lsp-status-badge {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  white-space: nowrap;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: var(--space-2);
+  /* Defensive: flex items default to a min-width equal to their unwrapped
+   * content width unless `overflow` is set, which can force a shrinkable
+   * sibling (e.g. `.files-topbar__tabs`, which explicitly opts into
+   * `overflow-x: auto; min-width: 0`) down to almost nothing to make room —
+   * this is what made the open-file tab strip look "pushed away" whenever a
+   * long LSP message (e.g. "LSP: not available for Typescript — server not
+   * found on host") rendered next to it. Capping this element's own width
+   * and letting IT truncate instead keeps that from happening again if it's
+   * ever placed in another tightly-packed flex row. */
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lsp-status-badge--ready {
+  color: var(--fg-success, #2da44e);
+}
+
+.lsp-status-badge--starting,
+.lsp-status-badge--indexing {
+  color: var(--fg-warning, #d29922);
+}
+
+.lsp-status-badge--clickable {
+  cursor: pointer;
+}
+
+.lsp-status-badge--disabled {
+  color: var(--fg-muted);
+}
+
+.lsp-cue-tooltip {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px 8px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+  max-width: 340px;
+  word-break: break-word;
+}
+
+.lsp-definition-picker {
+  position: fixed;
+  z-index: 1000;
+  min-width: 280px;
+  max-width: 440px;
+  max-height: 300px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  pointer-events: auto;
+}
+
+.lsp-definition-picker__header {
+  padding: 6px 10px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  color: var(--fg-muted);
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
+.lsp-definition-picker__list {
+  overflow-y: auto;
+  padding: 4px 0;
+  margin: 0;
+  list-style: none;
+}
+
+.lsp-definition-picker__item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  cursor: pointer;
+  gap: 2px;
+}
+
+.lsp-definition-picker__item--selected,
+.lsp-definition-picker__item:hover {
+  background: var(--bg-hover);
+}
+
+.lsp-definition-picker__item-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2, 6px);
+}
+
+.lsp-definition-picker__item-target {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--fg-accent, #58a6ff);
+}
+
+.lsp-definition-picker__item-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs, 2px);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  border: var(--border-width) solid var(--border-default);
+}
+
+.lsp-definition-picker__item-preview {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── LSP Hover Tooltip ──────────────────────────────────── */
+
+.lsp-hover-tooltip {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 480px;
+  max-height: 360px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  pointer-events: auto;
+}
+
+.lsp-hover-tooltip__signature {
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--fg-accent, #58a6ff);
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-default);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lsp-hover-tooltip__doc {
+  padding: 8px 10px;
+  color: var(--fg-secondary);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  overflow-y: auto;
+  max-height: 200px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lsp-hover-tooltip__actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-top: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
+.lsp-hover-tooltip__find-references-btn {
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--fg-primary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.lsp-hover-tooltip__find-references-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* ── References Panel ───────────────────────────────────── */
+
+.references-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+}
+
+.references-panel__header {
+  padding: 8px 12px;
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.references-panel__title-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.references-panel__title {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.references-panel__status {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+.references-panel__notice {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  color: var(--fg-warning, #d29922);
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.references-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.references-panel__group {
+  margin-bottom: 4px;
+}
+
+.references-panel__file-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-card);
+}
+
+.references-panel__file-header:hover {
+  background: var(--bg-hover);
+}
+
+.references-panel__file-toggle {
+  display: flex;
+  align-items: center;
+  color: var(--fg-muted);
+}
+
+.references-panel__file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.references-panel__external-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs, 2px);
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-muted);
+}
+
+.references-panel__count {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.references-panel__entries {
+  padding-left: 12px;
+}
+
+.references-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  margin: 1px 4px;
+}
+
+.references-panel__row:hover {
+  background: var(--bg-hover);
+}
+
+.references-panel__line-num {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  min-width: 24px;
+}
+
+.references-panel__preview {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.references-panel__def-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs, 2px);
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+  border: var(--border-width) solid rgba(63, 185, 80, 0.4);
+}
+
+.references-panel__text-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 4px;
+  border-radius: var(--radius-xs, 2px);
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  border: var(--border-width) solid var(--border-default);
+}
+
+.references-panel__more {
+  padding: 8px;
+  display: flex;
+  justify-content: center;
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+.references-panel__more-btn {
+  font-size: var(--font-size-xs);
+  padding: 4px 12px;
+  cursor: pointer;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+}
+
+.references-panel__more-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* ── Outline panel ─────────────────────────────────────── */
+
+.outline-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+}
+
+.outline-panel__header {
+  padding: 8px 12px;
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.outline-panel__filter-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.outline-panel__filter-icon {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.outline-panel__filter-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: var(--font-size-xs);
+  color: var(--fg-primary);
+  min-width: 0;
+}
+
+.outline-panel__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.outline-panel__empty,
+.outline-panel__loading {
+  padding: 16px 12px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.outline-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.outline-panel__item {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.outline-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius-sm);
+}
+
+.outline-panel__row:hover {
+  background: var(--bg-hover);
+}
+
+.outline-panel__row--highlighted {
+  background: var(--bg-hover);
+  color: var(--color-primary, #58a6ff);
+  font-weight: 500;
+}
+
+.outline-panel__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--fg-muted);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.outline-panel__toggle-spacer {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.outline-panel__symbol-icon {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.outline-panel__symbol-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Matches the code viewer's font (.workspace-code-viewer) so a symbol
+     name here reads as the same identifier it is in the source. */
+  font-family: var(--font-mono);
+}
+
+.outline-panel__symbol-kind {
+  font-size: 10px;
+  color: var(--fg-muted);
+  text-transform: lowercase;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.outline-panel__line-num {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+}
+
+/* Per-kind colors — reuse the same palette the code viewer's hljs-based
+   highlighting applies to function/type/keyword tokens (see the
+   "highlight.js token colors" block below: .hljs-title.function_,
+   .hljs-title.class_, .hljs-keyword) so a symbol's color in the outline
+   matches how it's colored in the code itself. Declared after the base
+   `__symbol-icon`/`__symbol-name` rules (and after `--row--highlighted`,
+   below) so the per-kind color wins over both. */
+.outline-panel__symbol-icon--function,
+.outline-panel__symbol-name--function {
+  color: var(--accent, #6e78c7);
+}
+
+.outline-panel__symbol-icon--type,
+.outline-panel__symbol-name--type {
+  color: #fbbf24;
+}
+
+.outline-panel__symbol-icon--namespace,
+.outline-panel__symbol-name--namespace {
+  color: #a78bfa;
+}
+
+/* variable/constant/property/field and anything unrecognized: no override —
+   matches .hljs-variable/.hljs-params/.hljs-property, which also render in
+   the default text color rather than a distinct hue. */
+
 /* ── highlight.js token colors ─────────────────────────── */
 
 .workspace-markdown-preview .hljs,
@@ -4697,6 +5247,145 @@ a.dashboard-card.dashboard-card--session {
   min-height: 0;
 }
 
+/* Global LSP status row — VS Code status-bar style. Sibling of
+ * `.tool-panel__body`, not a child of it, so `.tool-panel__body > *`'s
+ * `flex: 1` rule doesn't apply to it and it stays a fixed-height strip
+ * regardless of which tool tab (Files/Devices/Artifacts/VCS) is active. */
+.lsp-status-row {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  border-top: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  /* Only the LSP segment (the trigger button) should look/act clickable —
+   * this row is meant to hold other status-bar segments alongside it later
+   * (VS Code-style), so it must not stretch a single segment's hit target
+   * across the whole bar. */
+  padding: 3px var(--space-3);
+}
+
+.lsp-status-row__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px var(--space-1);
+  margin: -1px calc(-1 * var(--space-1));
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  text-align: left;
+}
+
+.lsp-status-row__trigger:hover {
+  color: var(--fg-secondary);
+  background: var(--bg-hover);
+}
+
+.lsp-status-row__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+}
+
+.lsp-status-row__dot--green {
+  background: var(--fg-success, #2da44e);
+}
+
+.lsp-status-row__dot--yellow {
+  background: var(--fg-warning, #d29922);
+}
+
+.lsp-status-row__dot--red {
+  background: var(--fg-error, #cf222e);
+}
+
+.lsp-status-row__dot--gray {
+  background: var(--fg-muted);
+}
+
+.lsp-status-row__word {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lsp-status-row__popup {
+  position: absolute;
+  left: var(--space-3);
+  bottom: calc(100% + 4px);
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 420px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: var(--font-size-xs);
+  overflow: hidden;
+}
+
+.lsp-status-row__popup-text {
+  padding: 8px 10px;
+  color: var(--fg-secondary);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.lsp-status-row__popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px;
+  border-top: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
+.lsp-status-row__popup-action-btn {
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  background: transparent;
+  color: var(--fg-primary);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.lsp-status-row__popup-action-btn:hover {
+  background: var(--bg-hover);
+}
+
+.lsp-status-row__popup-languages {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+.lsp-status-row__popup-loading {
+  padding: 6px 10px;
+  color: var(--fg-muted);
+}
+
+.lsp-status-row__popup-lang-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  color: var(--fg-secondary);
+}
+
+.lsp-status-row__popup-lang-row--current {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
 /* Empty hint shown in the terminal dock tab strip when no terminals exist. */
 .tabs-strip__empty {
   display: inline-flex;
@@ -6060,6 +6749,17 @@ a.dashboard-card.dashboard-card--session {
   text-overflow: ellipsis;
 }
 
+.files-topbar__tab-badge--external {
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-hover, #2a2a2a);
+  color: var(--text-muted, #888);
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
 .files-topbar__tab-close {
   display: inline-flex;
   align-items: center;
@@ -6151,6 +6851,46 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-primary);
   border-color: var(--fg-secondary);
   opacity: 1;
+}
+
+/* Back / Forward navigation controls in preview header. */
+.preview-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.preview-nav__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.preview-nav__btn:hover:not(:disabled) {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.preview-nav__btn:disabled {
+  color: var(--fg-muted);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preview-pane:focus {
+  outline: none;
 }
 
 /* Slim, content-scoped diff info strip at the top of the preview body. */

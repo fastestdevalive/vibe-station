@@ -455,6 +455,7 @@ describe("DashboardPanel", () => {
       defaultBranch: "main",
         createdAt: new Date().toISOString(),
         hidden: true,
+        lspEnabled: false,
       },
     });
 
@@ -525,6 +526,7 @@ describe("DashboardPanel", () => {
         defaultBranch: "main",
         createdAt: new Date().toISOString(),
         hidden: true,
+        lspEnabled: false,
       },
     });
 
