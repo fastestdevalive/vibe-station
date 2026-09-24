@@ -1161,7 +1161,10 @@
   position: absolute;
   top: calc(100% + var(--space-1));
   left: 0;
-  z-index: 50;
+  /* Must clear the composer below it (`.chat-composer` and its focused
+     field), which otherwise paints over this popup — see the analogous
+     comment on `.chat-skill-popover`. */
+  z-index: 70;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
