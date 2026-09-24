@@ -100,7 +100,9 @@ WORKTREE_ID=$(vst worktree create <projectId> \
 SESSION_ID=$(vst agent ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 ```
 
-**Agent sessions default to a tmux-backed terminal channel.** Pass `--channel=json` explicitly if you need Rich Chat (the structured, per-turn channel) instead. `--channel=pty` is not supported by the CLI.
+**Sessions default to a tmux-backed terminal channel** — this applies to both `vst agent create` and `vst worktree create` (its main session inherits the same `--channel` flag and default). Pass `--channel=json` explicitly on either command if you need **Rich Chat** (the UI's name for the structured, per-turn `json` channel) instead. `--channel=pty` is not supported by the CLI.
+
+**For `agy`-mode sessions, prefer `tmux`** (the default) unless the user explicitly asks for Rich Chat/json — don't pass `--channel=json` for an `agy` session on your own initiative.
 
 **Modes** bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. The mode determines which CLI is used — do not pass `--agent` separately. Use `vst mode ls --json` to discover available modes.
 

@@ -905,7 +905,7 @@ function DraftComposerInner({
                   disabled={!jsonSupported}
                   onChange={() => setChannel("json")}
                 />
-                💬 Rich Chat
+                💬 Rich Chat (json based)
               </label>
               <label className="draft-composer__radio-label">
                 <input

@@ -4,7 +4,8 @@
 //!
 //! ### Worktree commands
 //! - `parse_worktree_create_options` parses `<projectId>`, `--mode`, `--name`, `--base`,
-//!   `--branch`, `--prompt`, `--prompt-file`, `--json`, `--parent`, `--no-parent`.
+//!   `--branch`, `--prompt`, `--prompt-file`, `--channel` (`tmux`|`json`, default `tmux`),
+//!   `--parent`, `--no-parent`.
 //! - `run_worktree_create` requires `--mode`, resolves source_agent_id from `$VST_SESSION` by
 //!   default, posts `POST /worktrees`, prints branch and id on success.
 //! - `parse_worktree_rm_options` parses `<id>` and `--purge`.
@@ -63,7 +64,7 @@ fn test_worktree_create_parses_required_args() {
     let opts = parse_worktree_create_options(&args).expect("parse ok");
     assert_eq!(opts.project_id, "my-project");
     assert_eq!(opts.mode, "claude-mode");
-    assert!(!opts.json);
+    assert_eq!(opts.channel, "tmux");
     assert!(opts.branch.is_none());
 }
 
@@ -81,7 +82,8 @@ fn test_worktree_create_parses_all_flags() {
         "feat/abc".into(),
         "--prompt".into(),
         "do stuff".into(),
-        "--json".into(),
+        "--channel".into(),
+        "json".into(),
         "--parent".into(),
         "sess-abc".into(),
     ];
@@ -92,7 +94,7 @@ fn test_worktree_create_parses_all_flags() {
     assert_eq!(opts.base.as_deref(), Some("main"));
     assert_eq!(opts.branch.as_deref(), Some("feat/abc"));
     assert_eq!(opts.prompt.as_deref(), Some("do stuff"));
-    assert!(opts.json);
+    assert_eq!(opts.channel, "json");
     assert_eq!(opts.parent.as_deref(), Some("sess-abc"));
 
     let opts_src = parse_worktree_create_options(&[

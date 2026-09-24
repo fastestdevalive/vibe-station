@@ -13,7 +13,7 @@ use crate::text_source::resolve_file_or_inline;
 
 use vst_types::rest::shared::Worktree;
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WorktreeCreateOptions {
     pub project_id: String,
     pub mode: String,
@@ -22,9 +22,26 @@ pub struct WorktreeCreateOptions {
     pub branch: Option<String>,
     pub prompt: Option<String>,
     pub prompt_file: Option<String>,
-    pub json: bool,
+    pub channel: String,
     pub parent: Option<String>,
     pub no_parent: bool,
+}
+
+impl Default for WorktreeCreateOptions {
+    fn default() -> Self {
+        Self {
+            project_id: String::new(),
+            mode: String::new(),
+            name: None,
+            base: None,
+            branch: None,
+            prompt: None,
+            prompt_file: None,
+            channel: "tmux".to_string(),
+            parent: None,
+            no_parent: false,
+        }
+    }
 }
 
 pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOptions, String> {
@@ -73,8 +90,14 @@ pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOp
             s if s.starts_with("--prompt-file=") => {
                 opts.prompt_file = Some(s.trim_start_matches("--prompt-file=").to_string());
             }
-            "--json" => {
-                opts.json = true;
+            "--channel" => {
+                opts.channel = iter
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| "--channel requires an argument".to_string())?;
+            }
+            s if s.starts_with("--channel=") => {
+                opts.channel = s.trim_start_matches("--channel=").to_string();
             }
             "--parent" | "--source-agent" => {
                 opts.parent = iter.next().cloned();
@@ -110,6 +133,17 @@ pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOp
 }
 
 pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (String, i32)> {
+    let channel = match opts.channel.as_str() {
+        "tmux" => Channel::Tmux,
+        "json" => Channel::Json,
+        other => {
+            return Err((
+                format!("--channel must be 'tmux' or 'json' (got '{other}')"),
+                1,
+            ));
+        }
+    };
+
     let prompt = resolve_file_or_inline(opts.prompt, opts.prompt_file, "--prompt-file");
 
     preflight().await;
@@ -133,7 +167,7 @@ pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (Str
         base_branch: opts.base,
         prompt,
         use_tmux: None,
-        channel: if opts.json { Some(Channel::Json) } else { None },
+        channel: Some(channel),
         name: opts.name,
         source_agent_id,
         skip_auto_turn: None,

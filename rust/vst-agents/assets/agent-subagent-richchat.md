@@ -2,7 +2,9 @@
 
 ## Subagents (Rich Chat only)
 
-You are running in Rich Chat, so a session you spawn shows up as a **subagent**
+You are running in **Rich Chat** (the UI's name for the `json` channel — the
+structured, per-turn chat mode, as opposed to a raw terminal), so a session
+you spawn shows up as a **subagent**
 — a visible row above the user's composer, one they can open and watch, right
 next to this conversation.
 
@@ -66,3 +68,8 @@ and `--channel`. `vst worktree create` (Case A) does NOT inherit either — pass
 `--mode=<modeId> --channel=json` explicitly there, or you will get a
 tmux-channel session in another worktree, which cannot be opened as Rich Chat
 from your subagent row.
+
+**Exception — `agy`-mode sessions:** prefer `--channel=tmux` (the default) for
+an `agy` subagent/worktree even while you yourself are running in Rich Chat,
+unless the user explicitly asks for Rich Chat/json. Only override this when
+told to.
