@@ -651,6 +651,12 @@ export type WSEvent =
       path: string;
     }
   | {
+      type: "openFiles:changed";
+      worktreeId?: string;
+      projectId?: string;
+      paths: string[];
+    }
+  | {
       type: "file:changed";
       worktreeId: string;
       path: string;
@@ -748,6 +754,9 @@ export type WSEvent =
       /** Sent by POST /open — navigate the UI to this project. */
       type: "navigate";
       projectId: string;
+      /** Always true on fresh POST /open broadcasts; false on the daemon's
+       *  3-second replay (so a newly-spawned window doesn't re-spawn). */
+      newWindow: boolean;
     };
 
 export interface AuthSession {

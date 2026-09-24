@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { Session } from "@/api/types";
+import { api } from "@/api";
 import {
   useWorkspaceStore,
   insertTileIntoCanvas,
@@ -1301,3 +1302,68 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
   });
 });
 
+// Review Fix C: setActiveFile/setActiveFilePathAtLine (tree clicks, search/
+// quick-open jumps) must report to the daemon's durable open-file set, mirroring
+// openFileTabNew/closeFileTab. Without this, the next `openFiles:changed` WS
+// echo REPLACES the local tab list and silently deletes tabs the daemon never
+// learned about.
+describe("useWorkspaceStore - durable open-file sync (review Fix C)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeProjectId: null,
+      activeWorktreeId: null,
+      activeDirectContextId: null,
+      activeFilePath: null,
+      openFileTabsByWorktree: {},
+      activeFileTabIdxByWorktree: {},
+      lastFileByWorktree: {},
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("setActiveFile reports a newly-opened tab to the daemon's durable open-file set", () => {
+    const openSpy = vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: ["/src/foo.ts"] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/src/foo.ts");
+
+    expect(openSpy).toHaveBeenCalledWith(W1, "/src/foo.ts", "worktree");
+  });
+
+  it("a tab opened via setActiveFile survives an openFiles:changed echo that doesn't close it", () => {
+    vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: ["/src/foo.ts"] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/src/foo.ts");
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/src/foo.ts"]);
+
+    // Simulate the daemon's openFiles:changed echo for the worktree scope. The
+    // daemon's durable list now INCLUDES the path (because setActiveFile
+    // reported it above), so this replace must NOT wipe the local tab.
+    useWorkspaceStore.setState((s) => ({
+      openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [W1]: ["/src/foo.ts"] },
+    }));
+
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/src/foo.ts"]);
+  });
+
+  it("setActiveFile(null) closes the active tab and reports the close to the daemon", () => {
+    const closeSpy = vi.spyOn(api, "closeFileDurable").mockResolvedValue({ paths: [] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFile("/src/foo.ts");
+    useWorkspaceStore.getState().setActiveFile(null);
+
+    expect(closeSpy).toHaveBeenCalledWith(W1, "/src/foo.ts", "worktree");
+  });
+
+  it("setActiveFilePathAtLine reports a newly-added tab (search/quick-open jump) to the daemon", () => {
+    const openSpy = vi.spyOn(api, "openFileDurable").mockResolvedValue({ paths: ["/src/bar.ts"] });
+    useWorkspaceStore.setState({ activeWorktreeId: W1, activeDirectContextId: null });
+    useWorkspaceStore.getState().setActiveFilePathAtLine(W1, "/src/bar.ts", 12, "bar");
+
+    expect(openSpy).toHaveBeenCalledWith(W1, "/src/bar.ts", "worktree");
+  });
+});

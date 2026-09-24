@@ -17,6 +17,10 @@ import { sessionModeId } from "@/lib/modeIcon";
 
 interface DashboardPanelProps {
   api: ApiInstance;
+  /** When set, restrict the dashboard to exactly this one project (Decision 6 —
+   *  the `/project/:id` single-project view). Undefined renders the full
+   *  multi-project dashboard. */
+  projectFilter?: string;
 }
 
 /**
@@ -76,7 +80,7 @@ function CardIcon({ session, api }: { session: Session; api: ApiInstance }) {
   );
 }
 
-export function DashboardPanel({ api }: DashboardPanelProps) {
+export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   const navigate = useNavigate();
 
   // ── Header indicators ───────────────────────────────────────────────────────
@@ -152,7 +156,13 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
     () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
     [projects],
   );
-  const visibleProjects = useMemo(() => projects.filter((p) => !p.hidden), [projects]);
+  const visibleProjects = useMemo(
+    () =>
+      projects
+        .filter((p) => !p.hidden)
+        .filter((p) => (projectFilter != null ? p.id === projectFilter : true)),
+    [projects, projectFilter],
+  );
 
   /** Live state map (persisted across page loads, refreshed on every ws:open
    *  by useServerSync). The rollup uses it as the primary signal and falls
@@ -197,9 +207,12 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
       if (wt) {
         if (hiddenProjectIds.has(wt.projectId)) continue;
+        // Decision 6: single-project view — only sessions of the filtered project.
+        if (projectFilter != null && wt.projectId !== projectFilter) continue;
       } else {
         // Direct (worktree-less) session.
         if (!s.projectId || hiddenProjectIds.has(s.projectId)) continue;
+        if (projectFilter != null && s.projectId !== projectFilter) continue;
       }
       const status = sessionStatus(sessionStates[s.id] ?? s.state);
       // PR is resolved per WORKTREE (branch-guarded, D20), not per session —
@@ -220,7 +233,7 @@ export function DashboardPanel({ api }: DashboardPanelProps) {
       else sFinished.push(s);
     }
     return { working: sWorking, needsYou: sNeedsYou, idle: sIdle, pr: sPr, finished: sFinished };
-  }, [sessions, sessionStates, hiddenProjectIds, worktreeById, worktreePrById]);
+  }, [sessions, sessionStates, hiddenProjectIds, worktreeById, worktreePrById, projectFilter]);
 
 
   const renderDashboardItem = useCallback(

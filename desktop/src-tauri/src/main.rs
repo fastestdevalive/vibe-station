@@ -20,9 +20,9 @@ fn is_internal_url(url: &tauri::Url) -> bool {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .invoke_handler(tauri::generate_handler![open_project_window])
         .setup(|app| {
             let app_handle = app.handle().clone();
-            let nav_handle = app.handle().clone();
 
             let cloudflared_bin: PathBuf = app_handle
                 .path()
@@ -113,36 +113,22 @@ fn main() {
             // Store daemon info in app state for future invoke commands.
             app.manage(daemon_info.clone());
 
-            let os_name = if cfg!(target_os = "macos") {
-                "macos"
-            } else if cfg!(target_os = "linux") {
-                "linux"
-            } else {
-                "windows"
-            };
-
             // Build the "main" window from its config entry and attach the
             // initialization script. The script runs after the JS global object
             // is created but before any page script — the only race-free way to
             // guarantee __VST_TOKEN__ is present when useAuth reads it.
             // "create": false in tauri.conf.json prevents the auto-creation that
             // would otherwise happen before setup() runs.
-            let script = build_init_script(daemon_info.port, &daemon_info.token, os_name);
+            // Loop-prevention guard 1 (Decision 4): the "main" window is the
+            // ONLY one that ever spawns a new window on a navigate event, so it
+            // injects its own label "main" (never the project-* label a spawned
+            // window would carry).
+            let script = build_init_script(daemon_info.port, &daemon_info.token, detect_os_name(), "main");
             let conf = app.config().app.windows.first().cloned()
                 .ok_or("no window config found")?;
             WebviewWindowBuilder::from_config(app.handle(), &conf)?
                 .initialization_script(&script)
-                .on_navigation(move |url| {
-                    if is_internal_url(url) {
-                        return true;
-                    }
-                    let url_str = url.to_string();
-                    let handle = nav_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let _ = handle.shell().open(url_str, None);
-                    });
-                    false
-                })
+                .on_navigation(external_nav_handler(app_handle.clone()))
                 .build()?;
 
             tray::build_tray(&app_handle)?;
@@ -163,6 +149,76 @@ fn main() {
         .expect("error while running vibe-station desktop");
 }
 
+/// Returns the OS name string used to set `data-tauri-os` on the document.
+///
+/// Extracted from the inline block that setup() used to hold so that
+/// `open_project_window()` computes the same value for spawned windows —
+/// both the main window and every project-* window must set data-tauri-os
+/// identically, or theme/CSS that keys off it breaks in the new window.
+fn detect_os_name() -> &'static str {
+    if cfg!(target_os = "macos") { "macos" }
+    else if cfg!(target_os = "linux") { "linux" }
+    else { "windows" }
+}
+
+/// Navigation handler shared by every window (main or project-*): internal
+/// URLs navigate the webview; everything else opens in the OS shell so the
+/// app doesn't effectively become a browser.
+///
+/// `+ Send + 'static` is required by `WebviewWindowBuilder::on_navigation`'s
+/// bound — the webview may invoke the callback from a different thread.
+fn external_nav_handler(handle: tauri::AppHandle) -> impl Fn(&tauri::Url) -> bool + Send + 'static {
+    move |url: &tauri::Url| {
+        if is_internal_url(url) {
+            return true;
+        }
+        let url_str = url.to_string();
+        let handle = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = handle.shell().open(url_str, None);
+        });
+        false
+    }
+}
+
+/// Monotonic counter guaranteeing unique window labels across repeated opens
+/// of the SAME project, without pulling in the `uuid` crate (not a dependency
+/// of this crate). Tauri window labels are restricted to alphanumerics, `-`,
+/// `/`, `:`, `_` — ProjectRecord.id is already a slugified string, so the
+/// `project-{id}-{seq}` shape is always label-safe.
+static WINDOW_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Spawn a brand-new OS window pointed at a project's own view.
+///
+/// Invoked from the webview's `navigate` WS handler (Decision 5, Decision 4
+/// loop-prevention guard 1): only the window whose injected __VST_WINDOW_LABEL__
+/// equals "main" ever calls this. This command injects ITS OWN generated
+/// (non-"main") label into the new window so that new window never mistakes
+/// itself for the spawner if it later receives another navigate event.
+#[tauri::command]
+async fn open_project_window(
+    app: tauri::AppHandle,
+    daemon: tauri::State<'_, daemon::DaemonInfo>,
+    project_id: String,
+) -> Result<(), String> {
+    let seq = WINDOW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!("project-{project_id}-{seq}");
+    let script = build_init_script(daemon.port, &daemon.token, detect_os_name(), &label);
+    let nav_handle = app.clone();
+    WebviewWindowBuilder::new(
+        &app,
+        label,
+        tauri::WebviewUrl::App(format!("index.html?openProject={project_id}").into()),
+    )
+    .initialization_script(&script)
+    .title("vibe-station")
+    .inner_size(1400.0, 900.0)
+    .on_navigation(external_nav_handler(nav_handle))
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Returns the JS initialization script injected into every new window.
 ///
 /// Uses serde_json::to_string for safe token quoting (handles any chars the
@@ -171,11 +227,18 @@ fn main() {
 ///
 /// NOTE: __VST_PORT__ is read by baseUrl() in web-ui/src/api/client.ts to
 /// build an absolute daemon URL when running inside the Tauri shell.
-fn build_init_script(port: u16, token: &str, os_name: &str) -> String {
+///
+/// `label` is the Tauri window label, injected as `window.__VST_WINDOW_LABEL__`
+/// (loop-prevention guard 1, Decision 4) — web-ui/src/App.tsx reads it to know
+/// whether IT is the "main" window that may spawn a new window on a navigate
+/// event.
+fn build_init_script(port: u16, token: &str, os_name: &str, label: &str) -> String {
     let token_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
+    let label_json = serde_json::to_string(label).unwrap_or_else(|_| "\"\"".to_string());
     format!(
         "window.__VST_PORT__ = {port};\
          window.__VST_TOKEN__ = {token_json};\
+         window.__VST_WINDOW_LABEL__ = {label_json};\
          (function() {{\
            function tag() {{ document.body && document.body.setAttribute('data-tauri-os', '{os_name}'); }}\
            if (document.readyState === 'loading') {{\

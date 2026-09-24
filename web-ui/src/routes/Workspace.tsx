@@ -29,8 +29,10 @@ import { DraftComposer } from "@/components/draft/DraftComposer";
 export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
-  const params = useParams<{ directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
+  const params = useParams<{ projectId?: string; directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
   const isDashboard = location.pathname === "/";
+  const isProjectView = location.pathname.startsWith("/project/");
+  const projectId = isProjectView ? (params.projectId ?? null) : null;
   const isSettings = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
   // Draft route — /draft/new (Tier 2, no server record yet) or /draft/:id
   // (Tier 1, a server-persisted drafting session).
@@ -252,6 +254,15 @@ export function Workspace() {
       useWorkspaceStore.getState().setActiveDirectContext(pid);
     }
   }, [isDirectSession, directSessionProject]);
+
+  // Decision 6: `/project/:id` selects the project as the active context so
+  // DashboardPanel (with projectFilter) shows that project's own view.
+  useEffect(() => {
+    if (projectId == null) return;
+    if (useWorkspaceStore.getState().activeProjectId !== projectId) {
+      useWorkspaceStore.getState().selectProject(projectId);
+    }
+  }, [projectId]);
 
   // Redirect to dashboard if direct session not found
   useEffect(() => {
@@ -781,8 +792,8 @@ export function Workspace() {
           />
         }
         dashboardPane={
-          isDashboard ? (
-            <DashboardPanel api={api} />
+          isDashboard || isProjectView ? (
+            <DashboardPanel api={api} projectFilter={projectId ?? undefined} />
           ) : isSettings ? (
             <SettingsPanel api={api} />
           ) : isDraft ? (

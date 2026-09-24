@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { DiffScope, Session, SessionState } from "@/api/types";
+import { api } from "@/api";
+import type { DiffScope, FileScope, Session, SessionState } from "@/api/types";
 import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
 import { randomId } from "@/lib/uuid";
 
@@ -323,6 +324,10 @@ export interface WorkspaceState {
   setActiveWorktree: (projectId: string, worktreeId: string, sessions?: Session[]) => void;
   /** Set (or clear with null) the direct-session layout context (project id). */
   setActiveDirectContext: (projectId: string | null) => void;
+  /** Select a project as the active context (Decision 6) — drives the
+   *  single-project-filtered `/project/:id` dashboard. Clears any worktree/
+   *  session selection. */
+  selectProject: (projectId: string) => void;
   setActiveSession: (sessionId: string) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null, opts?: { skipHistory?: boolean }) => void;
@@ -882,7 +887,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               },
             };
           }),
-        setActiveWorktree: (projectId, worktreeId, sessions) =>
+        setActiveWorktree: (projectId, worktreeId, sessions) => {
           set((s) => {
             // Idempotency: if re-tapping the same worktree with an active session, no-op
             if (worktreeId === s.activeWorktreeId && s.activeSessionId != null) {
@@ -933,11 +938,32 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               peekFile: null,
               pendingLineTarget: null,
             };
-          }),
+          });
+          // Durable-state seeding (Phase 7): merge any daemon-known open files
+          // not already in the local tab array (append, don't clobber tab order).
+          void (async () => {
+            try {
+              const { paths } = await api.listOpenFiles(worktreeId, "worktree");
+              useWorkspaceStore.setState((s) => {
+                const current = s.openFileTabsByWorktree[worktreeId] ?? [];
+                const merged = [...current];
+                for (const p of paths) {
+                  if (!merged.includes(p)) merged.push(p);
+                }
+                if (merged.length === current.length) return s;
+                return {
+                  openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: merged },
+                };
+              });
+            } catch {
+              // Best-effort — a missing worktree or network error is not fatal.
+            }
+          })();
+        },
         // Restore the last file for this project context, mirroring what
         // setActiveWorktree does for worktrees. Entering a direct session used
         // to leave activeFilePath at whatever the previous context had.
-        setActiveDirectContext: (projectId) =>
+        setActiveDirectContext: (projectId) => {
           set((s) => {
             if (projectId == null) return { activeDirectContextId: null, peekFile: null, pendingLineTarget: null };
             // Restore from tab array, same as setActiveWorktree (D11).
@@ -950,7 +976,42 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               peekFile: null,
               pendingLineTarget: null,
             };
-          }),
+          });
+          if (projectId == null) return;
+          // Durable-state seeding (Phase 7): merge any daemon-known open files
+          // for this direct project context, same as setActiveWorktree.
+          void (async () => {
+            try {
+              const { paths } = await api.listOpenFiles(projectId, "project");
+              useWorkspaceStore.setState((s) => {
+                const current = s.openFileTabsByWorktree[projectId] ?? [];
+                const merged = [...current];
+                for (const p of paths) {
+                  if (!merged.includes(p)) merged.push(p);
+                }
+                if (merged.length === current.length) return s;
+                return {
+                  openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [projectId]: merged },
+                };
+              });
+            } catch {
+              // Best-effort — a missing project or network error is not fatal.
+            }
+          })();
+        },
+        // Decision 6: `/project/:id` is a single-project-filtered dashboard.
+        // Selects a project as the active context and clears any worktree/
+        // session selection so the filtered dashboard (DashboardPanel's
+        // projectFilter) is the project's own view, not a nested worktree.
+        selectProject: (projectId) =>
+          set(() => ({
+            activeProjectId: projectId,
+            activeWorktreeId: null,
+            activeSessionId: null,
+            activeDirectContextId: null,
+            peekFile: null,
+            pendingLineTarget: null,
+          })),
         setActiveSession: (sessionId) =>
           set((s) => {
             const key = layoutKey(s);
@@ -973,9 +1034,19 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // NOT activeWorktreeId, which is always null for a direct session and
         // so silently dropped their open file from the restore map.
         // setActiveSession/setActiveTerminalSession above already do this.
-        setActiveFile: (path, opts) =>
+        setActiveFile: (path, opts) => {
+          // Compute key/scope from CURRENT state so the durable-sync calls
+          // below resolve the same worktree/project scope `openFileTabNew` and
+          // `closeFileTab` use. Mirror of Phase 7's fire-and-forget mirror: any
+          // tab opened/closed through tree-navigation clicks must be reported to
+          // the daemon's durable openFiles set, or the next `openFiles:changed`
+          // WS event REPLACES the local list and silently deletes tabs the
+          // daemon never learned about.
+          const state = useWorkspaceStore.getState();
+          const key = state.activeWorktreeId ?? state.activeDirectContextId;
+          const scope: FileScope =
+            state.activeWorktreeId === key ? "worktree" : "project";
           set((s) => {
-            const key = layoutKey(s);
             const history = key && !opts?.skipHistory ? recordHistoryEntry(s, key) : {};
             if (!key) return { ...history, activeFilePath: path, peekFile: null, pendingLineTarget: null };
             if (path === null) {
@@ -983,9 +1054,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               const idx = s.activeFileTabIdxByWorktree[key] ?? -1;
               if (idx < 0) return { ...history, activeFilePath: null, peekFile: null, pendingLineTarget: null };
               const tabs = s.openFileTabsByWorktree[key] ?? [];
+              const closingPath = tabs[idx];
               const nextTabs = tabs.filter((_, i) => i !== idx);
               const nextIdx = nextTabs.length === 0 ? -1 : Math.min(idx, nextTabs.length - 1);
               const newPath = nextIdx >= 0 ? (nextTabs[nextIdx] ?? null) : null;
+              // Durable-state sync (Phase 7): report the closed path so the
+              // daemon's view doesn't keep a tab the client closed.
+              if (closingPath != null) {
+                void api.closeFileDurable(key, closingPath, scope).catch(() => undefined);
+              }
               return {
                 ...history,
                 activeFilePath: newPath,
@@ -1005,6 +1082,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             // dead "ghost" tab that can never be selected.
             const alreadyOpen = tabs.indexOf(path);
             if (alreadyOpen >= 0) {
+              // Durable-state sync (Phase 7): still report the path as open so
+              // the daemon keeps it in the set.
+              void api.openFileDurable(key, path, scope).catch(() => undefined);
               return {
                 ...history,
                 activeFilePath: path,
@@ -1023,6 +1103,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               nextTabs = [...tabs, path];
               nextIdx = nextTabs.length - 1;
             }
+            // Durable-state sync (Phase 7): report the newly opened/replaced
+            // path so `openFiles:changed` echoes don't wipe it.
+            void api.openFileDurable(key, path, scope).catch(() => undefined);
             return {
               ...history,
               activeFilePath: path,
@@ -1032,8 +1115,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               peekFile: null,
               pendingLineTarget: null,
             };
-          }),
-        openFileTabNew: (worktreeId, path) =>
+          });
+        },
+        openFileTabNew: (worktreeId, path) => {
+          const scope: FileScope =
+            useWorkspaceStore.getState().activeWorktreeId === worktreeId ? "worktree" : "project";
           set((s) => {
             const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
@@ -1059,8 +1145,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               peekFile: null,
               pendingLineTarget: null,
             };
-          }),
-        setActiveFilePathAtLine: (worktreeId, path, line, matchText) =>
+          });
+          // Durable-state sync (Phase 7): best-effort mirror to the daemon's
+          // openFiles column so `vst files ls` reflects what the UI shows.
+          void api.openFileDurable(worktreeId, path, scope).catch(() => undefined);
+        },
+        setActiveFilePathAtLine: (worktreeId, path, line, matchText) => {
+          const scope: FileScope =
+            useWorkspaceStore.getState().activeWorktreeId === worktreeId ? "worktree" : "project";
           set((s) => {
             const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
@@ -1076,6 +1168,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 peekFile: null,
               };
             }
+            // Durable-state sync (Phase 7): search/quick-open jumps add a real
+            // tab — report it so `openFiles:changed` echoes don't wipe it.
+            void api.openFileDurable(worktreeId, path, scope).catch(() => undefined);
             const nextTabs = [...tabs, path];
             const nextIdx = nextTabs.length - 1;
             return {
@@ -1087,7 +1182,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               pendingLineTarget: target,
               peekFile: null,
             };
-          }),
+          });
+        },
         clearPendingLineTarget: () => set({ pendingLineTarget: null }),
         setPeekFile: (peek) => set({ peekFile: peek }),
         clearPeekFile: (opts) =>
@@ -1256,7 +1352,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             }
           }
         },
-        closeFileTab: (worktreeId, idx) =>
+        closeFileTab: (worktreeId, idx) => {
+          const tabs = useWorkspaceStore.getState().openFileTabsByWorktree[worktreeId] ?? [];
+          const closingPath = idx >= 0 && idx < tabs.length ? tabs[idx] : undefined;
+          const scope: FileScope =
+            useWorkspaceStore.getState().activeWorktreeId === worktreeId ? "worktree" : "project";
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             if (idx < 0 || idx >= tabs.length) return s;
@@ -1281,7 +1381,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               peekFile: null,
               pendingLineTarget: null,
             };
-          }),
+          });
+          // Durable-state sync (Phase 7): best-effort mirror to the daemon.
+          if (closingPath != null) {
+            void api.closeFileDurable(worktreeId, closingPath, scope).catch(() => undefined);
+          }
+        },
         setActiveFileTabIdx: (worktreeId, idx) =>
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
