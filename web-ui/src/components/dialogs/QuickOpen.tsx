@@ -127,14 +127,13 @@ export function QuickOpen({ api, worktreeId, open, onClose, scope = "worktree" }
   }, [open, isLineMode, wt, orderedOpen, api, scope]);
 
   // Git-changed files (added/edited/untracked) are surfaced first when no
-  // query is typed. Refetched every time the dialog opens; project scope has
-  // no git, so it is skipped there.
+  // query is typed. Refetched every time the dialog opens.
   useEffect(() => {
-    if (!open || !wt || scope !== "worktree") return;
+    if (!open || !wt) return;
     let cancelled = false;
     setChanged([]);
     api
-      .listChangedPaths(wt, "local")
+      .listChangedPaths(wt, "local", undefined, scope)
       .then((entries) => {
         if (!cancelled) setChanged(entries);
       })

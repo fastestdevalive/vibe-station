@@ -197,7 +197,7 @@ export function ToolPanel({
             {effectiveTab === "devices" ? <DevicesPanel /> : null}
             {effectiveTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
             {effectiveTab === "vcs" ? (
-              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} />
+              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} scope={scope} />
             ) : null}
           </>
         )}

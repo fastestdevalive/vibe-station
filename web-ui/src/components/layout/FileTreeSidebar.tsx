@@ -112,8 +112,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   const scopeRaw = useWorkspaceStore((s) =>
     activeWorktreeId ? s.diffScopeByWorktree[activeWorktreeId] : undefined,
   );
-  // Project scope has no git/diff — force plain file view.
-  const scope: DiffScope = isProject ? "none" : (scopeRaw ?? "none");
+  const scope: DiffScope = scopeRaw ?? "none";
 
   // Separate local/branch scope for the PLAIN tree (diff mode off) — kept in
   // its own store slice so picking "branch" here never flips `scope` (which
@@ -301,8 +300,9 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
   }, [parentsOfActive]);
 
   useEffect(() => {
-    // Project scope (direct sessions) has no git — skip status entirely.
-    if (!activeWorktreeId || isProject) {
+    // Local scope (git status markers) — fires for project scope too now that
+    // the backend has a non-git short-circuit for `/projects/:id/changed-paths`.
+    if (!activeWorktreeId) {
       setLocalChanged([]);
       setLocalError(null);
       setLocalLoading(false);
@@ -313,7 +313,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     setLocalError(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(activeWorktreeId, "local");
+        const list = await api.listChangedPaths(activeWorktreeId, "local", undefined, fileScope);
         if (!cancelled) {
           setLocalChanged(list);
           setLocalLoading(false);
@@ -328,14 +328,14 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, isProject, lastChanged]);
+  }, [api, activeWorktreeId, fileScope, lastChanged]);
 
   useEffect(() => {
     // Fetch whenever EITHER scope source currently needs "branch" data — the
     // flat Changes list's own `scope`, or the plain tree's independent
     // `treeScope` (Task A.4) — so switching either one to "branch" has data
     // ready without a spurious extra fetch when neither wants it.
-    if (!activeWorktreeId || isProject || effectiveTreeScope !== "branch") {
+    if (!activeWorktreeId || effectiveTreeScope !== "branch") {
       setBranchChanged([]);
       setBranchError(null);
       setBranchLoading(false);
@@ -346,7 +346,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     setBranchError(null);
     void (async () => {
       try {
-        const list = await api.listChangedPaths(activeWorktreeId, "branch");
+        const list = await api.listChangedPaths(activeWorktreeId, "branch", undefined, fileScope);
         if (!cancelled) {
           setBranchChanged(list);
           setBranchLoading(false);
@@ -361,7 +361,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     return () => {
       cancelled = true;
     };
-  }, [api, activeWorktreeId, isProject, effectiveTreeScope, lastChanged]);
+  }, [api, activeWorktreeId, effectiveTreeScope, lastChanged]);
 
   function toggle(path: string) {
     setExpanded((prev) => {

@@ -71,7 +71,7 @@ describe("VcsPanel", () => {
     // The initial fetch requests one lookahead commit beyond the page size,
     // so "exactly 50 vs. more available" is known for certain rather than
     // guessed from the page being full.
-    expect(spy).toHaveBeenCalledWith("wt-1", 51);
+    expect(spy).toHaveBeenCalledWith("wt-1", 51, "worktree");
   });
 
   it("Requirement 3 — clicking Load more fetches the next page and appends it", async () => {
@@ -86,7 +86,7 @@ describe("VcsPanel", () => {
     await user.click(screen.getByRole("button", { name: /load 50 more/i }));
 
     await screen.findByText("Commits (80)");
-    expect(spy).toHaveBeenLastCalledWith("wt-1", 101);
+    expect(spy).toHaveBeenLastCalledWith("wt-1", 101, "worktree");
     // The pool only has 80, so the 101-commit request genuinely returns
     // fewer than asked — the lookahead entry never came back, so there's no
     // more and the button is gone (not just "the mock ran out").
@@ -186,7 +186,7 @@ describe("VcsPanel", () => {
     rerender(<VcsPanel api={api} worktreeId="wt-2" />);
     // Resets to one page (limit 51), not a continuation of wt-1's advanced
     // pageLimit (which would have requested 101).
-    await waitFor(() => expect(spy).toHaveBeenLastCalledWith("wt-2", 51));
+    await waitFor(() => expect(spy).toHaveBeenLastCalledWith("wt-2", 51, "worktree"));
     await screen.findByText("Commits (3)");
   });
 
@@ -479,6 +479,42 @@ describe("VcsPanel", () => {
     expect(screen.queryByText("feature/my-branch")).not.toBeInTheDocument();
   });
 
+  describe("Phase 3 — project scope (direct sessions)", () => {
+    it("3.T1 — under scope='project', listCommits is called with the project id and getPr/listSubmodules never fire", async () => {
+      const api = createMockApi();
+      const listCommitsSpy = vi
+        .spyOn(api, "listCommits")
+        .mockResolvedValue(makeCommits(3));
+      const getPrSpy = vi.spyOn(api, "getPr");
+      const listSubmodulesSpy = vi.spyOn(api, "listSubmodules");
+
+      render(<VcsPanel api={api} worktreeId="proj-1" scope="project" />);
+      await screen.findByText("Commits (3)");
+
+      expect(listCommitsSpy).toHaveBeenCalledWith("proj-1", 51, "project");
+      expect(getPrSpy).not.toHaveBeenCalled();
+      expect(listSubmodulesSpy).not.toHaveBeenCalled();
+    });
+
+    it("3.T2 — under scope='project', the Diff-from-base toggle is hidden and every fetched commit is shown (no isOnBranch filtering)", async () => {
+      const api = createMockApi();
+      // Mixed isOnBranch values — under project scope every commit should still
+      // be shown regardless, since there's no base branch to filter against.
+      vi.spyOn(api, "listCommits").mockResolvedValue(
+        makeCommits(3, { isOnBranch: (i) => i !== 1 }),
+      );
+
+      render(<VcsPanel api={api} worktreeId="proj-1" scope="project" baseBranch="main" />);
+      await screen.findByText("Commits (3)");
+
+      expect(screen.queryByRole("checkbox", { name: /diff from main/i })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/diff from main/i)).not.toBeInTheDocument();
+      expect(screen.getByText("commit #0")).toBeInTheDocument();
+      expect(screen.getByText("commit #1")).toBeInTheDocument();
+      expect(screen.getByText("commit #2")).toBeInTheDocument();
+    });
+  });
+
   describe("Phase 10 — commit quick-diff view (10.T2)", () => {
     it("clicking a CommitRow's dot opens VcsCommitView; 'Commits' breadcrumb returns to the graph", async () => {
       const user = userEvent.setup();
@@ -502,6 +538,7 @@ describe("VcsPanel", () => {
           "wt-1",
           "commit",
           expect.stringMatching(/^sha-0-/),
+          "worktree",
         );
       });
       expect(screen.queryByText("Commits (3)")).not.toBeInTheDocument();
@@ -531,6 +568,7 @@ describe("VcsPanel", () => {
           "wt-1",
           "commit",
           expect.stringMatching(/^sha-0-/),
+          "worktree",
         );
       });
       await screen.findByText("App.tsx");
@@ -547,6 +585,7 @@ describe("VcsPanel", () => {
           "wt-1",
           "commit",
           expect.stringMatching(/^sha-0-/),
+          "worktree",
         );
       });
     });

@@ -139,7 +139,7 @@ describe("FileTreeSidebar", () => {
 
       await user.click(screen.getByRole("button", { name: "branch" }));
       await waitFor(() => {
-        expect(spy).toHaveBeenCalledWith("wt-1", "branch");
+        expect(spy).toHaveBeenCalledWith("wt-1", "branch", undefined, "worktree");
       });
     });
 
@@ -164,6 +164,43 @@ describe("FileTreeSidebar", () => {
       await waitFor(() => expect(screen.getByText("Files")).toBeInTheDocument());
       expect(useWorkspaceStore.getState().treeScopeByWorktree["wt-1"]).toBe("branch");
       expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+
+  describe("project scope", () => {
+    it("2.T10 — the local changed-paths fetch fires with fileScope='project'", async () => {
+      const spy = vi
+        .spyOn(api, "listChangedPaths")
+        .mockResolvedValue([{ path: "file.rs", status: "M", insertions: 1, deletions: 0 }]);
+      useWorkspaceStore.setState({ activeWorktreeId: null });
+      render(<FileTreeSidebar api={api} contextId="proj-1" scope="project" />);
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalledWith("proj-1", "local", undefined, "project");
+      });
+      spy.mockRestore();
+    });
+
+    it("the diff-view toggle is shown (always-local, no branch/local chip) and switches to the changed-file list", async () => {
+      const user = userEvent.setup();
+      const spy = vi
+        .spyOn(api, "listChangedPaths")
+        .mockResolvedValue([{ path: "file.rs", status: "M", insertions: 1, deletions: 0 }]);
+      useWorkspaceStore.setState({ activeWorktreeId: null });
+      render(<FileTreeSidebar api={api} contextId="proj-1" scope="project" />);
+      await screen.findByRole("button", { name: "Diff view off" });
+
+      // Project scope is always local — no local/branch chip selector.
+      expect(screen.queryByRole("group", { name: "Diff scope" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "local" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Diff view off" }));
+      await screen.findByRole("button", { name: "Diff view on" });
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalledWith("proj-1", "local", undefined, "project");
+      });
+      expect(await screen.findByText("file.rs")).toBeInTheDocument();
+      spy.mockRestore();
     });
   });
 });

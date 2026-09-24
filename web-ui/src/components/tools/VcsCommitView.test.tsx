@@ -16,13 +16,13 @@ describe("VcsCommitView", () => {
     render(<VcsCommitView api={api} worktreeId="wt-1" sha="abc1234def" onBack={() => {}} />);
 
     await waitFor(() => {
-      expect(changedPathsSpy).toHaveBeenCalledWith("wt-1", "commit", "abc1234def");
+      expect(changedPathsSpy).toHaveBeenCalledWith("wt-1", "commit", "abc1234def", "worktree");
     });
     await screen.findByText("App.tsx");
 
     await user.click(screen.getByText("App.tsx"));
     await waitFor(() => {
-      expect(diffSpy).toHaveBeenCalledWith("wt-1", "src/App.tsx", "commit", "abc1234def");
+      expect(diffSpy).toHaveBeenCalledWith("wt-1", "src/App.tsx", "commit", "abc1234def", "worktree");
     });
   });
 
@@ -31,6 +31,29 @@ describe("VcsCommitView", () => {
     vi.spyOn(api, "listChangedPaths").mockResolvedValue([]);
     render(<VcsCommitView api={api} worktreeId="wt-1" sha="abc1234def" onBack={() => {}} />);
     expect(await screen.findByText("commit #abc1234")).toBeInTheDocument();
+  });
+
+  it("3.T4 — under scope='project', listChangedPaths is called with the project id and FilePreviewPane diffs at project scope", async () => {
+    const api = createMockApi();
+    const changedPathsSpy = vi
+      .spyOn(api, "listChangedPaths")
+      .mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+    const diffSpy = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/src/App.tsx b/src/App.tsx\n");
+
+    const user = userEvent.setup();
+    render(<VcsCommitView api={api} worktreeId="proj-1" sha="abc1234def" onBack={() => {}} scope="project" />);
+
+    await waitFor(() => {
+      expect(changedPathsSpy).toHaveBeenCalledWith("proj-1", "commit", "abc1234def", "project");
+    });
+    await screen.findByText("App.tsx");
+
+    // Clicking the file drives FilePreviewPane, which must fetch the diff at
+    // project scope (its `scope` prop threaded through from VcsCommitView).
+    await user.click(screen.getByText("App.tsx"));
+    await waitFor(() => {
+      expect(diffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc1234def", "project");
+    });
   });
 
   it("10.T3 — arrow-key roving navigation works inside the controlled ChangedFileList", async () => {
@@ -58,7 +81,7 @@ describe("VcsCommitView", () => {
 
     await user.keyboard("{Enter}");
     await waitFor(() => {
-      expect(api.getDiff).toHaveBeenCalledWith("wt-1", "b.ts", "commit", "abc1234def");
+      expect(api.getDiff).toHaveBeenCalledWith("wt-1", "b.ts", "commit", "abc1234def", "worktree");
     });
   });
 

@@ -87,8 +87,13 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     });
   });
 
-  it("project-scope plain preview never calls api.getDiff (guaranteed 404 for a project id)", async () => {
-    const getDiffSpy = vi.spyOn(api, "getDiff");
+  it("project-scope plain preview fetches the local diff too (for the diff-stat strip), scoped to the project", async () => {
+    // `GET /projects/:id/diff/*path?scope=local` exists (same route this
+    // feature added for diff mode) — plain preview must use it, same as
+    // worktree scope, not skip it. Previously this call was unconditionally
+    // skipped for project scope, so diffStats fell back to a synthetic
+    // "whole file is new" computation regardless of the file's real status.
+    const getDiffSpy = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/README.md b/README.md\n");
     useWorkspaceStore.setState({
       activeWorktreeId: "proj-1",
       activeFilePath: "README.md",
@@ -97,10 +102,77 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
     render(<FilePreviewPane api={api} worktreeId="proj-1" scope="project" />);
 
     await waitFor(() => {
-      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project");
     });
-    expect(getDiffSpy).not.toHaveBeenCalled();
 
+    getDiffSpy.mockRestore();
+  });
+
+  it("project-scope diff mode (Files header's toggle) actually renders a diff — the fix for the toggle being reachable but silently inert", async () => {
+    // Regression guard: FilePreviewPane used to force scope to "none" for
+    // any fileScope === "project" REGARDLESS of diffScopeByWorktree, so
+    // FileTreeHeader's diff-view toggle turned the store slice to "local"
+    // but the pane never noticed — clicking a changed file opened it as a
+    // plain, undecorated file. `getDiff`'s project-scope threading already
+    // existed (see the other project-scope tests in this file); the bug was
+    // purely that `scope` never actually became "local" here.
+    //
+    // Also covers a second, sibling bug found in manual testing: the
+    // "Compared to HEAD" label (asserted below) renders from `scope` alone,
+    // regardless of whether the fetch actually succeeds — it does NOT prove
+    // `getFile` was called correctly. `getFile(worktreeId, path)` in the
+    // scope==="local" branch was missing its `fileScope` arg entirely
+    // (unlike `getDiff`, right next to it), defaulting to "worktree" and
+    // 404ing against the mock's worktree-only lookup ("Worktree '<id>' not
+    // found" in the real daemon) — so this test also asserts the file body
+    // actually rendered, which only happens if `getFile` succeeded.
+    const getFileSpy = vi.spyOn(api, "getFile");
+    const getDiffSpy = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/README.md b/README.md\n");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "proj-1",
+      activeFilePath: "README.md",
+      diffScopeByWorktree: { "proj-1": "local" },
+    });
+    render(<FilePreviewPane api={api} worktreeId="proj-1" scope="project" />);
+
+    await waitFor(() => {
+      expect(getFileSpy).toHaveBeenCalledWith("proj-1", "README.md", "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "local", undefined, "project");
+    });
+    expect(await screen.findByText("Compared to HEAD")).toBeInTheDocument();
+    // `Promise.all([getFile, getDiff])` rejects as a whole if EITHER call
+    // rejects, which flips the pane into its generic error state (a bare
+    // `.empty-state` div showing the thrown message) instead of rendering
+    // `.preview-body--code`/DiffView — the mock's getFile 404s
+    // ("not found") for an unscoped call against a non-worktree id, exactly
+    // like the real daemon's "Worktree '<id>' not found". If getFile were
+    // still missing its `fileScope` arg, this assertion (not just the
+    // scope-only "Compared to HEAD" label above) is what would catch it.
+    await waitFor(() => {
+      expect(document.querySelector(".preview-body")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/not found/i)).not.toBeInTheDocument();
+
+    getFileSpy.mockRestore();
+    getDiffSpy.mockRestore();
+  });
+
+  it("project-scope branch-scope getFile also threads fileScope (defensive — unreachable from the UI today, chips are hidden for project scope)", async () => {
+    const getFileSpy = vi.spyOn(api, "getFile");
+    const getDiffSpy = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/README.md b/README.md\n");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "proj-1",
+      activeFilePath: "README.md",
+      diffScopeByWorktree: { "proj-1": "branch" },
+    });
+    render(<FilePreviewPane api={api} worktreeId="proj-1" scope="project" />);
+
+    await waitFor(() => {
+      expect(getFileSpy).toHaveBeenCalledWith("proj-1", "README.md", "project");
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "README.md", "branch", undefined, "project");
+    });
+
+    getFileSpy.mockRestore();
     getDiffSpy.mockRestore();
   });
 
@@ -116,6 +188,30 @@ describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", (
       expect(screen.getByText("Commit diff")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "branch" })).not.toBeInTheDocument();
+  });
+
+  it("3.T6 — project-scope controlled commit mode threads fileScope into the getDiff call", async () => {
+    const api = createMockApi();
+    const getDiffSpy = vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/src/App.tsx b/src/App.tsx\n");
+    useWorkspaceStore.setState({
+      activeWorktreeId: "proj-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+    });
+
+    render(
+      <FilePreviewPane
+        api={api}
+        worktreeId="proj-1"
+        scope="project"
+        controlled={{ path: "src/App.tsx", scope: "commit", commitSha: "abc123" }}
+      />,
+    );
+    await waitFor(() => {
+      expect(getDiffSpy).toHaveBeenCalledWith("proj-1", "src/App.tsx", "commit", "abc123", "project");
+    });
+
+    getDiffSpy.mockRestore();
   });
 });
 

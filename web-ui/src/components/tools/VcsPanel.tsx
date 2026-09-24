@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ExternalLink, GitCommit, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { CommitLogEntry, PrInfo, SubmoduleInfo } from "@/api/types";
+import type { CommitLogEntry, FileScope, PrInfo, SubmoduleInfo } from "@/api/types";
 import { VcsCommitView } from "@/components/tools/VcsCommitView";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
@@ -13,6 +13,10 @@ interface VcsPanelProps {
   /** Worktree's own branch name, rendered as a chip next to the title. Omitted for
    *  project-scope/no-git callers (see ToolPanel/Workspace). */
   branch?: string;
+  /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId` indexes
+   *  into. Under project scope the branch diff toggle is hidden and PR/submodule
+   *  lookups (worktree-only concepts) never fire. */
+  scope?: FileScope;
 }
 
 /** Relative time like "3m ago", "2h ago", "5d ago"; falls back to a date past ~30d. */
@@ -234,7 +238,8 @@ const SERVER_MAX_LIMIT = 1000;
  * for each additional page on "Load more"; no live updates yet (commits/PR
  * state changes aren't push-notified to the UI today).
  */
-export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps) {
+export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktree" }: VcsPanelProps) {
+  const isProject = scope === "project";
   // `commits` holds at most `pageLimit + 1` entries — the lookahead extra
   // entry (never rendered) is how `hasMore` is known for certain instead of
   // guessed from `commits.length === pageLimit`, which can't tell "exactly
@@ -262,6 +267,13 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
   // ON by default — the branch's own commits are the point of this view;
   // flipping it OFF reveals the full unfiltered log inline (Requirement 1a-1c).
   const [diffFromMain, setDiffFromMain] = useState(true);
+  // Decision 5: scope-aware read of the diff toggle. Under project scope every
+  // commit is `isOnBranch: true` (no base branch to diff against), so the toggle
+  // is both hidden AND its reads must not filter — this collapses to `false` for
+  // `isProject`, making `displayedCommits` show everything and the count/label
+  // read the full page. Using this (not raw `diffFromMain`) at every read site
+  // keeps the three call sites (display, load-more, count label) scope-consistent.
+  const diffFromMainEff = !isProject && diffFromMain;
 
   // Item 9 — which commit's `VcsCommitView` is open, if any. Held in the
   // Zustand store (non-persisted) rather than local state so it survives the
@@ -323,7 +335,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
 
   // Commits actually rendered: `ownCommits` when the toggle is ON, the full
   // unfiltered page when OFF (Requirements 1b/1c).
-  const displayedCommits = diffFromMain ? ownCommits : (pageCommits ?? []);
+  const displayedCommits = diffFromMainEff ? ownCommits : (pageCommits ?? []);
 
   // The controller for whichever fetch is currently in flight. Centralizing
   // cancellation here (rather than only aborting on effect cleanup) is what
@@ -369,17 +381,19 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
       setLoadMoreError(null);
     }
     return Promise.all([
-      api.listCommits(worktreeId, limit + 1),
+      api.listCommits(worktreeId, limit + 1, scope),
       // PR lookup is best-effort — a failure here shouldn't blank out the
       // commit list, so it's swallowed to null rather than propagated. Only
       // refetched on "initial" (mount/worktree-change/refresh) — a "Load
       // more" page is more commits of the same worktree, so the PR banner
-      // can't have changed as a side effect of it.
-      mode === "initial" ? api.getPr(worktreeId).catch(() => null) : Promise.resolve(undefined),
+      // can't have changed as a side effect of it. Project scope has no PR
+      // concept, so it must not fire at all.
+      mode === "initial" && !isProject ? api.getPr(worktreeId).catch(() => null) : Promise.resolve(undefined),
       // Submodules are also best-effort and initial-only, same reasoning as
       // the PR lookup above — a "Load more" page can't change the worktree's
-      // submodule set.
-      mode === "initial" ? api.listSubmodules(worktreeId).catch(() => []) : Promise.resolve(undefined),
+      // submodule set. Project scope has no submodules concept, so it must
+      // not fire at all.
+      mode === "initial" && !isProject ? api.listSubmodules(worktreeId).catch(() => []) : Promise.resolve(undefined),
     ])
       .then(([list, prInfo, submoduleList]) => {
         if (signal.aborted) return;
@@ -446,7 +460,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
     // but nothing new renders). Only arm the check when the toggle is
     // actually ON — if it's already OFF, the newly loaded page renders
     // regardless, so there's nothing to detect.
-    const loadMoreCheck = diffFromMain ? { prevOwnCount: ownCommits.length } : undefined;
+    const loadMoreCheck = diffFromMainEff ? { prevOwnCount: ownCommits.length } : undefined;
     void load(Math.min(pageLimit + PAGE_SIZE, SERVER_MAX_LIMIT), "more", loadMoreCheck);
   };
 
@@ -457,6 +471,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
         worktreeId={worktreeId}
         sha={selectedCommitSha}
         onBack={() => setSelectedCommitSha(null)}
+        scope={scope}
       />
     );
   }
@@ -467,7 +482,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
         <div className="vcs-panel__title-col">
           <span className="vcs-panel__title-group">
             <span className="vcs-panel__title">
-              Commits{pageCommits ? ` (${diffFromMain ? ownCommits.length : pageCommits.length})` : ""}
+              Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
             </span>
             {branch ? (
               <span className="vcs-panel__branch-chip" title={branch}>
@@ -475,14 +490,16 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch }: VcsPanelProps)
               </span>
             ) : null}
           </span>
-          <label className="vcs-panel__diff-toggle">
-            <input
-              type="checkbox"
-              checked={diffFromMain}
-              onChange={(e) => setDiffFromMain(e.target.checked)}
-            />
-            Diff from {baseBranch || "main"}
-          </label>
+          {!isProject ? (
+            <label className="vcs-panel__diff-toggle">
+              <input
+                type="checkbox"
+                checked={diffFromMainEff}
+                onChange={(e) => setDiffFromMain(e.target.checked)}
+              />
+              Diff from {baseBranch || "main"}
+            </label>
+          ) : null}
         </div>
         <div className="vcs-panel__bar-actions">
           <button
