@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import { getActiveDiffView } from "@/preview/diffViewRegistry";
 
 /**
  * ⌘/Ctrl+Shift+F → Search tool tab; ⌘/Ctrl+Shift+Z → terminal dock;
@@ -73,6 +74,39 @@ export function useWorkspaceKeyboardShortcuts(
           // place into, so defer to that instead of creating an orphaned session.
           e.preventDefault();
           onNewAgent();
+        }
+        return;
+      }
+
+      // Alt+D / Alt+Shift+D / Alt+H — diff-view-shortcuts: jump to the active
+      // file's diff, toggle inline/side-by-side layout, collapse/expand one
+      // hunk. Same placement/shape as the Alt+N block above (independent of
+      // ⌘/Ctrl and of the `mod` gate below, its own `inEditable` check,
+      // `e.code` for layout-independence) — bare-Alt combos are deliberately
+      // let through even from terminal focus (PRD Resolved Q3).
+      if (e.altKey && !e.metaKey && !e.ctrlKey && (e.code === "KeyD" || e.code === "KeyH")) {
+        if (inEditable) return;
+        if (e.code === "KeyH") {
+          e.preventDefault();
+          getActiveDiffView()?.toggleHunkAtFocus();
+        } else if (e.shiftKey) {
+          e.preventDefault();
+          getActiveDiffView()?.toggleLayout();
+        } else {
+          e.preventDefault();
+          const state = useWorkspaceStore.getState();
+          const { activeFilePath } = state;
+          // Resolved context id (worktree id or direct-session project id) —
+          // same `activeWorktreeId ?? activeDirectContextId` pattern as the
+          // Mod+Shift+F search shortcut below, so this also works for a
+          // direct/project-scoped session (a bare `activeWorktreeId` is null
+          // there). `diffScopeByWorktree` is keyed generically by whichever
+          // of the two `FilePreviewPane`'s own `worktreeId` prop resolves to.
+          const key = state.activeWorktreeId ?? state.activeDirectContextId;
+          if (key && activeFilePath) {
+            state.setDiffScopeForWorktree(key, "local");
+            setToolPanelTab("files");
+          }
         }
         return;
       }

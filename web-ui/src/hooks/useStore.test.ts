@@ -955,4 +955,12 @@ describe("useWorkspaceStore - peekFile slice", () => {
     const persisted = JSON.parse(localStorage.getItem(useWorkspaceStore.persist.getOptions()?.name ?? "storage") ?? "{}");
     expect(JSON.stringify(persisted.state ?? persisted)).not.toContain("peekFile");
   });
+
+  it("1.T14 — diffLayoutMode is NOT persisted (excluded from partialize)", () => {
+    useWorkspaceStore.getState().setDiffLayoutMode("side-by-side");
+    // Trigger a persist pass the same way the peekFile test above does.
+    useWorkspaceStore.getState().setActiveFile("/e.ts");
+    const persisted = JSON.parse(localStorage.getItem(useWorkspaceStore.persist.getOptions()?.name ?? "storage") ?? "{}");
+    expect(JSON.stringify(persisted.state ?? persisted)).not.toContain("diffLayoutMode");
+  });
 });

@@ -2762,7 +2762,6 @@
   font-size: inherit;
   line-height: 1.45;
   background: var(--bg-primary);
-  min-width: max-content;
   min-height: 100%;
 }
 
@@ -2771,6 +2770,174 @@
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* diff-view-shortcuts: per-hunk collapse caret + collapsed summary row. */
+.preview-diff-hunk-caret {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: inherit;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.preview-diff-hunk-caret:hover {
+  color: var(--fg-primary);
+}
+
+.preview-diff-hunk-collapsed {
+  padding: 4px 16px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-style: italic;
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+}
+
+/* diff-view-shortcuts-expand-context: omitted-context gap affordance — reuses
+ * the hunk-collapse caret/label visual language. The expanded state renders
+ * plain read-only context lines (same `diff-line--context` treatment) — so,
+ * unlike `.preview-diff-hunk-collapsed` (a standalone summary row that never
+ * wraps anything else), `.preview-diff-gap` itself must NOT carry the
+ * italic/small-font/padding hint styling: those inherit down into the real
+ * expanded context lines it wraps when open. That styling lives on
+ * `.preview-diff-gap-header` (the collapsed-state label/caret row) instead,
+ * which never coexists with the expanded lines in the DOM. */
+.preview-diff-gap {
+  background: color-mix(in srgb, var(--fg-muted) 6%, transparent);
+}
+
+/* `.preview-diff-gap-header` is a `<button>` (the whole row is the click
+ * target — the label itself says "click to expand", so only the tiny caret
+ * glyph responding to clicks was a real bug, not just an a11y nicety) —
+ * reset default button chrome and make it fill the row like a plain div. */
+.preview-diff-gap-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 4px 16px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preview-diff-gap-header:hover .preview-diff-gap-caret,
+.preview-diff-gap-header:hover .preview-diff-gap-label {
+  color: var(--fg-primary);
+}
+
+.preview-diff-gap-caret {
+  color: var(--fg-muted);
+  font-size: inherit;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* diff-view-shortcuts: Inline/Side-by-side layout toggle — mirrors
+ * `.preview-diff-mode-toggle` (Source/Rendered) below. */
+.preview-diff-layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.preview-diff-layout-toggle__btn {
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.preview-diff-layout-toggle__btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+.preview-diff-layout-toggle__btn--active {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+/* diff-view-shortcuts: side-by-side two-column diff grid. Each hunk is its
+ * own 2-column grid whose direct children (header spanning both columns,
+ * then alternating left/right `.diff-line` cells) fall into place via CSS
+ * grid auto-flow — no explicit row indices needed. */
+.preview-diff-side-by-side {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: inherit;
+  min-height: 100%;
+}
+
+/* `minmax(0, 1fr)` on both tracks — the separator between old/new must
+ * stay exactly centered regardless of pane width or content (hard
+ * requirement); bare `1fr 1fr` doesn't guarantee that, since a track's
+ * default minimum is driven by its content, so a column that's all
+ * `.diff-line--empty` (an all-additions/all-removals hunk) sizes much
+ * narrower than its populated sibling. `minmax(0, 1fr)` overrides that
+ * content-based minimum with an explicit 0, forcing an unconditional 50/50
+ * split no matter what's inside either column.
+ *
+ * This only works cleanly because `.diff-line-text` below wraps with
+ * `overflow-wrap: anywhere` and no min-width of its own — it always wraps
+ * to fit exactly the width its (now-fixed) column gives it, so nothing
+ * ever needs to overflow its cell and no per-line scrollbar is needed. */
+.preview-diff-side-by-side__hunk {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.preview-diff-side-by-side__hunk > .preview-diff-hunk-header,
+.preview-diff-side-by-side__hunk > .preview-diff-hunk-collapsed {
+  grid-column: 1 / -1;
+}
+
+/* diff-view-shortcuts-expand-context: omitted-context gap in the side-by-side
+ * layout — same two-column grid pattern as a hunk, with the caret/label row
+ * spanning both columns and the expanded context lines mirroring identically
+ * in both columns. */
+.preview-diff-side-by-side__gap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.preview-diff-side-by-side__gap > .preview-diff-gap-header {
+  grid-column: 1 / -1;
+}
+
+.preview-diff-side-by-side .diff-line {
+  grid-template-columns: 48px 16px 1fr;
+  border-left: var(--border-width) solid var(--border-default);
+}
+
+.preview-diff-side-by-side .diff-line--empty {
+  background: color-mix(in srgb, var(--fg-muted) 4%, transparent);
 }
 
 /* ── Code viewer (non-markdown files) ─────────────────── */
@@ -2787,6 +2954,7 @@
 
 .workspace-code-line {
   display: flex;
+  align-items: flex-start;
   padding: 0 16px;
   position: relative;
 }
@@ -2840,9 +3008,19 @@
   padding: 0 1px;
 }
 
+/* diff-view-shortcuts: wraps long lines instead of relying on the pane's
+ * shared horizontal scrollbar, with a flat `min-width: 100ch` floor so a
+ * narrow pane doesn't wrap every line down to just a few characters wide.
+ * Unlike `.diff-line-text`, this single-column (non-split) view has no
+ * centering constraint to fight, so the floor can stay — see
+ * `.diff-line-text`'s comment for why side-by-side couldn't keep one.
+ * Deliberately NOT applied to Markdown preview (`.workspace-markdown-preview`),
+ * which already wraps at its own width and stays as-is. */
 .workspace-code-content {
   flex: 1;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 100ch;
 }
 
 .workspace-code-content:not(.workspace-code-content--shiki) {
@@ -3398,6 +3576,7 @@
 .diff-line {
   display: grid;
   grid-template-columns: 48px 48px 16px 1fr;
+  align-items: start;
   font-family: var(--font-mono);
   font-size: inherit;
   line-height: 1.45;
@@ -3410,8 +3589,23 @@
   user-select: none;
 }
 
+/* diff-view-shortcuts: wrap long lines to fit whatever width this element's
+ * column actually has, instead of relying on one shared horizontal
+ * scrollbar for the whole file. No `min-width` floor here — for
+ * side-by-side, the separator staying exactly centered is a hard
+ * requirement (`.preview-diff-side-by-side__hunk`'s `minmax(0, 1fr)`
+ * columns), which only works if this element never needs to overflow its
+ * column; a fixed character-count floor (tried: `min-width: 100ch`, and
+ * before that a content-aware `min(100ch, max-content)`, which doesn't
+ * work — `max-content` isn't valid inside a CSS `min()`) necessarily fights
+ * a fixed-width column on a narrow pane. `overflow-wrap: anywhere`
+ * guarantees this always wraps to fit rather than overflowing, so a narrow
+ * pane wraps tighter (more rows) instead of scrolling — inline mode (a
+ * single, page-width column) is unaffected by any of this and just wraps
+ * at whatever the full pane width is, same as before. */
 .diff-line-text {
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 

@@ -57,6 +57,9 @@ const GROUPS: ShortcutGroup[] = [
       { keys: ["Ctrl+E"], action: "Toggle file tree" },
       { keys: ["Ctrl+/"], action: "Toggle split orientation" },
       { keys: ["Ctrl+Shift+Z"], action: "Toggle terminal dock" },
+      { keys: ["Alt+D"], action: "Jump to file diff" },
+      { keys: ["Alt+Shift+D"], action: "Toggle inline/side-by-side diff" },
+      { keys: ["Alt+H"], action: "Expand/collapse diff hunk" },
     ],
   },
   {

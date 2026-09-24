@@ -1,0 +1,11 @@
+feature: diff-view-shortcuts
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-173
+master: {prd: complete, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: review
+    awaiting_phase: null
+    awaiting_artifact: null

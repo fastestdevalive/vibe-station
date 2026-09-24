@@ -212,6 +212,11 @@ export interface WorkspaceState {
   /** Last selected terminal tab per worktree (persisted) */
   lastTerminalByWorktree: Record<string, string>;
   diffScopeByWorktree: Record<string, DiffScope>;
+  /** Inline vs. side-by-side diff layout preference (diff-view-shortcuts
+   *  Decision 1). Global, in-memory-only — deliberately excluded from
+   *  `partialize` below so it never reaches `localStorage`; persists across
+   *  files for the browser session only (PRD Resolved Q6). */
+  diffLayoutMode: "inline" | "side-by-side";
   /** Local/branch scope for the PLAIN tree's per-file status badges (Files
    *  header selector while browsing the tree, diff mode off) — kept separate
    *  from `diffScopeByWorktree` so selecting a scope while tree-browsing
@@ -307,6 +312,8 @@ export interface WorkspaceState {
   setVcsSelectedCommit: (worktreeId: string, sha: string | null) => void;
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
+  /** Session-only inline/side-by-side diff layout preference (Decision 1). */
+  setDiffLayoutMode: (mode: "inline" | "side-by-side") => void;
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   /** Set the Files tool's left-pane mode for the given resolved context id. */
   setFilesLeftPaneMode: (worktreeId: string, mode: "tree" | "search") => void;
@@ -668,6 +675,7 @@ const initial = {
   lastSessionByWorktree: {} as Record<string, string>,
   lastTerminalByWorktree: {} as Record<string, string>,
   diffScopeByWorktree: {} as Record<string, DiffScope>,
+  diffLayoutMode: "inline" as "inline" | "side-by-side",
   treeScopeByWorktree: {} as Record<string, "local" | "branch">,
   filesLeftPaneMode: {} as Record<string, "tree" | "search">,
   searchFocusSeq: {} as Record<string, number>,
@@ -1042,6 +1050,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             diffScopeByWorktree: { ...s.diffScopeByWorktree, [worktreeId]: scope },
           })),
+        setDiffLayoutMode: (mode) => set({ diffLayoutMode: mode }),
         setTreeScopeForWorktree: (worktreeId, scope) =>
           set((s) => ({
             treeScopeByWorktree: { ...s.treeScopeByWorktree, [worktreeId]: scope },
