@@ -354,6 +354,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // highlight below stays visible for as long as the user is looking at that
   // exact file, not just for the instant of the scroll.
   const lastScrolledKeyRef = useRef<string | null>(null);
+  // Bumped by the interactive `DiffView` child's `onRevealReady` once it has
+  // finished auto-expanding a collapsed hunk for a jump-to-line target
+  // (diff-view-shortcuts CUJ 1, plan-review addition) — added to the
+  // scroll-to-line effect's dependency array below so that effect re-runs,
+  // and actually finds the now-rendered row, only AFTER the expand commits
+  // instead of racing the DOM with an immediate `querySelector`.
+  const [hunksVersion, setHunksVersion] = useState(0);
   const peekActive =
     !!peekFile && peekFile.worktreeId === worktreeId && peekFile.path === path;
   const pendingActive =
@@ -490,7 +497,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     // re-render, so listing it below would not change when this effect
     // fires — only `effectiveLineKey` changing (already listed) can.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight]);
+  }, [effectiveLine, effectiveLineKey, fileBody, scope, worktreeId, scrollKey, clearHighlight, hunksVersion]);
   // ─────────────────────────────────────────────────────────────────────
 
   const diffStats = useMemo(() => {
@@ -605,6 +612,9 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
           api={api}
           worktreeId={worktreeId}
           scope={fileScope}
+          interactive
+          revealLine={effectiveLine ?? undefined}
+          onRevealReady={() => setHunksVersion((v) => v + 1)}
         />
       );
     }
