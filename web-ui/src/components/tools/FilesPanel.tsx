@@ -1,8 +1,8 @@
-import { FileText, Plus, Search, X } from "lucide-react";
+import { ArrowUpRight, FileText, List, ListTree, Plus, Search, X } from "lucide-react";
 import { useRef } from "react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore, type PeekFileValue } from "@/hooks/useStore";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { MasterDetailShell } from "@/components/layout/MasterDetailShell";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
@@ -25,6 +25,20 @@ function baseName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function sourceIcon(source: PeekFileValue["source"]) {
+  switch (source) {
+    case "definition":
+      return <ArrowUpRight size={13} aria-hidden />;
+    case "references":
+      return <List size={13} aria-hidden />;
+    case "outline":
+      return <ListTree size={13} aria-hidden />;
+    case "search":
+    default:
+      return <Search size={13} aria-hidden />;
+  }
+}
+
 /**
  * Files tool — a thin wrapper over `MasterDetailShell` (Decision 5): the file
  * tree/search pane on the left and the preview on the right, via the shared
@@ -44,6 +58,7 @@ export function FilesPanel({ api, worktreeId, scope = "worktree", onOpenQuickOpe
   const activeIdx = useWorkspaceStore((s) => s.activeFileTabIdxByWorktree[wt] ?? -1);
   const closeFileTab = useWorkspaceStore((s) => s.closeFileTab);
   const setActiveFileTabIdx = useWorkspaceStore((s) => s.setActiveFileTabIdx);
+  const setActiveFilePathAtLine = useWorkspaceStore((s) => s.setActiveFilePathAtLine);
   // A dedicated, always-separate "search preview" tab (live-review feedback):
   // while arrowing through content-search results, show ONE extra tab entry
   // reflecting the currently peeked file, distinct from any real tab —
@@ -59,6 +74,7 @@ export function FilesPanel({ api, worktreeId, scope = "worktree", onOpenQuickOpe
   const peekFile = useWorkspaceStore((s) => s.peekFile);
   const clearPeekFile = useWorkspaceStore((s) => s.clearPeekFile);
   const peekActive = !!peekFile && peekFile.worktreeId === wt;
+  const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
 
   // Handle to FilesLeftPane's active-mode tabbable row, consumed by
   // MasterDetailShell's refocus effects (Phase 3.3/3.5a, B4a).
@@ -113,27 +129,48 @@ export function FilesPanel({ api, worktreeId, scope = "worktree", onOpenQuickOpe
             </span>
           );
         })}
-        {peekActive && peekFile && (
-          <span
-            className="files-topbar__tab files-topbar__tab--preview"
-            data-active
-            title={`${peekFile.path} (search preview — not open as a tab)`}
-            role="tab"
-            aria-selected
-          >
-            <Search size={13} aria-hidden />
-            <span className="files-topbar__tab-name">{baseName(peekFile.path)}</span>
-            <button
-              type="button"
-              className="files-topbar__tab-close"
-              aria-label="Close search preview"
-              title="Close search preview"
-              onClick={(e) => { e.stopPropagation(); clearPeekFile(); }}
+        {peekActive && peekFile && (() => {
+          const src = peekFile.source ?? "search";
+          const isExternal = Boolean(peekFile.external);
+          const display = isExternal
+            ? (peekFile.external?.displayPath ?? peekFile.path)
+            : baseName(peekFile.path);
+          return (
+            <span
+              className="files-topbar__tab files-topbar__tab--preview"
+              data-active
+              title={`${isExternal ? (peekFile.external?.displayPath ?? peekFile.path) : peekFile.path} (${src} preview — not open as a tab)`}
+              role="tab"
+              aria-selected
+              onDoubleClick={() => {
+                if (isExternal) return;
+                setActiveFilePathAtLine(
+                  peekFile.worktreeId,
+                  peekFile.path,
+                  peekFile.line,
+                  peekFile.matchText ?? undefined,
+                );
+              }}
             >
-              <X size={12} />
-            </button>
-          </span>
-        )}
+              {sourceIcon(src)}
+              <span className="files-topbar__tab-name">{display}</span>
+              {isExternal && (
+                <span className="files-topbar__tab-badge files-topbar__tab-badge--external">
+                  outside workspace
+                </span>
+              )}
+              <button
+                type="button"
+                className="files-topbar__tab-close"
+                aria-label={`Close ${src} preview`}
+                title={`Close ${src} preview`}
+                onClick={(e) => { e.stopPropagation(); clearPeekFile(); }}
+              >
+                <X size={12} />
+              </button>
+            </span>
+          );
+        })()}
       </div>
       <button
         type="button"

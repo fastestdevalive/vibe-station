@@ -4,6 +4,8 @@ import type { FileScope } from "@/api/types";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { FileTreeSidebar } from "@/components/layout/FileTreeSidebar";
 import { SearchPanel } from "@/components/tools/SearchPanel";
+import { ReferencesPanel } from "@/components/tools/ReferencesPanel";
+import { OutlinePanel } from "@/components/tools/OutlinePanel";
 
 interface FilesLeftPaneProps {
   api: ApiInstance;
@@ -20,14 +22,10 @@ export interface FilesLeftPaneHandle {
 }
 
 /**
- * Mode-switching wrapper for the Files tool's left pane. Both the tree body
- * (`FileTreeSidebar`, header included) and the search body (`SearchPanel`,
- * own controls included) are ALWAYS mounted and CSS-hidden when inactive
+ * Mode-switching wrapper for the Files tool's left pane. The tree body,
+ * search body, references body, and outline body are ALWAYS mounted and CSS-hidden when inactive
  * (Requirement 9) — never conditionally unmounted on a rail-mode switch, so
- * each mode's async state (expanded dirs, debounce/abort state) survives.
- *
- * Per the resolved design decision for Phase 3.3, there is NO separate header
- * slot here: each mode's root component owns its own header inside itself.
+ * each mode's async state survives.
  */
 export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>(
   function FilesLeftPane({ api, worktreeId, scope = "worktree" }, ref) {
@@ -35,12 +33,20 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
     const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[key] ?? "tree");
     const treeContainerRef = useRef<HTMLDivElement>(null);
     const searchContainerRef = useRef<HTMLDivElement>(null);
+    const referencesContainerRef = useRef<HTMLDivElement>(null);
+    const outlineContainerRef = useRef<HTMLDivElement>(null);
 
     useImperativeHandle(
       ref,
       () => ({
         focusActivePane() {
-          const container = mode === "tree" ? treeContainerRef.current : searchContainerRef.current;
+          const containerMap: Record<string, HTMLDivElement | null> = {
+            tree: treeContainerRef.current,
+            search: searchContainerRef.current,
+            references: referencesContainerRef.current,
+            outline: outlineContainerRef.current,
+          };
+          const container = containerMap[mode] ?? treeContainerRef.current;
           const focusable =
             container?.querySelector<HTMLElement>("[tabindex='0']") ??
             container?.querySelector<HTMLElement>("[tabindex]");
@@ -63,6 +69,18 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
           className={mode === "search" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
         >
           <SearchPanel api={api} worktreeId={worktreeId} scope={scope} />
+        </div>
+        <div
+          ref={outlineContainerRef}
+          className={mode === "outline" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
+        >
+          <OutlinePanel api={api} worktreeId={worktreeId} scope={scope} />
+        </div>
+        <div
+          ref={referencesContainerRef}
+          className={mode === "references" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
+        >
+          <ReferencesPanel api={api} worktreeId={worktreeId} scope={scope} />
         </div>
       </>
     );

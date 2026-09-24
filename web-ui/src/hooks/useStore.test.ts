@@ -884,7 +884,7 @@ describe("useWorkspaceStore - peekFile slice", () => {
     });
   });
 
-  const PEEK = { worktreeId: W1, path: "/b.ts", line: 42, matchText: null };
+  const PEEK = { worktreeId: W1, path: "/b.ts", line: 42, matchText: null, source: "search" as const };
 
   function seedPeek() {
     useWorkspaceStore.getState().setPeekFile(PEEK);
@@ -963,4 +963,341 @@ describe("useWorkspaceStore - peekFile slice", () => {
     const persisted = JSON.parse(localStorage.getItem(useWorkspaceStore.persist.getOptions()?.name ?? "storage") ?? "{}");
     expect(JSON.stringify(persisted.state ?? persisted)).not.toContain("diffLayoutMode");
   });
+
+  // 4.3 & 4.T1: pushJump permanent-tab commit vs external peek
+  it("4.3: pushJump({source:'definition', external: undefined}) commits to tabs; pushJump with external still peeks", () => {
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/new-def.ts",
+      line: 12,
+      matchText: null,
+      source: "definition",
+      external: undefined,
+    });
+    let s = useWorkspaceStore.getState();
+    expect(s.peekFile).toBeNull();
+    expect(s.openFileTabsByWorktree[W1]).toContain("/new-def.ts");
+    expect(s.activeFilePath).toBe("/new-def.ts");
+    const tabs = s.openFileTabsByWorktree[W1] ?? [];
+    expect(s.activeFileTabIdxByWorktree[W1]).toBe(tabs.indexOf("/new-def.ts"));
+
+    // external override still sets peekFile and does NOT touch openFileTabsByWorktree
+    const preTabs = s.openFileTabsByWorktree[W1];
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/ext-def.ts",
+      line: 34,
+      matchText: null,
+      source: "definition",
+      external: { token: "tok-ext", displayPath: "/ext-def.ts" },
+    });
+    s = useWorkspaceStore.getState();
+    expect(s.peekFile).toEqual({
+      worktreeId: W1,
+      path: "/ext-def.ts",
+      line: 34,
+      matchText: null,
+      source: "definition",
+      external: { token: "tok-ext", displayPath: "/ext-def.ts" },
+    });
+    expect(s.openFileTabsByWorktree[W1]).toEqual(preTabs);
+  });
+
+  it("4.T1: pushJump (a) def in-workspace commits permanent tab; (b) search coalesce peeks; (c) outline external peeks", () => {
+    // (a) source:"definition", no existing tab, no external -> commits to openFileTabsByWorktree at new tab's index, activeFileTabIdxByWorktree matches that index (not -1), peekFile stays null
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/def-4t1.ts",
+      line: 10,
+      matchText: null,
+      source: "definition",
+    });
+    let s = useWorkspaceStore.getState();
+    expect(s.peekFile).toBeNull();
+    const tabsA = s.openFileTabsByWorktree[W1] ?? [];
+    expect(tabsA).toContain("/def-4t1.ts");
+    expect(s.activeFileTabIdxByWorktree[W1]).toBe(tabsA.indexOf("/def-4t1.ts"));
+    expect(s.activeFileTabIdxByWorktree[W1]).not.toBe(-1);
+    expect(s.activeFilePath).toBe("/def-4t1.ts");
+
+    // (b) source:"search", coalesce:true -> unchanged, sets peekFile
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/search-4t1.ts",
+      line: 20,
+      matchText: "query",
+      source: "search",
+      coalesce: true,
+    });
+    s = useWorkspaceStore.getState();
+    expect(s.peekFile).toEqual({
+      worktreeId: W1,
+      path: "/search-4t1.ts",
+      line: 20,
+      matchText: "query",
+      source: "search",
+    });
+
+    // (c) source:"outline" with external set -> sets peekFile, openFileTabsByWorktree unchanged
+    const tabsBeforeC = s.openFileTabsByWorktree[W1];
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/outline-ext.ts",
+      line: 30,
+      matchText: null,
+      source: "outline",
+      external: { token: "tok-outline", displayPath: "/outline-ext.ts" },
+    });
+    s = useWorkspaceStore.getState();
+    expect(s.peekFile).toEqual({
+      worktreeId: W1,
+      path: "/outline-ext.ts",
+      line: 30,
+      matchText: null,
+      source: "outline",
+      external: { token: "tok-outline", displayPath: "/outline-ext.ts" },
+    });
+    expect(s.openFileTabsByWorktree[W1]).toEqual(tabsBeforeC);
+  });
 });
+
+describe("Phase 2 — Shared preview slot + back/forward history", () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      activeFilePath: "/a.ts",
+      openFileTabsByWorktree: { [W1]: ["/a.ts", "/b.ts"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+      peekFile: null,
+      backStack: {},
+      forwardStack: {},
+      pendingLineTarget: null,
+    });
+  });
+
+  // 2.T1 Unit — useStore.ts pushJump branch ordering and coalesce
+  it("2.T1 — pushJump pushes to backStack on source switch; coalesce replaces in place; coalesce with open tab still peeks in place", () => {
+    const store = useWorkspaceStore.getState();
+
+    // 1. Initial pushJump from search
+    store.pushJump({
+      worktreeId: W1,
+      path: "/search-result.ts",
+      line: 10,
+      matchText: "foo",
+      source: "search",
+    });
+    expect(useWorkspaceStore.getState().peekFile).toEqual({
+      worktreeId: W1,
+      path: "/search-result.ts",
+      line: 10,
+      matchText: "foo",
+      source: "search",
+    });
+    // Recorded prior committed state (/a.ts)
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
+    expect(useWorkspaceStore.getState().backStack[W1]![0]).toEqual({
+      kind: "committed",
+      worktreeId: W1,
+      path: "/a.ts",
+      line: null,
+    });
+
+    // 2. Coalesce with matching source: replaces in place with no stack push
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/search-result-2.ts",
+      line: 30,
+      matchText: null,
+      source: "search",
+      coalesce: true,
+    });
+    expect(useWorkspaceStore.getState().peekFile?.path).toBe("/search-result-2.ts");
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
+
+    // 3. Coalesce where next.path IS already in openFileTabsByWorktree:
+    // /b.ts is already in openFileTabsByWorktree, but coalesce must win and replace peekFile in place
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/b.ts",
+      line: 5,
+      matchText: null,
+      source: "search",
+      coalesce: true,
+    });
+    expect(useWorkspaceStore.getState().peekFile?.path).toBe("/b.ts");
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
+    // Tab selection not touched
+    expect(useWorkspaceStore.getState().activeFileTabIdxByWorktree[W1]).toBe(0);
+
+    // 4. Push definition jump: pushes current peek (/b.ts) onto backStack and commits definition jump to permanent tab
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/def-target.ts",
+      line: 25,
+      matchText: null,
+      source: "definition",
+    });
+    expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toContain("/def-target.ts");
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/def-target.ts");
+    expect(useWorkspaceStore.getState().activeFileTabIdxByWorktree[W1]).toBe(2);
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(2);
+    expect(useWorkspaceStore.getState().backStack[W1]![1]).toEqual({
+      kind: "peek",
+      value: {
+        worktreeId: W1,
+        path: "/b.ts",
+        line: 5,
+        matchText: null,
+        source: "search",
+      },
+    });
+  });
+
+  // 2.T2 Unit — clearPeekFile({ ifSource: "search" })
+  it("2.T2 — clearPeekFile({ifSource: 'search'}): no-ops when source is definition; clears when search", () => {
+    // Seed definition peek via external override
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/def.ts",
+      line: 1,
+      matchText: null,
+      source: "definition",
+      external: { token: "tok-1", displayPath: "/def.ts" },
+    });
+    expect(useWorkspaceStore.getState().peekFile?.source).toBe("definition");
+
+    // Attempt to clear with ifSource: "search" -> no-op
+    useWorkspaceStore.getState().clearPeekFile({ ifSource: "search" });
+    expect(useWorkspaceStore.getState().peekFile?.path).toBe("/def.ts");
+
+    // Change peek to search
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/search.ts",
+      line: 2,
+      matchText: null,
+      source: "search",
+    });
+    expect(useWorkspaceStore.getState().peekFile?.source).toBe("search");
+
+    // Clear with ifSource: "search" -> clears
+    useWorkspaceStore.getState().clearPeekFile({ ifSource: "search" });
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  // 5.T6 Regression — Phase 2's source-gated clearPeekFile with references-sourced peek
+  it("5.T6 — clearPeekFile({ifSource: 'search'}): no-ops when source is references; clearPeekFile({ifSource: 'references'}) clears it", () => {
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/refs.ts",
+      line: 42,
+      matchText: null,
+      source: "references",
+      external: { token: "tok-2", displayPath: "/refs.ts" },
+    });
+    expect(useWorkspaceStore.getState().peekFile?.source).toBe("references");
+
+    // Attempt to clear with ifSource: "search" -> no-op
+    useWorkspaceStore.getState().clearPeekFile({ ifSource: "search" });
+    expect(useWorkspaceStore.getState().peekFile?.path).toBe("/refs.ts");
+
+    // Attempt to clear with ifSource: "definition" -> no-op
+    useWorkspaceStore.getState().clearPeekFile({ ifSource: "definition" });
+    expect(useWorkspaceStore.getState().peekFile?.path).toBe("/refs.ts");
+
+    // Clear with ifSource: "references" -> clears
+    useWorkspaceStore.getState().clearPeekFile({ ifSource: "references" });
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+  });
+
+  // 2.T4 Integration — back/forward navigation
+  it("2.T4 — back/forward restores peek or committed state without inflating history; restores tab index", () => {
+    const store = useWorkspaceStore.getState();
+
+    // (a) jump A (search) -> jump B (definition)
+    store.pushJump({
+      worktreeId: W1,
+      path: "/jump-a.ts",
+      line: 10,
+      matchText: "matchA",
+      source: "search",
+    });
+    store.pushJump({
+      worktreeId: W1,
+      path: "/jump-b.ts",
+      line: 20,
+      matchText: null,
+      source: "definition",
+    });
+    // backStack has 2 entries: committed /a.ts, then peek /jump-a.ts
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(2);
+    expect(useWorkspaceStore.getState().forwardStack[W1] ?? []).toHaveLength(0);
+
+    // navigateBack restores A into peek slot and pushes B onto forwardStack
+    useWorkspaceStore.getState().navigateBack(W1);
+    expect(useWorkspaceStore.getState().peekFile).toEqual({
+      worktreeId: W1,
+      path: "/jump-a.ts",
+      line: 10,
+      matchText: "matchA",
+      source: "search",
+    });
+    // backStack length must NOT be inflated (must now be 1, having popped jump-a)
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
+    expect(useWorkspaceStore.getState().forwardStack[W1]).toHaveLength(1);
+    expect(useWorkspaceStore.getState().forwardStack[W1]![0]).toEqual({
+      kind: "committed",
+      worktreeId: W1,
+      path: "/jump-b.ts",
+      line: 20,
+    });
+
+    // navigateForward restores B
+    useWorkspaceStore.getState().navigateForward(W1);
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/jump-b.ts");
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(2);
+    expect(useWorkspaceStore.getState().forwardStack[W1]).toHaveLength(0);
+
+    // (b) tree click (committed, no peek) followed by search jump, then navigateBack
+    // Reset state with 2 open tabs
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeFilePath: "/a.ts",
+      openFileTabsByWorktree: { [W1]: ["/a.ts", "/b.ts"] },
+      activeFileTabIdxByWorktree: { [W1]: 0 },
+      peekFile: null,
+      backStack: {},
+      forwardStack: {},
+    });
+
+    // Tree click to /b.ts (committed)
+    useWorkspaceStore.getState().setActiveFile("/b.ts");
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/b.ts");
+    expect(useWorkspaceStore.getState().activeFileTabIdxByWorktree[W1]).toBe(1);
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1); // recorded /a.ts
+
+    // Jump to search result /search.ts
+    useWorkspaceStore.getState().pushJump({
+      worktreeId: W1,
+      path: "/search.ts",
+      line: 5,
+      matchText: null,
+      source: "search",
+    });
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(2); // recorded /b.ts
+
+    // navigateBack restores /b.ts via setActiveFile({ skipHistory: true })
+    useWorkspaceStore.getState().navigateBack(W1);
+    expect(useWorkspaceStore.getState().peekFile).toBeNull();
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/b.ts");
+    // activeFileTabIdxByWorktree correctly points at tab 1 (/b.ts)
+    expect(useWorkspaceStore.getState().activeFileTabIdxByWorktree[W1]).toBe(1);
+    // backStack length popped to 1 without re-recording
+    expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
+  });
+});
+

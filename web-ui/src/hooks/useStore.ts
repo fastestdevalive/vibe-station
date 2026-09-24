@@ -22,6 +22,19 @@ export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs", "se
 /** Agent pane ↔ tool panel split orientation (terminal dock stays at the bottom). */
 export type ToolSplitOrientation = "horizontal" | "vertical";
 
+export type PeekFileValue = {
+  worktreeId: string;
+  path: string;
+  line: number;
+  matchText: string | null;
+  source: "search" | "definition" | "references" | "outline";
+  external?: { token: string; displayPath: string };
+};
+
+export type PeekEntry =
+  | { kind: "peek"; value: PeekFileValue }
+  | { kind: "committed"; worktreeId: string; path: string; line: number | null };
+
 export interface WorktreeLayout {
   toolPanelVisible: boolean;
   toolPanelTab: ToolTab;
@@ -143,9 +156,24 @@ export type WorkspacePaneFullscreen = "agent" | "tools" | "terminal";
 export const LEFT_SIDEBAR_MIN_WIDTH = 180;
 export const LEFT_SIDEBAR_MAX_WIDTH = 480;
 
-function clampLeftSidebarWidth(px: number): number {
+export function clampLeftSidebarWidth(px: number): number {
   return Math.min(LEFT_SIDEBAR_MAX_WIDTH, Math.max(LEFT_SIDEBAR_MIN_WIDTH, Math.round(px)));
 }
+
+export type FilesLeftPaneMode = "tree" | "search" | "outline" | "references";
+
+export type PendingReferencesQuery = {
+  worktreeId: string;
+  path: string;
+  line: number;
+  character: number;
+  symbol: string;
+  /** Set when the symbol lives in an EXTERNAL file (opened via go-to-definition
+   *  into e.g. node_modules or a system path). When present, the references
+   *  fetch must build an `LspFileRef { kind: "external", token }` instead of a
+   *  workspace-path request (which path-confinement would rightly reject). */
+  external?: { token: string; displayPath: string };
+};
 
 export interface WorkspaceState {
   /** Per-worktree layout state. Falls back to DEFAULT_WORKTREE_LAYOUT. */
@@ -184,7 +212,11 @@ export interface WorkspaceState {
    * prop uses. Explicitly cleared by the commit/context-switch actions in B1/B3;
    * deliberately NOT persisted (excluded from `partialize` — see B3 note there).
    */
-  peekFile: { worktreeId: string; path: string; line: number; matchText: string | null } | null;
+  peekFile: PeekFileValue | null;
+  /** Back navigation stack of peek or committed preview entries, keyed by layout key. */
+  backStack: Record<string, PeekEntry[]>;
+  /** Forward navigation stack of peek or committed preview entries, keyed by layout key. */
+  forwardStack: Record<string, PeekEntry[]>;
   /** Open file tabs per worktree/direct-context (keyed by layout key). */
   openFileTabsByWorktree: Record<string, string[]>;
   /** Active tab index per worktree/direct-context; -1 means none active. */
@@ -224,10 +256,12 @@ export interface WorkspaceState {
    *  mode is controlled exclusively by the "Diff view" (GitCompare) button. */
   treeScopeByWorktree: Record<string, "local" | "branch">;
   /** Which left-pane mode the Files tool shows per worktree/direct-context:
-   *  "tree" (default) or "search". Keyed by the same resolved context id as
+   *  "tree" (default), "search", or "references". Keyed by the same resolved context id as
    *  `layoutKey` (activeWorktreeId ?? activeDirectContextId) — NOT a bare
    *  activeWorktreeId, which is null for direct sessions (B5). */
-  filesLeftPaneMode: Record<string, "tree" | "search">;
+  filesLeftPaneMode: Record<string, FilesLeftPaneMode>;
+  /** Pending references query handed from hover tooltip's "Find references" button to ReferencesPanel */
+  pendingReferencesQuery: PendingReferencesQuery | null;
   /** Monotonic "focus the search query input" request counter, PER resolved
    *  context id (worktree id or direct-session project id) — a canvas can
    *  have multiple tools tiles (and so multiple mounted SearchPanels) open
@@ -291,7 +325,7 @@ export interface WorkspaceState {
   setActiveDirectContext: (projectId: string | null) => void;
   setActiveSession: (sessionId: string) => void;
   setActiveTerminalSession: (sessionId: string) => void;
-  setActiveFile: (path: string | null) => void;
+  setActiveFile: (path: string | null, opts?: { skipHistory?: boolean }) => void;
   /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
   openFileTabNew: (worktreeId: string, path: string) => void;
   /** Open path in a new tab and set the pending line/match-text target to scroll to + highlight (search/navigation intent). */
@@ -299,9 +333,23 @@ export interface WorkspaceState {
   /** Clear the pending line-jump target (e.g. a fresh unrelated navigation should drop a stale highlight). */
   clearPendingLineTarget: () => void;
   /** Set the live peek preview (search-result arrow focus, not committed). */
-  setPeekFile: (peek: { worktreeId: string; path: string; line: number; matchText: string | null } | null) => void;
+  setPeekFile: (peek: PeekFileValue | null) => void;
   /** Clear the live peek preview. */
-  clearPeekFile: () => void;
+  clearPeekFile: (opts?: { ifSource?: "search" | "definition" | "references" | "outline" }) => void;
+  /** Push a navigation jump into history and update preview or active tab. */
+  pushJump: (next: {
+    worktreeId: string;
+    path: string;
+    line: number;
+    matchText: string | null;
+    source: "search" | "definition" | "references" | "outline";
+    external?: { token: string; displayPath: string };
+    coalesce?: boolean;
+  }) => void;
+  /** Navigate back in the file preview history. */
+  navigateBack: (key: string) => void;
+  /** Navigate forward in the file preview history. */
+  navigateForward: (key: string) => void;
   /** Close the tab at index idx; adjacent tab becomes active. Updates lastFileByWorktree. */
   closeFileTab: (worktreeId: string, idx: number) => void;
   /** Switch to existing tab at index idx. Updates lastFileByWorktree. */
@@ -316,7 +364,9 @@ export interface WorkspaceState {
   setDiffLayoutMode: (mode: "inline" | "side-by-side") => void;
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   /** Set the Files tool's left-pane mode for the given resolved context id. */
-  setFilesLeftPaneMode: (worktreeId: string, mode: "tree" | "search") => void;
+  setFilesLeftPaneMode: (worktreeId: string, mode: FilesLeftPaneMode) => void;
+  /** Set or clear the pending references query */
+  setPendingReferencesQuery: (query: PendingReferencesQuery | null) => void;
   /** Bump `searchFocusSeq` for one context id, to request that context's search query input be focused. */
   requestSearchFocus: (contextId: string) => void;
   bumpPreviewFont: (delta: number) => void;
@@ -663,7 +713,9 @@ const initial = {
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
   pendingLineTarget: null as { worktreeId: string; path: string; line: number; matchText: string | null } | null,
-  peekFile: null as { worktreeId: string; path: string; line: number; matchText: string | null } | null,
+  peekFile: null as PeekFileValue | null,
+  backStack: {} as Record<string, PeekEntry[]>,
+  forwardStack: {} as Record<string, PeekEntry[]>,
   openFileTabsByWorktree: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
@@ -677,7 +729,8 @@ const initial = {
   diffScopeByWorktree: {} as Record<string, DiffScope>,
   diffLayoutMode: "inline" as "inline" | "side-by-side",
   treeScopeByWorktree: {} as Record<string, "local" | "branch">,
-  filesLeftPaneMode: {} as Record<string, "tree" | "search">,
+  filesLeftPaneMode: {} as Record<string, FilesLeftPaneMode>,
+  pendingReferencesQuery: null as PendingReferencesQuery | null,
   searchFocusSeq: {} as Record<string, number>,
   previewFontScale: 1,
   previewFontScaleByWorktree: {} as Record<string, number>,
@@ -698,10 +751,40 @@ const initial = {
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
-    (set) => {
+    (set, get) => {
       /** Active layout key: worktree id, or the direct-session project id. */
       function layoutKey(s: WorkspaceState): string | null {
         return s.activeWorktreeId ?? s.activeDirectContextId;
+      }
+
+      /** Snapshot current peek-or-committed state onto backStack, clear forwardStack. */
+      function recordHistoryEntry(
+        s: WorkspaceState,
+        key: string,
+      ): {
+        backStack: Record<string, PeekEntry[]>;
+        forwardStack: Record<string, PeekEntry[]>;
+      } {
+        if (!key) {
+          return { backStack: s.backStack, forwardStack: s.forwardStack };
+        }
+        let entry: PeekEntry | null = null;
+        if (s.peekFile) {
+          entry = { kind: "peek", value: s.peekFile };
+        } else if (s.activeFilePath) {
+          entry = {
+            kind: "committed",
+            worktreeId: key,
+            path: s.activeFilePath,
+            line: s.pendingLineTarget?.line ?? null,
+          };
+        }
+        const curBack = s.backStack[key] ?? [];
+        const nextBack = entry ? [...curBack, entry] : curBack;
+        return {
+          backStack: { ...s.backStack, [key]: nextBack },
+          forwardStack: { ...s.forwardStack, [key]: [] },
+        };
       }
 
       /** Patch the active context's layout, falling back to defaults. */
@@ -890,19 +973,21 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // NOT activeWorktreeId, which is always null for a direct session and
         // so silently dropped their open file from the restore map.
         // setActiveSession/setActiveTerminalSession above already do this.
-        setActiveFile: (path) =>
+        setActiveFile: (path, opts) =>
           set((s) => {
             const key = layoutKey(s);
-            if (!key) return { activeFilePath: path, peekFile: null, pendingLineTarget: null };
+            const history = key && !opts?.skipHistory ? recordHistoryEntry(s, key) : {};
+            if (!key) return { ...history, activeFilePath: path, peekFile: null, pendingLineTarget: null };
             if (path === null) {
               // Close active tab (D2)
               const idx = s.activeFileTabIdxByWorktree[key] ?? -1;
-              if (idx < 0) return { activeFilePath: null, peekFile: null, pendingLineTarget: null };
+              if (idx < 0) return { ...history, activeFilePath: null, peekFile: null, pendingLineTarget: null };
               const tabs = s.openFileTabsByWorktree[key] ?? [];
               const nextTabs = tabs.filter((_, i) => i !== idx);
               const nextIdx = nextTabs.length === 0 ? -1 : Math.min(idx, nextTabs.length - 1);
               const newPath = nextIdx >= 0 ? (nextTabs[nextIdx] ?? null) : null;
               return {
+                ...history,
                 activeFilePath: newPath,
                 openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
@@ -921,6 +1006,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const alreadyOpen = tabs.indexOf(path);
             if (alreadyOpen >= 0) {
               return {
+                ...history,
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: alreadyOpen },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [key]: path },
@@ -938,6 +1024,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               nextIdx = nextTabs.length - 1;
             }
             return {
+              ...history,
               activeFilePath: path,
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [key]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [key]: nextIdx },
@@ -948,10 +1035,12 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         openFileTabNew: (worktreeId, path) =>
           set((s) => {
+            const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             const existingIdx = tabs.indexOf(path);
             if (existingIdx >= 0) {
               return {
+                ...history,
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
@@ -962,6 +1051,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const nextTabs = [...tabs, path];
             const nextIdx = nextTabs.length - 1;
             return {
+              ...history,
               activeFilePath: path,
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
@@ -972,11 +1062,13 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         setActiveFilePathAtLine: (worktreeId, path, line, matchText) =>
           set((s) => {
+            const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             const existingIdx = tabs.indexOf(path);
             const target = { worktreeId, path, line, matchText: matchText ?? null };
             if (existingIdx >= 0) {
               return {
+                ...history,
                 activeFilePath: path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: existingIdx },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
@@ -987,6 +1079,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const nextTabs = [...tabs, path];
             const nextIdx = nextTabs.length - 1;
             return {
+              ...history,
               activeFilePath: path,
               openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [worktreeId]: nextTabs },
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: nextIdx },
@@ -997,7 +1090,172 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           }),
         clearPendingLineTarget: () => set({ pendingLineTarget: null }),
         setPeekFile: (peek) => set({ peekFile: peek }),
-        clearPeekFile: () => set({ peekFile: null }),
+        clearPeekFile: (opts) =>
+          set((s) => {
+            const currentSource = s.peekFile?.source ?? "search";
+            if (opts?.ifSource && currentSource !== opts.ifSource) {
+              return s;
+            }
+            return { peekFile: null };
+          }),
+        pushJump: (next) =>
+          set((s) => {
+            const key = next.worktreeId || layoutKey(s) || "";
+            const peekValue: PeekFileValue = {
+              worktreeId: next.worktreeId,
+              path: next.path,
+              line: next.line,
+              matchText: next.matchText,
+              source: next.source,
+              ...(next.external ? { external: next.external } : {}),
+            };
+
+            // (a) if coalesce && peekFile?.source === next.source, replace peekFile in place, no stack push, no tab-check
+            if (next.coalesce && s.peekFile?.source === next.source) {
+              return { peekFile: peekValue };
+            }
+
+            // (b) else if openFileTabsByWorktree[worktreeId] already contains next.path and !next.external,
+            // skip the peek slot entirely — call the existing tab-scroll logic instead (this path DOES record history,
+            // since it's a discrete jump, not a roving step);
+            const tabs = s.openFileTabsByWorktree[next.worktreeId] ?? [];
+            if (!next.external && tabs.includes(next.path)) {
+              const history = key ? recordHistoryEntry(s, key) : {};
+              const existingIdx = tabs.indexOf(next.path);
+              const target = {
+                worktreeId: next.worktreeId,
+                path: next.path,
+                line: next.line,
+                matchText: next.matchText ?? null,
+              };
+              return {
+                ...history,
+                activeFilePath: next.path,
+                activeFileTabIdxByWorktree: {
+                  ...s.activeFileTabIdxByWorktree,
+                  [next.worktreeId]: existingIdx,
+                },
+                lastFileByWorktree: {
+                  ...s.lastFileByWorktree,
+                  [next.worktreeId]: next.path,
+                },
+                pendingLineTarget: target,
+                peekFile: null,
+              };
+            }
+
+            // (c) Decision 19: in-workspace definition/references/outline jumps commit to a permanent tab;
+            // search (coalesce) and any external jump still peek.
+            // Decision 20: FilesPanel's per-source icon / double-click-to-promote logic is narrowed to external-only peeks by this change, not dead code.
+            const history = key ? recordHistoryEntry(s, key) : {};
+            if (next.source !== "search" && !next.external) {
+              const tabs = s.openFileTabsByWorktree[next.worktreeId] ?? [];
+              const nextTabs = [...tabs, next.path];
+              return {
+                ...history,
+                openFileTabsByWorktree: { ...s.openFileTabsByWorktree, [next.worktreeId]: nextTabs },
+                activeFilePath: next.path,
+                activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [next.worktreeId]: nextTabs.length - 1 },
+                lastFileByWorktree: { ...s.lastFileByWorktree, [next.worktreeId]: next.path },
+                pendingLineTarget: { worktreeId: next.worktreeId, path: next.path, line: next.line, matchText: next.matchText ?? null },
+                peekFile: null,
+              };
+            }
+            return {
+              ...history,
+              peekFile: peekValue,
+            };
+          }),
+        navigateBack: (key) => {
+          const s = get();
+          const stack = s.backStack[key] ?? [];
+          if (stack.length === 0) return;
+          const popped = stack[stack.length - 1]!;
+          const nextBack = stack.slice(0, -1);
+          let currentSnapshot: PeekEntry | null = null;
+          if (s.peekFile) {
+            currentSnapshot = { kind: "peek", value: s.peekFile };
+          } else if (s.activeFilePath) {
+            currentSnapshot = {
+              kind: "committed",
+              worktreeId: key,
+              path: s.activeFilePath,
+              line: s.pendingLineTarget?.line ?? null,
+            };
+          }
+          const curForward = s.forwardStack[key] ?? [];
+          const nextForward = currentSnapshot ? [...curForward, currentSnapshot] : curForward;
+
+          if (popped.kind === "peek") {
+            set({
+              backStack: { ...s.backStack, [key]: nextBack },
+              forwardStack: { ...s.forwardStack, [key]: nextForward },
+              peekFile: popped.value,
+              pendingLineTarget: null,
+            });
+          } else {
+            set({
+              backStack: { ...s.backStack, [key]: nextBack },
+              forwardStack: { ...s.forwardStack, [key]: nextForward },
+            });
+            get().setActiveFile(popped.path, { skipHistory: true });
+            if (popped.line != null) {
+              set({
+                pendingLineTarget: {
+                  worktreeId: popped.worktreeId,
+                  path: popped.path,
+                  line: popped.line,
+                  matchText: null,
+                },
+              });
+            }
+          }
+        },
+        navigateForward: (key) => {
+          const s = get();
+          const stack = s.forwardStack[key] ?? [];
+          if (stack.length === 0) return;
+          const popped = stack[stack.length - 1]!;
+          const nextForward = stack.slice(0, -1);
+          let currentSnapshot: PeekEntry | null = null;
+          if (s.peekFile) {
+            currentSnapshot = { kind: "peek", value: s.peekFile };
+          } else if (s.activeFilePath) {
+            currentSnapshot = {
+              kind: "committed",
+              worktreeId: key,
+              path: s.activeFilePath,
+              line: s.pendingLineTarget?.line ?? null,
+            };
+          }
+          const curBack = s.backStack[key] ?? [];
+          const nextBack = currentSnapshot ? [...curBack, currentSnapshot] : curBack;
+
+          if (popped.kind === "peek") {
+            set({
+              backStack: { ...s.backStack, [key]: nextBack },
+              forwardStack: { ...s.forwardStack, [key]: nextForward },
+              peekFile: popped.value,
+              pendingLineTarget: null,
+            });
+          } else {
+            set({
+              backStack: { ...s.backStack, [key]: nextBack },
+              forwardStack: { ...s.forwardStack, [key]: nextForward },
+            });
+            get().setActiveFile(popped.path, { skipHistory: true });
+            if (popped.line != null) {
+              set({
+                pendingLineTarget: {
+                  worktreeId: popped.worktreeId,
+                  path: popped.path,
+                  line: popped.line,
+                  matchText: null,
+                },
+              });
+            }
+          }
+        },
         closeFileTab: (worktreeId, idx) =>
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
@@ -1028,8 +1286,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => {
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             if (idx < 0 || idx >= tabs.length) return s;
+            const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const path = tabs[idx]!;
             return {
+              ...history,
               activeFilePath: path,
               activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [worktreeId]: idx },
               lastFileByWorktree: { ...s.lastFileByWorktree, [worktreeId]: path },
@@ -1059,6 +1319,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             filesLeftPaneMode: { ...s.filesLeftPaneMode, [worktreeId]: mode },
           })),
+        setPendingReferencesQuery: (query) =>
+          set({ pendingReferencesQuery: query }),
         requestSearchFocus: (contextId) =>
           set((s) => ({
             searchFocusSeq: { ...s.searchFocusSeq, [contextId]: (s.searchFocusSeq[contextId] ?? 0) + 1 },

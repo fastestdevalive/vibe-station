@@ -13,6 +13,9 @@ const mockSetActiveFilePathAtLine = vi.fn();
 const mockOpenFileTabNew = vi.fn();
 const mockSetToolPanelTab = vi.fn();
 const mockSetPeekFile = vi.fn();
+const mockPushJump = vi.fn((arg: { worktreeId: string; path: string; line: number; matchText: string | null; source?: string; coalesce?: boolean }) => {
+  mockSetPeekFile({ worktreeId: arg.worktreeId, path: arg.path, line: arg.line, matchText: arg.matchText });
+});
 const mockClearPeekFile = vi.fn();
 // Module-level mutable store state so tests can drive `filesLeftPaneMode` /
 // `searchFocusSeq` (Phase 3.7/3.7a) and re-render to observe the focus effects.
@@ -21,6 +24,7 @@ const mockStoreState: Record<string, unknown> = {
   openFileTabNew: mockOpenFileTabNew,
   setToolPanelTab: mockSetToolPanelTab,
   setPeekFile: mockSetPeekFile,
+  pushJump: mockPushJump,
   clearPeekFile: mockClearPeekFile,
   filesLeftPaneMode: {} as Record<string, "tree" | "search">,
   searchFocusSeq: {} as Record<string, number>,
@@ -640,6 +644,64 @@ describe("SearchPanel", () => {
       fireEvent.keyDown(container, { key: "Escape" });
       expect(mockClearPeekFile).not.toHaveBeenCalled();
       expect(mockSetPeekFile).toHaveBeenCalledTimes(1); // still the one from arrowing
+    });
+
+    // 2.T3 (a) typing a new query passes ifSource: 'search' preserving definition peeks;
+    // (b) arrow-roving through 5 search results passes coalesce: true (coalesce guard).
+    it("2.T3 — (a) query change passes ifSource: 'search'; (b) arrow-roving through 5 matches passes coalesce: true", async () => {
+      const fiveMatches: SearchResult = {
+        files: [
+          {
+            path: "src/a.ts",
+            matches: [
+              { line: 1, pre: "", mid: "one", post: "" },
+              { line: 2, pre: "", mid: "two", post: "" },
+              { line: 3, pre: "", mid: "three", post: "" },
+              { line: 4, pre: "", mid: "four", post: "" },
+              { line: 5, pre: "", mid: "five", post: "" },
+            ],
+          },
+        ],
+        truncated: false,
+        totalMatches: 5,
+      };
+
+      mockApi.search.mockResolvedValue(fiveMatches);
+      render(<SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />);
+      const input = screen.getByPlaceholderText("Search content...");
+
+      // (a) Typing query clears only search-sourced peeks (ifSource: "search")
+      mockClearPeekFile.mockClear();
+      await userEvent.type(input, "query");
+      expect(mockClearPeekFile).toHaveBeenCalledWith({ ifSource: "search" });
+
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(200);
+      vi.useRealTimers();
+
+      await waitFor(() => expect(screen.getByText("src/a.ts")).toBeInTheDocument());
+      const container = document.querySelector(".search-panel__results-list") as HTMLElement;
+
+      // (b) Arrow-rove through the 5 matches
+      mockPushJump.mockClear();
+      vi.useFakeTimers();
+      fireEvent.keyDown(input, { key: "Enter" }); // focus header
+      for (let i = 1; i <= 5; i++) {
+        fireEvent.keyDown(container, { key: "ArrowDown" });
+        vi.advanceTimersByTime(200);
+      }
+      vi.useRealTimers();
+
+      // Every roving jump was called with coalesce: true and source: "search"
+      expect(mockPushJump).toHaveBeenCalledTimes(5);
+      for (const call of mockPushJump.mock.calls) {
+        expect(call[0]).toMatchObject({
+          worktreeId: "wt-1",
+          path: "src/a.ts",
+          source: "search",
+          coalesce: true,
+        });
+      }
     });
   });
 

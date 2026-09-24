@@ -11,6 +11,7 @@ import { SkillsSetting } from "./SkillsSetting";
 import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
 import { StorageSetting } from "./StorageSetting";
 import { RemoteAccessSetting } from "./RemoteAccessSetting";
+import { LspSetting } from "./LspSetting";
 
 interface Section {
   id: string;
@@ -37,6 +38,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     { id: "hidden-projects", label: "Hidden projects", content: <HiddenProjectsSetting api={api} /> },
     { id: "storage", label: "Storage", content: <StorageSetting api={api} /> },
     { id: "remote-access", label: "Remote Access", content: <RemoteAccessSetting api={api} /> },
+    { id: "lsp", label: "LSP", content: <LspSetting api={api} /> },
   ];
 
   const activeSection = sections.find((s) => s.id === sectionId) ?? sections[0]!;

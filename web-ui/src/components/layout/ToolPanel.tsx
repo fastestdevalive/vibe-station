@@ -10,6 +10,7 @@ import { DevicesPanel } from "@/components/tools/DevicesPanel";
 import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
+import { LspStatusRow } from "@/components/layout/LspStatusRow";
 
 interface ToolPanelProps {
   api: ApiInstance;
@@ -202,6 +203,7 @@ export function ToolPanel({
           </>
         )}
       </div>
+      {worktreeId != null ? <LspStatusRow api={api} worktreeId={worktreeId} scope={scope} /> : null}
     </div>
   );
 }

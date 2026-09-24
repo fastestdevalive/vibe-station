@@ -525,6 +525,7 @@ describe("LeftSidebar", () => {
           createdAt: new Date().toISOString(),
           pinnedAt: new Date().toISOString(),
           hiddenAt: null,
+          lspEnabled: false,
         },
       });
 
@@ -569,6 +570,7 @@ describe("LeftSidebar", () => {
             createdAt: new Date().toISOString(),
             pinnedAt: new Date(now - 10000).toISOString(),
             hiddenAt: null,
+            lspEnabled: false,
           },
         });
       });
@@ -848,6 +850,7 @@ describe("LeftSidebar", () => {
       defaultBranch: "main",
           createdAt: new Date().toISOString(),
           hidden: true,
+          lspEnabled: false,
         },
       });
       await waitFor(() => {

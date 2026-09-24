@@ -70,6 +70,9 @@ export interface Project {
   /** When true, the project and all its worktrees are hidden from the sidebar
    *  and dashboard. Always emitted by the daemon (defaults to false). */
   hidden: boolean;
+  /** True when LSP features (code navigation, outline) are enabled for this project.
+   *  Always emitted by the daemon (defaults to false). */
+  lspEnabled: boolean;
 }
 
 export interface Worktree {
@@ -101,6 +104,9 @@ export interface Worktree {
    * main agent. Null for legacy/edge records with no main session.
    */
   mainSessionId?: string | null;
+  /** True when LSP features (code navigation, outline) are enabled for this worktree.
+   *  Always emitted by the daemon (defaults to false). */
+  lspEnabled: boolean;
 }
 
 /**
@@ -1068,4 +1074,19 @@ export interface WorktreeDiskUsage {
 export interface DiskUsageResponse {
   device: DeviceDiskInfo;
   worktrees: WorktreeDiskUsage[];
+}
+
+/** Mirrors daemon `LspLanguageSurveyEntry` (rust/vst-types/src/rest/lsp.rs). */
+export interface LspLanguageSurveyEntry {
+  language: string;
+  displayName: string;
+  command: string;
+  installedOnHost: boolean;
+  installCommand: string | null;
+  installNote: string | null;
+}
+
+/** Response from GET /lsp/languages. */
+export interface LspLanguageSurveyResponse {
+  languages: LspLanguageSurveyEntry[];
 }

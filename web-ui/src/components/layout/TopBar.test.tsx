@@ -18,10 +18,11 @@ const projects: Project[] = [
     isGit: true,
     createdAt: new Date().toISOString(),
     hidden: false,
+    lspEnabled: false,
   },
 ];
 const worktrees: Worktree[] = [
-  { id: W1, projectId: "proj-1", branch: "main", baseBranch: "main", createdAt: new Date().toISOString(), pinnedAt: null, hiddenAt: null },
+  { id: W1, projectId: "proj-1", branch: "main", baseBranch: "main", createdAt: new Date().toISOString(), pinnedAt: null, hiddenAt: null, lspEnabled: false },
 ];
 
 const emptyCanvas: CanvasGeometry = { mode: "free", tiles: [], tree: null, freeRects: {} };

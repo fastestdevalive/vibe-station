@@ -60,7 +60,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
   const setActiveFilePathAtLine = useWorkspaceStore((s) => s.setActiveFilePathAtLine);
   const openFileTabNew = useWorkspaceStore((s) => s.openFileTabNew);
   const setToolPanelTab = useWorkspaceStore((s) => s.setToolPanelTab);
-  const setPeekFile = useWorkspaceStore((s) => s.setPeekFile);
+  const pushJump = useWorkspaceStore((s) => s.pushJump);
   const clearPeekFile = useWorkspaceStore((s) => s.clearPeekFile);
   const filesLeftPaneMode = useWorkspaceStore((s) => s.filesLeftPaneMode);
   // Per-context (not global) — a canvas can have multiple mounted
@@ -218,7 +218,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
     // Any query change (not just clearing it to empty) must drop the previous
     // query's peek, so a stale preview never lingers under a new (still-loading)
     // result set (S8 / Requirement 7).
-    clearPeekFile();
+    clearPeekFile({ ifSource: "search" });
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
@@ -375,14 +375,21 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
       peekDebounceRef.current = null;
     }
     if (cursorPath === null) {
-      if (matchRows.length === 0) clearPeekFile();
+      if (matchRows.length === 0) clearPeekFile({ ifSource: "search" });
       return;
     }
     const row = matchRows.find((r) => r.path === cursorPath);
     if (row?.kind === "match" && row.line != null && worktreeId) {
       const { filePath, line, matchText } = row;
       peekDebounceRef.current = setTimeout(() => {
-        setPeekFile({ worktreeId, path: filePath, line, matchText: matchText ?? null });
+        pushJump({
+          worktreeId,
+          path: filePath,
+          line,
+          matchText: matchText ?? null,
+          source: "search",
+          coalesce: true,
+        });
       }, 200);
     }
     return () => {
@@ -391,7 +398,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
         peekDebounceRef.current = null;
       }
     };
-  }, [cursorPath, matchRows, worktreeId, setPeekFile, clearPeekFile]);
+  }, [cursorPath, matchRows, worktreeId, pushJump, clearPeekFile]);
 
   // Results-container key handling: Escape returns to the input; Mod+Enter
   // commits the cursored match into a NEW tab (priority over the hook's plain
