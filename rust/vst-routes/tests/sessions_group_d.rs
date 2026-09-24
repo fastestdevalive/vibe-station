@@ -124,6 +124,7 @@ fn make_project(id: &str) -> ProjectRecord {
         direct_session_seq: Some(1),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     }
 }
 

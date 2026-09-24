@@ -53,13 +53,14 @@ use vst_types::rest::projects::{
 };
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
-    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, GutterResult,
+    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, GutterResult, SearchResult,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 
 use crate::modes::{find_mode, resolve_mode_id};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
+use crate::file_serving::{read_file_response, FileServingError};
 use crate::worktrees::{
     compute_etag, is_valid_commit_sha, merge_numstat, parse_branch_name_status, parse_porcelain_z,
     run_numstat_cmd, serialize_worktree, untracked_numstat_cmd, DiffResponse, FileResponse,
@@ -87,6 +88,26 @@ pub enum ProjectRouteError {
     },
     #[error("Internal server error: {0}")]
     Internal(String),
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+}
+
+impl From<crate::search_util::RgSearchError> for ProjectRouteError {
+    fn from(e: crate::search_util::RgSearchError) -> Self {
+        match e {
+            crate::search_util::RgSearchError::NotFound => {
+                ProjectRouteError::ServiceUnavailable("ripgrep_unavailable".into())
+            }
+            crate::search_util::RgSearchError::ProcessError(msg) => {
+                ProjectRouteError::Internal(msg)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PatchProjectLspEnabledBody {
+    pub enabled: bool,
 }
 
 impl ProjectRouteError {
@@ -344,6 +365,7 @@ impl ProjectRoutes {
             direct_session_seq: Some(0),
             worktrees: vec![],
             next_worktree_num: Some(1),
+            lsp_enabled: None,
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {
@@ -539,6 +561,7 @@ impl ProjectRoutes {
             direct_session_seq: Some(0),
             worktrees: vec![],
             next_worktree_num: Some(1),
+            lsp_enabled: None,
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {
@@ -698,6 +721,7 @@ impl ProjectRoutes {
                             sort_order: ms_now() as f64,
                             terminal_seq: Some(0),
                             agent_seq: Some(1),
+                            lsp_enabled: None,
                             sessions: vec![main_session.clone()],
                         };
 
@@ -1103,6 +1127,57 @@ impl ProjectRoutes {
         })
     }
 
+    // ── 5b. PATCH /projects/:id/lsp-enabled ───────────────────────────────
+    pub async fn patch_lsp_enabled(
+        &self,
+        id: &str,
+        body: PatchProjectLspEnabledBody,
+    ) -> Result<PatchProjectResult, ProjectRouteError> {
+        let current = self
+            .store
+            .get_project(id)
+            .await
+            .ok_or_else(|| ProjectRouteError::NotFound(format!("Project '{id}' not found")))?;
+
+        let current_enabled = current.lsp_enabled.unwrap_or(false);
+        if current_enabled == body.enabled {
+            return Ok(PatchProjectResult {
+                ok: true,
+                project: serialize_project(&current),
+            });
+        }
+
+        let enabled_val = body.enabled;
+        let id_clone = id.to_string();
+        let updated = self
+            .store
+            .mutate_project(&id_clone, move |p| {
+                p.lsp_enabled = Some(enabled_val);
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|e| match e {
+                StoreError::NotFound(_) => {
+                    ProjectRouteError::NotFound(format!("Project '{id}' not found"))
+                }
+                other => ProjectRouteError::Internal(other.to_string()),
+            })?;
+
+        let api_project = serialize_project(&updated);
+        if let Ok(val) = serde_json::to_value(&api_project) {
+            if let Some(map) = val.as_object() {
+                self.broadcaster.send(ServerEvent::ProjectUpdated {
+                    project: map.clone(),
+                });
+            }
+        }
+
+        Ok(PatchProjectResult {
+            ok: true,
+            project: api_project,
+        })
+    }
+
     // ── 6. DELETE /projects/:id ───────────────────────────────────────────
     pub async fn delete_project(&self, id: &str) -> Result<(), ProjectRouteError> {
         let project = self
@@ -1251,6 +1326,42 @@ impl ProjectRoutes {
         })
     }
 
+    // ── 8b. GET /projects/:projectId/search ──────────────────────────────
+    pub async fn search(
+        &self,
+        project_id: &str,
+        q: &str,
+        re: bool,
+        case: bool,
+        word: bool,
+        glob: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<SearchResult, ProjectRouteError> {
+        if q.is_empty() {
+            return Err(ProjectRouteError::Validation("q is required".into()));
+        }
+
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        let root = PathBuf::from(&project.absolute_path);
+        let limit = limit.unwrap_or(2000);
+
+        let raw_matches = crate::search_util::rg_search(
+            &root,
+            q,
+            re,
+            case,
+            word,
+            glob,
+            limit,
+        )
+        .await?;
+
+        Ok(crate::search_util::shape_search_matches(&raw_matches, limit))
+    }
+
     // ── 9. GET /projects/:projectId/files/* ───────────────────────────────
     pub async fn get_file(
         &self,
@@ -1264,67 +1375,19 @@ impl ProjectRoutes {
         let root = Path::new(&project.absolute_path);
         let abs_path = resolve_inside_dir(root, file_path)?;
 
-        let meta = tokio::fs::metadata(&abs_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        read_file_response(&abs_path).await.map_err(|e| match e {
+            FileServingError::NotFound(_) => {
                 ProjectRouteError::NotFound(format!("File not found: {file_path}"))
-            } else {
-                ProjectRouteError::unprocessable(e.to_string(), None)
             }
-        })?;
-
-        const HARD_LIMIT: u64 = 50 * 1024 * 1024;
-        const BINARY_LIMIT: u64 = 1024 * 1024;
-
-        if meta.len() > HARD_LIMIT {
-            return Err(ProjectRouteError::unprocessable(
+            FileServingError::TooLarge => ProjectRouteError::unprocessable(
                 "File too large (>50MB)",
                 Some("size_limit".to_string()),
-            ));
-        }
-
-        let buf = tokio::fs::read(&abs_path)
-            .await
-            .map_err(|e| ProjectRouteError::unprocessable(e.to_string(), None))?;
-
-        let ext = abs_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let image_mime = match ext.as_str() {
-            "png" => Some("image/png"),
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "gif" => Some("image/gif"),
-            "webp" => Some("image/webp"),
-            "svg" => Some("image/svg+xml"),
-            "bmp" => Some("image/bmp"),
-            "ico" => Some("image/x-icon"),
-            "avif" => Some("image/avif"),
-            _ => None,
-        };
-
-        if let Some(mime) = image_mime {
-            return Ok(FileResponse::Image {
-                mime: mime.to_string(),
-                content: buf,
-            });
-        }
-
-        let sample_len = buf.len().min(8192);
-        let is_binary = buf[..sample_len].contains(&0);
-        if is_binary && meta.len() > BINARY_LIMIT {
-            return Err(ProjectRouteError::unprocessable(
+            ),
+            FileServingError::BinaryTooLarge => ProjectRouteError::unprocessable(
                 "Binary file (>1MB) — preview unavailable",
                 Some("binary".to_string()),
-            ));
-        }
-
-        let etag = compute_etag(&buf);
-        let text = String::from_utf8_lossy(&buf).to_string();
-
-        Ok(FileResponse::Text {
-            etag,
-            content: text,
+            ),
+            other => ProjectRouteError::unprocessable(other.to_string(), None),
         })
     }
 
@@ -1717,6 +1780,7 @@ pub fn serialize_project(p: &ProjectRecord) -> Project {
         default_branch: p.default_branch.clone(),
         created_at: p.created_at.clone(),
         hidden: p.hidden.unwrap_or(false),
+        lsp_enabled: p.lsp_enabled.unwrap_or(false),
         warning: None,
     }
 }

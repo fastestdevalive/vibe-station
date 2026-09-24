@@ -13,6 +13,7 @@ members = [
     "vst-ws",
     "vst-routes",
     "vst-daemon",
+    "vst-lsp",
     "vst-cli",
 ]
 # Vendor dir is a git submodule (openab/agy-acp) built in isolation as a
@@ -55,6 +56,7 @@ vst-lifecycle = { path = "vst-lifecycle" }
 vst-ws = { path = "vst-ws" }
 vst-routes = { path = "vst-routes" }
 vst-daemon = { path = "vst-daemon" }
+vst-lsp = { path = "vst-lsp" }
 vst-cli = { path = "vst-cli" }
 
 [workspace.lints.rust]

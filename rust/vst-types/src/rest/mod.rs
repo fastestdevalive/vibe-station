@@ -20,6 +20,7 @@ pub mod settings;
 pub mod skills;
 pub mod tailscale;
 pub mod worktrees;
+pub mod lsp;
 
 pub mod shared;
 

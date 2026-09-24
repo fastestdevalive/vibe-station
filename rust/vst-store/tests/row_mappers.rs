@@ -315,6 +315,7 @@ fn wt(id: &str, branch: &str, hidden_at: Option<&str>) -> WorktreeRecord {
         sort_order: 1.0,
         terminal_seq: Some(0),
         agent_seq: Some(0),
+        lsp_enabled: None,
         sessions: vec![],
     }
 }
@@ -334,6 +335,7 @@ fn worktree_round_trip() {
         sort_order: 3.0,
         terminal_seq: Some(2),
         agent_seq: Some(5),
+        lsp_enabled: None,
         sessions: vec![],
     };
     let row = worktree_to_row(&record, "proj-1");
@@ -365,6 +367,7 @@ fn project(id: &str, hidden: bool) -> ProjectRecord {
         direct_session_seq: Some(4),
         worktrees: vec![],
         next_worktree_num: Some(6),
+        lsp_enabled: None,
     }
 }
 
@@ -389,6 +392,7 @@ fn project_omits_hidden_when_false() {
         direct_session_seq: None,
         worktrees: vec![],
         next_worktree_num: None,
+        lsp_enabled: None,
     };
     let row = project_to_row(&record);
     let back = row_to_project(&row, vec![], vec![]);

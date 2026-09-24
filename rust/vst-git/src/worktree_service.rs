@@ -139,6 +139,7 @@ pub async fn create_worktree_record(
         sort_order: now_ms() as f64,
         terminal_seq: Some(0),
         agent_seq: Some(0),
+        lsp_enabled: None,
         sessions,
     };
 

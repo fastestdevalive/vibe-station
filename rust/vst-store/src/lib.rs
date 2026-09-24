@@ -478,12 +478,13 @@ fn worktree_from_row(r: &rusqlite::Row) -> rusqlite::Result<WorktreeRow> {
         terminal_seq: r.get(10)?,
         agent_seq: r.get(11)?,
         branch_is_placeholder: r.get(12)?,
+        lsp_enabled: r.get(13)?,
     })
 }
 
 fn select_worktrees(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<WorktreeRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, hiddenAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder FROM worktrees WHERE projectId = ?1 ORDER BY sortOrder ASC",
+        "SELECT id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, hiddenAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder, lspEnabled FROM worktrees WHERE projectId = ?1 ORDER BY sortOrder ASC",
     )?;
     let rows = stmt
         .query_map([project_id], worktree_from_row)?
@@ -502,12 +503,13 @@ fn project_from_row(r: &rusqlite::Row) -> rusqlite::Result<ProjectRow> {
         hidden: r.get(6)?,
         direct_session_seq: r.get(7)?,
         next_worktree_num: r.get(8)?,
+        lsp_enabled: r.get(9)?,
     })
 }
 
 fn select_project(conn: &Connection, id: &str) -> rusqlite::Result<Option<ProjectRow>> {
     conn.query_row(
-        "SELECT id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum FROM projects WHERE id = ?1",
+        "SELECT id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum, lspEnabled FROM projects WHERE id = ?1",
         [id],
         project_from_row,
     )
@@ -516,7 +518,7 @@ fn select_project(conn: &Connection, id: &str) -> rusqlite::Result<Option<Projec
 
 fn select_all_projects(conn: &Connection) -> rusqlite::Result<Vec<ProjectRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum FROM projects",
+        "SELECT id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum, lspEnabled FROM projects",
     )?;
     let rows = stmt
         .query_map([], project_from_row)?
@@ -569,8 +571,8 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
     {
         let proj = project_to_row(record);
         txn.execute(
-            "INSERT INTO projects (id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO projects (id, absolutePath, prefix, isGit, defaultBranch, createdAt, hidden, directSessionSeq, nextWorktreeNum, lspEnabled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                absolutePath = excluded.absolutePath,
                prefix = excluded.prefix,
@@ -579,7 +581,8 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
                createdAt = excluded.createdAt,
                hidden = excluded.hidden,
                directSessionSeq = excluded.directSessionSeq,
-               nextWorktreeNum = excluded.nextWorktreeNum",
+               nextWorktreeNum = excluded.nextWorktreeNum,
+               lspEnabled = excluded.lspEnabled",
             params![
                 proj.id,
                 proj.absolute_path,
@@ -589,7 +592,8 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
                 proj.created_at,
                 proj.hidden,
                 proj.direct_session_seq,
-                proj.next_worktree_num
+                proj.next_worktree_num,
+                proj.lsp_enabled
             ],
         )?;
 
@@ -599,11 +603,12 @@ fn write_project_full(conn: &Connection, record: &ProjectRecord) -> StoreResult<
         for w in &record.worktrees {
             let wt = worktree_to_row(w, &record.id);
             txn.execute(
-                "INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, hiddenAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO worktrees (id, projectId, name, branch, baseBranch, baseSha, createdAt, pinnedAt, hiddenAt, sortOrder, terminalSeq, agentSeq, branchIsPlaceholder, lspEnabled)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     wt.id, wt.project_id, wt.name, wt.branch, wt.base_branch, wt.base_sha, wt.created_at,
-                    wt.pinned_at, wt.hidden_at, wt.sort_order, wt.terminal_seq, wt.agent_seq, wt.branch_is_placeholder
+                    wt.pinned_at, wt.hidden_at, wt.sort_order, wt.terminal_seq, wt.agent_seq, wt.branch_is_placeholder,
+                    wt.lsp_enabled
                 ],
             )?;
             for s in &w.sessions {

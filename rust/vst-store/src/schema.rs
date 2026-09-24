@@ -25,7 +25,8 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
       createdAt TEXT NOT NULL,
       hidden INTEGER NOT NULL DEFAULT 0,
       directSessionSeq INTEGER NOT NULL DEFAULT 0,
-      nextWorktreeNum INTEGER NOT NULL DEFAULT 1
+      nextWorktreeNum INTEGER NOT NULL DEFAULT 1,
+      lspEnabled INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS worktrees (
@@ -41,7 +42,8 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
       sortOrder REAL NOT NULL,
       terminalSeq INTEGER NOT NULL DEFAULT 0,
       agentSeq INTEGER NOT NULL DEFAULT 0,
-      branchIsPlaceholder INTEGER NOT NULL DEFAULT 0
+      branchIsPlaceholder INTEGER NOT NULL DEFAULT 0,
+      lspEnabled INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_worktrees_projectId ON worktrees(projectId);
 
@@ -115,6 +117,8 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
         "branchIsPlaceholder",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    add_column_if_missing(db, "projects", "lspEnabled", "INTEGER")?;
+    add_column_if_missing(db, "worktrees", "lspEnabled", "INTEGER")?;
     add_column_if_missing(db, "worktrees", "hiddenAt", "TEXT")?;
     add_column_if_missing(db, "sessions", "spawnedFrom", "TEXT")?;
     add_column_if_missing(db, "sessions", "supersededBy", "TEXT")?;

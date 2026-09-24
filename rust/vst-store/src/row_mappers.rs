@@ -314,6 +314,7 @@ pub struct WorktreeRow {
     pub terminal_seq: i64,
     pub agent_seq: i64,
     pub branch_is_placeholder: i64,
+    pub lsp_enabled: Option<i64>,
 }
 
 pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> WorktreeRecord {
@@ -333,6 +334,7 @@ pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> Workt
         sort_order: row.sort_order,
         terminal_seq: Some(row.terminal_seq),
         agent_seq: Some(row.agent_seq),
+        lsp_enabled: row.lsp_enabled.map(row_to_bool),
         sessions,
     }
 }
@@ -352,6 +354,7 @@ pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
         terminal_seq: w.terminal_seq.unwrap_or(0),
         agent_seq: w.agent_seq.unwrap_or(0),
         branch_is_placeholder: bool_to_row(w.branch_is_placeholder.unwrap_or(false)),
+        lsp_enabled: w.lsp_enabled.map(bool_to_row),
     }
 }
 
@@ -367,6 +370,7 @@ pub struct ProjectRow {
     pub hidden: i64,
     pub direct_session_seq: i64,
     pub next_worktree_num: i64,
+    pub lsp_enabled: Option<i64>,
 }
 
 pub fn row_to_project(
@@ -386,6 +390,7 @@ pub fn row_to_project(
         direct_session_seq: Some(row.direct_session_seq),
         worktrees,
         next_worktree_num: Some(row.next_worktree_num),
+        lsp_enabled: row.lsp_enabled.map(row_to_bool),
     }
 }
 
@@ -400,5 +405,6 @@ pub fn project_to_row(p: &ProjectRecord) -> ProjectRow {
         hidden: bool_to_row(p.hidden.unwrap_or(false)),
         direct_session_seq: p.direct_session_seq.unwrap_or(0),
         next_worktree_num: p.next_worktree_num.unwrap_or(1),
+        lsp_enabled: p.lsp_enabled.map(bool_to_row),
     }
 }

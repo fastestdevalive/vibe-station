@@ -153,6 +153,7 @@ async fn test_pure_helpers() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     let serialized = serialize_project(&rec);
     assert_eq!(serialized.id, "p-rec");
@@ -177,6 +178,7 @@ async fn test_list_projects_order() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     let p2 = ProjectRecord {
         id: "proj-a".into(),
@@ -190,6 +192,7 @@ async fn test_list_projects_order() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     let p3 = ProjectRecord {
         id: "proj-c".into(),
@@ -203,6 +206,7 @@ async fn test_list_projects_order() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
 
     store.add_project(p1).await.unwrap();
@@ -243,6 +247,7 @@ async fn test_list_project_branches() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p_non_git).await.unwrap();
 
@@ -267,6 +272,7 @@ async fn test_list_project_branches() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p_git).await.unwrap();
 
@@ -656,6 +662,7 @@ async fn test_patch_project_hidden() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p).await.unwrap();
 
@@ -701,6 +708,109 @@ async fn test_patch_project_hidden() {
 }
 
 #[tokio::test]
+async fn test_patch_project_lsp_enabled() {
+    let (dir, store, broadcaster, routes) = test_env();
+    let mut rx = broadcaster.subscribe();
+
+    let p = ProjectRecord {
+        id: "patch-proj-lsp".into(),
+        absolute_path: dir.path().join("patch-proj-lsp").to_string_lossy().into(),
+        prefix: "ppl".into(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+    };
+    store.add_project(p).await.unwrap();
+
+    // 404 on missing
+    let err = routes
+        .patch_lsp_enabled(
+            "missing",
+            vst_routes::projects::PatchProjectLspEnabledBody { enabled: true },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::NotFound(_)));
+
+    // 1. PATCH with enabled: true
+    let res = routes
+        .patch_lsp_enabled(
+            "patch-proj-lsp",
+            vst_routes::projects::PatchProjectLspEnabledBody { enabled: true },
+        )
+        .await
+        .unwrap();
+    assert!(res.ok);
+    assert!(res.project.lsp_enabled);
+
+    // Verify broadcast
+    let event = rx.try_recv().expect("broadcast expected");
+    match event {
+        ServerEvent::ProjectUpdated { project } => {
+            assert_eq!(
+                project.get("id").and_then(|v| v.as_str()),
+                Some("patch-proj-lsp")
+            );
+            assert_eq!(
+                project.get("lspEnabled").and_then(|v| v.as_bool()),
+                Some(true)
+            );
+        }
+        other => panic!("expected ProjectUpdated, got {other:?}"),
+    }
+
+    // Verify persisted in DB
+    let p_db = store.get_project("patch-proj-lsp").await.unwrap();
+    assert_eq!(p_db.lsp_enabled, Some(true));
+
+    // 2. Idempotent repeated patch does not re-broadcast
+    let res2 = routes
+        .patch_lsp_enabled(
+            "patch-proj-lsp",
+            vst_routes::projects::PatchProjectLspEnabledBody { enabled: true },
+        )
+        .await
+        .unwrap();
+    assert!(res2.ok);
+    assert!(res2.project.lsp_enabled);
+    assert!(
+        rx.try_recv().is_err(),
+        "unexpected broadcast on idempotent patch"
+    );
+
+    // 3. PATCH with enabled: false
+    let res3 = routes
+        .patch_lsp_enabled(
+            "patch-proj-lsp",
+            vst_routes::projects::PatchProjectLspEnabledBody { enabled: false },
+        )
+        .await
+        .unwrap();
+    assert!(res3.ok);
+    assert!(!res3.project.lsp_enabled);
+
+    let event3 = rx.try_recv().expect("broadcast expected");
+    match event3 {
+        ServerEvent::ProjectUpdated { project } => {
+            assert_eq!(
+                project.get("lspEnabled").and_then(|v| v.as_bool()),
+                Some(false)
+            );
+        }
+        other => panic!("expected ProjectUpdated, got {other:?}"),
+    }
+
+    let p_db3 = store.get_project("patch-proj-lsp").await.unwrap();
+    assert_eq!(p_db3.lsp_enabled, Some(false));
+}
+
+#[tokio::test]
 async fn test_delete_project() {
     let (dir, store, broadcaster, routes) = test_env();
     let mut rx = broadcaster.subscribe();
@@ -726,6 +836,7 @@ async fn test_delete_project() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p).await.unwrap();
 
@@ -774,6 +885,7 @@ async fn test_tree_file_list_and_get_file() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p).await.unwrap();
 
@@ -836,6 +948,7 @@ async fn register_git_project(
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p).await.unwrap();
 }
@@ -1064,6 +1177,7 @@ async fn test_non_git_project_short_circuit() {
         direct_session_seq: Some(0),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(p).await.unwrap();
 
@@ -1191,4 +1305,75 @@ async fn test_gutter_traversal_returns_access_denied_403() {
         }
         other => panic!("expected AccessDenied (403), got {other:?}"),
     }
+}
+
+/// 3.T1: Integration test — project search against fixture project directory
+#[tokio::test]
+async fn test_project_search_integration() {
+    if std::process::Command::new("rg")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_err()
+    {
+        eprintln!("SKIP: rg not found on PATH");
+        return;
+    }
+
+    let (_dir, store, _broadcaster, routes) = test_env();
+    let proj_dir = tempdir().unwrap();
+    let p_path = proj_dir.path();
+
+    tokio::fs::write(p_path.join("hello.txt"), "hello foo world\ngoodbye world\n")
+        .await
+        .unwrap();
+    tokio::fs::create_dir_all(p_path.join("sub")).await.unwrap();
+    tokio::fs::write(p_path.join("sub/deep.txt"), "another foo here\n")
+        .await
+        .unwrap();
+
+    let project = ProjectRecord {
+        id: "proj-search".into(),
+        prefix: "sp".into(),
+        absolute_path: p_path.to_string_lossy().to_string(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+    };
+    store.add_project(project).await.unwrap();
+
+    let result = routes
+        .search("proj-search", "foo", false, true, true, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(result.total_matches, 2);
+    assert!(!result.truncated);
+    let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(paths.contains(&"hello.txt") || paths.contains(&"./hello.txt"));
+    assert!(
+        paths.contains(&"sub/deep.txt") || paths.contains(&"./sub/deep.txt"),
+        "expected sub/deep.txt in paths: {paths:?}"
+    );
+
+    // Empty q -> Validation error
+    let err = routes
+        .search("proj-search", "", false, false, false, None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)));
+
+    // Nonexistent project -> NotFound
+    let err = routes
+        .search("nonexistent-proj", "foo", false, false, false, None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::NotFound(_)));
 }

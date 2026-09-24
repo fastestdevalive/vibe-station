@@ -4982,6 +4982,7 @@ fn serialize_worktree_json(
         hidden_at: w.hidden_at.clone(),
         sort_order: w.sort_order,
         main_session_id,
+        lsp_enabled: w.lsp_enabled.unwrap_or(false),
     };
     serde_json::to_value(worktree)
         .ok()

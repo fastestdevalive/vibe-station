@@ -95,6 +95,8 @@ pub struct Worktree {
     #[serde(with = "crate::serde_ext::compact_f64")]
     pub sort_order: f64,
     pub main_session_id: Option<String>,
+    #[serde(default)]
+    pub lsp_enabled: bool,
 }
 
 /// The canonical serialized project object (`serializeProject`).
@@ -111,6 +113,8 @@ pub struct Project {
     pub default_branch: Option<String>,
     pub created_at: String,
     pub hidden: bool,
+    #[serde(default)]
+    pub lsp_enabled: bool,
     /// Present only on POST /projects when project setup failed.
     pub warning: Option<String>,
 }

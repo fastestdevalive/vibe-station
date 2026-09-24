@@ -194,6 +194,7 @@ impl OpenRoutes {
             direct_session_seq: Some(0),
             worktrees: vec![],
             next_worktree_num: Some(1),
+            lsp_enabled: None,
         };
 
         if let Err(e) = self.store.add_project(record.clone()).await {

@@ -131,6 +131,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         sort_order: 1.0,
         terminal_seq: Some(1),
         agent_seq: Some(1),
+        lsp_enabled: None,
         sessions: vec![session],
     };
 
@@ -146,6 +147,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         direct_session_seq: Some(1),
         worktrees: vec![wt],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     }
 }
 
@@ -196,6 +198,7 @@ async fn test_pure_helpers() {
         sort_order: 1.0,
         terminal_seq: Some(1),
         agent_seq: Some(1),
+        lsp_enabled: None,
         sessions: vec![],
     };
     let serialized = serialize_worktree("proj-x", &wt_rec);
@@ -321,6 +324,7 @@ async fn test_create_worktree_validation_and_errors() {
         direct_session_seq: Some(1),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(non_git_proj).await.unwrap();
 
@@ -368,6 +372,7 @@ async fn test_create_worktree_success_and_events() {
         direct_session_seq: Some(1),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(proj).await.unwrap();
 
@@ -515,6 +520,82 @@ async fn test_worktrees_pin_hide_rename_reorder() {
 }
 
 #[tokio::test]
+async fn test_worktree_patch_lsp_enabled() {
+    let dir = tempdir().unwrap();
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let mut rx = broadcaster.subscribe();
+    let json_registry = Arc::new(JsonAgentRegistry::new());
+    let tmux = Tmux::new();
+    let routes = WorktreeRoutes::new(store.clone(), broadcaster, json_registry, tmux, 4000);
+
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    // 1. PATCH with enabled: true
+    let patch_res = routes
+        .patch_lsp_enabled(
+            "wt-1",
+            vst_routes::worktrees::PatchWorktreeLspEnabledBody { enabled: true },
+        )
+        .await
+        .unwrap();
+
+    assert!(patch_res.ok);
+    assert!(patch_res.worktree.lsp_enabled);
+
+    // Verify broadcast event was sent
+    let event = rx.recv().await.unwrap();
+    match event {
+        ServerEvent::WorktreeUpdated { worktree } => {
+            assert_eq!(worktree["lspEnabled"], serde_json::Value::Bool(true));
+        }
+        other => panic!("Expected WorktreeUpdated event, got {:?}", other),
+    }
+
+    // Verify persisted in DB
+    let p = store.get_project("proj-1").await.unwrap();
+    let wt = p.worktrees.iter().find(|w| w.id == "wt-1").unwrap();
+    assert_eq!(wt.lsp_enabled, Some(true));
+
+    // 2. Idempotent repeated patch does not re-broadcast
+    let patch_res2 = routes
+        .patch_lsp_enabled(
+            "wt-1",
+            vst_routes::worktrees::PatchWorktreeLspEnabledBody { enabled: true },
+        )
+        .await
+        .unwrap();
+    assert!(patch_res2.ok);
+    assert!(patch_res2.worktree.lsp_enabled);
+    assert!(rx.try_recv().is_err(), "Idempotent patch should not broadcast");
+
+    // 3. PATCH with enabled: false
+    let patch_res3 = routes
+        .patch_lsp_enabled(
+            "wt-1",
+            vst_routes::worktrees::PatchWorktreeLspEnabledBody { enabled: false },
+        )
+        .await
+        .unwrap();
+    assert!(patch_res3.ok);
+    assert!(!patch_res3.worktree.lsp_enabled);
+
+    let event3 = rx.recv().await.unwrap();
+    match event3 {
+        ServerEvent::WorktreeUpdated { worktree } => {
+            assert_eq!(worktree["lspEnabled"], serde_json::Value::Bool(false));
+        }
+        other => panic!("Expected WorktreeUpdated event, got {:?}", other),
+    }
+
+    let p3 = store.get_project("proj-1").await.unwrap();
+    let wt3 = p3.worktrees.iter().find(|w| w.id == "wt-1").unwrap();
+    assert_eq!(wt3.lsp_enabled, Some(false));
+}
+
+#[tokio::test]
 async fn test_worktree_done_and_delete() {
     let (_dir, store, routes) = test_env();
     let wt_dir = tempdir().unwrap();
@@ -601,6 +682,7 @@ async fn test_git_surface_routes_on_real_repo() {
         direct_session_seq: Some(1),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     };
     store.add_project(proj).await.unwrap();
 

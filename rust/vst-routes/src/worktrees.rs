@@ -27,8 +27,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+
 use tokio::process::Command;
 
 use vst_agents::json_agent_chat::{start_json_create_turn, StartJsonCreateTurnOpts};
@@ -66,7 +65,7 @@ use vst_types::rest::worktrees::{
     DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, PatchWorktreeResult,
     PatchWorktreeToggleBody, PendingFileOpens, PrInfo, PrInfoState, PrLookupResult,
     RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
-    SearchFileMatches, SearchMatch, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
+    SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
     WorktreeDoneResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
@@ -76,6 +75,11 @@ use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQu
 
 use crate::modes::{find_mode, json_unsupported_cli, resolve_mode_id};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PatchWorktreeLspEnabledBody {
+    pub enabled: bool,
+}
 
 pub const MAX_DIFF_BYTES: usize = 512 * 1024;
 pub const COMMIT_SHA_RE: &str = "^[0-9a-fA-F]{7,40}$";
@@ -107,6 +111,7 @@ pub fn serialize_worktree(project_id: &str, w: &WorktreeRecord) -> Worktree {
         hidden_at: w.hidden_at.clone(),
         sort_order: w.sort_order,
         main_session_id,
+        lsp_enabled: w.lsp_enabled.unwrap_or(false),
     }
 }
 
@@ -323,13 +328,7 @@ pub async fn untracked_numstat_cmd(wt_path: &Path, rel_path: &str) -> PathNumsta
     })
 }
 
-/// Compute ETag header string: `"\"hex\""`
-pub fn compute_etag(content: &[u8]) -> String {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    let hex = format!("{:016x}", hasher.finish());
-    format!("\"{hex}\"")
-}
+pub use crate::file_serving::{compute_etag, read_file_response, FileResponse, FileServingError};
 
 /// Helper to wrap PtyHandle for PtyKill
 struct WorktreePtyHandleKill(PtyHandle);
@@ -358,6 +357,19 @@ pub enum WorktreeRouteError {
     ServiceUnavailable(String),
     #[error("Internal server error: {0}")]
     Internal(String),
+}
+
+impl From<crate::search_util::RgSearchError> for WorktreeRouteError {
+    fn from(e: crate::search_util::RgSearchError) -> Self {
+        match e {
+            crate::search_util::RgSearchError::NotFound => {
+                WorktreeRouteError::ServiceUnavailable("ripgrep_unavailable".into())
+            }
+            crate::search_util::RgSearchError::ProcessError(msg) => {
+                WorktreeRouteError::Internal(msg)
+            }
+        }
+    }
 }
 
 /// WorktreeRoutes handle providing all 21 route implementations.
@@ -924,6 +936,59 @@ impl WorktreeRoutes {
         })
     }
 
+    // --- 4b. PATCH /worktrees/:id/lsp-enabled ---
+    pub async fn patch_lsp_enabled(
+        &self,
+        wt_id: &str,
+        body: PatchWorktreeLspEnabledBody,
+    ) -> Result<PatchWorktreeResult, WorktreeRouteError> {
+        let project = self.find_project_for_worktree(wt_id).await?;
+        let current_wt = project
+            .worktrees
+            .iter()
+            .find(|w| w.id == wt_id)
+            .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+
+        if current_wt.lsp_enabled.unwrap_or(false) == body.enabled {
+            return Ok(PatchWorktreeResult {
+                ok: true,
+                worktree: serialize_worktree(&project.id, current_wt),
+            });
+        }
+
+        let wt_id_owned = wt_id.to_string();
+        let enabled = body.enabled;
+
+        let updated_project = self
+            .store
+            .mutate_project(&project.id, move |p| {
+                let wt = p.worktrees.iter_mut().find(|w| w.id == wt_id_owned);
+                let Some(wt) = wt else {
+                    return Err(StoreError::Mutation("Worktree not found".to_string()));
+                };
+                wt.lsp_enabled = Some(enabled);
+                Ok(p.clone())
+            })
+            .await
+            .map_err(|_| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+
+        let wt = updated_project
+            .worktrees
+            .iter()
+            .find(|w| w.id == wt_id)
+            .ok_or_else(|| WorktreeRouteError::NotFound(format!("Worktree '{wt_id}' not found")))?;
+        let serialized = serialize_worktree(&project.id, wt);
+
+        self.broadcaster.send(ServerEvent::WorktreeUpdated {
+            worktree: serialize_worktree_json(&project.id, wt),
+        });
+
+        Ok(PatchWorktreeResult {
+            ok: true,
+            worktree: serialized,
+        })
+    }
+
     // --- 5. PATCH /worktrees/:id/rename ---
     pub async fn patch_rename(
         &self,
@@ -1277,148 +1342,18 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let limit = limit.unwrap_or(2000);
 
-        let mut argv = vec![
-            "--json".to_string(),
-            "--hidden".to_string(),
-            "--glob".to_string(),
-            "!.git".to_string(),
-            "--glob".to_string(),
-            "!.git/**".to_string(),
-        ];
+        let raw_matches = crate::search_util::rg_search(
+            &wt_path,
+            q,
+            re,
+            case,
+            word,
+            glob,
+            limit,
+        )
+        .await?;
 
-        if !re {
-            argv.push("--fixed-strings".into());
-        }
-        if case {
-            argv.push("--case-sensitive".into());
-        } else {
-            argv.push("--ignore-case".into());
-        }
-        if word {
-            argv.push("--word-regexp".into());
-        }
-        if let Some(g) = glob {
-            argv.push("--glob".into());
-            argv.push(g.to_string());
-        }
-        argv.push("--".into());
-        argv.push(q.to_string());
-
-        let mut child = Command::new("rg")
-            .args(&argv)
-            .current_dir(&wt_path)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            // The caller (Axum handler future) can be dropped mid-stream —
-            // e.g. the browser aborts a superseded search request while this
-            // is still awaiting `lines.next_line()`. Without this, dropping
-            // the future orphans the `rg` process instead of terminating it;
-            // `kill_on_drop` makes tokio kill it as part of dropping `child`.
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    WorktreeRouteError::ServiceUnavailable("ripgrep_unavailable".into())
-                } else {
-                    WorktreeRouteError::Internal(format!("Failed to spawn rg: {e}"))
-                }
-            })?;
-
-        let stdout = child.stdout.take().ok_or_else(|| {
-            WorktreeRouteError::Internal("Failed to capture rg stdout".into())
-        })?;
-
-        let reader = tokio::io::BufReader::new(stdout);
-        use tokio::io::AsyncBufReadExt;
-        let mut lines = reader.lines();
-
-        // Group matches by file path, preserving first-seen order.
-        let mut files: Vec<SearchFileMatches> = Vec::new();
-        let mut file_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut total_matches: usize = 0;
-        let mut truncated = false;
-
-        while let Some(line) = lines.next_line().await.unwrap_or(None) {
-            let parsed: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            if parsed.get("type").and_then(|t| t.as_str()) != Some("match") {
-                continue;
-            }
-
-            let data = match parsed.get("data") {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let path = data
-                .pointer("/path/text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let line_number = data
-                .pointer("/line_number")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32;
-            let lines_text = data
-                .pointer("/lines/text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-
-            let submatches = match data.get("submatches").and_then(|v| v.as_array()) {
-                Some(a) => a,
-                None => continue,
-            };
-
-            for sm in submatches {
-                let start = sm.get("start").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let end = sm.get("end").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-
-                let (pre, mid, post) = truncate_snippet(lines_text, start, end);
-
-                let m = SearchMatch {
-                    line: line_number,
-                    pre,
-                    mid,
-                    post,
-                };
-
-                let idx = if let Some(&i) = file_index.get(&path) {
-                    i
-                } else {
-                    let i = files.len();
-                    file_index.insert(path.clone(), i);
-                    files.push(SearchFileMatches {
-                        path: path.clone(),
-                        matches: Vec::new(),
-                    });
-                    i
-                };
-                files[idx].matches.push(m);
-                total_matches += 1;
-
-                if total_matches >= limit {
-                    truncated = true;
-                    break;
-                }
-            }
-
-            if truncated {
-                break;
-            }
-        }
-
-        // Kill the child if we stopped early (truncated) or just let it finish.
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-
-        Ok(SearchResult {
-            files,
-            truncated,
-            total_matches,
-        })
+        Ok(crate::search_util::shape_search_matches(&raw_matches, limit))
     }
 
     // --- 11c. GET /worktrees/:id/file-search ---
@@ -1447,63 +1382,17 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let abs_path = resolve_inside_worktree(&wt_path, file_path)?;
 
-        let meta = tokio::fs::metadata(&abs_path).await.map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
+        read_file_response(&abs_path).await.map_err(|e| match e {
+            FileServingError::NotFound(_) => {
                 WorktreeRouteError::NotFound(format!("File not found: {file_path}"))
-            } else {
-                WorktreeRouteError::Unprocessable(e.to_string())
             }
-        })?;
-
-        const HARD_LIMIT: u64 = 50 * 1024 * 1024;
-        const BINARY_LIMIT: u64 = 1024 * 1024;
-
-        if meta.len() > HARD_LIMIT {
-            return Err(WorktreeRouteError::Unprocessable(
-                "File too large (>50MB)".to_string(),
-            ));
-        }
-
-        let buf = tokio::fs::read(&abs_path)
-            .await
-            .map_err(|e| WorktreeRouteError::Unprocessable(e.to_string()))?;
-
-        let ext = abs_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let image_mime = match ext.as_str() {
-            "png" => Some("image/png"),
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "gif" => Some("image/gif"),
-            "webp" => Some("image/webp"),
-            "svg" => Some("image/svg+xml"),
-            _ => None,
-        };
-
-        if let Some(mime) = image_mime {
-            return Ok(FileResponse::Image {
-                mime: mime.to_string(),
-                content: buf,
-            });
-        }
-
-        // Binary detection: check null byte in first 8KB
-        let sample_len = buf.len().min(8192);
-        let is_binary = buf[..sample_len].contains(&0);
-        if is_binary && meta.len() > BINARY_LIMIT {
-            return Err(WorktreeRouteError::Unprocessable(
+            FileServingError::TooLarge => {
+                WorktreeRouteError::Unprocessable("File too large (>50MB)".to_string())
+            }
+            FileServingError::BinaryTooLarge => WorktreeRouteError::Unprocessable(
                 "Binary file (>1MB) — preview unavailable".to_string(),
-            ));
-        }
-
-        let etag = compute_etag(&buf);
-        let text = String::from_utf8_lossy(&buf).to_string();
-
-        Ok(FileResponse::Text {
-            etag,
-            content: text,
+            ),
+            other => WorktreeRouteError::Unprocessable(other.to_string()),
         })
     }
 
@@ -2222,11 +2111,7 @@ pub fn parse_new_start(hunk_line: &str) -> u32 {
     1 // Default to 1 on parse failure
 }
 
-#[derive(Debug)]
-pub enum FileResponse {
-    Text { etag: String, content: String },
-    Image { mime: String, content: Vec<u8> },
-}
+
 
 #[derive(Debug)]
 pub struct DiffResponse {
@@ -2234,58 +2119,7 @@ pub struct DiffResponse {
     pub content: String,
 }
 
-/// Split `line` at byte offsets `start..end` into `(pre, mid, post)`,
-/// then truncate the three fragments so the combined char-count stays
-/// within `SNIP_MAX` (240). Public for unit-testing.
-pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String, String) {
-    const SNIP_LEAD: usize = 32;
-    const SNIP_KEEP: usize = 16;
-    const SNIP_MAX: usize = 240;
-
-    // Byte-offset split — clamp to line length to avoid panic.
-    let start = start.min(line.len());
-    let end = end.min(line.len()).max(start);
-    let raw_pre = &line[..start];
-    let raw_mid = &line[start..end];
-    let raw_post = &line[end..];
-
-    // --- pre ---
-    let mut pre: String = raw_pre.trim_start_matches([' ', '\t']).to_string();
-    if pre.chars().count() > SNIP_LEAD {
-        let keep: String = pre.chars().rev().take(SNIP_KEEP).collect::<Vec<_>>().into_iter().rev().collect();
-        pre = format!("…{keep}");
-    }
-
-    // --- mid ---
-    // Capped relative to what `pre` already used, not a flat SNIP_MAX — a
-    // flat cap here let pre+mid together exceed SNIP_MAX whenever pre was
-    // non-empty (pre is capped to SNIP_LEAD=32, well under SNIP_MAX=240, so
-    // "both individually under 240" doesn't imply "combined under 240").
-    let mut mid: String = raw_mid.to_string();
-    let mid_budget = SNIP_MAX.saturating_sub(pre.chars().count());
-    if mid.chars().count() > mid_budget {
-        // Reserve 1 char of the budget for the "…" itself, so the truncated
-        // `mid` (kept chars + ellipsis) lands AT mid_budget, not budget + 1.
-        let keep = mid_budget.saturating_sub(1);
-        mid = mid.chars().take(keep).collect::<String>() + "…";
-    }
-
-    // --- post ---
-    let budget = SNIP_MAX.saturating_sub(pre.chars().count()).saturating_sub(mid.chars().count());
-    let mut post: String = if budget > 0 {
-        let p = raw_post.to_string();
-        if p.chars().count() > budget {
-            p.chars().take(budget).collect::<String>() + "…"
-        } else {
-            p
-        }
-    } else {
-        String::new()
-    };
-    post = post.trim_end_matches([' ', '\t']).to_string();
-
-    (pre, mid, post)
-}
+pub use crate::search_util::truncate_snippet;
 
 fn serialize_worktree_json(
     project_id: &str,
@@ -2305,6 +2139,7 @@ fn serialize_worktree_json(
         hidden_at: w.hidden_at.clone(),
         sort_order: w.sort_order,
         main_session_id,
+        lsp_enabled: w.lsp_enabled.unwrap_or(false),
     };
     serde_json::to_value(worktree)
         .ok()
