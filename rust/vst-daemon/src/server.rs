@@ -84,7 +84,7 @@ use vst_types::rest::worktrees::{
     RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody, ReorderWorktreeResult,
     SearchResult, SubmodulesResult, WorktreeDoneResult,
 };
-use vst_types::ws::ClientMessage;
+use vst_types::ws::{ClientMessage, WatchScope};
 use vst_ws::broadcaster::{close_auth_expired, spawn_event_fanout, WsHub};
 use vst_ws::connection::{WsConnection, WsSink};
 use vst_ws::handlers::file_watch::{release_connection_file_watches, WatcherRegistry};
@@ -434,16 +434,24 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
 
     let paths_for_ws = opts.paths.clone();
     let store_for_ws = opts.store.clone();
-    let worktree_path_resolver = Arc::new(move |wt_id: &str| {
+    let worktree_path_resolver = Arc::new(move |id: &str, scope: WatchScope| {
         let projects = futures::executor::block_on(store_for_ws.get_all_projects());
-        for p in projects {
-            for w in p.worktrees {
-                if w.id == wt_id {
-                    return Some(paths_for_ws.worktree_path(&p.id, &w.id));
+        match scope {
+            WatchScope::Project => projects
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| PathBuf::from(&p.absolute_path)),
+            WatchScope::Worktree => {
+                for p in projects {
+                    for w in p.worktrees {
+                        if w.id == id {
+                            return Some(paths_for_ws.worktree_path(&p.id, &w.id));
+                        }
+                    }
                 }
+                None
             }
         }
-        None
     });
 
     let watchers: WatcherRegistry = Arc::new(std::sync::Mutex::new(Default::default()));
@@ -539,6 +547,13 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/projects/:id/tree", get(handle_project_tree))
         .route("/projects/:id/file-list", get(handle_project_file_list))
         .route("/projects/:id/files/*path", get(handle_project_get_file))
+        .route(
+            "/projects/:id/changed-paths",
+            get(handle_project_changed_paths),
+        )
+        .route("/projects/:id/gutter/*path", get(handle_project_gutter))
+        .route("/projects/:id/diff/*path", get(handle_project_diff))
+        .route("/projects/:id/commits", get(handle_project_commits))
         // Worktrees
         .route(
             "/worktrees",
@@ -1478,6 +1493,67 @@ async fn handle_project_get_file(
             Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
         }
     }
+}
+
+async fn handle_project_changed_paths(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(q): Query<DiffQuery>,
+) -> Result<Json<Vec<ChangedPath>>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .changed_paths(&id, q.scope.as_deref(), q.sha.as_deref())
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_gutter(
+    State(state): State<AppState>,
+    axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+) -> Result<Json<vst_types::rest::worktrees::GutterResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .gutter(&id, &file_path)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_diff(
+    State(state): State<AppState>,
+    axum::extract::Path((id, file_path)): axum::extract::Path<(String, String)>,
+    Query(q): Query<DiffQuery>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let DiffResponse { etag, content } = state
+        .project_routes
+        .diff(&id, &file_path, q.scope.as_deref(), q.sha.as_deref())
+        .await
+        .map_err(project_err_to_response)?;
+    Ok((
+        [
+            (header::ETAG, etag),
+            (
+                header::CONTENT_TYPE,
+                "text/plain; charset=utf-8".to_string(),
+            ),
+        ],
+        content,
+    )
+        .into_response())
+}
+
+async fn handle_project_commits(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(q): Query<CommitsQuery>,
+) -> Result<Json<CommitsResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .commits(&id, q.limit)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
 }
 
 fn project_err_to_response(err: ProjectRouteError) -> (StatusCode, Json<serde_json::Value>) {

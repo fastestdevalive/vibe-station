@@ -1,0 +1,27 @@
+feature: direct-session-file-git-parity
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-172
+created: 2026-09-23T00:00:00Z
+
+master:
+  prd: skipped
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "3.T6"
+    awaiting_phase: implement
+    awaiting_artifact: ".vibekit/feature-plans/wip/direct-session-file-git-parity/plan-direct-session-file-git-parity.md"
+    impl_turn: {phase: 3, of: 3}
+    phase_chain: [plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff:
+      next_item: null
+      returned_at: null
+      verified_by: null
+    commit: null

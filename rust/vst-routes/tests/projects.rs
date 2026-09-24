@@ -815,3 +815,380 @@ async fn test_tree_file_list_and_get_file() {
         .unwrap_err();
     assert!(matches!(err, ProjectRouteError::AccessDenied(_)));
 }
+
+// ── Phase 2: project git-status routes (changed-paths / gutter / diff / commits) ──
+
+/// Register a git repo (already initialized via `init_git_repo`) as a project.
+async fn register_git_project(
+    store: &StoreHandle,
+    id: &str,
+    proj_dir: &Path,
+) {
+    let p = ProjectRecord {
+        id: id.into(),
+        absolute_path: proj_dir.to_string_lossy().into(),
+        prefix: "gp".into(),
+        is_git: true,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+    };
+    store.add_project(p).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_changed_paths_local_and_branch_validation() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("git-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "git-proj", &proj_dir).await;
+
+    // Modify a tracked file and add an untracked file.
+    std::fs::write(proj_dir.join("README.md"), "# Modified\n").unwrap();
+    std::fs::write(proj_dir.join("untracked.txt"), "new\n").unwrap();
+
+    // 2.T1 — local scope (default) returns both, with correct porcelain chars.
+    let paths = routes.changed_paths("git-proj", None, None).await.unwrap();
+    let readme = paths
+        .iter()
+        .find(|p| p.path == "README.md")
+        .expect("README.md in changed paths");
+    assert_eq!(readme.status, "M");
+    let untracked = paths
+        .iter()
+        .find(|p| p.path == "untracked.txt")
+        .expect("untracked.txt in changed paths");
+    assert_eq!(untracked.status, "?");
+
+    // 2.T2 — branch scope is rejected with Validation for project routes.
+    let err = routes
+        .changed_paths("git-proj", Some("branch"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)));
+}
+
+#[tokio::test]
+async fn test_changed_paths_commit_scope() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("commit-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "commit-proj", &proj_dir).await;
+
+    // Make a second commit that modifies README.md and adds a new file.
+    std::fs::write(proj_dir.join("README.md"), "# Second\n").unwrap();
+    std::fs::write(proj_dir.join("added.txt"), "added\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "."])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "Second commit"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    let sha_out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&proj_dir)
+        .output()
+        .unwrap();
+    let sha = String::from_utf8_lossy(&sha_out.stdout).trim().to_string();
+
+    // 2.T3 — commit scope returns the diff-name-status for that commit.
+    let paths = routes
+        .changed_paths("commit-proj", Some("commit"), Some(&sha))
+        .await
+        .unwrap();
+    let readme = paths
+        .iter()
+        .find(|p| p.path == "README.md")
+        .expect("README.md in commit diff");
+    assert_eq!(readme.status, "M");
+    let added = paths
+        .iter()
+        .find(|p| p.path == "added.txt")
+        .expect("added.txt in commit diff");
+    assert_eq!(added.status, "A");
+
+    // Unresolvable sha -> Unprocessable, not 500.
+    let err = routes
+        .changed_paths("commit-proj", Some("commit"), Some("deadbee"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
+}
+
+#[tokio::test]
+async fn test_gutter_project_scope() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("gutter-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "gutter-proj", &proj_dir).await;
+
+    // Create a tracked file with 3 lines and commit it.
+    let file_path = proj_dir.join("file.rs");
+    std::fs::write(&file_path, "line 1\nline 2\nline 3\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "Add file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    // 2.T4 — single-line edit on line 1 -> modified: [1].
+    std::fs::write(&file_path, "changed line\nline 2\nline 3\n").unwrap();
+    let result = routes.gutter("gutter-proj", "file.rs").await.unwrap();
+    assert_eq!(result.modified, vec![1]);
+    assert!(result.added.is_empty());
+    assert!(result.deleted.is_empty());
+}
+
+#[tokio::test]
+async fn test_diff_project_scope() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("diff-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "diff-proj", &proj_dir).await;
+
+    // Create a tracked file and commit it.
+    let file_path = proj_dir.join("file.rs");
+    std::fs::write(&file_path, "original\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "Add file.rs"])
+        .current_dir(&proj_dir)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    // Modify it locally.
+    std::fs::write(&file_path, "modified\n").unwrap();
+
+    // 2.T5 — local diff matches `git diff HEAD -- file.rs`.
+    let diff_res = routes.diff("diff-proj", "file.rs", None, None).await.unwrap();
+    let expected = Command::new("git")
+        .args(["diff", "HEAD", "--", "file.rs"])
+        .current_dir(&proj_dir)
+        .output()
+        .unwrap();
+    let expected_str = String::from_utf8_lossy(&expected.stdout);
+    assert_eq!(diff_res.content, expected_str);
+    assert!(!diff_res.etag.is_empty());
+
+    // 2.T6 — branch scope is rejected with Validation.
+    let err = routes
+        .diff("diff-proj", "file.rs", Some("branch"), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Validation(_)));
+}
+
+#[tokio::test]
+async fn test_commits_project_scope() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("commits-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "commits-proj", &proj_dir).await;
+
+    // Two more commits after the initial one -> 3 total.
+    for i in 0..2 {
+        std::fs::write(proj_dir.join(format!("file{i}.txt")), format!("{i}\n")).unwrap();
+        let add = Command::new("git")
+            .args(["add", "."])
+            .current_dir(&proj_dir)
+            .status()
+            .unwrap();
+        assert!(add.success());
+        let commit = Command::new("git")
+            .args(["commit", "-m", &format!("Commit {i}")])
+            .current_dir(&proj_dir)
+            .status()
+            .unwrap();
+        assert!(commit.success());
+    }
+
+    // 2.T7 — exactly 3 commits, most-recent-first, all is_on_branch.
+    let result = routes.commits("commits-proj", None).await.unwrap();
+    assert_eq!(result.commits.len(), 3);
+    assert!(result.commits.iter().all(|c| c.is_on_branch));
+    assert_eq!(result.commits[0].subject, "Commit 1");
+    assert_eq!(result.commits[1].subject, "Commit 0");
+    assert_eq!(result.commits[2].subject, "Initial commit");
+}
+
+#[tokio::test]
+async fn test_non_git_project_short_circuit() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    // 2.T9 — plain non-git dir, is_git: false.
+    let proj_dir = dir.path().join("non-git-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let p = ProjectRecord {
+        id: "non-git-proj".into(),
+        absolute_path: proj_dir.to_string_lossy().into(),
+        prefix: "ng".into(),
+        is_git: false,
+        default_branch: None,
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(0),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+    };
+    store.add_project(p).await.unwrap();
+
+    // changed_paths -> Ok([])
+    let paths = routes
+        .changed_paths("non-git-proj", None, None)
+        .await
+        .unwrap();
+    assert!(paths.is_empty());
+
+    // gutter -> empty GutterResult
+    let gutter = routes.gutter("non-git-proj", "file.rs").await.unwrap();
+    assert!(gutter.added.is_empty());
+    assert!(gutter.deleted.is_empty());
+    assert!(gutter.modified.is_empty());
+
+    // commits -> Ok([])
+    let commits = routes.commits("non-git-proj", None).await.unwrap();
+    assert!(commits.commits.is_empty());
+
+    // diff -> Err(Unprocessable) (422), NOT Internal (500).
+    let err = routes
+        .diff("non-git-proj", "file.rs", None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProjectRouteError::Unprocessable { .. }));
+}
+
+#[tokio::test]
+async fn test_project_in_git_subdir_paths_project_relative() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    // Create a git repo whose ROOT contains a project subdirectory, and register
+    // the PROJECT at the subdirectory (NOT the repo root) — the exact scenario
+    // where `git status`/`git diff` report repo-root-relative paths.
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("subproj")).unwrap();
+    init_git_repo(&repo_root);
+
+    let proj_dir = repo_root.join("subproj");
+    register_git_project(&store, "subproj", &proj_dir).await;
+
+    // A tracked file INSIDE the project subdir and a tracked file OUTSIDE it
+    // (at the repo root, above the subdirectory).
+    std::fs::write(proj_dir.join("inside.rs"), "line 1\nline 2\nline 3\n").unwrap();
+    std::fs::write(repo_root.join("outside.txt"), "outside\n").unwrap();
+    let add = Command::new("git")
+        .args(["add", "."])
+        .current_dir(&repo_root)
+        .status()
+        .unwrap();
+    assert!(add.success());
+    let commit = Command::new("git")
+        .args(["commit", "-m", "track files"])
+        .current_dir(&repo_root)
+        .status()
+        .unwrap();
+    assert!(commit.success());
+
+    // Modify a file INSIDE the project, a file OUTSIDE it, and add an untracked
+    // file inside the project.
+    std::fs::write(proj_dir.join("inside.rs"), "changed line\nline 2\nline 3\n").unwrap();
+    std::fs::write(repo_root.join("outside.txt"), "changed outside\n").unwrap();
+    std::fs::write(proj_dir.join("untracked.txt"), "new\n").unwrap();
+
+    // 1) changed_paths — only the in-project files, project-relative (no repo-root
+    //    `subproj/` prefix, no out-of-project `outside.txt`).
+    let paths = routes.changed_paths("subproj", None, None).await.unwrap();
+    assert!(
+        paths.iter().any(|p| p.path == "inside.rs"),
+        "inside.rs must appear project-relative, got {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.path == "untracked.txt"),
+        "untracked.txt must appear project-relative, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.path.contains("outside.txt")),
+        "out-of-project file must not appear, got {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.path.contains("subproj/")),
+        "paths must be project-relative (no repo-root prefix), got {paths:?}"
+    );
+
+    // 2) gutter — a call on the in-project file returns REAL content (not empty),
+    //    proving the project-relative path resolution works end-to-end.
+    let gutter = routes.gutter("subproj", "inside.rs").await.unwrap();
+    assert_eq!(
+        gutter.modified, vec![1],
+        "gutter must resolve project-relative path to real lines"
+    );
+
+    // 3) diff — real content (not empty, not a doubled `subproj/subproj/...` path).
+    let diff_res = routes.diff("subproj", "inside.rs", None, None).await.unwrap();
+    assert!(
+        diff_res.content.contains("changed line"),
+        "diff must resolve project-relative path and return real content, got {:?}",
+        diff_res.content
+    );
+}
+
+#[tokio::test]
+async fn test_gutter_traversal_returns_access_denied_403() {
+    let (dir, store, _broadcaster, routes) = test_env();
+
+    let proj_dir = dir.path().join("traversal-proj");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    init_git_repo(&proj_dir);
+    register_git_project(&store, "traversal-proj", &proj_dir).await;
+
+    // Path traversal must be rejected with AccessDenied (403), not 422 — and the
+    // message must be single (not doubled), matching the worktree gutter route.
+    let err = routes
+        .gutter("traversal-proj", "../../etc/passwd")
+        .await
+        .unwrap_err();
+    match err {
+        ProjectRouteError::AccessDenied(msg) => {
+            assert!(msg.contains("Access denied"), "got {msg:?}");
+            assert!(
+                msg.matches("Access denied").count() == 1,
+                "message must not be doubled, got {msg:?}"
+            );
+        }
+        other => panic!("expected AccessDenied (403), got {other:?}"),
+    }
+}

@@ -76,7 +76,12 @@ pub async fn handle_tree_watch(
     file_search: &Arc<FileSearchIndex>,
     msg: &ClientMessage,
 ) {
-    let ClientMessage::TreeWatch { worktree_id, path } = msg else {
+    let ClientMessage::TreeWatch {
+        worktree_id,
+        path,
+        scope,
+    } = msg
+    else {
         return;
     };
     let tree_path = path.clone().unwrap_or_default();
@@ -107,7 +112,7 @@ pub async fn handle_tree_watch(
         }
     }
 
-    let Some(root) = resolve_root(worktree_id) else {
+    let Some(root) = resolve_root(worktree_id, *scope) else {
         conn.send(ServerMessage::SystemError {
             message: format!("Worktree '{worktree_id}' not found"),
         });
@@ -251,7 +256,10 @@ pub async fn handle_tree_unwatch(
     file_search: &Arc<FileSearchIndex>,
     msg: &ClientMessage,
 ) {
-    let ClientMessage::TreeUnwatch { worktree_id, path } = msg else {
+    let ClientMessage::TreeUnwatch {
+        worktree_id, path, ..
+    } = msg
+    else {
         return;
     };
     let tree_path = path.clone().unwrap_or_default();
@@ -466,7 +474,7 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |_| Some(root.clone()))
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
         };
 
         let conn_a = WsConnection::new(WsSinkHandle::mock(0));
@@ -476,6 +484,7 @@ mod tests {
         let msg = || ClientMessage::TreeWatch {
             worktree_id: "wt1".into(),
             path: None,
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
@@ -530,7 +539,7 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |_| Some(root.clone()))
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
         };
         let conn_a = WsConnection::new(WsSinkHandle::mock(0));
         let conn_b = WsConnection::new(WsSinkHandle::mock(0));
@@ -538,6 +547,7 @@ mod tests {
         let msg = || ClientMessage::TreeWatch {
             worktree_id: "wt1".into(),
             path: None,
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
@@ -596,7 +606,7 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |_| Some(root.clone()))
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
         };
         let conn_a = WsConnection::new(WsSinkHandle::mock(0));
         let conn_b = WsConnection::new(WsSinkHandle::mock(0));
@@ -604,6 +614,7 @@ mod tests {
         let msg = || ClientMessage::TreeWatch {
             worktree_id: "wt1".into(),
             path: None,
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         // conn_a watches the SAME key twice locally — e.g. FileTreeSidebar
@@ -662,7 +673,7 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |_| Some(root.clone()))
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
         };
         let conn = WsConnection::new(WsSinkHandle::mock(0));
 
@@ -674,6 +685,7 @@ mod tests {
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: None,
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         )
         .await;
@@ -714,7 +726,7 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |_| Some(root.clone()))
+            Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
         };
         let conn = WsConnection::new(WsSinkHandle::mock(0));
 
@@ -727,6 +739,7 @@ mod tests {
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: None,
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         )
         .await;
@@ -738,6 +751,7 @@ mod tests {
             &ClientMessage::TreeWatch {
                 worktree_id: "wt1".into(),
                 path: Some("src".into()),
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         )
         .await;
@@ -759,6 +773,7 @@ mod tests {
             &ClientMessage::TreeUnwatch {
                 worktree_id: "wt1".into(),
                 path: Some("src".into()),
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         )
         .await;
@@ -779,6 +794,7 @@ mod tests {
             &ClientMessage::TreeUnwatch {
                 worktree_id: "wt1".into(),
                 path: None,
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         )
         .await;
@@ -788,5 +804,65 @@ mod tests {
             after.files.is_empty(),
             "closing the last watcher must evict the worktree's index entry"
         );
+    }
+
+    // Phase 1 — a project-scope `tree:watch` resolves against a resolver that
+    // distinguishes scopes: it returns a root ONLY for `(id, WatchScope::Project)`,
+    // never for `(id, WatchScope::Worktree)`. The watcher must register
+    // successfully (no `SystemError` sent), proving `handle_tree_watch` threads
+    // `msg.scope` through to `resolve_root`.
+    #[tokio::test]
+    async fn project_scope_tree_watch_resolves_against_project_branch() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("proj.rs"), "x").unwrap();
+        let file_search = index();
+        let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
+        let resolve_root: WorktreePathResolver = {
+            let root = root.path().to_path_buf();
+            Arc::new(move |id: &str, scope: vst_types::ws::WatchScope| {
+                match scope {
+                    vst_types::ws::WatchScope::Project if id == "proj1" => Some(root.clone()),
+                    _ => None,
+                }
+            })
+        };
+
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+
+        handle_tree_watch(
+            &conn,
+            &registry,
+            &resolve_root,
+            &file_search,
+            &ClientMessage::TreeWatch {
+                worktree_id: "proj1".into(),
+                path: None,
+                scope: vst_types::ws::WatchScope::Project,
+            },
+        )
+        .await;
+
+        assert!(
+            registry.lock().unwrap().watchers.contains_key("tree:proj1:"),
+            "project-scope tree watcher must register successfully"
+        );
+        assert!(
+            !sent.lock().unwrap().iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
+            "project-scope resolution must not send SystemError"
+        );
+
+        // Cleanup.
+        {
+            let mut reg = registry.lock().unwrap();
+            if let Some(sw) = reg.watchers.remove("tree:proj1:") {
+                drop(reg);
+                sw.watcher.close();
+            }
+        }
     }
 }
