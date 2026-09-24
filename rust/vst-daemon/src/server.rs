@@ -48,6 +48,8 @@ use vst_routes::sessions::{
     TranscriptError, TranscriptQuery, TranscriptResponse,
 };
 use vst_routes::settings::{SettingsRouteError, SettingsRoutes};
+use vst_lsp::{LspManager, WorkspaceKey};
+use vst_routes::lsp::{lsp_err_to_response, LspRoutes};
 use vst_routes::skills::SkillsRoutes;
 use vst_routes::tailscale::{TailscaleRouteError, TailscaleRoutes};
 use vst_routes::worktrees::{DiffResponse, FileResponse, WorktreeRouteError, WorktreeRoutes};
@@ -56,6 +58,11 @@ use vst_types::domain::{TokenPayload, TokenScope, VerifyResult};
 use vst_types::events::Broadcaster;
 use vst_types::rest::attachments::{AttachmentsResult, DeleteAttachmentResult};
 use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
+use vst_types::rest::lsp::{
+    LspDefinitionResponse, LspHoverResponse, LspLanguageStatus, LspLanguageSurveyResponse,
+    LspOutlineResponse, LspPositionRequest, LspReferencesResponse, LspStatusResponse,
+    LspStatusesResponse,
+};
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
 };
@@ -143,6 +150,7 @@ pub struct AppState {
     pub auth_routes: Option<AuthRoutes>,
     pub mobile_auth_routes: MobileAuthRoutes,
     pub tailscale_routes: TailscaleRoutes,
+    pub lsp_routes: LspRoutes,
 
     // Dispatch context for WS
     pub dispatch_ctx: DispatchContext,
@@ -432,6 +440,8 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     .with_store(opts.store.clone());
 
     let tailscale_routes = TailscaleRoutes::new(code_store.clone(), opts.port);
+    let lsp_manager = LspManager::new(opts.paths.vst_home().clone());
+    let lsp_routes = LspRoutes::new(opts.store.clone(), opts.paths.clone(), lsp_manager);
 
     let paths_for_ws = opts.paths.clone();
     let store_for_ws = opts.store.clone();
@@ -502,6 +512,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         auth_routes,
         mobile_auth_routes,
         tailscale_routes,
+        lsp_routes,
         dispatch_ctx,
     };
 
@@ -545,8 +556,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/projects/:id",
             patch(handle_patch_project).delete(handle_delete_project),
         )
+        .route("/projects/:id/lsp-enabled", patch(handle_patch_project_lsp_enabled))
         .route("/projects/:id/tree", get(handle_project_tree))
         .route("/projects/:id/file-list", get(handle_project_file_list))
+        .route("/projects/:id/search", get(handle_project_search))
         .route("/projects/:id/files/*path", get(handle_project_get_file))
         .route(
             "/projects/:id/changed-paths",
@@ -555,6 +568,16 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/projects/:id/gutter/*path", get(handle_project_gutter))
         .route("/projects/:id/diff/*path", get(handle_project_diff))
         .route("/projects/:id/commits", get(handle_project_commits))
+        .route("/projects/:id/lsp/status", get(handle_project_lsp_status))
+        .route("/projects/:id/lsp/statuses", get(handle_project_lsp_statuses))
+        .route("/projects/:id/lsp/definition", post(handle_project_lsp_definition))
+        .route("/projects/:id/lsp/hover", post(handle_project_lsp_hover))
+        .route("/projects/:id/lsp/references", post(handle_project_lsp_references))
+        .route("/projects/:id/lsp/outline", get(handle_project_lsp_outline))
+        .route(
+            "/projects/:id/lsp/external-file/:token",
+            get(handle_project_lsp_external_file),
+        )
         // Worktrees
         .route(
             "/worktrees",
@@ -563,6 +586,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/worktrees/disk-usage", get(handle_worktrees_disk_usage))
         .route("/worktrees/:id/pin", patch(handle_worktree_pin))
         .route("/worktrees/:id/hide", patch(handle_worktree_hide))
+        .route("/worktrees/:id/lsp-enabled", patch(handle_patch_worktree_lsp_enabled))
         .route("/worktrees/:id/rename", patch(handle_worktree_rename))
         .route("/worktrees/:id/reorder", patch(handle_worktree_reorder))
         .route("/worktrees/:id/done", post(handle_worktree_done))
@@ -587,6 +611,16 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/worktrees/:id/pending-file-opens",
             get(handle_worktree_get_pending_file_opens)
                 .delete(handle_worktree_delete_pending_file_opens),
+        )
+        .route("/worktrees/:id/lsp/status", get(handle_worktree_lsp_status))
+        .route("/worktrees/:id/lsp/statuses", get(handle_worktree_lsp_statuses))
+        .route("/worktrees/:id/lsp/definition", post(handle_worktree_lsp_definition))
+        .route("/worktrees/:id/lsp/hover", post(handle_worktree_lsp_hover))
+        .route("/worktrees/:id/lsp/references", post(handle_worktree_lsp_references))
+        .route("/worktrees/:id/lsp/outline", get(handle_worktree_lsp_outline))
+        .route(
+            "/worktrees/:id/lsp/external-file/:token",
+            get(handle_worktree_lsp_external_file),
         )
         // Sessions
         .route(
@@ -682,6 +716,8 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         )
         // Skills
         .route("/skills", get(handle_get_skills))
+        // LSP language survey (host-wide, read-only)
+        .route("/lsp/languages", get(handle_lsp_languages))
         // Ordered lists
         .route(
             "/user/ordered-lists/:scopeKey",
@@ -1438,6 +1474,19 @@ async fn handle_patch_project(
         .map_err(project_err_to_response)
 }
 
+async fn handle_patch_project_lsp_enabled(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<vst_routes::projects::PatchProjectLspEnabledBody>,
+) -> Result<Json<PatchProjectResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .patch_lsp_enabled(&id, body)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
 async fn handle_delete_project(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -1479,6 +1528,28 @@ async fn handle_project_file_list(
     state
         .project_routes
         .file_list(&id)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_search(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<SearchResult>, (StatusCode, Json<serde_json::Value>)> {
+    let q = query.q.as_deref().unwrap_or("");
+    state
+        .project_routes
+        .search(
+            &id,
+            q,
+            query.re.unwrap_or(false),
+            query.case.unwrap_or(false),
+            query.word.unwrap_or(false),
+            query.glob.as_deref(),
+            query.limit,
+        )
         .await
         .map(Json)
         .map_err(project_err_to_response)
@@ -1601,6 +1672,10 @@ fn project_err_to_response(err: ProjectRouteError) -> (StatusCode, Json<serde_js
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
         ),
+        ProjectRouteError::ServiceUnavailable(m) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "error": m })),
+        ),
     }
 }
 
@@ -1667,6 +1742,19 @@ async fn handle_worktree_hide(
     state
         .worktree_routes
         .patch_hide(&id, body)
+        .await
+        .map(Json)
+        .map_err(worktree_err_to_response)
+}
+
+async fn handle_patch_worktree_lsp_enabled(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<vst_routes::worktrees::PatchWorktreeLspEnabledBody>,
+) -> Result<Json<PatchWorktreeResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .worktree_routes
+        .patch_lsp_enabled(&id, body)
         .await
         .map(Json)
         .map_err(worktree_err_to_response)
@@ -1986,6 +2074,308 @@ async fn handle_worktree_delete_pending_file_opens(
         .await
         .map(|_| Json(serde_json::json!({ "ok": true })))
         .map_err(worktree_err_to_response)
+}
+
+// ── LSP ──────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct LspStatusQuery {
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LspOutlineQuery {
+    file: Option<String>,
+}
+
+async fn handle_project_lsp_status(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LspStatusQuery>,
+) -> Result<Json<LspStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let path = q.path.unwrap_or_default();
+    state
+        .lsp_routes
+        .status(WorkspaceKey::Project { project_id: id }, &path)
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_project_lsp_statuses(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<LspStatusesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .statuses(WorkspaceKey::Project { project_id: id })
+        .await
+        .map(|pairs| {
+            Json(LspStatusesResponse {
+                statuses: pairs
+                    .into_iter()
+                    .map(|(language, status)| LspLanguageStatus { language, status })
+                    .collect(),
+            })
+        })
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_project_lsp_definition(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspDefinitionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .definition(
+            WorkspaceKey::Project { project_id: id },
+            body.file,
+            body.line,
+            body.character,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_project_lsp_hover(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspHoverResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .hover(
+            WorkspaceKey::Project { project_id: id },
+            body.file,
+            body.line,
+            body.character,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_project_lsp_references(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspReferencesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .references(
+            WorkspaceKey::Project { project_id: id },
+            body.file,
+            body.line,
+            body.character,
+            body.cursor,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_project_lsp_outline(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LspOutlineQuery>,
+) -> Result<Json<LspOutlineResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let file = q.file.unwrap_or_default();
+    state
+        .lsp_routes
+        .outline(WorkspaceKey::Project { project_id: id }, file)
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_status(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LspStatusQuery>,
+) -> Result<Json<LspStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let path = q.path.unwrap_or_default();
+    state
+        .lsp_routes
+        .status(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            &path,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_statuses(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<LspStatusesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .statuses(WorkspaceKey::Worktree {
+            project_id: String::new(),
+            worktree_id: id,
+        })
+        .await
+        .map(|pairs| {
+            Json(LspStatusesResponse {
+                statuses: pairs
+                    .into_iter()
+                    .map(|(language, status)| LspLanguageStatus { language, status })
+                    .collect(),
+            })
+        })
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_definition(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspDefinitionResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .definition(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            body.file,
+            body.line,
+            body.character,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_hover(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspHoverResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .hover(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            body.file,
+            body.line,
+            body.character,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_references(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspPositionRequest>,
+) -> Result<Json<LspReferencesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .references(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            body.file,
+            body.line,
+            body.character,
+            body.cursor,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_outline(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LspOutlineQuery>,
+) -> Result<Json<LspOutlineResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let file = q.file.unwrap_or_default();
+    state
+        .lsp_routes
+        .outline(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            file,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_external_file(
+    State(state): State<AppState>,
+    axum::extract::Path((id, token)): axum::extract::Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let resp = state
+        .lsp_routes
+        .external_file(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            &token,
+        )
+        .await
+        .map_err(lsp_err_to_response)?;
+
+    match resp {
+        FileResponse::Text { etag, content } => Ok((
+            [
+                (header::ETAG, etag),
+                (
+                    header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8".to_string(),
+                ),
+            ],
+            content,
+        )
+            .into_response()),
+        FileResponse::Image { mime, content } => {
+            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
+        }
+    }
+}
+
+async fn handle_project_lsp_external_file(
+    State(state): State<AppState>,
+    axum::extract::Path((id, token)): axum::extract::Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let resp = state
+        .lsp_routes
+        .external_file(WorkspaceKey::Project { project_id: id }, &token)
+        .await
+        .map_err(lsp_err_to_response)?;
+
+    match resp {
+        FileResponse::Text { etag, content } => Ok((
+            [
+                (header::ETAG, etag),
+                (
+                    header::CONTENT_TYPE,
+                    "text/plain; charset=utf-8".to_string(),
+                ),
+            ],
+            content,
+        )
+            .into_response()),
+        FileResponse::Image { mime, content } => {
+            Ok(([(header::CONTENT_TYPE, mime)], content).into_response())
+        }
+    }
 }
 
 fn worktree_err_to_response(err: WorktreeRouteError) -> (StatusCode, Json<serde_json::Value>) {
@@ -2929,6 +3319,12 @@ async fn handle_patch_settings(
 
 async fn handle_get_skills(State(state): State<AppState>) -> Json<SkillsResult> {
     Json(state.skills_routes.get_skills().await)
+}
+
+// ── LSP language survey ──────────────────────────────────────────────────
+
+async fn handle_lsp_languages(State(state): State<AppState>) -> Json<LspLanguageSurveyResponse> {
+    Json(state.lsp_routes.language_survey())
 }
 
 // ── Ordered Lists ─────────────────────────────────────────────────────────

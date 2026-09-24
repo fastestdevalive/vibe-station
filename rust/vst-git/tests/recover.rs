@@ -98,6 +98,7 @@ fn make_record() -> ProjectRecord {
             sort_order: 0.0,
             terminal_seq: Some(0),
             agent_seq: Some(0),
+            lsp_enabled: None,
             sessions: vec![
                 session(
                     "sess-alive",
@@ -137,6 +138,7 @@ fn make_record() -> ProjectRecord {
             ],
         }],
         next_worktree_num: None,
+        lsp_enabled: None,
     }
 }
 

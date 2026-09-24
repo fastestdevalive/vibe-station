@@ -20,6 +20,7 @@ fn make_project(id: &str) -> ProjectRecord {
         direct_session_seq: None,
         worktrees: vec![],
         next_worktree_num: None,
+        lsp_enabled: None,
     }
 }
 
@@ -38,6 +39,7 @@ fn project_with_session(project_id: &str, wt_id: &str, sess_id: &str) -> Project
         sort_order: 0.0,
         terminal_seq: Some(0),
         agent_seq: Some(0),
+        lsp_enabled: None,
         sessions: vec![vst_types::SessionRecord {
             id: sess_id.into(),
             worktree_id: Some(wt_id.into()),

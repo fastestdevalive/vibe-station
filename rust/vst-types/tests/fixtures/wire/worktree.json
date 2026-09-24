@@ -10,5 +10,6 @@
   "pinnedAt": null,
   "hiddenAt": null,
   "sortOrder": 1,
-  "mainSessionId": "vs-141-a-5853aa1a"
+  "mainSessionId": "vs-141-a-5853aa1a",
+  "lspEnabled": false
 }

@@ -1144,6 +1144,7 @@ mod tests {
             direct_session_seq: None,
             worktrees: vec![],
             next_worktree_num: None,
+            lsp_enabled: None,
         };
 
         JsonAgentSession::new(JsonAgentSessionOptions {

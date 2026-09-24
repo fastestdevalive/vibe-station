@@ -2969,6 +2969,7 @@ dependencies = [
  "vst-agy-acp",
  "vst-git",
  "vst-lifecycle",
+ "vst-lsp",
  "vst-proc",
  "vst-routes",
  "vst-rpc",
@@ -3014,6 +3015,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "vst-lsp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "vst-types",
+ "vst-ws",
+]
+
+[[package]]
 name = "vst-proc"
 version = "0.1.0"
 dependencies = [
@@ -3043,6 +3061,7 @@ dependencies = [
  "vst-agents",
  "vst-git",
  "vst-lifecycle",
+ "vst-lsp",
  "vst-proc",
  "vst-store",
  "vst-types",

@@ -99,6 +99,7 @@ fn make_worktree(id: &str) -> WorktreeRecord {
         sort_order: 0.0,
         terminal_seq: Some(1),
         agent_seq: Some(1),
+        lsp_enabled: None,
         sessions: vec![],
     }
 }
@@ -116,6 +117,7 @@ fn make_project(id: &str) -> ProjectRecord {
         direct_session_seq: Some(1),
         worktrees: vec![],
         next_worktree_num: Some(1),
+        lsp_enabled: None,
     }
 }
 

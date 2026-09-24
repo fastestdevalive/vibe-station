@@ -79,6 +79,7 @@ fn project(id: &str, worktree_sessions: &[&str], direct_sessions: &[&str]) -> Pr
                 sort_order: 0.0,
                 terminal_seq: Some(0),
                 agent_seq: Some(0),
+                lsp_enabled: None,
                 sessions: worktree_sessions
                     .iter()
                     .map(|s| session(s, id, Some(&format!("{id}-w1"))))
@@ -86,6 +87,7 @@ fn project(id: &str, worktree_sessions: &[&str], direct_sessions: &[&str]) -> Pr
             }]
         },
         next_worktree_num: None,
+        lsp_enabled: None,
     }
 }
 

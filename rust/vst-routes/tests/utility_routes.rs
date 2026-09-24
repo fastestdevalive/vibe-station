@@ -715,6 +715,7 @@ async fn test_attachments_upload_and_delete() {
         sort_order: 1.0,
         terminal_seq: Some(1),
         agent_seq: Some(1),
+        lsp_enabled: None,
         sessions: vec![agent_session.clone(), term_session.clone()],
     };
 
@@ -730,6 +731,7 @@ async fn test_attachments_upload_and_delete() {
         direct_session_seq: Some(0),
         worktrees: vec![worktree],
         next_worktree_num: Some(2),
+        lsp_enabled: None,
     };
 
     store.add_project(project.clone()).await.unwrap();

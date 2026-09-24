@@ -75,9 +75,11 @@ fn project(
             sort_order: 0.0,
             terminal_seq: None,
             agent_seq: None,
+            lsp_enabled: None,
             sessions: worktree_sessions,
         }],
         next_worktree_num: None,
+        lsp_enabled: None,
     }
 }
 

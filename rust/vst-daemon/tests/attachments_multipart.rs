@@ -104,6 +104,7 @@ async fn seed_agent_session(store: &StoreHandle, checkout: &std::path::Path, ses
         sort_order: 1.0,
         terminal_seq: Some(1),
         agent_seq: Some(1),
+        lsp_enabled: None,
         sessions: vec![session],
     };
     let project = ProjectRecord {
@@ -118,6 +119,7 @@ async fn seed_agent_session(store: &StoreHandle, checkout: &std::path::Path, ses
         direct_session_seq: Some(0),
         worktrees: vec![worktree],
         next_worktree_num: Some(2),
+        lsp_enabled: None,
     };
     store.add_project(project).await.unwrap();
 }

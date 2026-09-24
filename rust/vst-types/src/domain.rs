@@ -604,6 +604,8 @@ pub struct WorktreeRecord {
     pub terminal_seq: Option<i64>,
     /// Monotonic high-water counter for agent slots.
     pub agent_seq: Option<i64>,
+    /// Whether code navigation (LSP) is enabled.
+    pub lsp_enabled: Option<bool>,
     pub sessions: Vec<SessionRecord>,
 }
 
@@ -672,4 +674,6 @@ pub struct ProjectRecord {
     pub worktrees: Vec<WorktreeRecord>,
     /// Monotonic high-water mark for worktree numbers.
     pub next_worktree_num: Option<i64>,
+    /// Whether code navigation (LSP) is enabled.
+    pub lsp_enabled: Option<bool>,
 }

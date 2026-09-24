@@ -23,6 +23,7 @@ vst-agy-acp = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
 vst-routes = { workspace = true }
+vst-lsp = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full", "signal"] }
 serde = { workspace = true }

@@ -21,3 +21,6 @@ pub mod settings;
 pub mod skills;
 pub mod tailscale;
 pub mod worktrees;
+pub mod file_serving;
+pub mod lsp;
+pub mod search_util;

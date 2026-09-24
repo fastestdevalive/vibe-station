@@ -235,6 +235,7 @@ fn sample_worktree(id: &str, project: &str, branch: &str) -> Worktree {
         hidden_at: None,
         sort_order: 1.0,
         main_session_id: None,
+        lsp_enabled: false,
     }
 }
 

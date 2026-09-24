@@ -404,9 +404,11 @@ async fn test_modes_crud_lifecycle_and_events() {
             sort_order: 1.0,
             terminal_seq: Some(0),
             agent_seq: Some(2),
+            lsp_enabled: None,
             sessions: vec![session1, session2_done],
         }],
         next_worktree_num: Some(2),
+        lsp_enabled: None,
     };
     store.add_project(project).await.unwrap();
 

@@ -12,6 +12,7 @@ vst-git = { workspace = true }
 vst-agents = { workspace = true }
 vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
+vst-lsp = { workspace = true }
 vst-proc = { workspace = true }
 axum = { workspace = true }
 thiserror = { workspace = true }
