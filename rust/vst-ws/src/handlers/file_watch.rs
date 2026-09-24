@@ -10,8 +10,9 @@ use vst_types::ws::{ClientMessage, ServerMessage};
 use crate::connection::WsConnection;
 use crate::streams::file_watcher::{FileWatcher, WatcherCallbacks, WatcherHandle};
 
-/// Resolves a worktree id to its absolute root path.
-pub type WorktreePathResolver = Arc<dyn Fn(&str) -> Option<PathBuf> + Send + Sync>;
+/// Resolves a watch id to its absolute root path.
+pub type WorktreePathResolver =
+    Arc<dyn Fn(&str, vst_types::ws::WatchScope) -> Option<PathBuf> + Send + Sync>;
 
 /// One live watcher registration in the shared registry: the watcher plus the
 /// number of live subscribers (across ALL connections) currently referencing
@@ -72,7 +73,12 @@ pub fn handle_file_watch(
     resolve_root: &WorktreePathResolver,
     msg: &ClientMessage,
 ) {
-    let ClientMessage::FileWatch { worktree_id, path } = msg else {
+    let ClientMessage::FileWatch {
+        worktree_id,
+        path,
+        scope,
+    } = msg
+    else {
         return;
     };
     let watch_key = format!("file:{worktree_id}:{path}");
@@ -103,7 +109,7 @@ pub fn handle_file_watch(
         }
     }
 
-    let Some(root) = resolve_root(worktree_id) else {
+    let Some(root) = resolve_root(worktree_id, *scope) else {
         conn.send(ServerMessage::SystemError {
             message: format!("Worktree '{worktree_id}' not found"),
         });
@@ -194,7 +200,10 @@ pub async fn handle_file_unwatch(
     registry: &WatcherRegistry,
     msg: &ClientMessage,
 ) {
-    let ClientMessage::FileUnwatch { worktree_id, path } = msg else {
+    let ClientMessage::FileUnwatch {
+        worktree_id, path, ..
+    } = msg
+    else {
         return;
     };
     let watch_key = format!("file:{worktree_id}:{path}");
@@ -275,7 +284,7 @@ mod tests {
     }
 
     fn resolve_root(root: std::path::PathBuf) -> WorktreePathResolver {
-        Arc::new(move |_| Some(root.clone()))
+        Arc::new(move |_id: &str, _scope: vst_types::ws::WatchScope| Some(root.clone()))
     }
 
     // Phase 0 — regression test proving the file-watcher leak (bug 2: global
@@ -305,6 +314,7 @@ mod tests {
         let msg = || ClientMessage::FileWatch {
             worktree_id: "wt1".into(),
             path: "existing.rs".into(),
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         handle_file_watch(&conn_a, &registry, &resolve_root, &msg());
@@ -363,6 +373,7 @@ mod tests {
         let msg = || ClientMessage::FileWatch {
             worktree_id: "wt1".into(),
             path: "existing.rs".into(),
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         handle_file_watch(&conn_a, &registry, &resolve_root, &msg());
@@ -438,6 +449,7 @@ mod tests {
         let msg = || ClientMessage::FileWatch {
             worktree_id: "wt1".into(),
             path: "watched.rs".into(),
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         handle_file_watch(&conn_a, &registry, &resolve_root, &msg());
@@ -512,6 +524,7 @@ mod tests {
         let msg = || ClientMessage::FileWatch {
             worktree_id: "wt1".into(),
             path: "existing.rs".into(),
+            scope: vst_types::ws::WatchScope::Worktree,
         };
 
         // conn_a watches the SAME key twice locally — but this only ever takes
@@ -568,6 +581,7 @@ mod tests {
             &ClientMessage::FileWatch {
                 worktree_id: "wt1".into(),
                 path: "a.rs".into(),
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         );
         handle_file_watch(
@@ -577,6 +591,7 @@ mod tests {
             &ClientMessage::FileWatch {
                 worktree_id: "wt1".into(),
                 path: "b.rs".into(),
+                scope: vst_types::ws::WatchScope::Worktree,
             },
         );
         assert_eq!(registry.lock().unwrap().watchers.len(), 2);
@@ -588,5 +603,59 @@ mod tests {
             registry.lock().unwrap().watchers.is_empty(),
             "disconnect must release every file watcher (bug 1)"
         );
+    }
+
+    // Phase 1 — a project-scope `file:watch` resolves against a resolver that
+    // distinguishes scopes: it returns a root ONLY for `(id, WatchScope::Project)`,
+    // never for `(id, WatchScope::Worktree)`. The watcher must register
+    // successfully (no `SystemError` sent), proving `handle_file_watch` threads
+    // `msg.scope` through to `resolve_root`.
+    #[tokio::test]
+    async fn project_scope_file_watch_resolves_against_project_branch() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("proj.rs"), "x").unwrap();
+        let registry = registry();
+        let resolve_root: WorktreePathResolver = Arc::new(move |id: &str, scope: vst_types::ws::WatchScope| {
+            match scope {
+                vst_types::ws::WatchScope::Project if id == "proj1" => Some(root.path().to_path_buf()),
+                _ => None,
+            }
+        });
+
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let conn = WsConnection::new(WsSinkHandle::from_parts(
+            sent.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            Arc::new(Mutex::new(None)),
+        ));
+
+        handle_file_watch(
+            &conn,
+            &registry,
+            &resolve_root,
+            &ClientMessage::FileWatch {
+                worktree_id: "proj1".into(),
+                path: "proj.rs".into(),
+                scope: vst_types::ws::WatchScope::Project,
+            },
+        );
+
+        assert!(
+            registry.lock().unwrap().watchers.contains_key("file:proj1:proj.rs"),
+            "project-scope watcher must register successfully"
+        );
+        assert!(
+            !sent.lock().unwrap().iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
+            "project-scope resolution must not send SystemError"
+        );
+
+        // Cleanup.
+        {
+            let mut reg = registry.lock().unwrap();
+            if let Some(sw) = reg.watchers.remove("file:proj1:proj.rs") {
+                drop(reg);
+                sw.watcher.close();
+            }
+        }
     }
 }

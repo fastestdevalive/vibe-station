@@ -15,6 +15,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use tokio::process::Command;
+
 use vst_agents::home::home_dir;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
@@ -26,8 +28,8 @@ use vst_agents::session_runtime::{release_session_runtime, ReleaseOpts};
 use vst_git::branch_validator::validate_branch;
 use vst_git::direct_pty::PtyKill;
 use vst_git::git::{
-    detect_default_branch, is_git_available, is_git_repo, list_branches, rev_parse, worktree_add,
-    worktree_remove,
+    detect_default_branch, is_git_available, is_git_repo, list_branches, list_commits, rev_parse,
+    resolve_parent_sha, worktree_add, worktree_remove,
 };
 use vst_git::naming::slugify_prompt;
 use vst_git::paths::Paths;
@@ -50,13 +52,19 @@ use vst_types::rest::projects::{
     PatchProjectBody, PatchProjectResult, TreeEntry, TreeEntryType,
 };
 use vst_types::rest::shared::Project;
-use vst_types::rest::worktrees::FileListResult;
+use vst_types::rest::worktrees::{
+    ChangedPath, CommitLogEntry, CommitsResult, FileListResult, GutterResult,
+};
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 
 use crate::modes::{find_mode, resolve_mode_id};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
-use crate::worktrees::{compute_etag, serialize_worktree, FileResponse};
+use crate::worktrees::{
+    compute_etag, is_valid_commit_sha, merge_numstat, parse_branch_name_status, parse_porcelain_z,
+    run_numstat_cmd, serialize_worktree, untracked_numstat_cmd, DiffResponse, FileResponse,
+    MAX_DIFF_BYTES,
+};
 
 /// Errors surfaced by project route handlers.
 #[derive(Debug, thiserror::Error)]
@@ -1319,6 +1327,383 @@ impl ProjectRoutes {
             content: text,
         })
     }
+
+    // ── 10. GET /projects/:projectId/changed-paths ────────────────────────
+    pub async fn changed_paths(
+        &self,
+        project_id: &str,
+        scope: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<Vec<ChangedPath>, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        if !project.is_git {
+            return Ok(vec![]);
+        }
+
+        let root = PathBuf::from(&project.absolute_path);
+        let scope = scope.unwrap_or("local");
+
+        if scope == "branch" {
+            return Err(ProjectRouteError::validation(
+                "scope=branch is not supported for project-scope routes",
+            ));
+        }
+
+        // A project can sit in a SUBDIRECTORY of a git repo, not just at its
+        // root. `git status`/`git diff` report paths relative to the REPO ROOT
+        // in that case, which breaks project-relative consumers. `--show-prefix`
+        // yields the (empty at the repo root) prefix to strip from `git status`
+        // paths, and tells us to add `--relative` to the `git diff` calls so
+        // their paths come back project-relative too.
+        let prefix = git_show_prefix(&root).await?;
+        let is_subdir = !prefix.is_empty();
+
+        if scope == "commit" {
+            let sha = sha.ok_or_else(|| {
+                ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+            })?;
+            if !is_valid_commit_sha(sha) {
+                return Err(ProjectRouteError::unprocessable(
+                    "Could not resolve commit sha",
+                    None,
+                ));
+            }
+            let root_str = root.to_string_lossy().to_string();
+            let resolved_sha = rev_parse(&root_str, &format!("{sha}^{{commit}}"))
+                .await
+                .map_err(|_| {
+                    ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                })?;
+            let parent_sha = resolve_parent_sha(&root_str, &resolved_sha)
+                .await
+                .map_err(|_| {
+                    ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                })?;
+
+            let mut cmd = Command::new("git");
+            cmd.arg("-c")
+                .arg("core.quotepath=false")
+                .arg("diff")
+                .arg("-z")
+                .arg("--name-status");
+            if is_subdir {
+                cmd.arg("--relative");
+            }
+            cmd.arg(&parent_sha)
+                .arg(&resolved_sha)
+                .current_dir(&root)
+                .env("GIT_TERMINAL_PROMPT", "0");
+            let output = cmd.output().await.map_err(|e| {
+                ProjectRouteError::Internal(format!("git diff --name-status failed: {e}"))
+            })?;
+            if !output.status.success() && output.status.code() != Some(1) {
+                return Err(ProjectRouteError::Internal(
+                    "git diff --name-status failed".to_string(),
+                ));
+            }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let entries = parse_branch_name_status(&stdout);
+            let numstat_args = numstat_args(is_subdir, &[parent_sha.as_str(), resolved_sha.as_str()]);
+            let numstat = run_numstat_cmd(&root, &numstat_args).await;
+            return Ok(merge_numstat(entries, numstat));
+        }
+
+        // Local scope: git status -z -uall + git diff --numstat HEAD + untrackedNumstat
+        let mut cmd = Command::new("git");
+        cmd.args(["status", "--porcelain=v1", "-z", "-uall"]);
+        // `-- .` scopes `git status` to the project's own directory when it is a
+        // subdirectory of a larger repo (paths still come back repo-root-relative,
+        // so we strip the prefix below).
+        if is_subdir {
+            cmd.arg("--").arg(".");
+        }
+        cmd.current_dir(&root).env("GIT_TERMINAL_PROMPT", "0");
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| ProjectRouteError::Internal(format!("git status failed: {e}")))?;
+        if !output.status.success() {
+            return Err(ProjectRouteError::Internal(
+                "git status failed".to_string(),
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut entries = parse_porcelain_z(&stdout);
+        if is_subdir {
+            for e in &mut entries {
+                e.path = strip_git_prefix(&e.path, &prefix);
+            }
+        }
+        let numstat_args = numstat_args(is_subdir, &["HEAD"]);
+        let mut numstat = run_numstat_cmd(&root, &numstat_args).await;
+
+        for entry in &entries {
+            if entry.status == "?" && !numstat.contains_key(&entry.path) {
+                let stat = untracked_numstat_cmd(&root, &entry.path).await;
+                numstat.insert(entry.path.clone(), stat);
+            }
+        }
+
+        let mut changed = merge_numstat(entries, numstat);
+        for c in &mut changed {
+            if c.status == "D" {
+                continue;
+            }
+            if let Ok(meta) = tokio::fs::metadata(root.join(&c.path)).await {
+                c.mtime_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_millis() as i64);
+            }
+        }
+        Ok(changed)
+    }
+
+    // ── 11. GET /projects/:projectId/gutter/*path ─────────────────────────
+    pub async fn gutter(
+        &self,
+        project_id: &str,
+        file_path: &str,
+    ) -> Result<GutterResult, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        if !project.is_git {
+            return Ok(GutterResult {
+                added: vec![],
+                deleted: vec![],
+                modified: vec![],
+            });
+        }
+
+        let root = PathBuf::from(&project.absolute_path);
+        let abs_path = resolve_inside_dir(&root, file_path)?;
+
+        // Compute relative path for git commands
+        let rel_path = abs_path
+            .strip_prefix(&root)
+            .map_err(|_| {
+                ProjectRouteError::unprocessable("path outside project root", None)
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        let diff_output = Command::new("git")
+            .current_dir(&root)
+            .args([
+                "-c",
+                "color.diff=false",
+                "-c",
+                "core.quotepath=false",
+                "diff",
+                "--no-color",
+                "HEAD",
+                "--",
+                &rel_path,
+            ])
+            .output()
+            .await
+            .map_err(|e| ProjectRouteError::Internal(format!("Failed to run git diff: {e}")))?;
+
+        if !diff_output.status.success() && diff_output.status.code() != Some(1) {
+            return Err(ProjectRouteError::Internal("git diff failed".to_string()));
+        }
+
+        let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
+        if stdout_for_ambiguity_check.trim().is_empty() {
+            let check_tracked = Command::new("git")
+                .args(["ls-files", "--error-unmatch", "--", &rel_path])
+                .current_dir(&root)
+                .output()
+                .await
+                .map_err(|e| {
+                    ProjectRouteError::Internal(format!("Failed to run git ls-files: {e}"))
+                })?;
+
+            if !check_tracked.status.success() {
+                return match tokio::fs::read(&abs_path).await {
+                    Ok(content) => {
+                        if let Ok(text) = String::from_utf8(content) {
+                            let line_count = text.lines().count() as u32;
+                            if line_count > 0 {
+                                let capped = line_count.min(crate::worktrees::GUTTER_MAX_LINES);
+                                let added = (1..=capped).collect();
+                                Ok(GutterResult {
+                                    added,
+                                    deleted: vec![],
+                                    modified: vec![],
+                                })
+                            } else {
+                                Ok(GutterResult::default())
+                            }
+                        } else {
+                            Ok(GutterResult::default())
+                        }
+                    }
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            Err(ProjectRouteError::NotFound(format!(
+                                "File not found: {file_path}"
+                            )))
+                        } else {
+                            Err(ProjectRouteError::unprocessable(e.to_string(), None))
+                        }
+                    }
+                };
+            }
+            return Ok(GutterResult::default());
+        }
+
+        Ok(crate::worktrees::parse_diff_hunk(&stdout_for_ambiguity_check))
+    }
+
+    // ── 12. GET /projects/:projectId/diff/*path ───────────────────────────
+    pub async fn diff(
+        &self,
+        project_id: &str,
+        file_path: &str,
+        scope: Option<&str>,
+        sha: Option<&str>,
+    ) -> Result<DiffResponse, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        if !project.is_git {
+            return Err(ProjectRouteError::unprocessable(
+                "project is not a git repository",
+                None,
+            ));
+        }
+
+        let root = PathBuf::from(&project.absolute_path);
+        let scope = scope.unwrap_or("local");
+
+        if scope == "branch" {
+            return Err(ProjectRouteError::validation(
+                "scope=branch is not supported for project-scope routes",
+            ));
+        }
+
+        let mut cmd = Command::new("git");
+        cmd.arg("-c")
+            .arg("color.diff=false")
+            .arg("-c")
+            .arg("core.quotepath=false")
+            .arg("diff");
+
+        match scope {
+            "commit" => {
+                let sha = sha.ok_or_else(|| {
+                    ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                })?;
+                if !is_valid_commit_sha(sha) {
+                    return Err(ProjectRouteError::unprocessable(
+                        "Could not resolve commit sha",
+                        None,
+                    ));
+                }
+                let root_str = root.to_string_lossy().to_string();
+                let resolved_sha = rev_parse(&root_str, &format!("{sha}^{{commit}}"))
+                    .await
+                    .map_err(|_| {
+                        ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                    })?;
+                let parent_sha = resolve_parent_sha(&root_str, &resolved_sha)
+                    .await
+                    .map_err(|_| {
+                        ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                    })?;
+                cmd.arg(parent_sha)
+                    .arg(resolved_sha)
+                    .arg("--")
+                    .arg(file_path);
+            }
+            _ => {
+                cmd.arg("HEAD").arg("--").arg(file_path);
+            }
+        }
+
+        cmd.current_dir(&root).env("GIT_TERMINAL_PROMPT", "0");
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| ProjectRouteError::Internal(format!("git diff failed: {e}")))?;
+
+        if !output.status.success() && output.status.code() != Some(1) {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(ProjectRouteError::Internal(if stderr.is_empty() {
+                format!("git diff exited with status {:?}", output.status.code())
+            } else {
+                stderr
+            }));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if stdout.contains("Binary files ") && stdout.contains(" differ") {
+            return Err(ProjectRouteError::unprocessable(
+                "Binary file diff is not supported",
+                None,
+            ));
+        }
+        if stdout.len() > MAX_DIFF_BYTES {
+            return Err(ProjectRouteError::unprocessable(
+                "Diff too large to display",
+                None,
+            ));
+        }
+
+        let etag = compute_etag(stdout.as_bytes());
+        Ok(DiffResponse {
+            etag,
+            content: stdout,
+        })
+    }
+
+    // ── 13. GET /projects/:projectId/commits?limit=<n> ────────────────────
+    pub async fn commits(
+        &self,
+        project_id: &str,
+        limit: Option<usize>,
+    ) -> Result<CommitsResult, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        if !project.is_git {
+            return Ok(CommitsResult { commits: vec![] });
+        }
+
+        let limit = limit.unwrap_or(200).clamp(1, 1000);
+        let root_str = project.absolute_path.clone();
+        let commits = list_commits(&root_str, limit, None)
+            .await
+            .map_err(|e| ProjectRouteError::Internal(e.to_string()))?;
+
+        let mapped = commits
+            .into_iter()
+            .map(|c| CommitLogEntry {
+                sha: c.sha,
+                short_sha: c.short_sha,
+                author_name: c.author_name,
+                author_email: c.author_email,
+                date: c.date,
+                subject: c.subject,
+                body: c.body,
+                insertions: c.insertions as i64,
+                deletions: c.deletions as i64,
+                has_binary_changes: c.has_binary_changes,
+                is_on_branch: c.is_on_branch,
+            })
+            .collect();
+
+        Ok(CommitsResult { commits: mapped })
+    }
 }
 
 /// Map internal ProjectRecord to API shape consumed by the web UI.
@@ -1350,6 +1735,47 @@ pub fn expand_tilde(input: &str) -> String {
             .to_string();
     }
     input.to_string()
+}
+
+/// Run `git rev-parse --show-prefix` against `dir`, returning the prefix of
+/// `dir` relative to the repository root (empty when `dir` IS the repo root).
+async fn git_show_prefix(dir: &Path) -> Result<String, ProjectRouteError> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-prefix"])
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .await
+        .map_err(|e| ProjectRouteError::Internal(format!("git rev-parse failed: {e}")))?;
+    if !output.status.success() {
+        return Err(ProjectRouteError::Internal(
+            "git rev-parse --show-prefix failed".to_string(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Strip the `git rev-parse --show-prefix` prefix (e.g. `pkg/`) from a
+/// repo-root-relative path returned by `git status`, yielding the
+/// project-relative path. No-op when the prefix doesn't match.
+fn strip_git_prefix(path: &str, prefix: &str) -> String {
+    match path.strip_prefix(prefix) {
+        Some(stripped) => stripped.to_string(),
+        None => path.to_string(),
+    }
+}
+
+/// Build the extra args for `run_numstat_cmd` — prepends `--relative` so paths
+/// come back project-relative when the project is a subdirectory of a repo.
+fn numstat_args<'a>(is_subdir: bool, diff_args: &[&'a str]) -> Vec<&'a str> {
+    if is_subdir {
+        let mut args: Vec<&'a str> = Vec::with_capacity(diff_args.len() + 1);
+        args.push("--relative");
+        args.extend_from_slice(diff_args);
+        args
+    } else {
+        diff_args.to_vec()
+    }
 }
 
 /// Resolve `file_path` inside `root`, rejecting path traversal.

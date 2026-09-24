@@ -42,18 +42,32 @@ pub enum ClientMessage {
     #[serde(rename = "session:close", rename_all = "camelCase")]
     SessionClose { session_id: String },
     #[serde(rename = "file:watch", rename_all = "camelCase")]
-    FileWatch { worktree_id: String, path: String },
+    FileWatch {
+        worktree_id: String,
+        path: String,
+        #[serde(default)]
+        scope: WatchScope,
+    },
     #[serde(rename = "file:unwatch", rename_all = "camelCase")]
-    FileUnwatch { worktree_id: String, path: String },
+    FileUnwatch {
+        worktree_id: String,
+        path: String,
+        #[serde(default)]
+        scope: WatchScope,
+    },
     #[serde(rename = "tree:watch", rename_all = "camelCase")]
     TreeWatch {
         worktree_id: String,
         path: Option<String>,
+        #[serde(default)]
+        scope: WatchScope,
     },
     #[serde(rename = "tree:unwatch", rename_all = "camelCase")]
     TreeUnwatch {
         worktree_id: String,
         path: Option<String>,
+        #[serde(default)]
+        scope: WatchScope,
     },
     #[serde(rename = "ping")]
     Ping,
@@ -276,6 +290,16 @@ pub enum TreeChangeKind {
     Renamed,
 }
 
+/// `file:watch`/`tree:watch` scope — which id namespace `worktree_id` (kept
+/// as the field name for wire back-compat) actually indexes into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WatchScope {
+    #[default]
+    Worktree,
+    Project,
+}
+
 /// The `session` payload of `remote:connected`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -450,6 +474,70 @@ impl From<&crate::rest::shared::GlobalDraft> for SessionCreatedSnapshot {
             pr: s.pr.clone(),
             draft_prompt: s.draft_prompt.clone(),
             draft_config: s.draft_config.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_watch_missing_scope_defaults_to_worktree() {
+        let msg: ClientMessage = serde_json::from_str(r#"{"type":"file:watch","worktreeId":"w","path":"p"}"#)
+            .expect("old client message with no scope key must still parse");
+        match msg {
+            ClientMessage::FileWatch {
+                worktree_id,
+                path,
+                scope,
+            } => {
+                assert_eq!(worktree_id, "w");
+                assert_eq!(path, "p");
+                assert_eq!(scope, WatchScope::Worktree);
+            }
+            other => panic!("expected FileWatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tree_watch_missing_scope_defaults_to_worktree() {
+        let msg: ClientMessage = serde_json::from_str(r#"{"type":"tree:watch","worktreeId":"w"}"#)
+            .expect("old client message with no scope key must still parse");
+        match msg {
+            ClientMessage::TreeWatch {
+                worktree_id,
+                path,
+                scope,
+            } => {
+                assert_eq!(worktree_id, "w");
+                assert_eq!(path, None);
+                assert_eq!(scope, WatchScope::Worktree);
+            }
+            other => panic!("expected TreeWatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn watch_messages_with_explicit_project_scope_parse() {
+        let msg: ClientMessage =
+            serde_json::from_str(r#"{"type":"file:watch","worktreeId":"w","path":"p","scope":"project"}"#)
+                .expect("message with explicit project scope must parse");
+        match msg {
+            ClientMessage::FileWatch { scope, .. } => {
+                assert_eq!(scope, WatchScope::Project);
+            }
+            other => panic!("expected FileWatch, got {other:?}"),
+        }
+
+        let msg: ClientMessage =
+            serde_json::from_str(r#"{"type":"tree:watch","worktreeId":"w","scope":"project"}"#)
+                .expect("message with explicit project scope must parse");
+        match msg {
+            ClientMessage::TreeWatch { scope, .. } => {
+                assert_eq!(scope, WatchScope::Project);
+            }
+            other => panic!("expected TreeWatch, got {other:?}"),
         }
     }
 }

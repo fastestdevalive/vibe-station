@@ -28,6 +28,9 @@ rust/target/
 # can hit `GLIBC_x.xx not found` inside the container). Not a standard build
 # location; kept out of git the same as rust/target/.
 rust/target-docker/
+# rust/target-bookworm/ — same reason as rust/target-docker/ above, built via
+# `rust:slim-bookworm` to match the dev-sandbox's Debian bookworm base image.
+rust/target-bookworm/
 # *.rs.bk are backup files left by rustfmt.
 *.rs.bk
 # Gate logs (rust/.gate/<part>.log) are a committed deliverable — the bare
