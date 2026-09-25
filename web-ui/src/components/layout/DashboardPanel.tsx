@@ -61,6 +61,116 @@ export function bucketForRollup(
   return "finished";
 }
 
+export interface SessionBuckets {
+  working: Session[];
+  needsYou: Session[];
+  idle: Session[];
+  pr: Session[];
+  finished: Session[];
+}
+
+export interface UseSessionBucketsOptions {
+  /**
+   * When true, only worktree-attached agent sessions are bucketed — direct
+   * (worktree-less) sessions are excluded from every bucket entirely. Used by
+   * ProjectHomeTab, which renders direct agents in its own "Direct agents"
+   * list instead (Decision 6). Defaults to false (full dashboard behavior).
+   */
+  worktreeOnly?: boolean;
+}
+
+/**
+ * Decision 6 — the dashboard's per-session bucketing loop, extracted from the
+ * `DashboardPanel` render so `ProjectHomeTab` can reuse it verbatim (R9: the
+ * worktree status-bucket grouping must stay logic-identical to today's
+ * dashboard, which is why this is an extraction, not a rewrite — and why no
+ * `docs/STATUS-INDICATORS.md` update is needed: `bucketForRollup` and the
+ * section labels are untouched). Reads `sessions`/`sessionStates`/
+ * `hiddenProjectIds`/`worktreeById`/`worktreePrById` internally via the same
+ * store selectors `DashboardPanel` uses.
+ *
+ * @param projectFilter restrict to exactly one project (or undefined for all).
+ * @param opts.worktreeOnly exclude direct (worktree-less) sessions.
+ */
+export function useSessionBuckets(
+  projectFilter?: string,
+  opts?: UseSessionBucketsOptions,
+): SessionBuckets {
+  const projects = useServerStore((s) => s.projects);
+  const worktrees = useServerStore((s) => s.worktrees);
+  const sessions = useServerStore((s) => s.sessions);
+  const sessionStates = useWorkspaceStore((s) => s.sessionStates);
+
+  /** Hidden projects (and all their worktrees) are excluded from every dashboard
+   *  list — visibility only; unhide from Settings. */
+  const hiddenProjectIds = useMemo(
+    () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
+    [projects],
+  );
+
+  const worktreeById = useMemo(
+    () => new Map(worktrees.map((w) => [w.id, w])),
+    [worktrees],
+  );
+
+  /**
+   * PR is a property of the BRANCH, not any one session (BLOCKING-2 fix).
+   * Resolve it once per worktree here via `worktreePrStatus()`, then apply it
+   * to every non-archived agent session card of that worktree below.
+   */
+  const worktreePrById = useMemo(() => {
+    const map = new Map<string, PrStatus | null>();
+    for (const wt of worktrees) {
+      const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
+      map.set(wt.id, worktreePrStatus(sessionsForWt, wt.branch));
+    }
+    return map;
+  }, [worktrees, sessions]);
+
+  const worktreeOnly = opts?.worktreeOnly ?? false;
+
+  const { working, needsYou, idle, pr, finished } = useMemo(() => {
+    const sWorking: Session[] = [];
+    const sNeedsYou: Session[] = [];
+    const sIdle: Session[] = [];
+    const sPr: Session[] = [];
+    const sFinished: Session[] = [];
+    // One card per non-archived agent session — worktree-attached and direct
+    // alike (Phase 6). Archived (handed-off/reset) sessions are excluded:
+    // one stuck in `waiting_for_human` shouldn't produce a stray card.
+    for (const s of sessions) {
+      if (s.type !== "agent" || s.archivedAt != null) continue;
+      const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
+      if (wt) {
+        if (hiddenProjectIds.has(wt.projectId)) continue;
+        // Decision 6: single-project view — only sessions of the filtered project.
+        if (projectFilter != null && wt.projectId !== projectFilter) continue;
+      } else {
+        // Direct (worktree-less) session.
+        if (worktreeOnly) continue;
+        if (!s.projectId || hiddenProjectIds.has(s.projectId)) continue;
+        if (projectFilter != null && s.projectId !== projectFilter) continue;
+      }
+      const status = sessionStatus(sessionStates[s.id] ?? s.state);
+      // PR is resolved per WORKTREE (branch-guarded, D20), not per session —
+      // `worktreePrById` reads it from the worktree's `isMain` session and
+      // is applied to every non-archived agent session card of that
+      // worktree. A direct session has no worktree, so it can never show a
+      // PR (6.3).
+      const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
+      const b = bucketForRollup(status, sessionPr);
+      if (b === "working") sWorking.push(s);
+      else if (b === "needs-you") sNeedsYou.push(s);
+      else if (b === "idle") sIdle.push(s);
+      else if (b === "pr") sPr.push(s);
+      else sFinished.push(s);
+    }
+    return { working: sWorking, needsYou: sNeedsYou, idle: sIdle, pr: sPr, finished: sFinished };
+  }, [sessions, sessionStates, hiddenProjectIds, worktreeById, worktreePrById, projectFilter, worktreeOnly]);
+
+  return { working, needsYou, idle, pr, finished };
+}
+
 const DASHBOARD_VIEW_KEY = "dashboard:view";
 const DASHBOARD_SHOW_FINISHED_KEY = "dashboard:showFinished";
 
@@ -150,12 +260,6 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   useSubscription(sessionIdKey ? sessionIdKey.split(",").filter(Boolean) : [], api);
 
   const projectById = useMemo(() => Object.fromEntries(projects.map((p) => [p.id, p])), [projects]);
-  /** Hidden projects (and all their worktrees) are excluded from every dashboard
-   *  list — visibility only; unhide from Settings. */
-  const hiddenProjectIds = useMemo(
-    () => new Set(projects.filter((p) => p.hidden).map((p) => p.id)),
-    [projects],
-  );
   const visibleProjects = useMemo(
     () =>
       projects
@@ -193,48 +297,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     return map;
   }, [worktrees, sessions]);
 
-  const { working, needsYou, idle, pr, finished } = useMemo(() => {
-    const sWorking: Session[] = [];
-    const sNeedsYou: Session[] = [];
-    const sIdle: Session[] = [];
-    const sPr: Session[] = [];
-    const sFinished: Session[] = [];
-    // One card per non-archived agent session — worktree-attached and direct
-    // alike (Phase 6). Archived (handed-off/reset) sessions are excluded:
-    // one stuck in `waiting_for_human` shouldn't produce a stray card.
-    for (const s of sessions) {
-      if (s.type !== "agent" || s.archivedAt != null) continue;
-      const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
-      if (wt) {
-        if (hiddenProjectIds.has(wt.projectId)) continue;
-        // Decision 6: single-project view — only sessions of the filtered project.
-        if (projectFilter != null && wt.projectId !== projectFilter) continue;
-      } else {
-        // Direct (worktree-less) session.
-        if (!s.projectId || hiddenProjectIds.has(s.projectId)) continue;
-        if (projectFilter != null && s.projectId !== projectFilter) continue;
-      }
-      const status = sessionStatus(sessionStates[s.id] ?? s.state);
-      // PR is resolved per WORKTREE (branch-guarded, D20), not per session —
-      // `worktreePrById` reads it from the worktree's `isMain` session and
-      // is applied to every non-archived agent session card of that
-      // worktree. A direct session has no worktree, so it can never show a
-      // PR (6.3). No `isMain` preference on which CARDS show it — every
-      // non-archived session on a branch shows that branch's PR;
-      // duplication across sibling sessions on the same branch is expected,
-      // not guarded against (user decision, Phase 6 amendment — see
-      // docs/STATUS-INDICATORS.md).
-      const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
-      const b = bucketForRollup(status, sessionPr);
-      if (b === "working") sWorking.push(s);
-      else if (b === "needs-you") sNeedsYou.push(s);
-      else if (b === "idle") sIdle.push(s);
-      else if (b === "pr") sPr.push(s);
-      else sFinished.push(s);
-    }
-    return { working: sWorking, needsYou: sNeedsYou, idle: sIdle, pr: sPr, finished: sFinished };
-  }, [sessions, sessionStates, hiddenProjectIds, worktreeById, worktreePrById, projectFilter]);
-
+  const { working, needsYou, idle, pr, finished } = useSessionBuckets(projectFilter);
 
   const renderDashboardItem = useCallback(
     (s: Session) => {
@@ -248,7 +311,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
         return (
           <div key={s.id} className="dashboard-card-shell">
             <Link
-              to={`/session/${s.id}`}
+              to={s.projectId ? `/project/${s.projectId}/${s.id}` : `/session/${s.id}`}
               className="dashboard-card dashboard-card--session dashboard-card--worktree"
             >
               <span className="dashboard-card__dot dashboard-card__dot--status">

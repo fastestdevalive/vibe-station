@@ -7,9 +7,9 @@ import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { TabsStrip } from "@/components/layout/TabsStrip";
 import { TerminalPane } from "@/components/layout/TerminalPane";
 import { AgentPaneSlot } from "@/components/layout/AgentPaneSlot";
-import { PaneTools } from "@/components/layout/PaneTools";
 import { ToolPanel } from "@/components/layout/ToolPanel";
 import { DashboardPanel } from "@/components/layout/DashboardPanel";
+import { ProjectHomeTab } from "@/components/layout/ProjectHomeTab";
 import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { PaneOutletProvider, PaneOutlet } from "@/components/layout/paneOutlets";
 import { PaneHostLayer, type PaneKey } from "@/components/layout/PaneHostLayer";
@@ -20,16 +20,17 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWorkspaceUrlSync } from "@/hooks/useWorkspaceUrlSync";
+import { useProjectWorkspaceUrlSync } from "@/hooks/useProjectWorkspaceUrlSync";
 import { useWorkspaceKeyboardShortcuts } from "@/hooks/useWorkspaceKeyboardShortcuts";
-import { sessionLabel } from "@/lib/sessionLabel";
 import { worktreePrStatus } from "@/lib/statusColor";
+import { sessionLabel } from "@/lib/sessionLabel";
 import { QuickOpen } from "@/components/dialogs/QuickOpen";
 import { DraftComposer } from "@/components/draft/DraftComposer";
 
 export function Workspace() {
   const location = useLocation();
   const navigate = useNavigate();
-  const params = useParams<{ projectId?: string; directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
+  const params = useParams<{ projectId?: string; sessionId?: string; directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
   const isDashboard = location.pathname === "/";
   const isProjectView = location.pathname.startsWith("/project/");
   const projectId = isProjectView ? (params.projectId ?? null) : null;
@@ -52,7 +53,10 @@ export function Workspace() {
   // Detached-workspace view (agent-interaction-workspaces/04-workspaces Phase 3,
   // Decision 4) — a saved WorkspaceDoc's own route, independent of any worktree.
   const isWorkspaceView = location.pathname.startsWith("/workspaces/");
-  const isFullWidthPane = isDashboard || isSettings || isDraft;
+  // `/session/:id` is now a pure redirect (R4 / 4.9) to the project workspace, so
+  // it is treated as a full-width pane — a benign transient render before the
+  // redirect effect fires — never the old standalone direct-session layout.
+  const isFullWidthPane = isDashboard || isSettings || isDraft || isDirectSession;
 
   // Server data lives in `useServerStore`, populated and refreshed by
   // `useServerSync` (initial fetch + ws:open + WS patch reducers). Reading
@@ -165,8 +169,8 @@ export function Workspace() {
   // consumes URL params on first load) will NOT pick up the new id — we have to
   // select it in the store ourselves. For a worktree, `setActiveWorktree`
   // sets activeWorktreeId; for a direct session, `createDirectSession` has
-  // already registered the session so `/session/:id` resolves and its no-bounce
-  // redirect check passes.
+  // already registered the session, so we navigate straight to the project
+  // workspace tab (`/project/:projectId/:id`).
   const handleAgentCreated = useCallback(
     (result: { worktreeId?: string; sessionId?: string }) => {
       if (result.worktreeId) {
@@ -198,13 +202,28 @@ export function Workspace() {
         }
         navigate(`/worktree/${result.worktreeId}`);
       } else if (result.sessionId) {
-        navigate(`/session/${result.sessionId}`);
+        // A direct (worktree-less) session — land it in the project workspace.
+        // `createDirectSession` has already registered it in the server store,
+        // so look up its projectId and navigate to the project workspace tab.
+        // If it isn't in the store yet, fall back to `/session/:id` — whose
+        // R4 redirect effect (:283) resolves to `/project/:pid/:id` once the
+        // session IS a direct agent, or bounces to `/` otherwise (it does NOT
+        // wait for the session to land).
+        const created = useServerStore.getState().sessions.find(
+          (s) => s.id === result.sessionId,
+        );
+        if (created && created.projectId) {
+          navigate(`/project/${created.projectId}/${created.id}`);
+        } else {
+          navigate(`/session/${result.sessionId}`);
+        }
       }
     },
     [navigate],
   );
 
   useWorkspaceUrlSync(bundleLoaded, worktrees, sessions);
+  useProjectWorkspaceUrlSync(isProjectView, bundleLoaded, sessions, projects);
   // Quick Open + pane shortcuts work in both worktree and direct-session modes
   // (direct sessions browse the project base dir); only full-width panes (and
   // the detached workspace view, which has no single owning worktree/project
@@ -248,29 +267,32 @@ export function Workspace() {
   // Bind the direct-session layout context (project id) so the tool panel /
   // terminal dock toggles persist per project, and the Files tree + terminals
   // resolve to the project base dir. Cleared when leaving direct-session mode.
+  // Project view is owned by useProjectWorkspaceUrlSync (Decision 9) — guard
+  // off here, but keep `isProjectView` in deps so leaving project view (to `/`
+  // or `/settings`) still re-triggers the effect and clears the stale context.
   useEffect(() => {
+    if (isProjectView) return;
     const pid = isDirectSession ? (directSessionProject?.id ?? null) : null;
     if (useWorkspaceStore.getState().activeDirectContextId !== pid) {
       useWorkspaceStore.getState().setActiveDirectContext(pid);
     }
-  }, [isDirectSession, directSessionProject]);
+  }, [isDirectSession, directSessionProject, isProjectView]);
 
-  // Decision 6: `/project/:id` selects the project as the active context so
-  // DashboardPanel (with projectFilter) shows that project's own view.
-  useEffect(() => {
-    if (projectId == null) return;
-    if (useWorkspaceStore.getState().activeProjectId !== projectId) {
-      useWorkspaceStore.getState().selectProject(projectId);
-    }
-  }, [projectId]);
-
-  // Redirect to dashboard if direct session not found
+  // R4 / 4.9 — `/session/:id` is now a pure redirect into the project workspace.
+  // When `bundleLoaded` and `params.directSessionId` resolves to a direct agent
+  // (worktreeId === null && type === "agent"), go to `/project/:projectId/:id`;
+  // a worktree-attached session (or a missing id) falls back to `/`.
   useEffect(() => {
     if (!isDirectSession || !bundleLoaded) return;
-    if (params.directSessionId && !directSession) {
+    const id = params.directSessionId;
+    if (!id) return;
+    const s = sessions.find((x) => x.id === id);
+    if (s && s.worktreeId === null && s.type === "agent" && s.projectId) {
+      navigate(`/project/${s.projectId}/${s.id}`, { replace: true });
+    } else {
       navigate("/", { replace: true });
     }
-  }, [isDirectSession, bundleLoaded, params.directSessionId, directSession, navigate]);
+  }, [isDirectSession, bundleLoaded, params.directSessionId, sessions, navigate]);
 
   // Redirect to dashboard if the workspace doc no longer exists (deleted, or a
   // stale/invalid id in the URL — Risk #8, Phase 3c.3). Mirrors the direct-
@@ -309,7 +331,7 @@ export function Workspace() {
     // `.lifecycleState` is only set on the initial fetch, never patched live.
     if (s.state === "drafting") return;
     if (s.worktreeId) navigate(`/worktree/${s.worktreeId}`, { replace: true });
-    else if (s.projectId) navigate(`/session/${s.id}`, { replace: true });
+    else if (s.projectId) navigate(`/project/${s.projectId}/${s.id}`, { replace: true });
     else navigate("/", { replace: true });
   }, [isDraft, draftSessionId, bundleLoaded, sessions, navigate]);
 
@@ -321,11 +343,13 @@ export function Workspace() {
   useEffect(() => {
     if (isSettings) {
       document.title = "Settings — Vibe Station";
-    } else if (isDirectSession && directSession) {
-      const projectName = directSessionProject?.name ?? "Direct";
-      document.title = `${sessionLabel(directSession)} — ${projectName} — Vibe Station`;
     } else if (isWorkspaceView && viewedWorkspace) {
       document.title = `${viewedWorkspace.name} — Vibe Station`;
+    } else if (isProjectView) {
+      // Project workspace — title shows the project's name regardless of which
+      // tab (Project or a direct agent) is active (R3).
+      const proj = projects.find((p) => p.id === projectId);
+      document.title = proj ? `${proj.name} — Vibe Station` : "Vibe Station";
     } else if (isDashboard || !activeWorktreeId) {
       document.title = "Vibe Station";
     } else {
@@ -337,11 +361,11 @@ export function Workspace() {
     worktrees,
     isDashboard,
     isSettings,
-    isDirectSession,
-    directSession,
-    directSessionProject,
     isWorkspaceView,
     viewedWorkspace,
+    isProjectView,
+    projectId,
+    projects,
   ]);
 
   // Open the WS eagerly so the ConnectionStatus pill reflects daemon health
@@ -365,7 +389,7 @@ export function Workspace() {
   // owned by the redirect effect above ("Redirect to dashboard if direct session
   // not found"), so there is nothing for this effect to validate here.
   useEffect(() => {
-    if (!bundleLoaded || isDirectSession) return;
+    if (!bundleLoaded || isDirectSession || isProjectView) return;
     const s = useWorkspaceStore.getState();
     const activeWt = s.activeWorktreeId
       ? worktrees.find((w) => w.id === s.activeWorktreeId)
@@ -393,7 +417,7 @@ export function Workspace() {
     } else if (!sessStillExists) {
       useWorkspaceStore.setState({ activeSessionId: null });
     }
-  }, [bundleLoaded, isDirectSession, worktrees, sessions, projects, location.pathname, navigate]);
+  }, [bundleLoaded, isDirectSession, isProjectView, worktrees, sessions, projects, location.pathname, navigate]);
 
   useEffect(() => {
     if (!isMobile && mobileSidebarOpen) {
@@ -694,33 +718,133 @@ export function Workspace() {
       />
     ) : null;
 
-  // Direct session: identical to the worktree layout, minus the agent TabsStrip
-  // (a direct session is a single agent — no agent tabs). The tool panel and
-  // terminal dock are wired to the PROJECT base dir via scope="project".
-  const directAgentPane = directSession ? (
+  // Project workspace (Decision 2): the project's own pane set — one
+  // `agent:<id>` per OPEN direct-agent tab (that still exists — a session
+  // terminated elsewhere must not leave a stale pane key), plus one shared
+  // `tools:<projectId>`. Terminal session keys are deliberately excluded:
+  // the terminal dock's TerminalPane renders directly in `terminalDock`
+  // below, keyed only by `activeTerminalSessionId`, so it never remounts on a
+  // Project↔agent switch (AGENTS.md TerminalPane invariant).
+  const projectOpenAgentIds = useWorkspaceStore((s) =>
+    isProjectView && projectId ? (s.openDirectAgentTabsByProject[projectId] ?? null) : null,
+  );
+  const projectPaneKeys = useMemo<PaneKey[]>(() => {
+    if (!isProjectView || !projectId) return [];
+    const keys: PaneKey[] = [];
+    const seen = new Set<string>();
+    const push = (k: PaneKey) => {
+      if (seen.has(k)) return;
+      seen.add(k);
+      keys.push(k);
+    };
+    for (const id of projectOpenAgentIds ?? []) {
+      // Item 3 Fix D — a drafting session renders via the `DraftComposer`
+      // branch below, not the offscreen pane-host mechanism; leaving it out
+      // of `projectPaneKeys` stops an `AgentPaneSlot` from mounting for it.
+      const s = sessions.find((sess) => sess.id === id);
+      if (s && s.state !== "drafting") push(`agent:${id}`);
+    }
+    push(`tools:${projectId}`);
+    return keys;
+  }, [isProjectView, projectId, projectOpenAgentIds, sessions]);
+  const renderProjectPane = useCallback(
+    (key: PaneKey): ReactNode => {
+      if (key.startsWith("agent:")) {
+        const id = key.slice("agent:".length);
+        // A direct agent has no worktree, so branch/pr are always null (a
+        // direct session can never show a PR).
+        return (
+          <AgentPaneSlot
+            api={api}
+            sessionId={id}
+            session={sessions.find((s) => s.id === id)}
+            branch={null}
+            pr={null}
+          />
+        );
+      }
+      const pid = key.slice("tools:".length);
+      return (
+        <ToolPanel
+          api={api}
+          worktreeId={pid}
+          scope="project"
+          onOpenQuickOpen={() => setQuickOpen(true)}
+        />
+      );
+    },
+    [sessions],
+  );
+  const projectPaneHostLayer = (
+    <PaneHostLayer paneKeys={projectPaneKeys} renderPane={renderProjectPane} />
+  );
+
+  // Project workspace pane: the project-scoped agent TabsStrip (which itself
+  // renders a real, pinned, non-closeable "Overview" tab first — PRD R1 /
+  // Resolved design question #3) plus this pane's content, which mirrors
+  // whichever tab is active: the ProjectHomeTab when the pinned Overview tab is
+  // active (activeSessionId === null) or the matching `agent:<id>` pane
+  // otherwise (Decision 7 — routed through agentPane/toolPanel/terminalDock/
+  // paneHostLayer, never dashboardPane, so the shared tools pane and the
+  // terminal dock stay at stable tree positions across every switch).
+  const projectAgentPane = isProjectView && projectId ? (
     <div className="pane-stack">
-      {/* No agent TabsStrip — single agent, no tabs. Still needs the zoom/
-          fullscreen controls that TabsStrip normally bundles alongside the
-          tab list, so mount PaneTools directly instead of losing them.
-          TerminalPane stays mounted; ChatPane toggles beside it for a JSON
-          direct agent (Decision 14). */}
-      <div className="tabs-strip tabs-strip--tools-only" role="toolbar" aria-label="Terminal controls">
-        <PaneTools fsTarget="agent" />
-      </div>
-      {/* A direct session has no worktree, so no branch to guard a PR
-          against — `branch` defaults to null, which unconditionally
-          suppresses `session.pr` (a direct session can never show a PR). */}
-      <AgentPaneSlot api={api} sessionId={directSession.id} session={directSession} />
+      <TabsStrip api={api} worktreeId={projectId} kind="agent" scope="project" />
+      {activeSessionId ? (
+        activeSessionIsDrafting ? (
+          // Item 3 Fix C — mirrors the worktree pane's drafting branch above
+          // (`:653-670`), so a draft opened via the project-scope "+" (or
+          // ProjectHomeTab's "New direct agent") renders its composer instead
+          // of a broken `PaneOutlet` pointed at a session with no live pane.
+          <DraftComposer
+            key={activeSessionId}
+            api={api}
+            draftSessionId={activeSessionId}
+            onStarted={(result) => {
+              // Unlike the worktree branch, do NOT null `activeSessionId`
+              // first — a "tab" draft start promotes the SAME session id in
+              // place, so `handleAgentCreated` navigates to
+              // `/project/:pid/:id` (a no-op on the current URL); nulling it
+              // first would bounce the URL through `/project/:pid` first.
+              handleAgentCreated(result);
+            }}
+            onDiscard={async () => {
+              try {
+                await api.terminateSession(activeSessionId);
+              } catch {
+                /* ignore */
+              }
+              // Also nulls `activeSessionId` if it was the discarded draft.
+              useWorkspaceStore.getState().closeProjectAgentTab(projectId, activeSessionId);
+            }}
+          />
+        ) : (
+          <PaneOutlet paneKey={`agent:${activeSessionId}`} />
+        )
+      ) : (
+        (() => {
+          const project = projects.find((p) => p.id === projectId);
+          if (!project) return <div className="empty-state">Project not found</div>;
+          return (
+            <ProjectHomeTab
+              key={project.id}
+              api={api}
+              project={project}
+              sessions={sessions}
+              worktrees={worktrees.filter((w) => w.projectId === projectId)}
+              onOpenAgent={handleAgentCreated}
+            />
+          );
+        })()
+      )}
     </div>
   ) : null;
-
-  const directToolPanel = directSessionProject ? (
-    <ToolPanel api={api} worktreeId={directSessionProject.id} scope="project" onOpenQuickOpen={() => setQuickOpen(true)} />
+  const projectToolPanel = isProjectView && projectId ? (
+    <PaneOutlet paneKey={`tools:${projectId}`} />
   ) : null;
-
-  const directTerminalDock = directSessionProject ? (
+  const projectTerminalDock = isProjectView && projectId ? (
     <div className="pane-stack">
-      <TabsStrip api={api} worktreeId={directSessionProject.id} kind="terminal" scope="project" />
+      <TabsStrip api={api} worktreeId={projectId} kind="terminal" scope="project" />
       <TerminalPane api={api} sessionId={activeTerminalSessionId} session={activeTerminalSession} themed={false} />
     </div>
   ) : null;
@@ -728,10 +852,10 @@ export function Workspace() {
   // Compute layout mode for TopBar
   const layoutMode = isSettings
     ? "settings"
-    : isDashboard || isDraft
+    : isDashboard || isDraft || isDirectSession
       ? "dashboard"
-      : isDirectSession
-        ? "direct-session"
+      : isProjectView
+        ? "project-workspace"
         : isWorkspaceView
           ? "workspace-view"
           : "workspace";
@@ -740,10 +864,11 @@ export function Workspace() {
     <PaneOutletProvider>
     <div className="workspace-route">
       {!isFullWidthPane && !isWorkspaceView ? (
-        isDirectSession ? (
+        isProjectView && projectId ? (
+          // Project workspace: file search scopes to the project base dir.
           <QuickOpen
             api={api}
-            worktreeId={directSessionProject?.id ?? null}
+            worktreeId={projectId}
             scope="project"
             open={quickOpen}
             onClose={() => setQuickOpen(false)}
@@ -758,9 +883,12 @@ export function Workspace() {
             layoutMode={layoutMode}
             projects={projects}
             worktrees={worktrees}
-            directSession={directSession ?? undefined}
-            directSessionProject={directSessionProject ?? undefined}
             viewedWorkspaceName={viewedWorkspace?.name}
+            projectActiveSessionName={
+              isProjectView && activeSessionId && activeSession
+                ? sessionLabel(activeSession)
+                : undefined
+            }
             isMobile={isMobile}
             onToggleLeftSidebar={() => {
               if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
@@ -786,14 +914,14 @@ export function Workspace() {
             isMobile={isMobile}
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
-              if (isDashboard || isSettings || isDirectSession || isWorkspaceView || isDraft) navigate(`/worktree/${wtId}`);
+              if (isDashboard || isSettings || isDirectSession || isWorkspaceView || isDraft || isProjectView) navigate(`/worktree/${wtId}`);
             }}
             onOpenShortcuts={() => setShortcutsOpen(true)}
           />
         }
         dashboardPane={
-          isDashboard || isProjectView ? (
-            <DashboardPanel api={api} projectFilter={projectId ?? undefined} />
+          isDashboard ? (
+            <DashboardPanel api={api} />
           ) : isSettings ? (
             <SettingsPanel api={api} />
           ) : isDraft ? (
@@ -825,6 +953,11 @@ export function Workspace() {
             // no single owning worktree to key that machinery's persisted
             // sizes/visibility off of — see Layout.tsx's dashboard branch.
             (detachedWorkspaceCanvas ?? <div className="workspace-canvas workspace-canvas--loading" />)
+          ) : isDirectSession ? (
+            // Transient only: `/session/:id` is a pure redirect to the project
+            // workspace (R4 / 4.9), so this placeholder renders for at most a
+            // tick before the redirect effect navigates away.
+            <div className="empty-state">Redirecting…</div>
           ) : undefined
         }
         leftColumnPx={leftColumnPx}
@@ -843,14 +976,17 @@ export function Workspace() {
             { paneHostLayer: detachedWorkspacePaneHostLayer }
           : isFullWidthPane
             ? {}
-            : isDirectSession
+            : isProjectView
               ? {
-                  // Direct session: full worktree layout minus the agent tabs.
-                  // Tool panel (Files) + terminal dock resolve to the project
-                  // base dir (scope="project").
-                  agentPane: directAgentPane,
-                  toolPanel: directToolPanel,
-                  terminalDock: directTerminalDock,
+                  // Project workspace (Decision 7): routed through the classic
+                  // agentPane/toolPanel/terminalDock/paneHostLayer machinery —
+                  // never dashboardPane — so the shared `tools:<projectId>`
+                  // pane and the terminal dock's TerminalPane stay at stable
+                  // tree positions across every Project↔agent tab switch.
+                  agentPane: projectAgentPane,
+                  toolPanel: projectToolPanel,
+                  terminalDock: projectTerminalDock,
+                  paneHostLayer: projectPaneHostLayer,
                 }
               : {
                   agentPane,

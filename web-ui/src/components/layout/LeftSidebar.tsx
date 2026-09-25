@@ -24,6 +24,7 @@ import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/ap
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { createProjectDirectDraft } from "@/lib/projectDraft";
 import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
@@ -32,7 +33,7 @@ import { StatusDot } from "@/components/layout/StatusDot";
 import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
-import { sessionLabel, draftLabel } from "@/lib/sessionLabel";
+import { sessionLabel, draftLabel, worktreeLabel } from "@/lib/sessionLabel";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { HiddenWorktreesDialog } from "@/components/dialogs/HiddenWorktreesDialog";
 import { ProjectPlusMenu } from "@/components/layout/ProjectPlusMenu";
@@ -456,10 +457,6 @@ export function LeftSidebar({
       // than clearing it.
       if (trimmed) renameWorkspace(target.id, trimmed);
     }
-  }
-
-  function worktreeLabel(w: Worktree): string {
-    return w.name ?? w.branch;
   }
 
   /** Reorder scope: pinned worktrees and direct sessions float in a single drag-order list,
@@ -931,10 +928,10 @@ export function LeftSidebar({
     if (!pendingTerminateSession) return;
     const sess = pendingTerminateSession;
     setPendingTerminateSession(null);
-    // If we're viewing the session being terminated, leave for the dashboard
+    // If we're viewing the session being terminated, leave for the Project tab
     // BEFORE deletion so we don't briefly render a dead session.
-    if (location.pathname === `/session/${sess.id}`) {
-      navigate("/", { replace: true });
+    if (location.pathname === `/project/${sess.projectId}/${sess.id}`) {
+      navigate(`/project/${sess.projectId}`, { replace: true });
     }
     try {
       // Removes the session record + kills the process + removes its data dir.
@@ -1104,20 +1101,23 @@ export function LeftSidebar({
     })();
   }
 
-  /** Project "+" → "Agent in project dir" → create a Tier 1 direct draft. */
+  /** Project "+" → "Agent in project dir" → item 4: same draft-tab path as
+   *  the project workspace's own "+"/"New direct agent" (`createProjectDirectDraft`,
+   *  entryPoint "tab"), landing in the SAME tab + sidebar-highlighted state
+   *  those produce, instead of the legacy full-page `/draft/:id` composer.
+   *  Deliberately does NOT call `openProjectAgentTab` here — navigating first
+   *  lets `useProjectWorkspaceUrlSync`'s read effect seed the project's other
+   *  existing direct agents before this draft's own entry is added; opening
+   *  the tab first would mark the project's open-tab-set non-empty and skip
+   *  that seed. */
   function handleNewDirectAgent(project: Project) {
     if (isMobile) setMobileSidebarOpen(false);
     setDraftError(null);
+    setPlusMenu(null);
     void (async () => {
       try {
-        const s = await api.createDraftSession({
-          target: "direct",
-          projectId: project.id,
-          type: "agent",
-          draftConfig: { entryPoint: "direct", channel: "json", useWorktree: false },
-        });
-        useServerStore.getState().applySessionCreated(s);
-        gotoDraft(s.id);
+        const s = await createProjectDirectDraft(api, project.id);
+        navigate(`/project/${project.id}/${s.id}`);
       } catch (err) {
         setDraftError(err instanceof Error ? err.message : "Couldn't start a new draft. Please try again.");
       }
@@ -1125,8 +1125,19 @@ export function LeftSidebar({
   }
 
   /** Discard a Tier 1 draft (server-backed session) — DELETE the record, and
-   *  leave the draft route if we're currently viewing it. */
+   *  leave the draft route if we're currently viewing it. Item 4: a "tab"
+   *  draft lives at `/project/:pid/:id` instead of `/draft/:id` — close its
+   *  project-workspace tab and return to the project's Overview, mirroring
+   *  `confirmTerminateSession`'s "leave before deletion" pattern above. */
   function confirmDiscardSession(s: Session) {
+    if (s.draftConfig?.entryPoint === "tab" && s.projectId) {
+      if (location.pathname === `/project/${s.projectId}/${s.id}`) {
+        navigate(`/project/${s.projectId}`, { replace: true });
+      }
+      useWorkspaceStore.getState().closeProjectAgentTab(s.projectId, s.id);
+    } else if (location.pathname === `/draft/${s.id}`) {
+      navigate("/", { replace: true });
+    }
     void (async () => {
       try {
         await api.terminateSession(s.id);
@@ -1134,9 +1145,6 @@ export function LeftSidebar({
         window.alert(err instanceof Error ? err.message : "Failed to discard draft.");
       }
     })();
-    if (location.pathname === `/draft/${s.id}`) {
-      navigate("/", { replace: true });
-    }
   }
 
   /** Discard the Tier 2 (global) draft — just clears the store. */
@@ -1158,21 +1166,37 @@ export function LeftSidebar({
   }
 
   /** Draft sessions (state === "drafting") under a given project, partitioned
-   *  into direct drafts (entryPoint === "direct", merged into the direct
-   *  session list) and worktree drafts (any other entry point, merged into the
-   *  worktree list). Both are rendered as Tier 1 draft rows inside their
-   *  merged sortable scope, so a draft can be dragged among its non-draft
-   *  siblings. */
+   *  into direct drafts (entryPoint === "direct" OR a worktree-less "tab"
+   *  draft — item 4's project-workspace draft tabs — merged into the direct
+   *  session list) and worktree drafts (any other entry point, merged into
+   *  the worktree list). A worktree-scope "tab" draft (has a `worktreeId`)
+   *  stays excluded, same as before — it's the worktree TabsStrip's own tab,
+   *  not a sidebar row. Both direct/worktree buckets render as Tier 1 draft
+   *  rows inside their merged sortable scope, so a draft can be dragged among
+   *  its non-draft siblings. */
   const draftsByProject = useMemo(() => {
     const m: Record<string, { direct: Session[]; worktree: Session[] }> = {};
     for (const s of sessions) {
-      if (s.state === "drafting" && s.projectId && s.draftConfig?.entryPoint !== "tab") {
-        const bucket = s.draftConfig?.entryPoint === "direct" ? "direct" : "worktree";
-        (m[s.projectId] ??= { direct: [], worktree: [] })[bucket].push(s);
+      if (s.state !== "drafting" || !s.projectId) continue;
+      const entryPoint = s.draftConfig?.entryPoint;
+      if (entryPoint === "tab") {
+        if (s.worktreeId != null) continue; // worktree-scope tab draft — not a sidebar row
+        (m[s.projectId] ??= { direct: [], worktree: [] }).direct.push(s);
+        continue;
       }
+      const bucket = entryPoint === "direct" ? "direct" : "worktree";
+      (m[s.projectId] ??= { direct: [], worktree: [] })[bucket].push(s);
     }
     return m;
   }, [sessions]);
+
+  /** A "tab" draft's sidebar row (item 4) links into the project workspace
+   *  tab, not the legacy full-page `/draft/:id` composer. */
+  function draftRowHref(sess: Session): string {
+    return sess.draftConfig?.entryPoint === "tab" && sess.projectId
+      ? `/project/${sess.projectId}/${sess.id}`
+      : `/draft/${sess.id}`;
+  }
 
   return (
     <div
@@ -1262,7 +1286,7 @@ export function LeftSidebar({
                   if (item.kind === "session") {
                     const sess = item.data;
                     const proj = sess.projectId != null ? projectById[sess.projectId] : undefined;
-                    const isActive = location.pathname === `/session/${sess.id}`;
+                    const isActive = location.pathname === `/project/${sess.projectId}/${sess.id}`;
                     const label = sessionLabel(sess);
                     return (
                       <SortableRow key={`pinned-sess-${sess.id}`} id={sess.id}>
@@ -1288,7 +1312,7 @@ export function LeftSidebar({
                               }}
                             >
                               <Link
-                                to={`/session/${sess.id}`}
+                                to={`/project/${sess.projectId}/${sess.id}`}
                                 className="wt-row__stretch-link"
                                 draggable={false}
                                 aria-label={`Open pinned direct session ${label}`}
@@ -1767,26 +1791,72 @@ export function LeftSidebar({
           <SortableRow key={p.id} id={p.id}>
           {({ setNodeRef, style, attributes, listeners }) => (
           <div ref={setNodeRef} style={style} className="wt-row-wrap" {...attributes}>
-            <div className="tree-row tree-row--project" {...listeners}>
-              <button
-                type="button"
-                className="tree-row__project-expand"
-                aria-expanded={openProj.has(p.id)}
-                aria-label={`${openProj.has(p.id) ? "Collapse" : "Expand"} project ${p.name}`}
-                title={
-                  collapsed
-                    ? `${p.name} — ${openProj.has(p.id) ? "Click to hide worktrees" : "Click to show worktrees"}`
-                    : undefined
+            <div
+              className="tree-row tree-row--project"
+              style={{ position: "relative" }}
+              /* Item 3 (round 2): the project row itself had no active-state
+                 signal at all — only individual session rows got one — so
+                 selecting the bare Overview tab (no session, activeSessionId
+                 == null) highlighted the tab strip but left the sidebar's
+                 project row looking unselected. `.tree-row[data-active]`
+                 already has generic highlight CSS (workspace.css:1999); just
+                 supplying the attribute here reuses it with no new rules. */
+              data-active={location.pathname === `/project/${p.id}`}
+              /* The stretch-link below is tabIndex={-1} (same full-row overlay
+                 pattern as every other row), so give the row itself the
+                 keyboard route to the project Overview — matching how the
+                 worktree rows are keyboard-reachable (role="button" +
+                 tabIndex={0}, Enter/Space activates). */
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  navigate(`/project/${p.id}`);
+                  if (isMobile) setMobileSidebarOpen(false);
                 }
-                onClick={() => toggleProj(p.id)}
-              >
-                <span className="tree-row__chevron tree-row__project-chevron" aria-hidden>
-                  {openProj.has(p.id) ? <FolderOpen size={14} /> : <Folder size={14} />}
-                </span>
+              }}
+              {...listeners}
+            >
+              {/* Item 5: a full-row stretch link (same pattern as the direct-
+                  session/draft rows), instead of a link wrapping only the
+                  name text — the name-only link's hit area was one line
+                  tall, so tapping a few px above/below it (still inside the
+                  visually clickable row) did nothing. The folder toggle,
+                  "+" and "⋯" buttons sit above this via z-index so they stay
+                  independently clickable. */}
+              <Link
+                to={`/project/${p.id}`}
+                className="wt-row__stretch-link"
+                aria-label={`Open project ${p.name}`}
+                draggable={false}
+                tabIndex={-1}
+                onClickCapture={suppressDoubleClickNavigation}
+                onClick={() => {
+                  if (isMobile) setMobileSidebarOpen(false);
+                }}
+              />
+              <div className="tree-row__project-main">
+                <button
+                  type="button"
+                  className="tree-row__project-expand"
+                  aria-expanded={openProj.has(p.id)}
+                  aria-label={`${openProj.has(p.id) ? "Collapse" : "Expand"} project ${p.name}`}
+                  title={
+                    collapsed
+                      ? `${p.name} — ${openProj.has(p.id) ? "Click to hide worktrees" : "Click to show worktrees"}`
+                      : undefined
+                  }
+                  onClick={() => toggleProj(p.id)}
+                >
+                  <span className="tree-row__chevron tree-row__project-chevron" aria-hidden>
+                    {openProj.has(p.id) ? <FolderOpen size={14} /> : <Folder size={14} />}
+                  </span>
+                </button>
                 <span className="tree-row__label">
                   {collapsed ? disambiguatedAbbrev(p.name, p.id, visibleProjects) : p.name}
                 </span>
-              </button>
+              </div>
               <button
                 type="button"
                 data-plus-menu-trigger
@@ -1873,12 +1943,12 @@ export function LeftSidebar({
                                     >
                                       <div
                                         className="tree-row tree-row--direct-session draft-row"
-                                        data-active={location.pathname === `/draft/${sess.id}`}
+                                        data-active={location.pathname === draftRowHref(sess)}
                                         style={{ position: "relative" }}
                                         title={sess.name?.trim() || draftLabel(sess.draftPrompt)}
                                       >
                                         <Link
-                                          to={`/draft/${sess.id}`}
+                                          to={draftRowHref(sess)}
                                           className="wt-row__stretch-link"
                                           draggable={false}
                                           tabIndex={-1}
@@ -1925,7 +1995,7 @@ export function LeftSidebar({
                                   >
                                     <div
                                       className="tree-row tree-row--direct-session"
-                                      data-active={location.pathname === `/session/${sess.id}`}
+                                      data-active={location.pathname === `/project/${sess.projectId}/${sess.id}`}
                                       data-archived={sess.archivedAt != null ? "true" : undefined}
                                       style={{ position: "relative" }}
                                       title={collapsed ? `${label} — direct session` : "Direct session (no worktree)"}
@@ -1938,7 +2008,7 @@ export function LeftSidebar({
                                       }}
                                     >
                                       <Link
-                                        to={`/session/${sess.id}`}
+                                        to={`/project/${sess.projectId}/${sess.id}`}
                                         className="wt-row__stretch-link"
                                         draggable={false}
                                         aria-label={`Open direct session ${label}`}

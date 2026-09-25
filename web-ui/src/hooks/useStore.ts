@@ -220,6 +220,12 @@ export interface WorkspaceState {
   forwardStack: Record<string, PeekEntry[]>;
   /** Open file tabs per worktree/direct-context (keyed by layout key). */
   openFileTabsByWorktree: Record<string, string[]>;
+  /**
+   * Which direct-agent sessions show as tabs in a project workspace (keyed by
+   * projectId, ordered). `undefined` for a key = "never seeded", `[]` = "user
+   * closed all tabs" — distinct states (Decision 5).
+   */
+  openDirectAgentTabsByProject: Record<string, string[]>;
   /** Active tab index per worktree/direct-context; -1 means none active. */
   activeFileTabIdxByWorktree: Record<string, number>;
   /**
@@ -328,7 +334,14 @@ export interface WorkspaceState {
    *  single-project-filtered `/project/:id` dashboard. Clears any worktree/
    *  session selection. */
   selectProject: (projectId: string) => void;
-  setActiveSession: (sessionId: string) => void;
+  /** Set the active agent session, or null to mean "Project tab is active" (Decision 1). */
+  setActiveSession: (sessionId: string | null) => void;
+  /** Add a direct-agent session id to a project's open-tab set (no-op if already present). */
+  openProjectAgentTab: (projectId: string, sessionId: string) => void;
+  /** Remove a direct-agent session id from a project's open-tab set; clears activeSessionId if it was active. */
+  closeProjectAgentTab: (projectId: string, sessionId: string) => void;
+  /** Seed a project's open-tab set only when it has NO entry yet (undefined); excludes drafts. */
+  seedProjectAgentTabsIfEmpty: (projectId: string, sessions: Session[]) => void;
   setActiveTerminalSession: (sessionId: string) => void;
   setActiveFile: (path: string | null, opts?: { skipHistory?: boolean }) => void;
   /** Open path in a new tab, or switch to it if already open (Ctrl+P / agent intent). Updates lastFileByWorktree. */
@@ -722,6 +735,7 @@ const initial = {
   backStack: {} as Record<string, PeekEntry[]>,
   forwardStack: {} as Record<string, PeekEntry[]>,
   openFileTabsByWorktree: {} as Record<string, string[]>,
+  openDirectAgentTabsByProject: {} as Record<string, string[]>,
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
   vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
@@ -1014,12 +1028,49 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           })),
         setActiveSession: (sessionId) =>
           set((s) => {
-            const key = layoutKey(s);
+            // Decision 1: `sessionId` may be null (Project tab active) — don't
+            // persist a null as the "last selected session" for this context.
+            const key = sessionId == null ? null : layoutKey(s);
             const nextLast =
-              key != null
+              key != null && sessionId != null
                 ? { ...s.lastSessionByWorktree, [key]: sessionId }
                 : s.lastSessionByWorktree;
             return { activeSessionId: sessionId, lastSessionByWorktree: nextLast };
+          }),
+        // Decision 5 — open-tab-set actions for direct-agent tabs in a project
+        // workspace.
+        openProjectAgentTab: (projectId, sessionId) =>
+          set((s) => {
+            const cur = s.openDirectAgentTabsByProject[projectId] ?? [];
+            const next = cur.includes(sessionId) ? cur : [...cur, sessionId];
+            return { openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: next } };
+          }),
+        closeProjectAgentTab: (projectId, sessionId) =>
+          set((s) => {
+            const cur = s.openDirectAgentTabsByProject[projectId] ?? [];
+            return {
+              openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: cur.filter((id) => id !== sessionId) },
+              activeSessionId: s.activeSessionId === sessionId ? null : s.activeSessionId,
+            };
+          }),
+        // Seeds only when the project has NO entry yet (undefined, not `[]`) —
+        // an intentionally emptied set must never be silently repopulated.
+        // Excludes drafts (state === "drafting"), matching LeftSidebar's
+        // directSessionMap draft exclusion.
+        seedProjectAgentTabsIfEmpty: (projectId, sessions) =>
+          set((s) => {
+            if (s.openDirectAgentTabsByProject[projectId] !== undefined) return s;
+            const ids = sessions
+              .filter(
+                (x) =>
+                  x.projectId === projectId &&
+                  x.worktreeId === null &&
+                  x.type === "agent" &&
+                  x.archivedAt == null &&
+                  x.state !== "drafting",
+              )
+              .map((x) => x.id);
+            return { openDirectAgentTabsByProject: { ...s.openDirectAgentTabsByProject, [projectId]: ids } };
           }),
         setActiveTerminalSession: (sessionId) =>
           set((s) => {
@@ -2068,6 +2119,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         activeTerminalSessionId: s.activeTerminalSessionId,
         activeFilePath: s.activeFilePath,
         openFileTabsByWorktree: s.openFileTabsByWorktree,
+        openDirectAgentTabsByProject: s.openDirectAgentTabsByProject,
         activeFileTabIdxByWorktree: s.activeFileTabIdxByWorktree,
         lastFileByWorktree: s.lastFileByWorktree,
         fileScrollByKey: s.fileScrollByKey,

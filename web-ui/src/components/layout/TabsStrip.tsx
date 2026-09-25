@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Home } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ancestorIds } from "@/components/chat/SubagentRow";
 import { motion } from "framer-motion";
@@ -31,6 +31,7 @@ import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
+import { createProjectDirectDraft } from "@/lib/projectDraft";
 
 type TabKind = "agent" | "terminal";
 
@@ -160,6 +161,20 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  // Item 1 (round 2): selecting a tab from elsewhere (the left sidebar, a
+  // bucket row, "New direct agent", etc.) updated `activeSessionId` and the
+  // tab's own `data-active`/highlight styling correctly, but never scrolled
+  // the strip itself — so a newly-active tab past the visible edge stayed
+  // selected-but-invisible until the user manually scrolled to find it.
+  // `block: "nearest"` keeps this purely horizontal (the strip's own scroll
+  // axis) with no effect on outer page/vertical scroll position.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const activeTab = el.querySelector<HTMLElement>('[data-active="true"]');
+    activeTab?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }, [activeSessionId]);
   const [localSessions, setSessions] = useState<Session[]>([]);
   // Mirrors the rendered `sessions` list so the WS effect — whose deps are
   // deliberately stable — can read it without re-subscribing on every change.
@@ -269,14 +284,23 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   // Project scope: direct-session terminals live in the global server store
   // (no worktree). Derive them instead of fetching per-worktree.
   const serverSessions = useServerStore((s) => s.sessions);
+  const openAgentTabIds = useWorkspaceStore((s) =>
+    isProject && worktreeId ? (s.openDirectAgentTabsByProject[worktreeId] ?? null) : null,
+  );
   const projectSessions = useMemo(
     () =>
       isProject && worktreeId
         ? serverSessions.filter(
-            (s) => s.projectId === worktreeId && s.worktreeId === null && s.type === kind,
+            (s) =>
+              s.projectId === worktreeId &&
+              s.worktreeId === null &&
+              s.type === kind &&
+              // Decision 5 (4.1) — agent tabs only show sessions in the open-tab
+              // set; terminal tabs keep showing every project terminal.
+              (kind !== "agent" || (openAgentTabIds ?? []).includes(s.id)),
           )
         : [],
-    [isProject, worktreeId, serverSessions, kind],
+    [isProject, worktreeId, serverSessions, kind, openAgentTabIds],
   );
   const sessions = isProject ? projectSessions : localSessions;
   // Keep the ref in step so the WS `session:created` effect — whose deps are
@@ -359,10 +383,14 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
 
   // Project scope: keep the active terminal selection valid as direct sessions
   // come and go (created/closed elsewhere). Pick a default when none is active.
+  // For agent tabs (4.2) this is intentionally a no-op: an empty project strip
+  // must NOT auto-pick the first agent and fight the Project tab (R1) — the
+  // active session is owned by the project workspace's URL sync / tab clicks.
   useEffect(() => {
     if (!isProject) return;
+    if (isAgent) return; // agent scope never auto-picks (see comment above)
     const store = useWorkspaceStore.getState();
-    const cur = isAgent ? store.activeSessionId : store.activeTerminalSessionId;
+    const cur = store.activeTerminalSessionId;
     if (cur && projectSessions.some((s) => s.id === cur)) return;
     const pick = projectSessions[0]?.id ?? null;
     if (pick) setActiveSession(pick);
@@ -652,12 +680,71 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
 
   const ariaLabel = isAgent ? "Agent sessions" : "Terminals";
 
+  // Pinned "Overview" tab (PRD R1 / Resolved design question #3, labeled
+  // "Project" in the PRD's own mockups — renamed per plan-04's naming
+  // decision since it describes what's ON the tab, not another agent): a
+  // real, always-first, non-closeable tablist entry for the project
+  // workspace's home view, distinct from `orderedSessions`'s agent-session
+  // tabs — never part of the sortable/draggable set. Active whenever no
+  // agent session is selected (`activeSessionId == null`); clicking it
+  // clears the selection, which `useProjectWorkspaceUrlSync`'s write effect
+  // then reflects onto the URL (`/project/:id`, no `:sessionId`).
+  const projectHomeTab =
+    isAgent && isProject ? (
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeSessionId == null}
+        aria-label="Overview"
+        data-active={activeSessionId == null ? "true" : undefined}
+        className="tab tab--project-home"
+        // Only reachable when isAgent && isProject (this button only renders
+        // then), so `setActiveSession` here is always the agent setter
+        // (`(sessionId: string | null) => void`) — cast past the union type
+        // TS infers from the isAgent-ternary hook call above, which also
+        // covers `setActiveTerminalSession: (sessionId: string) => void`.
+        onClick={() => (setActiveSession as (sessionId: string | null) => void)(null)}
+        style={{ position: "relative", flexShrink: 0 }}
+      >
+        {activeSessionId == null ? (
+          <motion.span
+            layoutId={`tab-indicator-${kind}`}
+            style={{
+              position: "absolute",
+              bottom: -1,
+              left: 0,
+              right: 0,
+              height: 2,
+              background: "var(--fg-muted)",
+              borderRadius: 1,
+            }}
+          />
+        ) : null}
+        <span
+          className="tab__content"
+          style={{
+            position: "relative",
+            zIndex: 1,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            flex: "0 1 auto",
+            minWidth: 0,
+          }}
+        >
+          <Home size={13} className="tab__icon tab--project-home__icon" aria-hidden />
+          <span className="tab__label tab--project-home__label">Overview</span>
+        </span>
+      </button>
+    ) : null;
+
   return (
     <div className="tabs-strip" role="tablist" aria-label={ariaLabel}>
       <div className="tabs-strip__scroll" ref={scrollRef}>
         {sessions.length === 0 && !isAgent ? (
           <span className="tabs-strip__empty">No terminals — open one with +</span>
         ) : null}
+        {projectHomeTab}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
@@ -835,11 +922,34 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       {closeable ? (
                         <span
                           role="button"
-                          aria-label={`Terminate ${label}`}
+                          aria-label={isAgent && isProject ? `Close ${label}` : `Terminate ${label}`}
                           className="tab__close"
-                          onClick={(e) => { e.stopPropagation(); setTerminateTarget(s); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isAgent && isProject) {
+                              // Decision 5 (4.3) — closing a direct-agent tab only
+                              // hides that tab's view; it does NOT terminate the
+                              // session (R16). No confirm dialog.
+                              if (worktreeId) {
+                                useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, s.id);
+                              }
+                            } else {
+                              setTerminateTarget(s);
+                            }
+                          }}
                           onPointerDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setTerminateTarget(s); } }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.stopPropagation();
+                              if (isAgent && isProject) {
+                                if (worktreeId) {
+                                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, s.id);
+                                }
+                              } else {
+                                setTerminateTarget(s);
+                              }
+                            }
+                          }}
                           tabIndex={-1}
                           style={{ position: "relative", zIndex: 1 }}
                         >
@@ -860,6 +970,22 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           onClick={() => {
             if (isAgent) {
               if (!worktreeId) return;
+              if (isProject) {
+                // Item 3 — project-scope "+" opens a DRAFT direct agent tab,
+                // mirroring the worktree-scope "+" below, instead of creating
+                // a live agent immediately. `Workspace.tsx`'s drafting branch
+                // renders `DraftComposer` for it once the tab is active.
+                void (async () => {
+                  try {
+                    const s = await createProjectDirectDraft(api, worktreeId);
+                    useWorkspaceStore.getState().openProjectAgentTab(worktreeId, s.id);
+                    setActiveSession(s.id);
+                  } catch {
+                    /* surface later */
+                  }
+                })();
+                return;
+              }
               void api
                 .createDraftSession({
                   target: "worktree",

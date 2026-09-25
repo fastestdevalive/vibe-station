@@ -1521,4 +1521,177 @@ describe("TabsStrip", () => {
     );
     expect(workspace).toMatch(/\.tab\s*\{[\s\S]*max-width:\s*var\(--agent-surface-max-width\)/);
   });
+
+  // ─── Project workspace (Phase 4) — kind="agent" scope="project" ─────────
+
+  function directAgentSession(id: string, projectId: string, name?: string): Session {
+    return {
+      id,
+      worktreeId: null,
+      projectId,
+      modeId: "mode-1",
+      type: "agent",
+      name: name ?? id,
+      isMain: false,
+      state: "idle",
+      lifecycleState: "idle",
+      tmuxName: id,
+      createdAt: new Date(0).toISOString(),
+      sortOrder: 1,
+    };
+  }
+
+  it("4.T3 — closing a direct-agent tab hides it (no terminate, no confirm) and the session stays in the store", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({
+      sessions: [
+        directAgentSession("s1", "proj-a", "Alpha"),
+        directAgentSession("s2", "proj-a", "Beta"),
+      ],
+    });
+    useWorkspaceStore.setState({
+      activeSessionId: "s1",
+      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
+    });
+    const terminateSpy = vi.spyOn(localApi, "terminateSession");
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+
+    const alphaTab = await screen.findByRole("tab", { name: /Alpha/i });
+    const closeBtn = within(alphaTab).getByRole("button", { name: /^Close Alpha/i });
+    fireEvent.click(closeBtn);
+
+    // Removed from the open-tab set; the active (closed) tab clears to the
+    // Project tab sentinel (null).
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s2"]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+    // Not terminated — the session survives in the server store, and no
+    // confirm dialog appears (R16).
+    expect(terminateSpy).not.toHaveBeenCalled();
+    expect(useServerStore.getState().sessions.some((s) => s.id === "s1")).toBe(true);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    useModesStore.getState()._reset();
+  });
+
+  it("4.T3b — the pinned Project tab is a real, first, non-closeable role=tab entry, active when activeSessionId is null", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({
+      sessions: [
+        directAgentSession("s1", "proj-a", "Alpha"),
+        directAgentSession("s2", "proj-a", "Beta"),
+      ],
+    });
+    useWorkspaceStore.setState({
+      activeSessionId: null,
+      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
+    });
+    const { unmount: unmountProject } = render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("tab", { name: /Alpha/i });
+    const tabs = screen.getAllByRole("tab");
+    // Naming decision (plan-04): the pinned tab reads "Overview", not "Project".
+    expect(tabs[0]).toHaveAttribute("aria-label", "Overview");
+    expect(tabs[0]).toHaveTextContent("Overview");
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true"); // activeSessionId is null
+    expect(within(tabs[0]!).queryByRole("button", { name: /close|terminate/i })).not.toBeInTheDocument();
+    unmountProject();
+
+    // A worktree-scope strip must NOT render the pinned Overview tab.
+    const worktreeApi = createMockApi();
+    const { unmount: unmountWorktree } = render(
+      <MemoryRouter>
+        <TabsStrip api={worktreeApi} worktreeId="wt-1" kind="agent" />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /agent-2/i });
+    expect(screen.queryAllByRole("tab").some((t) => t.textContent === "Overview")).toBe(false);
+    unmountWorktree();
+    useModesStore.getState()._reset();
+  });
+
+  it("4.T4 — an empty project agent strip does NOT auto-pick a default (keeps activeSessionId null)", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({
+      sessions: [
+        directAgentSession("s1", "proj-a", "Alpha"),
+        directAgentSession("s2", "proj-a", "Beta"),
+      ],
+    });
+    useWorkspaceStore.setState({
+      activeSessionId: null,
+      openDirectAgentTabsByProject: { "proj-a": [] },
+    });
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+
+    // Give the auto-pick effect a chance to run — it must NOT pick a default
+    // for an agent strip, or it would fight the pinned Project tab (R1).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+    useModesStore.getState()._reset();
+  });
+
+  it("4.T5 (revised, item 3) — the project-scope '+' button opens a DRAFT direct-agent tab, never creates a live session", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({ sessions: [] });
+    useWorkspaceStore.setState({
+      activeSessionId: null,
+      openDirectAgentTabsByProject: { "proj-a": [] },
+    });
+    const createSpy = vi.spyOn(localApi, "createDirectSession");
+    const createDraftSpy = vi.spyOn(localApi, "createDraftSession");
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /New agent/i }));
+
+    await waitFor(() => {
+      expect(createDraftSpy).toHaveBeenCalled();
+    });
+    // Opens a draft, NOT a live direct session.
+    expect(createSpy).not.toHaveBeenCalled();
+    const arg = createDraftSpy.mock.calls[0]![0] as {
+      target: string;
+      projectId: string;
+      type: string;
+      draftConfig: { entryPoint: string };
+    };
+    expect(arg).toMatchObject({
+      target: "direct",
+      projectId: "proj-a",
+      type: "agent",
+      draftConfig: { entryPoint: "tab" },
+    });
+
+    // The new draft is added to the open set AND activated immediately, and
+    // renders with the Draft chip (TabsStrip.tsx:758-759,901 — existing
+    // drafting-session chip, unchanged by this fix).
+    const newId = useWorkspaceStore.getState().activeSessionId;
+    expect(newId).toBeTruthy();
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toContain(newId);
+    expect(useWorkspaceStore.getState().activeSessionId).toBe(newId);
+    await waitFor(() => {
+      expect(screen.getByText("Draft")).toBeInTheDocument();
+    });
+    useModesStore.getState()._reset();
+  });
 });

@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
 import type { ApiInstance } from "@/api";
-import { createMockApi } from "@/api/mock";
+import { createMockApi, type MockApi } from "@/api/mock";
 import { LeftSidebar } from "./LeftSidebar";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -107,7 +107,7 @@ describe("LeftSidebar", () => {
     });
   });
 
-  it("clicking project name toggles worktrees (expand control)", async () => {
+  it("clicking project folder icon toggles worktrees (expand control)", async () => {
     const user = userEvent.setup();
     render(
       <MemoryRouter>
@@ -117,9 +117,35 @@ describe("LeftSidebar", () => {
       </MemoryRouter>,
     );
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
-    await user.click(screen.getByText("Proj A"));
+    await user.click(screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i }));
     expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
-    await user.click(screen.getByText("Proj A"));
+    await user.click(screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i }));
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
+  });
+
+  it("collapsed rail — project folder toggle stays clickable to expand/collapse worktrees (regression)", async () => {
+    // The collapsed project row hides the folder icon (making the button 0×0)
+    // and the abbreviation label is `pointer-events: none` — so without a real
+    // hit area on the toggle button there was NO way to expand/collapse a
+    // project from the collapsed rail, and clicking the abbreviation navigated
+    // to /project/:id instead of toggling. The toggle must remain clickable.
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <LeftSidebar api={api} collapsed />
+        </Harness>
+      </MemoryRouter>,
+    );
+    // Active project (proj-a) auto-expands, so its worktrees show in the rail.
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+    // Collapse: worktrees hide (toggle remains clickable in collapsed mode).
+    await user.click(screen.getByRole("button", { name: /Collapse project Proj A/i }));
+    expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+
+    // Expand again: worktrees return.
+    await user.click(screen.getByRole("button", { name: /Expand project Proj A/i }));
     await screen.findByRole("link", { name: /Open worktree wt-1/i });
   });
 
@@ -2050,5 +2076,219 @@ describe("LeftSidebar - global Workspaces section", () => {
     // invoked by this click anymore — Decision 4 moved this to routing.
     expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
     expect(useWorkspaceStore.getState().layoutByWorktree["wt-1"]?.activeWorkspaceId ?? null).toBeNull();
+  });
+
+  // ─── Phase 5 — sidebar wiring (project-home-workspace) ───────────────────
+  describe("Phase 5 — sidebar wiring", () => {
+    /** A sibling location-reporter inside the same Router context observes
+     *  the navigation (there's no Router-agnostic way to assert the URL). */
+    function LocationProbe() {
+      const location = useLocation();
+      return <div data-testid="location-probe">{location.pathname}</div>;
+    }
+
+    function emitDirectSession(localApi: MockApi, id: string, name: string) {
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: id,
+          worktreeId: null,
+          projectId: "proj-a",
+          sessionType: "agent",
+          snapshot: {
+            id,
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: "mode-1",
+            type: "agent",
+            name,
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: `tm-${id}`,
+            createdAt: new Date().toISOString(),
+          },
+        });
+      });
+    }
+
+    it("5.T1 — clicking a direct-agent row navigates to /project/:projectId/:id and highlights that row", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      emitDirectSession(localApi, "proj-a-d1", "direct agent one");
+
+      const link = await screen.findByRole("link", { name: /Open direct session direct agent one/i });
+      expect(link).toHaveAttribute("href", "/project/proj-a/proj-a-d1");
+      await user.click(link);
+
+      expect(screen.getByTestId("location-probe").textContent).toBe("/project/proj-a/proj-a-d1");
+      const row = link.closest(".tree-row")! as HTMLElement;
+      expect(row).toHaveAttribute("data-active", "true");
+    });
+
+    it("5.T2 — project name link navigates to /project/:id; folder icon only toggles (no navigation)", async () => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      expect(screen.getByTestId("location-probe").textContent).toBe("/");
+
+      // Folder icon: toggles worktrees, must NOT navigate.
+      await user.click(screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i }));
+      expect(screen.getByTestId("location-probe").textContent).toBe("/");
+
+      // Name link: navigates to the project workspace. Item 5: this is now a
+      // full-row `.wt-row__stretch-link` (same pattern as direct-session/
+      // draft rows) rather than a link wrapping only the name text, so a tap
+      // anywhere in the row's hit area — not just the text glyphs — reaches
+      // it (jsdom can't verify pixel geometry; the real fix is confirmed by
+      // hand in the sandbox — see plan-04's Verify section).
+      const nameLink = await screen.findByRole("link", { name: /Open project Proj A/i });
+      expect(nameLink).toHaveAttribute("href", "/project/proj-a");
+      expect(nameLink).toHaveClass("wt-row__stretch-link");
+      await user.click(nameLink);
+      expect(screen.getByTestId("location-probe").textContent).toBe("/project/proj-a");
+    });
+
+    it("5.T3 — project row is keyboard-reachable; Enter navigates to the project Overview", async () => {
+      // The stretch-link is tabIndex={-1} (full-row mouse overlay, like every
+      // other row), so the project row itself carries the keyboard route —
+      // role="button" + tabIndex={0}, Enter/Space activates — mirroring the
+      // worktree rows. Regression: without it there was no keyboard path to a
+      // project's Overview tab.
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      const nameLink = await screen.findByRole("link", { name: /Open project Proj A/i });
+      const row = nameLink.closest(".tree-row--project")! as HTMLElement;
+      expect(row).toHaveAttribute("role", "button");
+      expect(row).toHaveAttribute("tabindex", "0");
+      expect(screen.getByTestId("location-probe").textContent).toBe("/");
+
+      // Enter on the focused row navigates to the project Overview.
+      fireEvent.keyDown(row, { key: "Enter" });
+      expect(screen.getByTestId("location-probe").textContent).toBe("/project/proj-a");
+    });
+
+    it("item 4 — sidebar '+' → 'Agent in project dir' opens the same draft-tab path as the workspace '+' button, landing on /project/:pid/:id highlighted in the sidebar", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const draftSpy = vi.spyOn(localApi, "createDraftSession").mockResolvedValue({
+        id: "proj-a-draft1",
+        worktreeId: null,
+        projectId: "proj-a",
+        modeId: "mode-1",
+        type: "agent",
+        name: null,
+        isMain: false,
+        state: "drafting",
+        lifecycleState: "drafting",
+        tmuxName: "tm-proj-a-draft1",
+        createdAt: new Date().toISOString(),
+        draftConfig: { entryPoint: "tab", channel: "json" },
+      });
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      await user.click(screen.getByRole("button", { name: "New session in Proj A" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Agent in project dir" }));
+
+      expect(draftSpy).toHaveBeenCalledWith({
+        target: "direct",
+        projectId: "proj-a",
+        type: "agent",
+        draftConfig: { entryPoint: "tab", channel: "json" },
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("location-probe").textContent).toBe("/project/proj-a/proj-a-draft1");
+      });
+
+      // The new draft tab session shows up in the sidebar's direct list with
+      // the Draft chip, at the SAME /project/:pid/:id path (not /draft/:id).
+      // The row's stretch link has no visible text of its own (same pattern
+      // as every other draft/direct row), so locate it via the row's label.
+      const label = await screen.findByText("New agent…");
+      const row = label.closest(".tree-row")! as HTMLElement;
+      const draftLink = within(row).getByRole("link");
+      expect(draftLink).toHaveAttribute("href", "/project/proj-a/proj-a-draft1");
+      expect(within(row).getByText("Draft")).toBeInTheDocument();
+      expect(row).toHaveAttribute("data-active", "true");
+
+      draftSpy.mockRestore();
+    });
+
+    it("5.T4 — terminating the direct agent currently being viewed navigates to /project/:projectId, not /", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+      try {
+        render(
+          <MemoryRouter initialEntries={["/project/proj-a/proj-a-d4"]}>
+            <Harness api={localApi}>
+              <LeftSidebar api={localApi} />
+            </Harness>
+            <LocationProbe />
+          </MemoryRouter>,
+        );
+        await screen.findByText("Proj A");
+        emitDirectSession(localApi, "proj-a-d4", "viewed direct agent");
+
+        const trigger = await screen.findByRole("button", { name: /Session actions for viewed direct agent/i });
+        await user.click(trigger);
+        await user.click(await screen.findByRole("menuitem", { name: /^Terminate$/i }));
+        await user.click(await screen.findByRole("button", { name: /^Terminate$/i }));
+
+        await waitFor(() => {
+          expect(screen.getByTestId("location-probe").textContent).toBe("/project/proj-a");
+        });
+      } finally {
+        alertSpy.mockRestore();
+      }
+    });
+
+    it("5.T5 — regression: worktree row navigation is unaffected", async () => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      const link = await screen.findByRole("link", { name: /Open worktree wt-2/i });
+      expect(link).toHaveAttribute("href", "/worktree/wt-2");
+      await user.click(link);
+      expect(screen.getByTestId("location-probe").textContent).toBe("/worktree/wt-2");
+    });
   });
 });

@@ -1367,3 +1367,52 @@ describe("useWorkspaceStore - durable open-file sync (review Fix C)", () => {
     expect(openSpy).toHaveBeenCalledWith(W1, "/src/bar.ts", "worktree");
   });
 });
+
+describe("useWorkspaceStore - seedProjectAgentTabsIfEmpty (Decision 5)", () => {
+  const P = "proj-d5";
+  const makeDirect = (id: string, state: Session["state"]): Session => ({
+    id,
+    worktreeId: null,
+    projectId: P,
+    modeId: "mode-1",
+    type: "agent",
+    isMain: false,
+    state,
+    lifecycleState: state,
+    tmuxName: id,
+    createdAt: new Date().toISOString(),
+  });
+
+  beforeEach(() => {
+    useWorkspaceStore.setState({ openDirectAgentTabsByProject: {} });
+  });
+
+  it("1.T10 — excludes a session with state 'drafting' from the seeded set", () => {
+    const sessions: Session[] = [
+      makeDirect("s-live", "idle"),
+      makeDirect("s-draft", "drafting"),
+      { ...makeDirect("s-term", "working"), type: "terminal" },
+      { ...makeDirect("s-wt", "idle"), worktreeId: "wt-1" },
+    ];
+    useWorkspaceStore.getState().seedProjectAgentTabsIfEmpty(P, sessions);
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s-live"]);
+  });
+
+  it("1.T10 — is a no-op when the project already has an entry, even an empty array", () => {
+    useWorkspaceStore.setState({ openDirectAgentTabsByProject: { [P]: [] } });
+    const sessions: Session[] = [makeDirect("s-live", "idle")];
+    useWorkspaceStore.getState().seedProjectAgentTabsIfEmpty(P, sessions);
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual([]);
+  });
+
+  it("openProjectAgentTab adds an id and closeProjectAgentTab removes it and clears activeSessionId", () => {
+    useWorkspaceStore.setState({ activeSessionId: "s1" });
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s1");
+    useWorkspaceStore.getState().openProjectAgentTab(P, "s2");
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s1", "s2"]);
+
+    useWorkspaceStore.getState().closeProjectAgentTab(P, "s1");
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject[P]).toEqual(["s2"]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
+  });
+});

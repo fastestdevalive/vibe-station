@@ -14,8 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLayout } from "@/hooks/useLayout";
-import type { Project, Session, Worktree } from "@/api/types";
-import { sessionLabel } from "@/lib/sessionLabel";
+import type { Project, Worktree } from "@/api/types";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { Logo } from "@/components/shared/Logo";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
@@ -53,20 +52,20 @@ function shortcutHints() {
 interface TopBarProps {
   /** Dashboard keeps projects sidebar; omits quick open, terminal layout, and pane toggles.
    *  login = unauthenticated state — only shows brand + "not signed in" chip, no sidebar.
-   *  direct-session = terminal-only view for direct sessions (no worktree).
    *  workspace-view = detached saved-workspace view (agent-interaction-workspaces/
    *  04-workspaces Phase 3c) — no owning worktree, so (like dashboard) it omits
    *  quick open and the per-worktree pane toggles; the canvas is fully
-   *  self-contained instead. */
-  layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "direct-session" | "workspace-view";
+   *  self-contained instead.
+   *  project-workspace = the tabbed /project/:id workspace (project-home-workspace):
+   *  a pinned Project tab + one tab per open direct agent, one shared tools pane. */
+  layoutMode?: "workspace" | "dashboard" | "settings" | "login" | "workspace-view" | "project-workspace";
   projects: Project[];
   worktrees: Worktree[];
-  /** Direct session for breadcrumb (when layoutMode === "direct-session") */
-  directSession?: Session;
-  /** Project for direct session breadcrumb */
-  directSessionProject?: Project;
   /** Viewed WorkspaceDoc's name for breadcrumb (when layoutMode === "workspace-view") */
   viewedWorkspaceName?: string;
+  /** Active direct-agent tab's label, for the project-workspace breadcrumb's
+   *  second (highlighted) crumb when an agent tab — not the Project tab — is active. */
+  projectActiveSessionName?: string;
   isMobile: boolean;
   onToggleLeftSidebar: () => void;
   leftSidebarCollapsed: boolean;
@@ -86,9 +85,8 @@ export function TopBar({
   layoutMode = "workspace",
   projects,
   worktrees,
-  directSession,
-  directSessionProject,
   viewedWorkspaceName,
+  projectActiveSessionName,
   isMobile,
   onToggleLeftSidebar,
   leftSidebarCollapsed,
@@ -163,11 +161,13 @@ export function TopBar({
   } else if (layoutMode === "settings") {
     crumbParts.push({ label: "Settings" });
     if (settingsSectionLabel) crumbParts.push({ label: settingsSectionLabel, highlight: true });
-  } else if (layoutMode === "direct-session") {
-    if (directSessionProject) crumbParts.push({ label: directSessionProject.name });
-    if (directSession) crumbParts.push({ label: sessionLabel(directSession), highlight: true });
   } else if (layoutMode === "workspace-view") {
     crumbParts.push({ label: viewedWorkspaceName ?? "Workspace", highlight: true });
+  } else if (layoutMode === "project-workspace") {
+    // Project workspace: the project's name, plus (when an agent tab is active,
+    // not the pinned Project tab) that session's label as the highlighted crumb.
+    if (project) crumbParts.push({ label: project.name });
+    if (projectActiveSessionName) crumbParts.push({ label: projectActiveSessionName, highlight: true });
   } else {
     // Project > Worktree is enough — the active agent tab is already visible
     // in the agent pane's own TabsStrip; naming it again in the breadcrumb
@@ -184,10 +184,10 @@ export function TopBar({
       ? "Dashboard"
       : layoutMode === "settings"
         ? (settingsSectionLabel ?? "Settings")
-        : layoutMode === "direct-session"
-          ? [directSessionProject?.name, directSession ? sessionLabel(directSession) : null].filter(Boolean).join(" · ") || "Direct Session"
-          : layoutMode === "workspace-view"
-            ? (viewedWorkspaceName ?? "Workspace")
+        : layoutMode === "workspace-view"
+          ? (viewedWorkspaceName ?? "Workspace")
+          : layoutMode === "project-workspace"
+            ? [project?.name, projectActiveSessionName ?? null].filter(Boolean).join(" · ") || undefined
             : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
 
   const crumbNode = crumbParts.length === 0 ? (
@@ -315,7 +315,7 @@ export function TopBar({
           <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
         ) : null}
         <ConnectionStatus />
-        {layoutMode === "workspace" || layoutMode === "direct-session" ? (
+        {layoutMode === "workspace" || layoutMode === "project-workspace" ? (
           <>
             <button
               type="button"
