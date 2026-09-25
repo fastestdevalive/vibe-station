@@ -154,3 +154,70 @@ describe("TopBar - canvas mode pane toggles", () => {
     expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.canvasToolbarVisible).toBe(true);
   });
 });
+
+describe("TopBar - project workspace", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeProjectId: "proj-1",
+      activeWorktreeId: null,
+      activeDirectContextId: "proj-1",
+      layoutByWorktree: {},
+      workspaceDocs: {},
+    });
+  });
+
+  it("4.T9 — layoutMode 'project-workspace' renders the project-name breadcrumb and the pane-toggle buttons", () => {
+    render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            layoutMode="project-workspace"
+            projects={projects}
+            worktrees={worktrees}
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+
+    // R3: the breadcrumb shows the project's name (not "Dashboard").
+    expect(screen.getByText("Proj A")).toBeInTheDocument();
+    expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
+
+    // Decision 10: the pane-toggle buttons (Files search) are present in
+    // project-workspace mode, not hidden like dashboard.
+    expect(screen.getByLabelText("Search files")).toBeInTheDocument();
+    expect(screen.getByLabelText("More options")).toBeInTheDocument();
+  });
+
+  it("4.T9 — an active agent tab adds its label as the highlighted second crumb", () => {
+    render(
+      <MemoryRouter>
+        <PaneOutletProvider>
+          <TopBar
+            layoutMode="project-workspace"
+            projects={projects}
+            worktrees={worktrees}
+            projectActiveSessionName="Some Agent"
+            isMobile={false}
+            onToggleLeftSidebar={() => {}}
+            leftSidebarCollapsed={false}
+            mobileSidebarOpen={false}
+            onOpenQuickOpen={() => {}}
+          />
+        </PaneOutletProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("Proj A")).toBeInTheDocument();
+    const agentCrumb = screen.getByText("Some Agent");
+    expect(agentCrumb).toBeInTheDocument();
+    expect(agentCrumb.className).toContain("highlight");
+  });
+});

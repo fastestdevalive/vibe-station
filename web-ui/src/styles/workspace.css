@@ -650,13 +650,22 @@
   min-height: auto;
 }
 
-.left-sidebar--collapsed .tree-row__project-expand .tree-row__project-chevron {
-  display: none;
+.left-sidebar--collapsed .tree-row__project-main {
+  /* Stack the folder toggle above the abbreviation so the disclosure button
+     keeps a visible, clickable hit area in the collapsed rail — hiding the
+     icon made the button 0×0 (nothing to expand/collapse). */
+  flex-direction: column;
+  min-height: auto;
+  justify-content: center;
+  gap: 0;
 }
 
 .left-sidebar--collapsed .tree-row__project-expand {
-  min-height: 28px;
-  justify-content: center;
+  min-height: 22px;
+}
+
+.left-sidebar--collapsed .tree-row__project-expand .tree-row__project-chevron {
+  display: inline-flex;
 }
 
 .left-sidebar--collapsed .tree-row__label {
@@ -752,7 +761,32 @@
   font-weight: var(--font-weight-medium);
 }
 
-.tree-row__project-expand {
+/* Decision 4 split (revised, item 5): the project row's name is now a plain
+   label — navigation comes from a full-row `.wt-row__stretch-link` sibling
+   (same pattern as direct-session/draft rows), not a link wrapping just the
+   text, whose one-line-tall hit area made taps a few px above/below the
+   text land on nothing despite the row showing `cursor: pointer`. This
+   `.tree-row__project-main` wrapper (folder toggle + label) sits ABOVE the
+   stretch link via z-index so the folder button stays its own click target;
+   `.tree-row--project .tree-row__action` (the "+"/"⋯" buttons) does the same.
+   BUG (regression, fixed): raising the whole wrapper's z-index also raised
+   the WRAPPER DIV ITSELF above the stretch-link, not just its button child —
+   `document.elementFromPoint` at the label's center returned
+   `.tree-row__project-main` (the div), not the stretch-link, so tapping
+   exactly on the visible text hit an element with no click handler and did
+   nothing, while taps elsewhere in the row (outside this wrapper's own
+   bounding box) fell through to the working stretch-link underneath. Giving
+   only the `.tree-row__label` span `pointer-events: none` was NOT enough —
+   the parent div still intercepted the click before it ever reached the
+   span. Fix: make the wrapper itself `pointer-events: none` (transparent to
+   hit-testing everywhere, including over the label), then explicitly punch
+   a hole back to `auto` on `.tree-row__project-expand`, the one real button
+   inside it that must stay independently clickable. Verified live via
+   Playwright + `elementFromPoint`: label center now resolves to
+   `.wt-row__stretch-link` and navigates, same as taps above/below it. */
+.tree-row__project-main {
+  position: relative;
+  z-index: 2;
   flex: 1;
   min-width: 0;
   display: inline-flex;
@@ -760,6 +794,22 @@
   /* More breathing room than the default --space-1 (4px) — the folder icon
      and project name were reading as too close together. */
   gap: var(--space-2);
+  pointer-events: none;
+}
+
+.tree-row__project-main .tree-row__project-expand {
+  pointer-events: auto;
+}
+
+.tree-row--project .tree-row__action {
+  position: relative;
+  z-index: 2;
+}
+
+.tree-row__project-expand {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
   margin: 0;
   padding: 0;
   border: none;
@@ -2106,17 +2156,6 @@
   min-height: 0;
 }
 
-/* A .tabs-strip that hosts only PaneTools (no tabs__scroll sibling) — e.g. a
- * direct session's primary agent pane. Right-align the tools and drop the
- * separator border-left that normally divides them from the tab list. */
-.tabs-strip--tools-only {
-  justify-content: flex-end;
-}
-
-.tabs-strip--tools-only .tabs-strip__tools {
-  border-left: none;
-}
-
 .tabs-strip__zoom {
   display: flex;
   flex-direction: row;
@@ -2216,6 +2255,16 @@
 .tab[data-active="true"] {
   color: var(--fg-primary);
   border-bottom-color: var(--accent);
+}
+
+/* Pinned "Overview" tab (plan-04 naming decision) — collapses to icon-only
+   on narrow screens, same breakpoint as the dashboard's own mobile layout.
+   The button keeps `aria-label="Overview"` so the name is still announced
+   to assistive tech once the visible label is hidden. */
+@media (max-width: 600px) {
+  .tab--project-home__label {
+    display: none;
+  }
 }
 
 .tab__close {
@@ -5196,6 +5245,233 @@ a.dashboard-card.dashboard-card--session {
   color: var(--fg-muted);
   margin: 0;
   padding: var(--space-3) 0;
+}
+
+/* ============================================================================
+   Project home tab (ProjectHomeTab.tsx) — the pinned "Project" tab's content.
+   Was previously entirely unstyled (project-home__* classes existed in the
+   component but had no rules here), so it rendered as raw unstyled HTML.
+   ============================================================================ */
+
+/* Item 2 (round 2): scrolling and content-centering used to live on the
+   same box (`.project-home` had both `overflow: auto` and `max-width`), so
+   the scrollbar rendered at the edge of the narrower centered content
+   instead of the pane's true right edge, and the content had no
+   `margin-inline: auto` to actually center it — it just hugged the left
+   edge inside the `max-width` box. `.project-home-scroll` is the full-width
+   outer scroll container; `.project-home` is the inner, centered,
+   width-capped content. */
+.project-home-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.project-home {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+  padding: var(--space-8) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.project-home__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.project-home__title {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.project-home__name {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--fg-primary);
+  line-height: var(--line-height-tight);
+}
+
+.project-home__path {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.project-home__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.project-home__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: var(--border-width) solid var(--border-default);
+  color: var(--fg-primary);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.project-home__action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.project-home__action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-home__show-finished {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.project-home__git-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-sm);
+}
+
+.project-home__git-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--fg-success);
+}
+
+.project-home__git-warn {
+  color: var(--fg-warning);
+}
+
+.project-home__git-init {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: var(--border-width) solid var(--fg-warning);
+  color: var(--fg-warning);
+  cursor: pointer;
+}
+
+.project-home__git-init:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg-warning) 14%, transparent);
+}
+
+.project-home__error {
+  font-size: var(--font-size-xs);
+  color: var(--fg-danger);
+}
+
+.project-home__empty {
+  padding: var(--space-6) 0;
+  border-top: var(--border-width) solid var(--border-default);
+}
+
+.project-home__empty-text {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+  max-width: 52ch;
+}
+
+.project-home__buckets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.project-home__card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* Item 1: these rows are `<button>`s now (were `<div>`s), so reset the
+   default button chrome and re-add the same visual shell they had before,
+   plus a hover/focus state that makes them read as tappable. */
+.project-home__worktree-row,
+.project-home__direct-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-md);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.project-home__worktree-row:hover,
+.project-home__direct-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.project-home__worktree-row:focus-visible,
+.project-home__direct-row:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+}
+
+.project-home__direct-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Item 2: the owning worktree's label, shown before the session name on a
+   bucket row (worktree-scoped rows only — `renderSessionRow`, never the
+   worktree-less "Direct agents" rows). */
+.project-home__wt-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  padding: 0 var(--space-2);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-full, 999px);
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-home__direct-agents {
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border-default);
 }
 
 /* ============================================================================

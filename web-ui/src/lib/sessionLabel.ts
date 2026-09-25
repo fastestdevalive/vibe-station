@@ -1,4 +1,4 @@
-import type { Session } from "@/api/types";
+import type { Session, Worktree } from "@/api/types";
 
 /**
  * The display label for a session's tab/sidebar row: the custom `name` when
@@ -26,4 +26,13 @@ export function sessionLabel(s: Pick<Session, "name" | "isMain" | "type">): stri
 export function draftLabel(prompt?: string | null): string {
   if (!prompt || !prompt.trim()) return "New agent…";
   return prompt.trim().split(/\s+/).slice(0, 5).join(" ");
+}
+
+/**
+ * The display label for a worktree: the custom `name` when one is set, else
+ * its branch. Shared by `LeftSidebar.tsx` and `ProjectHomeTab.tsx` so the
+ * naming never drifts between the two.
+ */
+export function worktreeLabel(w: Pick<Worktree, "name" | "branch">): string {
+  return w.name ?? w.branch;
 }

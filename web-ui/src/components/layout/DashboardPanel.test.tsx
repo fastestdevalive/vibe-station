@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import type { ApiInstance } from "@/api";
 import { createMockApi } from "@/api/mock";
-import { DashboardPanel, bucketForRollup } from "./DashboardPanel";
+import { DashboardPanel, bucketForRollup, useSessionBuckets } from "./DashboardPanel";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useServerSync } from "@/hooks/useServerSync";
 import { useModesStore } from "@/store/modesStore";
@@ -49,6 +49,35 @@ function Harness({ api, children }: { api: ApiInstance; children: ReactNode }) {
   useServerSync(api);
   return <>{children}</>;
 }
+
+/** Renders the extracted `useSessionBuckets` hook's output so tests can assert
+ *  the bucketing arrays directly (Decision 6 regression — 3.T1/3.T2). */
+function BucketsProbe({
+  projectFilter,
+  worktreeOnly,
+}: {
+  projectFilter?: string;
+  worktreeOnly?: boolean;
+}) {
+  const b = useSessionBuckets(projectFilter, worktreeOnly ? { worktreeOnly: true } : undefined);
+  return (
+    <div
+      data-testid="buckets"
+      data-json={JSON.stringify({
+        working: b.working.map((s) => s.id),
+        needsYou: b.needsYou.map((s) => s.id),
+        idle: b.idle.map((s) => s.id),
+        pr: b.pr.map((s) => s.id),
+        finished: b.finished.map((s) => s.id),
+      })}
+    />
+  );
+}
+
+function bucketsJson(): string {
+  return screen.getByTestId("buckets").getAttribute("data-json") ?? "{}";
+}
+
 
 describe("DashboardPanel", () => {
   beforeEach(() => {
@@ -100,7 +129,7 @@ describe("DashboardPanel", () => {
     expect(screen.getByText("finished")).toBeInTheDocument();
   });
 
-  it("6.T3 — dashboard-direct-agents — shows a direct (worktree-less) agent session, bucketed by its own state and linking to /session/:id", async () => {
+  it("6.T3 — dashboard-direct-agents — shows a direct (worktree-less) agent session, bucketed by its own state and linking to /project/:projectId/:id", async () => {
     const api = createMockApi();
     render(
       <MemoryRouter>
@@ -138,7 +167,7 @@ describe("DashboardPanel", () => {
       const workingSection = screen.getByText("working").closest("section");
       expect(workingSection).not.toBeNull();
       const link = within(workingSection!).getByRole("link", { name: /My Direct Agent/i });
-      expect(link).toHaveAttribute("href", "/session/sess-direct-1");
+      expect(link).toHaveAttribute("href", "/project/proj-a/sess-direct-1");
     });
   });
 
@@ -394,7 +423,7 @@ describe("DashboardPanel", () => {
       // branch-guarded and is never shown — the card stays lifecycle-only,
       // bucketed under "idle" (its own state), not "pr created".
       const link = screen.getByRole("link", { name: /Direct PR Agent/i });
-      expect(link).toHaveAttribute("href", "/session/sess-direct-pr");
+      expect(link).toHaveAttribute("href", "/project/proj-a/sess-direct-pr");
     });
     expect(screen.queryByText("pr created")).toBeNull();
     const idleSection = screen.getByText("idle").closest("section");
@@ -561,5 +590,74 @@ describe("DashboardPanel", () => {
     const card = within(workingSection!).getByRole("link", { name: /Proj A/i });
     const primary = card.querySelector(".dashboard-card__primary");
     expect(primary?.getAttribute("title")).toBeTruthy();
+  });
+
+  it("3.T2 — useSessionBuckets with default opts matches the inline dashboard loop for existing fixtures", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <BucketsProbe />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("buckets")).toBeTruthy();
+    });
+    // Default fixture (no direct sessions, no PRs):
+    //  - sess-main  (working, wt-1) -> working
+    //  - sess-agent2(idle,    wt-1) -> idle
+    //  - sess-term1 (terminal)       -> excluded (not an agent)
+    //  - sess-wt2-main(done,   wt-2) -> finished
+    //  - sess-wt3-main(idle,   wt-3) -> idle
+    expect(JSON.parse(bucketsJson())).toEqual({
+      working: ["sess-main"],
+      needsYou: [],
+      idle: ["sess-agent2", "sess-wt3-main"],
+      pr: [],
+      finished: ["sess-wt2-main"],
+    });
+  });
+
+  it("3.T1 — useSessionBuckets with worktreeOnly excludes a direct session from every bucket", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <BucketsProbe worktreeOnly />
+        </Harness>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("buckets")).toBeTruthy();
+    });
+
+    // Add a direct (worktree-less) agent session to the store.
+    api.__test.emit({
+      type: "session:created",
+      sessionId: "sess-direct-1",
+      worktreeId: null,
+      projectId: "proj-a",
+      sessionType: "agent",
+      snapshot: {
+        id: "sess-direct-1",
+        worktreeId: null,
+        projectId: "proj-a",
+        modeId: "mode-1",
+        type: "agent",
+        name: "Direct Agent",
+        isMain: false,
+        state: "working",
+        lifecycleState: "working",
+        tmuxName: "sess-direct-1",
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    await waitFor(() => {
+      const all = Object.values(JSON.parse(bucketsJson()));
+      const flat = all.flat();
+      expect(flat).not.toContain("sess-direct-1");
+    });
   });
 });
