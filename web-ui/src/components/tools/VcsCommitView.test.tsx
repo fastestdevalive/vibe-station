@@ -33,6 +33,35 @@ describe("VcsCommitView", () => {
     expect(await screen.findByText("commit #abc1234")).toBeInTheDocument();
   });
 
+  it("hides the changed-file sidebar when the VCS rail closed it (State C)", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "listChangedPaths").mockResolvedValue([{ path: "src/App.tsx", status: "M" }]);
+    vi.spyOn(api, "getDiff").mockResolvedValue("diff --git a/src/App.tsx b/src/App.tsx\n");
+    // Sidebar driven by the VCS rail icon's store flag, not `fileTreeVisible`.
+    const { useWorkspaceStore } = await import("@/hooks/useStore");
+    useWorkspaceStore.setState({
+      vcsSidebarVisibleByWorktree: { "wt-1": false },
+      fileTreeVisible: true,
+    });
+    try {
+      render(<VcsCommitView api={api} worktreeId="wt-1" sha="abc1234def" onBack={() => {}} />);
+
+      // Changed-file list hidden even though fileTreeVisible is true.
+      await waitFor(() => expect(api.listChangedPaths).toHaveBeenCalled());
+      expect(screen.queryByRole("treeitem", { name: "src/App.tsx" })).not.toBeInTheDocument();
+      // The two redundant MasterDetailShell toggles are gone.
+      expect(screen.queryByRole("button", { name: "Hide file tree" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Switch to stacked layout" })).not.toBeInTheDocument();
+    } finally {
+      // Reset the store so the leaked state doesn't hide the sidebar for the
+      // sibling tests that run in this file with the shared real store.
+      useWorkspaceStore.setState({
+        vcsSidebarVisibleByWorktree: {},
+        fileTreeVisible: true,
+      });
+    }
+  });
+
   it("3.T4 — under scope='project', listChangedPaths is called with the project id and FilePreviewPane diffs at project scope", async () => {
     const api = createMockApi();
     const changedPathsSpy = vi

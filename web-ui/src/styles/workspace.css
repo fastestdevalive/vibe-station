@@ -138,6 +138,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  padding-right: 28px;
 }
 
 .file-tree-sidebar-header__title {
@@ -310,6 +311,38 @@
 
 .pane-left--mobile.pane-left--open {
   transform: translateX(0);
+}
+
+/* Desktop sidebar collapse/expand animation. The desktop sidebar (.pane-left)
+   is a plain flex child sized by an inline `width` (Layout.tsx
+   `sidebarDesktop`), NOT a react-resizable-panels Panel — toggling it
+   (leftSidebarCollapsed) changes that inline width, so animate it to slide
+   open/closed and reflow its sibling. Scoped away from .pane-left--mobile,
+   which animates via transform instead. Disabled while live-drag-resizing
+   (dragWidth updates on every mousemove; a transition there would lag behind
+   the cursor) — matches FilesPanel.tsx's isDragging guard. */
+.pane-left:not(.pane-left--mobile) {
+  transition: width var(--transition-fast);
+}
+.pane-left:not(.pane-left--mobile)[data-dragging="true"] {
+  transition: none;
+}
+
+/* Tool pane + terminal dock collapse/expand animation. react-resizable-panels
+   sizes these Panels inline via the `flex` shorthand (flex-grow 0..100 with
+   flex-basis 0) — see Layout.tsx's toolsPanelRef/dockPanelRef imperative
+   collapse()/expand(). Animate flex-grow so a toggled panel slides open/closed
+   (its sibling reflows in lockstep as flex recalculates each frame). During a
+   live drag-resize the group's resize handle gets data-resize-handle-active;
+   disable the transition then (via :has) so dragging stays instant and doesn't
+   fight the resize math. :has() keeps this order-independent — in vertical
+   orientation the tools panel precedes the handle, so a plain sibling
+   combinator wouldn't reach it. */
+[data-panel-group][data-animate-collapse] [data-panel] {
+  transition: flex-grow var(--transition-fast);
+}
+[data-panel-group][data-animate-collapse]:has(.resize-handle[data-resize-handle-active]) [data-panel] {
+  transition: none;
 }
 
 .sidebar-projects-heading {
@@ -810,6 +843,16 @@
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
+  /* Regression fix: this class is used two ways — (1) wrapping ONLY the
+     chevron for real project rows (`.tree-row__project-main` supplies the
+     icon-to-label gap there, so this has no effect); (2) wrapping BOTH the
+     chevron/icon AND the label as direct children (the Workspaces section
+     header, and the draft-row's "mirror the project-expand structure"
+     usage) — those need their own internal gap or the label sits flush
+     against the icon. Restores the `--space-2` (8px) gap the Workspaces
+     header comment above `.sidebar-projects-heading__icon` already assumes
+     exists. */
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   border: none;
@@ -1682,7 +1725,11 @@
 .top-bar__crumb {
   flex: 1;
   font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
+  /* Brighter than --fg-secondary — this is the page title (Dashboard,
+     project name, ...), not secondary chrome; --highlight segments already
+     use --fg-primary + medium weight, so the two now share brightness and
+     differ only by weight. */
+  color: var(--fg-primary);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1753,7 +1800,12 @@
   align-self: center;
   gap: 0;
   margin-left: 0;
-  font-size: calc(var(--font-size-sm) - 2px);
+  /* Revision 4's --font-size-xl (20px) read as too big on a real phone;
+     one step down to --font-size-lg (18px at the mobile breakpoint). Keeps
+     the medium weight and brighter color from revision 4 — only the size
+     changes. */
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-medium);
   white-space: normal;
 }
 
@@ -3305,10 +3357,14 @@
 }
 
 .references-panel__header {
-  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  padding: 0 32px 0 12px;
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 32px;
 }
 
 .references-panel__title-bar {
@@ -3474,10 +3530,14 @@
 }
 
 .outline-panel__header {
-  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  padding: 0 32px 0 12px;
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 32px;
 }
 
 .outline-panel__filter-box {
@@ -5888,6 +5948,7 @@ a.dashboard-card.dashboard-card--session {
   align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
+  padding-right: 28px;
 }
 
 .search-panel__input,
@@ -5898,8 +5959,8 @@ a.dashboard-card.dashboard-card--session {
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-xs);
+  padding: 4px 8px;
   outline: none;
 }
 
@@ -5923,19 +5984,19 @@ a.dashboard-card.dashboard-card--session {
 
 .search-panel__input-wrap .search-panel__input {
   width: 100%;
-  padding-right: 26px;
+  padding-right: 24px;
 }
 
 .search-panel__clear {
   position: absolute;
   top: 50%;
-  right: 6px;
+  right: 5px;
   transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -5962,14 +6023,12 @@ a.dashboard-card.dashboard-card--session {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 var(--space-2);
+  padding: 4px 8px;
   background: var(--bg-input);
   border: none;
   color: var(--fg-secondary);
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   cursor: pointer;
 }
 
@@ -6155,22 +6214,29 @@ a.dashboard-card.dashboard-card--session {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  /* Right inset so the bar's content never sits under the floating top-right
+     fullscreen/orientation buttons (ToolPanel's `.tool-panel__top-actions`),
+     matching the `.files-topbar` fix from revision 3. */
+  padding-right: 68px;
   border-bottom: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
+}
+
+.vcs-panel__bar-tail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .vcs-panel__title {
   font-size: var(--font-size-sm);
   color: var(--fg-secondary);
-}
-
-.vcs-panel__title-col {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-  min-width: 0;
 }
 
 .vcs-panel__title-group {
@@ -6199,8 +6265,13 @@ a.dashboard-card.dashboard-card--session {
 .vcs-panel__bar-actions {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  /* Fixed-height single row (the bar is 32px) — never wrap onto a second row
+     that would overflow the bar into the commit list. Let the left title
+     group shrink instead (it has min-width:0) while these actions keep their
+     intrinsic width. */
+  flex-shrink: 0;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .vcs-panel__diff-toggle {
@@ -6846,11 +6917,28 @@ a.dashboard-card.dashboard-card--session {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  flex-shrink: 0;
-  width: 36px;
-  padding: var(--space-1) 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: var(--tools-rail-w, 36px);
+  padding: 0 0 var(--space-1);
   background: var(--bg-secondary);
   border-right: var(--border-width) solid var(--border-default);
+  z-index: 10;
+  user-select: none;
+}
+
+.files-left-rail__group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.files-left-rail__divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: var(--space-1) var(--space-1);
 }
 
 .files-left-rail__btn {
@@ -6862,17 +6950,67 @@ a.dashboard-card.dashboard-card--session {
   padding: 0;
   background: transparent;
   border: none;
+  border-radius: 0;
   color: var(--fg-secondary);
   cursor: pointer;
 }
 
-.files-left-rail__btn:hover {
+.files-left-rail__btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--fg-primary);
 }
 
 .files-left-rail__btn--active {
   background: var(--bg-active);
+  color: var(--fg-primary);
+  border-radius: 0;
+  box-shadow: inset 2px 0 0 var(--accent, var(--fg-primary));
+}
+
+.files-left-rail__btn:disabled,
+.files-left-rail__btn--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.files-left-pane {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.files-left-pane__overlay-chrome {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+}
+
+.files-left-pane__layout-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.files-left-pane__layout-toggle:hover {
+  opacity: 1;
+  background: var(--bg-hover);
   color: var(--fg-primary);
 }
 
@@ -6892,6 +7030,36 @@ a.dashboard-card.dashboard-card--session {
   display: none;
 }
 
+/* Revision 2 §4a — drag-resize handle on the expanded side panel overlay */
+.files-left-pane-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  z-index: 30;
+  cursor: col-resize;
+  background: transparent;
+  user-select: none;
+  touch-action: none;
+}
+
+.files-left-pane-resize-handle:hover,
+.files-left-pane-resize-handle[data-dragging="true"],
+.files-left-pane-resize-handle:focus-visible {
+  background: var(--border-strong);
+}
+
+.files-left-pane-resize-handle--horizontal {
+  top: auto;
+  bottom: -5px;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 10px;
+  cursor: row-resize;
+}
+
 .files-panel__preview-only {
   flex: 1;
   min-height: 0;
@@ -6909,6 +7077,17 @@ a.dashboard-card.dashboard-card--session {
   flex-shrink: 0;
   min-width: 0;
   overflow: hidden;
+}
+
+/* VCS commit view's topbar (Revision 4) — same 32px + right inset as the
+   Files topbar so the back-arrow breadcrumb never sits under the floating
+   top-right fullscreen/orientation buttons. */
+.vcs-topbar {
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  box-sizing: border-box;
+  padding-right: 68px;
 }
 
 /* Item 9 — "Commits › commit #x" breadcrumb, `VcsCommitView`'s `topbarExtra`. */

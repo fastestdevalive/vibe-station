@@ -1,5 +1,4 @@
 import { Plus, Home } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 import { ancestorIds } from "@/components/chat/SubagentRow";
 import { motion } from "framer-motion";
 import { createPortal } from "react-dom";
@@ -130,7 +129,6 @@ function AgentTabIcon({
 }
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
-  const navigate = useNavigate();
   const isAgent = kind === "agent";
   const isProject = scope === "project";
   const fsTarget: WorkspacePaneFullscreen = isAgent ? "agent" : "terminal";

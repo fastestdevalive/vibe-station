@@ -53,6 +53,13 @@ interface MasterDetailShellProps {
    *  `treeVisible` effect, which skips the first render to avoid stealing
    *  focus from the agent when the tool pane first opens. */
   autoFocusTree?: boolean;
+  /** Optional override for the left-pane (sidebar) visibility. When supplied it
+   *  replaces the global `fileTreeVisible` gate entirely — used by VcsCommitView
+   *  so its changed-file sidebar toggles via the VCS rail icon's own state,
+   *  independent of the Files rail-mode's `fileTreeVisible`. */
+  treeVisibleOverride?: boolean;
+  /** Optional extra class on the full-width `.files-topbar` row. */
+  topbarClassName?: string;
 }
 
 /**
@@ -67,16 +74,20 @@ interface MasterDetailShellProps {
  * preference, not per-content state, unlike the `controlled` overrides
  * `FilePreviewPane`/`ChangedFileList` need (Decision 6).
  */
-export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, layoutToggle = true, leftPaneFocusHandle, leftPane, rightPane, topbarExtra, rightPaneTopbar, autoFocusTree = false }: MasterDetailShellProps) {
+export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, layoutToggle = true, leftPaneFocusHandle, leftPane, rightPane, topbarExtra, rightPaneTopbar, autoFocusTree = false, treeVisibleOverride, topbarClassName }: MasterDetailShellProps) {
   const leftPaneRef = useRef<HTMLDivElement>(null);
   const isFirstRender = useRef(true);
-  const treeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
+  const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const toggleFileTree = useWorkspaceStore((s) => s.toggleFileTree);
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const setMasterDetailVertical = useWorkspaceStore((s) => s.setMasterDetailVertical);
   const vertical = worktreeId
     ? !!(layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical
     : false;
+  // The sidebar/left-pane visibility gate. VcsCommitView supplies
+  // `treeVisibleOverride` to decouple from the Files `fileTreeVisible` flag;
+  // every other caller falls back to the global flag as before.
+  const treeVisible = treeVisibleOverride ?? fileTreeVisible;
 
   // Refocus the left pane's ACTIVE-mode tabbable row. When a
   // `leftPaneFocusHandle` (FilesLeftPane) is provided, use it — it is scoped
@@ -136,7 +147,7 @@ export function MasterDetailShell({ storageKey, worktreeId, treeToggle = true, l
   return (
     <div className="files-panel">
       {treeToggle || layoutToggle || topbarExtra ? (
-        <div className="files-topbar">
+        <div className={`files-topbar${topbarClassName ? ` ${topbarClassName}` : ""}`}>
           {treeToggle ? (
             <button
               type="button"

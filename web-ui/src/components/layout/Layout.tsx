@@ -75,7 +75,7 @@ export function Layout({
   // the store (and its localStorage write) is only updated once, on mouseup.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
 
-  function startSidebarResize(e: React.MouseEvent) {
+  function startSidebarResize(e: React.PointerEvent) {
     if (!onLeftSidebarResize) return;
     e.preventDefault();
     const startX = e.clientX;
@@ -84,28 +84,38 @@ export function Layout({
     const prevCursor = document.body.style.cursor;
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
     function clamp(px: number) {
       return Math.min(LEFT_SIDEBAR_MAX_WIDTH, Math.max(LEFT_SIDEBAR_MIN_WIDTH, px));
     }
-    function onMove(ev: MouseEvent) {
+    function onMove(ev: PointerEvent) {
       setDragWidth(clamp(startWidth + (ev.clientX - startX)));
     }
-    function onUp(ev: MouseEvent) {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+    function onUp(ev: PointerEvent) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       document.body.style.userSelect = prevUserSelect;
       document.body.style.cursor = prevCursor;
       onLeftSidebarResize?.(clamp(startWidth + (ev.clientX - startX)));
       setDragWidth(null);
     }
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   }
 
   // Must be called unconditionally — before any early returns — to satisfy Rules of Hooks.
   const paneFullscreen = useWorkspaceStore((s) => s.workspacePaneFullscreen);
   const setPaneFullscreen = useWorkspaceStore((s) => s.setWorkspacePaneFullscreen);
+  // Collapse/expand/re-orient animation is ONLY for an explicit toggle action
+  // (toggleToolPanel / toggleTerminalDock / toggleToolSplitOrientation raise
+  // this hint for ~300ms). Deliberately NOT derived from `toolsInSplit`/
+  // `effectiveOrientation`/`dockInSplit` changing: a worktree switch flips
+  // those same values whenever the destination's persisted layout differs,
+  // and must snap instantly — see `layoutTransitionHint` in useStore.ts.
+  const animateSplit = useWorkspaceStore((s) => s.layoutTransitionHint === "split");
 
   // `null` slots mean the region is unavailable in this mode (direct sessions
   // are terminal-only) — treat them as hidden no matter what the persisted
@@ -169,6 +179,7 @@ export function Layout({
   const sidebarDesktop = (
     <div
       className="pane-left"
+      data-dragging={dragWidth !== null || undefined}
       style={{
         width: dragWidth ?? leftColumnPx,
         flexShrink: 0,
@@ -185,7 +196,7 @@ export function Layout({
           aria-orientation="vertical"
           aria-label="Resize sidebar"
           data-dragging={dragWidth !== null}
-          onMouseDown={startSidebarResize}
+          onPointerDown={startSidebarResize}
         />
       ) : null}
     </div>
@@ -283,6 +294,7 @@ export function Layout({
     <PanelGroup
       direction={vertical ? "vertical" : "horizontal"}
       autoSaveId={`vs-ide-top-${wt}-${effectiveOrientation}`}
+      data-animate-collapse={animateSplit || undefined}
       style={{ width: "100%", height: "100%" }}
     >
       {[
@@ -342,6 +354,7 @@ export function Layout({
     <PanelGroup
       direction="vertical"
       autoSaveId={`vs-ide-dock-${wt}`}
+      data-animate-collapse={animateSplit || undefined}
       style={{ width: "100%", height: "100%" }}
     >
       <Panel defaultSize={68} minSize={20} order={1}>

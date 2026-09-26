@@ -26,11 +26,14 @@ export interface FilesLeftPaneHandle {
  * search body, references body, and outline body are ALWAYS mounted and CSS-hidden when inactive
  * (Requirement 9) — never conditionally unmounted on a rail-mode switch, so
  * each mode's async state survives.
+ *
+ * Houses the vertical/horizontal split orientation toggle on its overlay chrome (Revision 2 §3.f).
  */
 export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>(
   function FilesLeftPane({ api, worktreeId, scope = "worktree" }, ref) {
     const key = worktreeId ?? "__none__";
     const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[key] ?? "tree");
+
     const treeContainerRef = useRef<HTMLDivElement>(null);
     const searchContainerRef = useRef<HTMLDivElement>(null);
     const referencesContainerRef = useRef<HTMLDivElement>(null);
@@ -57,7 +60,7 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
     );
 
     return (
-      <>
+      <div className="files-left-pane">
         <div
           ref={treeContainerRef}
           className={mode === "tree" ? "files-left-pane__body" : "files-left-pane__body files-left-pane__hidden"}
@@ -82,7 +85,7 @@ export const FilesLeftPane = forwardRef<FilesLeftPaneHandle, FilesLeftPaneProps>
         >
           <ReferencesPanel api={api} worktreeId={worktreeId} scope={scope} />
         </div>
-      </>
+      </div>
     );
   },
 );

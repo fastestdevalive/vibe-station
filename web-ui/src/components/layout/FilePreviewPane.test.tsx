@@ -892,5 +892,27 @@ describe("FilePreviewPane — 2.9 (back/forward buttons and keyboard shortcuts)"
     });
     expect(navigateForwardSpy).toHaveBeenCalledWith("wt-1");
   });
+
+  it("Revision 3 item 2 — preview-diffinfo applies rail padding when side panel is closed", async () => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "README.md",
+      fileTreeVisible: false,
+    });
+    const { container, rerender } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Demo" })).toBeInTheDocument();
+    });
+
+    const diffInfo = container.querySelector(".preview-diffinfo") as HTMLElement;
+    expect(diffInfo.style.paddingLeft).toBe("calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))");
+
+    // Open side panel
+    act(() => {
+      useWorkspaceStore.setState({ fileTreeVisible: true });
+    });
+    rerender(<FilePreviewPane api={api} worktreeId="wt-1" />);
+    expect(diffInfo.style.paddingLeft).toBe("");
+  });
 });
 

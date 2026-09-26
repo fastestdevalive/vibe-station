@@ -1,6 +1,6 @@
 import { GitCompare } from "lucide-react";
 import type { DiffScope } from "@/api/types";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
 
 interface FileTreeHeaderProps {
@@ -25,6 +25,15 @@ interface FileTreeHeaderProps {
 export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderProps) {
   const setDiffScopeForWorktree = useWorkspaceStore((s) => s.setDiffScopeForWorktree);
   const setTreeScopeForWorktree = useWorkspaceStore((s) => s.setTreeScopeForWorktree);
+
+  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
+  // so this header reaches the top-right corner where the fullscreen +
+  // orientation-toggle buttons float (`ToolPanel.tsx`'s `.tool-panel__top-actions`).
+  // In left-side orientation the panel is a narrow left column that never
+  // reaches that corner, so the right inset only applies while stacked.
+  const masterDetailVertical = useWorkspaceStore(
+    (s) => !!(s.layoutByWorktree[contextId ?? ""] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
+  );
 
   const scopeRaw = useWorkspaceStore((s) =>
     contextId ? s.diffScopeByWorktree[contextId] : undefined,
@@ -85,7 +94,16 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
   }
 
   return (
-    <div className="pane-header pane-header--compact file-tree-sidebar-header">
+    <div
+      className="pane-header pane-header--compact file-tree-sidebar-header"
+      style={{
+        height: "32px",
+        minHeight: "32px",
+        maxHeight: "32px",
+        boxSizing: "border-box",
+        paddingRight: masterDetailVertical ? "68px" : undefined,
+      }}
+    >
       <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>
       <div className="file-tree-sidebar-header__tail">
         {/* One scope selector, always visible in the Files header — not
