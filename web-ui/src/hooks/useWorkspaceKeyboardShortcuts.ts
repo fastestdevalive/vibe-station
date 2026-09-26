@@ -124,9 +124,21 @@ export function useWorkspaceKeyboardShortcuts(
       // ⌘/Ctrl+E — toggle file tree (VS Code-style). Same placement as Ctrl+P:
       // handled before the `inEditable` guard so it fires even from the terminal
       // (the xterm passthrough in TerminalPane.tsx lets Ctrl+E through to us).
+      // Context-aware: on the VCS commit view it toggles that sidebar (whose
+      // visibility is `treeVisibleOverride`, NOT the Files `fileTreeVisible`
+      // flag) instead of silently flipping a hidden, irrelevant Files flag.
       if (!e.shiftKey && !e.altKey && e.key.toLowerCase() === "e") {
         e.preventDefault();
-        toggleFileTree();
+        const state = useWorkspaceStore.getState();
+        const key = state.activeWorktreeId ?? state.activeDirectContextId;
+        const tab = key ? (state.layoutByWorktree[key]?.toolPanelTab ?? "files") : "files";
+        const commitOpen = key ? !!state.vcsSelectedCommitByWorktree[key] : false;
+        if (tab === "vcs" && commitOpen && key) {
+          const visible = state.vcsSidebarVisibleByWorktree[key] ?? true;
+          state.setVcsSidebarVisible(key, !visible);
+        } else {
+          toggleFileTree();
+        }
         return;
       }
 

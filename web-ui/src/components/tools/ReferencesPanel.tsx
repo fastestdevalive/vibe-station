@@ -7,10 +7,7 @@ import {
   type ReferenceGroup,
   type LspFileRef,
 } from "@/lib/lspApi";
-import {
-  useWorkspaceStore,
-  type PendingReferencesQuery,
-} from "@/hooks/useStore";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type PendingReferencesQuery } from "@/hooks/useStore";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { languageForFilePath } from "../preview/codeHighlight";
@@ -42,6 +39,15 @@ export function ReferencesPanel({
 
   const layoutKey =
     worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "";
+
+  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
+  // so this panel's header reaches the top-right corner where the fullscreen +
+  // orientation-toggle buttons float. In left-side orientation it is a narrow
+  // left column that never reaches that corner, so the right inset only
+  // applies while stacked.
+  const masterDetailVertical = useWorkspaceStore(
+    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
+  );
 
   const [activeQuery, setActiveQuery] = useState<PendingReferencesQuery | null>(
     null
@@ -247,7 +253,16 @@ export function ReferencesPanel({
       role="region"
       aria-label="References panel"
     >
-      <div className="references-panel__header">
+      <div
+        className="references-panel__header"
+        style={{
+          height: "32px",
+          minHeight: "32px",
+          maxHeight: "32px",
+          boxSizing: "border-box",
+          paddingRight: masterDetailVertical ? "68px" : undefined,
+        }}
+      >
         {loading && groups.length === 0 ? (
           <div className="references-panel__title">LSP: indexing…</div>
         ) : activeQuery ? (

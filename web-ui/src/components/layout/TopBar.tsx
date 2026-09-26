@@ -95,7 +95,7 @@ export function TopBar({
   settingsSectionLabel,
   onSettingsBack,
   shortcutsOpen = false,
-  onOpenShortcuts,
+  onOpenShortcuts: _onOpenShortcuts,
   onCloseShortcuts,
 }: TopBarProps) {
   const {

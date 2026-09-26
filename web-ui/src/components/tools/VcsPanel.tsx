@@ -286,12 +286,6 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
     [setVcsSelectedCommitStore, worktreeId],
   );
 
-  useEffect(() => {
-    if (selectedCommitSha && !useWorkspaceStore.getState().fileTreeVisible) {
-      useWorkspaceStore.getState().toggleFileTree();
-    }
-  }, [selectedCommitSha]);
-
   const toggleExpanded = (sha: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -479,17 +473,17 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
   return (
     <div className="vcs-panel">
       <div className="vcs-panel__bar">
-        <div className="vcs-panel__title-col">
-          <span className="vcs-panel__title-group">
-            <span className="vcs-panel__title">
-              Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
-            </span>
-            {branch ? (
-              <span className="vcs-panel__branch-chip" title={branch}>
-                {branch}
-              </span>
-            ) : null}
+        <span className="vcs-panel__title-group">
+          <span className="vcs-panel__title">
+            Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
           </span>
+          {branch ? (
+            <span className="vcs-panel__branch-chip" title={branch}>
+              {branch}
+            </span>
+          ) : null}
+        </span>
+        <div className="vcs-panel__bar-tail">
           {!isProject ? (
             <label className="vcs-panel__diff-toggle">
               <input
@@ -500,8 +494,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
               Diff from {baseBranch || "main"}
             </label>
           ) : null}
-        </div>
-        <div className="vcs-panel__bar-actions">
+          <div className="vcs-panel__bar-actions">
           <button
             type="button"
             className="tab tab--icon tool-bar-btn"
@@ -540,6 +533,7 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
               ""
             )}
           </span>
+        </div>
         </div>
       </div>
       {pr ? <PrBanner pr={pr} /> : null}

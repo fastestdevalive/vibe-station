@@ -1,9 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Columns2, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 import type { ToolTab } from "@/hooks/useStore";
-import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
@@ -11,6 +11,8 @@ import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { LspStatusRow } from "@/components/layout/LspStatusRow";
+import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
+import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
 
 interface ToolPanelProps {
   api: ApiInstance;
@@ -25,45 +27,35 @@ interface ToolPanelProps {
   /**
    * True when this same ToolPanel instance is currently portaled into a
    * workspace-canvas tile (WorkspaceCanvas.tsx) rather than the classic
-   * docked tool-panel region. The tile already has its own close (removes
-   * the tile) and fullscreen (click title bar) controls in that context —
-   * this panel's own fullscreen/close buttons would be redundant at best
-   * (two different "fullscreen" behaviors) and actively confusing at worst
-   * ("close" here means `toggleToolPanel()`, the classic dock's visibility
-   * flag — clicking it from inside a tile just blanks the tile's content
-   * with no obvious way back except the top bar's unrelated toggle).
-   * ToolPanel is a single shared instance/pane (per the never-unmount
-   * invariant) portaled to whichever outlet is currently live, so this has
-   * to be a prop threaded from the call site (Workspace.tsx), not something
-   * ToolPanel can determine on its own.
+   * docked tool-panel region.
    */
   hidePanelControls?: boolean;
   /** Called when the user clicks the "+" tab or presses Ctrl+P to open the file quick-open dialog. */
   onOpenQuickOpen?: () => void;
   /**
    * Called when the user wants to remove this ToolPanel from the workspace
-   * canvas tile it is currently inside. When present alongside
-   * `hidePanelControls`, the X close button is rendered — the one action
-   * the tile's own header X does NOT cover (the header X removes the whole
-   * tile chrome; this X is discoverable from within the tools tab bar
-   * itself). Not passed in classic/docked mode — the top bar toggle
-   * already hides the panel there, so the X would be redundant.
+   * canvas tile it is currently inside.
    */
   onClose?: () => void;
 }
 
-const TABS: { id: ToolTab; label: string }[] = [
-  { id: "files", label: "Files" },
-  { id: "devices", label: "Devices" },
-  { id: "artifacts", label: "Artifacts" },
-  { id: "vcs", label: "VCS" },
-];
+export const RAIL_WIDTH = 36;
+export const FILES_LEFT_PANE_DEFAULT_WIDTH = 240;
+export const FILES_LEFT_PANE_MIN_WIDTH = 160;
+export const FILES_LEFT_PANE_MAX_WIDTH = 600;
+export const FILES_LEFT_PANE_DEFAULT_HEIGHT = 240;
+export const FILES_LEFT_PANE_MIN_HEIGHT = 100;
+export const FILES_LEFT_PANE_MAX_HEIGHT = 600;
 
 /**
- * Right-side tool panel. Hosts one tool at a time (Files, Devices, Artifacts)
- * selected via the tab strip. Files is master-detail (tree + preview); Devices
- * (web browser + emulators) and Artifacts are placeholders until their backends
- * land.
+ * Right-side tool panel (R1–R7, R14, R16):
+ * - Horizontal tab strip is removed (R1).
+ * - Consolidated vertical left rail (FilesLeftRail) selects tool + Files sub-modes (R1–R3).
+ * - Rail and FilesLeftPane are overlays (R4) with insets mechanism (R5).
+ * - ToolFullscreenButton relocated to top-right overlay matching top-bar height (R6).
+ * - Devices tool is disabled in the rail (R7).
+ * - Isolation and stacking context scoped (R14).
+ * - Preserves state across fullscreen and implements two-step Esc handling (R16).
  */
 export function ToolPanel({
   api,
@@ -77,102 +69,166 @@ export function ToolPanel({
 }: ToolPanelProps) {
   const { toolPanelTab, setToolPanelTab, activeWorktreeId, activeDirectContextId } = useLayout();
 
-  // Layout-orientation toggle for the Files tab, attached directly to its
-  // tab button (live-review feedback, after two earlier homes — the rail,
-  // then the Files tab's own tab-strip row — both got rejected as "wrong
-  // place"): rendered as a small, independently-focusable icon-button on
-  // the right edge of the "Files" tab item (grouped via a wrapping span,
-  // not nested inside the tab's own <button> — see the JSX below for why).
   const filesWt = worktreeId ?? "__none__";
+  const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[filesWt] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
   const setMasterDetailVertical = useWorkspaceStore((s) => s.setMasterDetailVertical);
+  const storedWidth = useWorkspaceStore(
+    (s) => s.filesLeftPaneWidthByWorktree[filesWt] ?? FILES_LEFT_PANE_DEFAULT_WIDTH,
+  );
+  const storedHeight = useWorkspaceStore(
+    (s) => s.filesLeftPaneHeightByWorktree[filesWt] ?? FILES_LEFT_PANE_DEFAULT_HEIGHT,
+  );
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const activePanelWidth = dragWidth ?? storedWidth;
+  const activePanelHeight = dragHeight ?? storedHeight;
 
-  // Decision 9 migration: the "search" tab no longer exists in TABS, but a
-  // worktree whose persisted `toolPanelTab === "search"` from before this
-  // change must still land somewhere sensible — treat it as "files" at render
-  // time, and seed that worktree's Files rail into search mode so the user
-  // who had Search open returns there rather than silently resetting to tree.
-  const effectiveTab: ToolTab = toolPanelTab === "search" ? "files" : toolPanelTab;
+  // Decision 9 migration: persisted `toolPanelTab === "search"` seeds Files rail into search mode.
+  // Persisted "devices"/"artifacts" (from before they were disabled, or via direct state
+  // manipulation) are folded into "files" too — those tools have no active rail button, so
+  // leaving the tab on one of them would render a tool with no rail highlight.
+  const effectiveTab = (
+    toolPanelTab === "search" || toolPanelTab === "devices" || toolPanelTab === "artifacts"
+      ? "files"
+      : toolPanelTab
+  ) as ToolTab;
 
   useEffect(() => {
-    // `toolPanelTab` (via useLayout) always reflects the GLOBALLY active
-    // worktree/direct-context, not this specific ToolPanel instance's own
-    // `worktreeId` prop — on a canvas with multiple tools tiles open
-    // simultaneously, every mounted instance sees the same value. Gate the
-    // seed on this instance actually BEING that active context, or every
-    // mounted tile would seed ITS OWN (possibly unrelated) worktree's rail
-    // into search mode off a single flag that only ever described one of
-    // them.
     const isActiveContext = worktreeId != null && worktreeId === (activeWorktreeId ?? activeDirectContextId);
-    if (toolPanelTab === "search" && isActiveContext) {
-      // S-4: ALSO migrate the persisted value to "files", so this migration is
-      // truly one-shot. Without it the stale "search" tab value survives and the
-      // effect re-runs — re-seeding this worktree's rail into search mode,
-      // potentially overriding a user's later choice to be in tree mode — on
-      // every worktree switch or additional tools-tile mount.
+    if (isActiveContext && (toolPanelTab === "search" || toolPanelTab === "devices" || toolPanelTab === "artifacts")) {
+      const wasSearch = toolPanelTab === "search";
       setToolPanelTab("files");
-      useWorkspaceStore.getState().setFilesLeftPaneMode(worktreeId, "search");
+      if (wasSearch) {
+        useWorkspaceStore.getState().setFilesLeftPaneMode(worktreeId, "search");
+      }
     }
   }, [toolPanelTab, worktreeId, activeWorktreeId, activeDirectContextId, setToolPanelTab]);
 
+  const isPanelOpen = effectiveTab === "files" && fileTreeVisible;
+  const panelWidth = isPanelOpen ? activePanelWidth : 0;
+  const leftInset = RAIL_WIDTH + panelWidth;
+
+  const insetContextValue = useMemo(
+    () => ({
+      isPanelOpen,
+    }),
+    [isPanelOpen],
+  );
+
+  // R16: Escape-key handling order when both expanded panel and fullscreen are
+  // active: pressing Esc first closes the files panel (if open); a second Esc
+  // then exits tools-pane fullscreen.
+  //
+  // Scoped to THIS tools pane: the listener is attached to the container in
+  // the BUBBLE phase (not a window capture-phase listener), so it only fires
+  // when focus is actually inside this tools pane. It must never swallow Esc
+  // meant for the terminal (Claude Code Esc-to-interrupt, vim) or for Quick
+  // Open — both of which live outside this pane and keep their own Esc
+  // handling. When focus is in the terminal or a dialog, this listener isn't
+  // on the event path at all, so Esc passes through untouched. Because it's a
+  // container listener rather than a window one, multiple tools tiles can each
+  // mount one without the two cancelling each other.
+  const escPaneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = escPaneRef.current;
+    if (!el) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const s = useWorkspaceStore.getState();
+      // Same resolution as useLayout(): the layout may have no persisted entry
+      // yet (fresh view), in which case the DEFAULT layout's tab applies — the
+      // default is "files", so a bare store lookup would wrongly report the
+      // files panel as not-open here.
+      const key = s.activeWorktreeId ?? s.activeDirectContextId;
+      const layout = s.layoutByWorktree[key ?? ""] ?? DEFAULT_WORKTREE_LAYOUT;
+      const effectiveTabForEsc = layout.toolPanelTab === "search" ? "files" : layout.toolPanelTab;
+      const panelOpen = effectiveTabForEsc === "files" && s.fileTreeVisible;
+      if (panelOpen) {
+        e.stopPropagation();
+        s.toggleFileTree();
+      } else if (s.workspacePaneFullscreen === "tools") {
+        e.stopPropagation();
+        s.setWorkspacePaneFullscreen(null);
+      }
+    };
+    el.addEventListener("keydown", onKeyDown);
+    return () => el.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   return (
-    <div className="tool-panel pane-stack">
-      <div className="tool-panel__tabs" role="tablist" aria-label="Tools">
-        <div className="tool-panel__tabs-scroll">
-          {TABS.map((t) => {
-            const showLayoutToggle = t.id === "files" && !!worktreeId;
-            const tabButton = (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={effectiveTab === t.id}
-                data-active={effectiveTab === t.id}
-                className="tab"
-                onClick={() => setToolPanelTab(t.id)}
-              >
-                {t.label}
-              </button>
-            );
-            // The layout toggle needs its own real, independently-focusable
-            // <button> — HTML forbids nesting interactive controls inside a
-            // <button>, and an earlier version that nested a `role="button"`
-            // span inside the tab button polluted the tab's accessible name
-            // (announced as "Files Switch to stacked layout") and broke the
-            // tablist's roving-tabindex convention. A wrapping span keeps
-            // both buttons visually grouped as one tab item without nesting.
-            if (!showLayoutToggle) return <span key={t.id}>{tabButton}</span>;
-            return (
-              <span key={t.id} className="tool-panel__files-tab-wrap">
-                {tabButton}
-                <button
-                  type="button"
-                  className="tab__layout-toggle"
-                  aria-label={masterDetailVertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
-                  title={masterDetailVertical ? "Side-by-side layout" : "Stacked layout"}
-                  onClick={() => setMasterDetailVertical(filesWt, !masterDetailVertical)}
-                >
-                  {masterDetailVertical ? <Columns2 size={13} /> : <Rows2 size={13} />}
-                </button>
-              </span>
-            );
-          })}
+    <ToolsInsetProvider value={insetContextValue}>
+      <div
+        ref={escPaneRef}
+        className="tool-panel pane-stack"
+        style={
+          {
+            position: "relative",
+            isolation: "isolate",
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            "--tools-rail-w": `${RAIL_WIDTH}px`,
+            "--tools-rail-panel-w": `${activePanelWidth}px`,
+            "--tools-rail-panel-h": `${activePanelHeight}px`,
+            "--tools-left-inset": `${leftInset}px`,
+          } as React.CSSProperties
+        }
+      >
+        {/* Rail as vertical overlay on the left edge (R1, R4). The wrapper is a
+            flex container (not just position:absolute) so the rail stretches to
+            the pane's full height instead of only its icon content — otherwise
+            the rail background/border stops partway down and preview content
+            shows through the column below the last icon. */}
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: `${RAIL_WIDTH}px`,
+            zIndex: 10,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <FilesLeftRail worktreeId={filesWt} />
         </div>
-        {/* Panel-level controls — fullscreen + close act on the whole tool
-            panel (whichever tool is shown), so they live on the selector bar.
-            Hidden inside a workspace-canvas tile — see `hidePanelControls`'s
-            doc comment; the tile's own header already owns both concepts.
-            When inside a canvas tile, show only the X close button (wired to
-            `onClose`, which removes the tools tile) — the tile header's own
-            X already removes the whole tile, but an X inside the tab bar
-            is more discoverable from within the tools content itself. */}
-        {!hidePanelControls ? (
-          <div className="tool-panel__tabs-actions">
+
+        {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
+        <div
+          className="tool-panel__top-actions"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: "var(--space-2)",
+            height: "32px",
+            display: "flex",
+            alignItems: "center",
+            gap: "2px",
+            zIndex: 30,
+          }}
+        >
+          {effectiveTab === "files" ? (
+            <button
+              type="button"
+              className="tab tab--icon tool-bar-btn"
+              aria-label={masterDetailVertical ? "Switch to side-by-side layout" : "Switch to stacked layout"}
+              title={masterDetailVertical ? "Side-by-side layout" : "Stacked layout"}
+              onClick={() => setMasterDetailVertical(filesWt, !masterDetailVertical)}
+            >
+              {masterDetailVertical ? (
+                <Rows2 size={13} strokeWidth={2} aria-hidden />
+              ) : (
+                <Columns2 size={13} strokeWidth={2} aria-hidden />
+              )}
+            </button>
+          ) : null}
+          {!hidePanelControls ? (
             <ToolFullscreenButton />
-          </div>
-        ) : onClose ? (
-          <div className="tool-panel__tabs-actions">
+          ) : onClose ? (
             <button
               type="button"
               className="tab tab--icon tool-bar-btn"
@@ -182,28 +238,59 @@ export function ToolPanel({
             >
               <X size={13} />
             </button>
+          ) : null}
+        </div>
+
+        {/* Content body: zero rail inset for files tool (preview draws underneath rail, §4b) */}
+        <div
+          className="tool-panel__body"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            paddingLeft: effectiveTab === "files" ? 0 : `${RAIL_WIDTH}px`,
+            display: "flex",
+            flexDirection: "column",
+            position: "relative",
+          }}
+        >
+          {worktreeId == null ? (
+            <div className="empty-state">Select a worktree to use tools</div>
+          ) : (
+            <>
+              {effectiveTab === "files" ? (
+                <FilesPanel
+                  api={api}
+                  worktreeId={worktreeId}
+                  scope={scope}
+                  onOpenQuickOpen={onOpenQuickOpen}
+                  currentWidth={activePanelWidth}
+                  currentHeight={activePanelHeight}
+                  onWidthDrag={setDragWidth}
+                  onHeightDrag={setDragHeight}
+                />
+              ) : null}
+              {effectiveTab === "devices" ? <DevicesPanel /> : null}
+              {effectiveTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
+              {effectiveTab === "vcs" ? (
+                <VcsPanel
+                  api={api}
+                  worktreeId={worktreeId}
+                  baseBranch={baseBranch}
+                  branch={branch}
+                  scope={scope}
+                />
+              ) : null}
+            </>
+          )}
+        </div>
+
+        {worktreeId != null ? (
+          <div style={{ paddingLeft: `${RAIL_WIDTH}px` }}>
+            <LspStatusRow api={api} worktreeId={worktreeId} scope={scope} />
           </div>
         ) : null}
       </div>
-      <div className="tool-panel__body">
-        {worktreeId == null ? (
-          // No context (nothing selected yet). Tools are context-scoped, so
-          // show a plain empty state — never dashboard/kanban or stale files.
-          <div className="empty-state">Select a worktree to use tools</div>
-        ) : (
-          <>
-            {effectiveTab === "files" ? (
-              <FilesPanel api={api} worktreeId={worktreeId} scope={scope} onOpenQuickOpen={onOpenQuickOpen} />
-            ) : null}
-            {effectiveTab === "devices" ? <DevicesPanel /> : null}
-            {effectiveTab === "artifacts" ? <ArtifactsPanel worktreeId={worktreeId} /> : null}
-            {effectiveTab === "vcs" ? (
-              <VcsPanel api={api} worktreeId={worktreeId} baseBranch={baseBranch} branch={branch} scope={scope} />
-            ) : null}
-          </>
-        )}
-      </div>
-      {worktreeId != null ? <LspStatusRow api={api} worktreeId={worktreeId} scope={scope} /> : null}
-    </div>
+    </ToolsInsetProvider>
   );
 }

@@ -28,9 +28,11 @@ const mockStoreState: Record<string, unknown> = {
   clearPeekFile: mockClearPeekFile,
   filesLeftPaneMode: {} as Record<string, "tree" | "search">,
   searchFocusSeq: {} as Record<string, number>,
+  layoutByWorktree: {} as Record<string, unknown>,
 };
 vi.mock("@/hooks/useStore", () => ({
   useWorkspaceStore: (selector: (state: unknown) => unknown) => selector(mockStoreState),
+  DEFAULT_WORKTREE_LAYOUT: { masterDetailVertical: false },
 }));
 
 describe("SearchPanel", () => {

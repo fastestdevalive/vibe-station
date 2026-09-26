@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { VcsPanel } from "./VcsPanel";
+import { useWorkspaceStore } from "@/hooks/useStore";
 import type { CommitLogEntry, SubmoduleInfo } from "@/api/types";
 
 /** Builds `count` synthetic commits, newest first, all on-branch unless overridden. */
@@ -48,6 +49,12 @@ function deferred<T>() {
 }
 
 describe("VcsPanel", () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      vcsSelectedCommitByWorktree: {},
+    });
+  });
+
   it("Requirement 1 — fewer than a page of commits: no Load more button, header count matches", async () => {
     const api = createMockApi();
     vi.spyOn(api, "listCommits").mockImplementation(limitAwareListCommits({ "wt-1": makeCommits(5) }));

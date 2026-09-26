@@ -5,6 +5,7 @@ import { ChangedFileList } from "@/components/layout/ChangedFileList";
 import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { MasterDetailShell } from "@/components/layout/MasterDetailShell";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
+import { useWorkspaceStore } from "@/hooks/useStore";
 
 interface VcsCommitViewProps {
   api: ApiInstance;
@@ -36,6 +37,12 @@ export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree"
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // The changed-file sidebar's visibility is driven by the VCS rail icon
+  // (scoped to this commit view, independent of the Files rail-mode's own
+  // `fileTreeVisible`). Defaults to visible on first open (State B); the rail
+  // icon toggles it closed (State C) / open again without exiting the commit.
+  const sidebarVisible = useWorkspaceStore((s) => s.vcsSidebarVisibleByWorktree[worktreeId] ?? true);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +80,13 @@ export function VcsCommitView({ api, worktreeId, sha, onBack, scope = "worktree"
       storageKey={`commit-${worktreeId}`}
       worktreeId={worktreeId}
       autoFocusTree
+      // Revision 4: the split's two redundant built-in toggles (treeToggle +
+      // layoutToggle) are removed — sidebar open/close is now owned by the VCS
+      // rail icon via `treeVisibleOverride`, not MasterDetailShell's own buttons.
+      treeToggle={false}
+      layoutToggle={false}
+      treeVisibleOverride={sidebarVisible}
+      topbarClassName="vcs-topbar"
       topbarExtra={topbarExtra}
       leftPane={
         <ChangedFileList

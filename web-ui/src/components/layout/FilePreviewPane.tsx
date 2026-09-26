@@ -1,12 +1,13 @@
 import { Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ApiInstance } from "@/api";
-import type { DiffScope, FileScope } from "@/api/types";
+import type { FileScope } from "@/api/types";
+import { useToolsInset } from "@/context/ToolsInsetContext";
 import { getExternalFile, type LspFileRef } from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
 import { segmentMarkdownWithMermaid } from "@/preview/mdSegments";
 import { useTheme } from "@/hooks/useTheme";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
@@ -57,6 +58,13 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const canGoForward = useWorkspaceStore((s) => !controlled && (s.forwardStack[layoutKey]?.length ?? 0) > 0);
   const navigateBack = useWorkspaceStore((s) => s.navigateBack);
   const navigateForward = useWorkspaceStore((s) => s.navigateForward);
+
+  const { isPanelOpen: insetPanelOpen } = useToolsInset();
+  const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
+  const isPanelOpen = insetPanelOpen || fileTreeVisible;
+  const masterDetailVertical = useWorkspaceStore(
+    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
+  );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey) {
@@ -557,7 +565,12 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // there is reflected here automatically without this pane owning any UI
   // for it. File name + panel controls live on the Files bar above.
   const diffInfo = (
-    <div className="preview-diffinfo">
+    <div
+      className="preview-diffinfo"
+      style={{
+        paddingLeft: !controlled && (!isPanelOpen || masterDetailVertical) ? "calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))" : undefined,
+      }}
+    >
       <div className="preview-nav" role="navigation" aria-label="Preview navigation">
         <button
           type="button"

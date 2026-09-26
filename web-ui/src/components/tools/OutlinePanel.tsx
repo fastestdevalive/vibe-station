@@ -9,7 +9,7 @@ import {
   type LspFileRef,
   type OutlineSymbol,
 } from "@/lib/lspApi";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
@@ -214,6 +214,15 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeDirectContextId = useWorkspaceStore((s) => s.activeDirectContextId);
   const layoutKey = worktreeId ?? activeWorktreeId ?? activeDirectContextId ?? "__none__";
+
+  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
+  // so this panel's header reaches the top-right corner where the fullscreen +
+  // orientation-toggle buttons float. In left-side orientation it is a narrow
+  // left column that never reaches that corner, so the right inset only
+  // applies while stacked.
+  const masterDetailVertical = useWorkspaceStore(
+    (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
+  );
 
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId ?? "__none__"] ?? "tree");
   const pushJump = useWorkspaceStore((s) => s.pushJump);
@@ -522,7 +531,16 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
 
   return (
     <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
-      <div className="outline-panel__header">
+      <div
+        className="outline-panel__header"
+        style={{
+          height: "32px",
+          minHeight: "32px",
+          maxHeight: "32px",
+          boxSizing: "border-box",
+          paddingRight: masterDetailVertical ? "68px" : undefined,
+        }}
+      >
         <div className="outline-panel__filter-box">
           <Search size={14} className="outline-panel__filter-icon" aria-hidden />
           <input

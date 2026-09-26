@@ -1,9 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { FilesPanel } from "./FilesPanel";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
 
 /** 10.T4 — regression: tree toggle / open-file tab / zoom controls behavior
  *  must be unchanged after the `MasterDetailShell` extraction. */
@@ -25,17 +25,20 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
     expect(screen.getByText("No file open")).toBeInTheDocument();
   });
 
-  it("toggling the tree-visibility button hides the tree and shows preview-only", async () => {
-    const user = userEvent.setup();
-    render(<FilesPanel api={api} worktreeId="wt-1" />);
+  it("toggling tree visibility hides the tree and shows preview-only", async () => {
+    const { rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
     await screen.findByText("README.md");
 
-    const toggle = screen.getByRole("button", { name: "Hide file tree" });
-    await user.click(toggle);
-    await waitFor(() => expect(screen.queryByText("README.md")).not.toBeInTheDocument());
+    act(() => {
+      useWorkspaceStore.getState().toggleFileTree();
+    });
+    rerender(<FilesPanel api={api} worktreeId="wt-1" />);
     expect(useWorkspaceStore.getState().fileTreeVisible).toBe(false);
 
-    await user.click(screen.getByRole("button", { name: "Show file tree" }));
+    act(() => {
+      useWorkspaceStore.getState().toggleFileTree();
+    });
+    rerender(<FilesPanel api={api} worktreeId="wt-1" />);
     await screen.findByText("README.md");
   });
 
@@ -84,11 +87,13 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
     });
 
     it("3.T2 — rail search mode hides the tree and shows SearchPanel without unmounting FileTreeSidebar", async () => {
-      const user = userEvent.setup();
-      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      const { rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
       await screen.findByText("README.md");
 
-      await user.click(screen.getByRole("button", { name: "Search files" }));
+      act(() => {
+        useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "search");
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
 
       // Tree is always-mounted — its node is still in the DOM, just inside the
       // CSS-hidden container (display:none), NOT unmounted.
@@ -100,14 +105,19 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
     });
 
     it("3.T2 — switching tree→search→tree keeps FileTreeSidebar mounted (no conditional-render regression)", async () => {
-      const user = userEvent.setup();
-      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      const { rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
       await screen.findByText("README.md");
 
-      await user.click(screen.getByRole("button", { name: "Search files" }));
+      act(() => {
+        useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "search");
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
       expect(screen.getByText("README.md")).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Switch to file tree" }));
+      act(() => {
+        useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "tree");
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
       // Back in tree mode, the tree is visible again (no longer in the hidden
       // container) and was never unmounted.
       const treeRow = screen.getByText("README.md");
@@ -116,8 +126,7 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
     });
 
     it("3.T3 — peekFile survives a tree→search→tree mode switch (Requirement 7)", async () => {
-      const user = userEvent.setup();
-      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      const { rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
       await screen.findByText("README.md");
 
       // Set the peek AFTER SearchPanel's empty-query mount effect has run (it
@@ -126,10 +135,16 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
         peekFile: { worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" },
       });
 
-      await user.click(screen.getByRole("button", { name: "Search files" }));
+      act(() => {
+        useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "search");
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
       expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
 
-      await user.click(screen.getByRole("button", { name: "Switch to file tree" }));
+      act(() => {
+        useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "tree");
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
       expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
     });
   });
@@ -305,6 +320,246 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       // peekFile is still active, openFileTabsByWorktree is unchanged
       expect(useWorkspaceStore.getState().peekFile).not.toBeNull();
       expect(useWorkspaceStore.getState().openFileTabsByWorktree["wt-1"]).toEqual(["src/App.tsx"]);
+    });
+  });
+
+  describe("Revision 2 §4 — drag-resize and rail overlap", () => {
+    beforeEach(() => {
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        fileTreeVisible: true,
+        filesLeftPaneWidthByWorktree: {},
+      });
+    });
+
+    // jsdom doesn't implement setPointerCapture at all; the drag handles call
+    // it on pointerdown. Define a no-op so the pointer-events path runs (and
+    // the captured pointer's move/up are still delivered to window, which the
+    // handler also listens on).
+    beforeEach(() => {
+      if (!Element.prototype.setPointerCapture) {
+        (Element.prototype as unknown as { setPointerCapture: () => void }).setPointerCapture = () => {};
+      }
+    });
+
+    // The resize clamp is now pane-relative (measures `.files-panel`'s own
+    // width/height, not window.innerWidth/innerHeight). jsdom's
+    // getBoundingClientRect returns all-zeros, so give the pane a real size
+    // for tests that exercise the clamp.
+    function mockPaneRect(width: number, height: number) {
+      const el = document.querySelector(".files-panel") as HTMLElement | null;
+      if (!el) return;
+      vi.spyOn(el, "getBoundingClientRect").mockReturnValue({
+        width,
+        height,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      });
+    }
+
+    // Dispatch a pointer drag: pointerdown on the handle, then pointermove +
+    // pointerup on window (what startResize wires), all as PointerEvents.
+    function drag(handle: Element, down: { clientX?: number; clientY?: number }, up: { clientX?: number; clientY?: number }) {
+      act(() => {
+        handle.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 1,
+            bubbles: true,
+            clientX: down.clientX ?? 0,
+            clientY: down.clientY ?? 0,
+          }),
+        );
+      });
+      act(() => {
+        window.dispatchEvent(
+          new PointerEvent("pointermove", {
+            pointerId: 1,
+            bubbles: true,
+            clientX: up.clientX ?? 0,
+            clientY: up.clientY ?? 0,
+          }),
+        );
+      });
+      act(() => {
+        window.dispatchEvent(
+          new PointerEvent("pointerup", {
+            pointerId: 1,
+            bubbles: true,
+            clientX: up.clientX ?? 0,
+            clientY: up.clientY ?? 0,
+          }),
+        );
+      });
+    }
+
+    it("§4a — renders resize handle with accessible attributes on the expanded panel", async () => {
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+
+      const handle = screen.getByRole("separator", { name: "Resize files side panel" });
+      expect(handle).toBeInTheDocument();
+      expect(handle).toHaveAttribute("aria-orientation", "vertical");
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+      expect(handle).toHaveAttribute("aria-valuemin", "160");
+      expect(handle).toHaveAttribute("aria-valuemax", "600");
+    });
+
+    it("§4a — dragging resize handle adjusts width and persists to store on pointerup", async () => {
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      mockPaneRect(800, 600);
+
+      const handle = screen.getByRole("separator", { name: "Resize files side panel" });
+
+      // Start drag at x = 200, move 50px right -> 240 + 50 = 290
+      drag(handle, { clientX: 200 }, { clientX: 250 });
+
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(290);
+    });
+
+    it("§4a — dragging clamps to min (160) and max (600)", async () => {
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      // Wide pane: max = min(600, 800 - 80) = 600, so the absolute max applies.
+      mockPaneRect(800, 600);
+
+      const handle = screen.getByRole("separator", { name: "Resize files side panel" });
+
+      // Drag way to the left (-200px) -> clamp to min 160
+      drag(handle, { clientX: 500 }, { clientX: 100 });
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(160);
+
+      // Drag way to the right (+600px) -> clamp to max 600
+      drag(handle, { clientX: 100 }, { clientX: 900 });
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(600);
+    });
+
+    it("§4a — clamping is pane-relative, NOT window-relative (narrow pane caps the width below 600)", async () => {
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      // A 300px-wide pane leaves room for the rail + a sliver of preview:
+      // max = min(600, 300 - 80) = 220. Window.innerWidth in jsdom is 1024,
+      // so the OLD window-based clamp would have allowed up to 600 here.
+      mockPaneRect(300, 600);
+
+      const handle = screen.getByRole("separator", { name: "Resize files side panel" });
+
+      // Drag way to the right -> must stop at 220, never reach 600.
+      drag(handle, { clientX: 100 }, { clientX: 900 });
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(220);
+    });
+
+    it("§4a — keyboard ArrowLeft / ArrowRight adjusts width (and shares the pane-relative clamp)", async () => {
+      const user = userEvent.setup();
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      mockPaneRect(800, 600);
+
+      const handle = screen.getByRole("separator", { name: "Resize files side panel" });
+      handle.focus();
+
+      await user.keyboard("{ArrowRight}");
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(250);
+
+      await user.keyboard("{ArrowLeft}");
+      expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(240);
+    });
+
+    it("§4b — overlay has left at rail width, and content / topbar padding reflects open/closed state", async () => {
+      const { container, rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+
+      const overlay = container.querySelector(".files-left-pane-overlay") as HTMLElement;
+      expect(overlay.style.left).toBe("var(--tools-rail-w, 36px)");
+
+      const content = container.querySelector(".files-panel__content") as HTMLElement;
+      const topbar = container.querySelector(".files-topbar") as HTMLElement;
+
+      // Open state: content padded by rail + panel, topbar padded 0
+      expect(content.style.paddingLeft).toBe("calc(var(--tools-rail-w, 36px) + var(--tools-rail-panel-w, 240px))");
+      expect(topbar.style.paddingLeft).toBe("0px");
+
+      // Close panel
+      act(() => {
+        useWorkspaceStore.setState({ fileTreeVisible: false });
+      });
+      rerender(<FilesPanel api={api} worktreeId="wt-1" />);
+
+      // Closed state: content padded 0 (preview full width under rail), topbar padded 36px (tabs avoid rail)
+      expect(content.style.paddingLeft).toBe("0px");
+      expect(topbar.style.paddingLeft).toBe("var(--tools-rail-w, 36px)");
+    });
+
+    it("stacked orientation: sets top overlay, height handle, padding-top on content, and rail-offset on topbar", async () => {
+      useWorkspaceStore.setState({
+        layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, masterDetailVertical: true } },
+      });
+      const { container } = render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+
+      const overlay = container.querySelector(".files-left-pane-overlay") as HTMLElement;
+      expect(overlay.style.left).toBe("var(--tools-rail-w, 36px)");
+      expect(overlay.style.right).toBe("0px");
+      expect(overlay.style.height).toBe("var(--tools-rail-panel-h, 240px)");
+      expect(overlay.style.borderBottom).toBe("var(--border-width) solid var(--border-default)");
+      expect(overlay.style.borderRight).toBe("");
+
+      const handle = screen.getByRole("separator", { name: "Resize files top panel" });
+      expect(handle).toHaveAttribute("aria-orientation", "horizontal");
+      expect(handle).toHaveAttribute("aria-valuenow", "240");
+
+      const content = container.querySelector(".files-panel__content") as HTMLElement;
+      const topbar = container.querySelector(".files-topbar") as HTMLElement;
+
+      expect(content.style.paddingLeft).toBe("0px");
+      expect(content.style.paddingTop).toBe("var(--tools-rail-panel-h, 240px)");
+      expect(topbar.style.paddingLeft).toBe("var(--tools-rail-w, 36px)");
+      expect(topbar.style.paddingRight).toBe("68px");
+    });
+
+    it("stacked orientation: dragging clamps to min (100) and max (600)", async () => {
+      useWorkspaceStore.setState({
+        layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, masterDetailVertical: true } },
+      });
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      // Tall pane: max = min(600, 700 - 80) = 600, so the absolute max applies.
+      mockPaneRect(800, 700);
+
+      const handle = screen.getByRole("separator", { name: "Resize files top panel" });
+
+      // Drag up (-200px) -> clamp to min 100
+      drag(handle, { clientY: 500 }, { clientY: 100 });
+      expect(useWorkspaceStore.getState().filesLeftPaneHeightByWorktree["wt-1"]).toBe(100);
+
+      // Drag down (+600px) -> clamp to max 600
+      drag(handle, { clientY: 100 }, { clientY: 900 });
+      expect(useWorkspaceStore.getState().filesLeftPaneHeightByWorktree["wt-1"]).toBe(600);
+    });
+
+    it("stacked orientation: keyboard ArrowUp / ArrowDown adjusts height (and shares the pane-relative clamp)", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, masterDetailVertical: true } },
+        filesLeftPaneHeightByWorktree: { "wt-1": 240 },
+      });
+      render(<FilesPanel api={api} worktreeId="wt-1" />);
+      await screen.findByText("README.md");
+      mockPaneRect(800, 700);
+
+      const handle = screen.getByRole("separator", { name: "Resize files top panel" });
+      handle.focus();
+
+      await user.keyboard("{ArrowDown}");
+      expect(useWorkspaceStore.getState().filesLeftPaneHeightByWorktree["wt-1"]).toBe(250);
+
+      await user.keyboard("{ArrowUp}");
+      expect(useWorkspaceStore.getState().filesLeftPaneHeightByWorktree["wt-1"]).toBe(240);
     });
   });
 });

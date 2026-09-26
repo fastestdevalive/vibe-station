@@ -23,6 +23,19 @@ export const TOOL_TABS: ToolTab[] = ["files", "devices", "artifacts", "vcs", "se
 /** Agent pane ↔ tool panel split orientation (terminal dock stays at the bottom). */
 export type ToolSplitOrientation = "horizontal" | "vertical";
 
+/**
+ * Which layout transition an EXPLICIT user toggle just asked for — see
+ * `WorkspaceState.layoutTransitionHint`.
+ * - `"split"`: the agent/tools/terminal-dock PanelGroups in Layout.tsx.
+ * - `"files"`: the Files side-panel overlay's content padding in FilesPanel.tsx.
+ */
+export type LayoutTransitionHint = "split" | "files";
+
+/** How long a toggle's transition hint stays live. Comfortably longer than the
+ *  0.15s (`--transition-fast`) CSS transitions it gates, so the hint never
+ *  lapses mid-animation. */
+export const LAYOUT_TRANSITION_HINT_MS = 300;
+
 export type PeekFileValue = {
   worktreeId: string;
   path: string;
@@ -239,6 +252,10 @@ export interface WorkspaceState {
   focusedPane: string | null;
   /** Non-persisted: which commit is open in the VCS panel, keyed by worktreeId. */
   vcsSelectedCommitByWorktree: Record<string, string | null>;
+  /** Non-persisted: whether the VCS commit view's changed-file sidebar is
+   *  visible, keyed by worktreeId. Scoped to the commit-open case and
+   *  independent of the Files rail-mode's own `fileTreeVisible`. */
+  vcsSidebarVisibleByWorktree: Record<string, boolean>;
   /** Last opened file path per worktree (persisted). */
   lastFileByWorktree: Record<string, string>;
   /** Preview scroll position keyed by `${worktreeId}:${filePath}` (persisted). */
@@ -267,6 +284,10 @@ export interface WorkspaceState {
    *  `layoutKey` (activeWorktreeId ?? activeDirectContextId) — NOT a bare
    *  activeWorktreeId, which is null for direct sessions (B5). */
   filesLeftPaneMode: Record<string, FilesLeftPaneMode>;
+  /** Left-pane width (in pixels) for the Files tool overlay, per worktree/direct-context. Defaults to 240. */
+  filesLeftPaneWidthByWorktree: Record<string, number>;
+  /** Left-pane height (in pixels) for the Files tool stacked overlay, per worktree/direct-context. Defaults to 240. */
+  filesLeftPaneHeightByWorktree: Record<string, number>;
   /** Pending references query handed from hover tooltip's "Find references" button to ReferencesPanel */
   pendingReferencesQuery: PendingReferencesQuery | null;
   /** Monotonic "focus the search query input" request counter, PER resolved
@@ -307,6 +328,25 @@ export interface WorkspaceState {
   sessionAttachState: Record<string, "pending" | "attached">;
   /** A region maximized over the full viewport (sidebar + top bar area). */
   workspacePaneFullscreen: WorkspacePaneFullscreen | null;
+  /**
+   * Transient "animate this layout change" signal. Set ONLY by the explicit
+   * toggle actions themselves (`toggleToolPanel`, `toggleTerminalDock`,
+   * `toggleToolSplitOrientation` → "split"; `toggleFileTree`,
+   * `setMasterDetailVertical` → "files") and auto-cleared after
+   * `LAYOUT_TRANSITION_HINT_MS`; also force-cleared by every context switch
+   * (`setActiveWorktree`/`setActiveDirectContext`/`selectProject`).
+   *
+   * Layout.tsx / FilesPanel.tsx gate their CSS transitions on THIS, never on a
+   * change in the derived layout values (`toolsInSplit`, orientation,
+   * `isPanelOpen`, `masterDetailVertical`, panel width…): a worktree switch
+   * can flip those exact same values (the destination has a different
+   * persisted layout) and must snap, not animate. Two earlier fixes that
+   * watched the derived values in a useEffect were wrong for that reason.
+   * Driving the flag from the action (the cause) instead of the values (the
+   * effect) means a worktree switch — which never calls these actions — can
+   * never animate. Not persisted.
+   */
+  layoutTransitionHint: LayoutTransitionHint | null;
   setWorkspacePaneFullscreen: (next: WorkspacePaneFullscreen | null) => void;
   /** Toggle the right-side tool panel. */
   toggleToolPanel: () => void;
@@ -376,6 +416,8 @@ export interface WorkspaceState {
   setFocusedPane: (id: string | null) => void;
   /** Set (or clear with null) which commit is open in the VCS panel for a worktree. */
   setVcsSelectedCommit: (worktreeId: string, sha: string | null) => void;
+  /** Set whether the VCS commit view's changed-file sidebar is visible for a worktree. */
+  setVcsSidebarVisible: (worktreeId: string, visible: boolean) => void;
   setFileScroll: (worktreeId: string, filePath: string, scrollTop: number) => void;
   setDiffScopeForWorktree: (worktreeId: string, scope: DiffScope) => void;
   /** Session-only inline/side-by-side diff layout preference (Decision 1). */
@@ -383,6 +425,10 @@ export interface WorkspaceState {
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   /** Set the Files tool's left-pane mode for the given resolved context id. */
   setFilesLeftPaneMode: (worktreeId: string, mode: FilesLeftPaneMode) => void;
+  /** Set the Files tool's left-pane overlay width (in pixels) for the given resolved context id. */
+  setFilesLeftPaneWidth: (worktreeId: string, width: number) => void;
+  /** Set the Files tool's left-pane stacked overlay height (in pixels) for the given resolved context id. */
+  setFilesLeftPaneHeight: (worktreeId: string, height: number) => void;
   /** Set or clear the pending references query */
   setPendingReferencesQuery: (query: PendingReferencesQuery | null) => void;
   /** Bump `searchFocusSeq` for one context id, to request that context's search query input be focused. */
@@ -739,6 +785,7 @@ const initial = {
   activeFileTabIdxByWorktree: {} as Record<string, number>,
   focusedPane: null as string | null,
   vcsSelectedCommitByWorktree: {} as Record<string, string | null>,
+  vcsSidebarVisibleByWorktree: {} as Record<string, boolean>,
   lastFileByWorktree: {} as Record<string, string>,
   fileScrollByKey: {} as Record<string, number>,
   showDotFiles: true,
@@ -749,6 +796,8 @@ const initial = {
   diffLayoutMode: "inline" as "inline" | "side-by-side",
   treeScopeByWorktree: {} as Record<string, "local" | "branch">,
   filesLeftPaneMode: {} as Record<string, FilesLeftPaneMode>,
+  filesLeftPaneWidthByWorktree: {} as Record<string, number>,
+  filesLeftPaneHeightByWorktree: {} as Record<string, number>,
   pendingReferencesQuery: null as PendingReferencesQuery | null,
   searchFocusSeq: {} as Record<string, number>,
   previewFontScale: 1,
@@ -763,10 +812,13 @@ const initial = {
   mobileSidebarOpen: false,
   sessionAttachState: {} as Record<string, "pending" | "attached">,
   workspacePaneFullscreen: null as WorkspacePaneFullscreen | null,
+  layoutTransitionHint: null as LayoutTransitionHint | null,
   sortOrders: {} as Record<string, string[]>,
   workspaceDocs: {} as Record<string, WorkspaceDoc>,
   workspaceOrder: {} as Record<string, string[]>,
 };
+
+let layoutTransitionTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
@@ -806,6 +858,34 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         };
       }
 
+      /**
+       * Wrap a toggle action's state patch so the SAME `set` also raises the
+       * transition hint (the render that applies the new layout must already
+       * see it), then schedule its auto-clear. Only explicit toggle actions
+       * may call this — see `layoutTransitionHint`.
+       */
+      function withTransitionHint(
+        kind: LayoutTransitionHint,
+        patch: Partial<WorkspaceState>,
+      ): Partial<WorkspaceState> {
+        if (layoutTransitionTimer != null) clearTimeout(layoutTransitionTimer);
+        layoutTransitionTimer = setTimeout(() => {
+          layoutTransitionTimer = null;
+          set({ layoutTransitionHint: null });
+        }, LAYOUT_TRANSITION_HINT_MS);
+        return { ...patch, layoutTransitionHint: kind };
+      }
+
+      /** Context switches must never inherit a still-live hint from a toggle
+       *  that happened just before them. */
+      function clearTransitionHint(): Partial<WorkspaceState> {
+        if (layoutTransitionTimer != null) {
+          clearTimeout(layoutTransitionTimer);
+          layoutTransitionTimer = null;
+        }
+        return { layoutTransitionHint: null };
+      }
+
       /** Patch the active context's layout, falling back to defaults. */
       function patchLayout(
         s: WorkspaceState,
@@ -833,9 +913,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const next = patchLayout(s, { toolPanelVisible: !cur.toolPanelVisible });
             // Leaving fullscreen if we just hid the panel that was maximized.
             if (cur.toolPanelVisible && s.workspacePaneFullscreen === "tools") {
-              return { ...next, workspacePaneFullscreen: null };
+              return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
             }
-            return next;
+            return withTransitionHint("split", next);
           }),
         setToolPanelTab: (tab) =>
           set((s) => patchLayout(s, { toolPanelTab: tab, toolPanelVisible: true })),
@@ -847,9 +927,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : DEFAULT_WORKTREE_LAYOUT;
             const next = patchLayout(s, { terminalDockVisible: !cur.terminalDockVisible });
             if (cur.terminalDockVisible && s.workspacePaneFullscreen === "terminal") {
-              return { ...next, workspacePaneFullscreen: null };
+              return withTransitionHint("split", { ...next, workspacePaneFullscreen: null });
             }
-            return next;
+            return withTransitionHint("split", next);
           }),
         toggleToolSplitOrientation: (effectiveOrientation) =>
           set((s) => {
@@ -859,7 +939,10 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               : DEFAULT_WORKTREE_LAYOUT;
             const from = effectiveOrientation ?? cur.toolSplitOrientation;
             const next = from === "horizontal" ? "vertical" : "horizontal";
-            return patchLayout(s, { toolSplitOrientation: next, toolSplitOrientationUserSet: true });
+            return withTransitionHint(
+              "split",
+              patchLayout(s, { toolSplitOrientation: next, toolSplitOrientationUserSet: true }),
+            );
           }),
         toggleCanvasToolbar: () =>
           set((s) => {
@@ -951,6 +1034,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: restoredFile,
               peekFile: null,
               pendingLineTarget: null,
+              ...clearTransitionHint(),
             };
           });
           // Durable-state seeding (Phase 7): merge any daemon-known open files
@@ -979,7 +1063,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         // to leave activeFilePath at whatever the previous context had.
         setActiveDirectContext: (projectId) => {
           set((s) => {
-            if (projectId == null) return { activeDirectContextId: null, peekFile: null, pendingLineTarget: null };
+            if (projectId == null) {
+              return { activeDirectContextId: null, peekFile: null, pendingLineTarget: null, ...clearTransitionHint() };
+            }
             // Restore from tab array, same as setActiveWorktree (D11).
             const dcTabs = s.openFileTabsByWorktree[projectId] ?? [];
             const dcIdx = s.activeFileTabIdxByWorktree[projectId] ?? -1;
@@ -989,6 +1075,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               activeFilePath: restoredFile,
               peekFile: null,
               pendingLineTarget: null,
+              ...clearTransitionHint(),
             };
           });
           if (projectId == null) return;
@@ -1025,6 +1112,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             activeDirectContextId: null,
             peekFile: null,
             pendingLineTarget: null,
+            ...clearTransitionHint(),
           })),
         setActiveSession: (sessionId) =>
           set((s) => {
@@ -1457,6 +1545,26 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setVcsSelectedCommit: (worktreeId, sha) =>
           set((s) => ({
             vcsSelectedCommitByWorktree: { ...s.vcsSelectedCommitByWorktree, [worktreeId]: sha },
+            // Opening a commit (sha != null) defaults its changed-file sidebar
+            // to visible (State B). While the commit stays open the rail icon
+            // toggles this flag independently (State B ↔ C) without ever
+            // re-selecting the commit; clearing to null (back to the list,
+            // State A) just leaves the flag for the next open.
+            ...(sha
+              ? {
+                  vcsSidebarVisibleByWorktree: {
+                    ...s.vcsSidebarVisibleByWorktree,
+                    [worktreeId]: true,
+                  },
+                }
+              : {}),
+          })),
+        setVcsSidebarVisible: (worktreeId, visible) =>
+          set((s) => ({
+            vcsSidebarVisibleByWorktree: {
+              ...s.vcsSidebarVisibleByWorktree,
+              [worktreeId]: visible,
+            },
           })),
         setFileScroll: (worktreeId, filePath, scrollTop) =>
           set((s) => ({
@@ -1474,6 +1582,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setFilesLeftPaneMode: (worktreeId, mode) =>
           set((s) => ({
             filesLeftPaneMode: { ...s.filesLeftPaneMode, [worktreeId]: mode },
+          })),
+        setFilesLeftPaneWidth: (worktreeId, width) =>
+          set((s) => ({
+            filesLeftPaneWidthByWorktree: { ...s.filesLeftPaneWidthByWorktree, [worktreeId]: width },
+          })),
+        setFilesLeftPaneHeight: (worktreeId, height) =>
+          set((s) => ({
+            filesLeftPaneHeightByWorktree: { ...s.filesLeftPaneHeightByWorktree, [worktreeId]: height },
           })),
         setPendingReferencesQuery: (query) =>
           set({ pendingReferencesQuery: query }),
@@ -1498,14 +1614,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setMasterDetailVertical: (worktreeId, vertical) =>
           set((s) => {
             const cur = s.layoutByWorktree[worktreeId] ?? DEFAULT_WORKTREE_LAYOUT;
-            return {
+            return withTransitionHint("files", {
               layoutByWorktree: {
                 ...s.layoutByWorktree,
                 [worktreeId]: { ...cur, masterDetailVertical: vertical },
               },
-            };
+            });
           }),
-        toggleFileTree: () => set((s) => ({ fileTreeVisible: !s.fileTreeVisible })),
+        toggleFileTree: () =>
+          set((s) => withTransitionHint("files", { fileTreeVisible: !s.fileTreeVisible })),
         bumpTerminalFont: (delta) =>
           set((s) => ({
             terminalFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.terminalFontScale + delta) * 100) / 100)),
@@ -2130,6 +2247,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         diffScopeByWorktree: s.diffScopeByWorktree,
         treeScopeByWorktree: s.treeScopeByWorktree,
         filesLeftPaneMode: s.filesLeftPaneMode,
+        filesLeftPaneWidthByWorktree: s.filesLeftPaneWidthByWorktree,
+        filesLeftPaneHeightByWorktree: s.filesLeftPaneHeightByWorktree,
         previewFontScale: s.previewFontScale,
         previewFontScaleByWorktree: s.previewFontScaleByWorktree,
         fileTreeVisible: s.fileTreeVisible,

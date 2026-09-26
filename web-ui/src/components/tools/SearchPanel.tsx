@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope, SearchResult } from "@/api/types";
 import { ApiError } from "@/api/errors";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useRovingListNav, type RovingRow } from "@/hooks/useRovingListNav";
 
 interface SearchPanelProps {
@@ -67,6 +67,15 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
   // SearchPanels (one per tools tile) at once; reading only this panel's
   // own `worktreeId` key means Mod+Shift+F focuses just the intended one.
   const searchFocusSeq = useWorkspaceStore((s) => (worktreeId ? s.searchFocusSeq[worktreeId] : undefined) ?? 0);
+
+  // Stacked (vertical) orientation spans the full tools-pane width at top: 0,
+  // so this panel's controls header reaches the top-right corner where the
+  // fullscreen + orientation-toggle buttons float. In left-side orientation it
+  // is a narrow left column that never reaches that corner, so the right inset
+  // only applies while stacked.
+  const masterDetailVertical = useWorkspaceStore(
+    (s) => !!(s.layoutByWorktree[worktreeId ?? ""] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
+  );
 
   const [query, setQuery] = useState("");
   const [caseCheck, setCaseCheck] = useState(false);
@@ -424,7 +433,16 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
 
   return (
     <div className="search-panel pane pane-stack">
-      <div className="search-panel__controls">
+      <div
+        className="search-panel__controls"
+        style={{
+          height: "32px",
+          minHeight: "32px",
+          maxHeight: "32px",
+          boxSizing: "border-box",
+          paddingRight: masterDetailVertical ? "68px" : undefined,
+        }}
+      >
         <div className="search-panel__input-wrap">
         <input
           type="text"
