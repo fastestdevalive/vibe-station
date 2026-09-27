@@ -1,0 +1,86 @@
+/* OobeFlow — centered-card layout, mirrors LoginScreen.css's pattern. */
+
+/* Unlike LoginScreen (which relies on `flex: 1` inside an App.tsx-provided
+   `height: 100dvh` flex column alongside a TopBar), OobeFlow is returned as
+   AppShell's ENTIRE render output with no such wrapper — see App.tsx's
+   `!oobe.completed` branch. So this sizes itself directly with `100dvh`
+   rather than depending on flex-parent context that doesn't exist here.
+
+   Both steps are top-aligned (not vertically centered) with a generous top
+   margin: step 1 and step 2 have very different heights (a short form vs. a
+   growing mode list), and top-aligning both means the card's top edge stays
+   in the same place across the step transition — only its bottom edge moves
+   as `OobeFlow.tsx`'s `layout` animation resizes it, which reads far more
+   stable than re-centering a differently-sized box on every step change. */
+.oobe-screen {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  /* FIXED height, not min-height: `html, body { overflow: hidden }`
+     (global.css) means the document itself never scrolls — every screen
+     must be viewport-sized and own its own internal scroller. A
+     `min-height` here would let this element itself grow taller than the
+     viewport when step 2's content is long, which the document then clips
+     instead of this element's own `overflow-y: auto` ever having anything
+     to scroll (nothing overflows a box that just grew to fit its content). */
+  height: 100dvh;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  padding: var(--space-6);
+  padding-top: var(--space-10);
+}
+
+/* Fixed width across every step (step 2's CLI detection panel + mode list
+   need the most horizontal room of any step, so that's the width all steps
+   use — a narrower step 1 next to it would look identical either way, and a
+   FIXED width means `OobeFlow.tsx`'s `layout` animation only ever needs to
+   interpolate height between steps, never width). */
+.oobe-card {
+  width: 100%;
+  max-width: 640px;
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.oobe-step-header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+/* Both slots are the same width (1fr) so the middle step-indicator column
+   stays visually centered whether or not the left slot has a Back link. */
+.oobe-step-header__slot {
+  display: flex;
+  align-items: center;
+}
+
+.oobe-back-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.oobe-back-link:hover {
+  color: var(--fg-secondary);
+  text-decoration: underline;
+}
+
+.oobe-step-indicator {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--fg-muted);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

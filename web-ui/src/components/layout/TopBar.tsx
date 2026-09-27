@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronUp,
   Columns2,
+  Keyboard,
   LayoutGrid,
   MoreHorizontal,
   PanelLeft,
@@ -10,9 +11,11 @@ import {
   PanelTop,
   Rows2,
   Search,
+  Settings,
   SquareTerminal,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useLayout } from "@/hooks/useLayout";
 import type { Project, Worktree } from "@/api/types";
 import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
@@ -95,9 +98,10 @@ export function TopBar({
   settingsSectionLabel,
   onSettingsBack,
   shortcutsOpen = false,
-  onOpenShortcuts: _onOpenShortcuts,
+  onOpenShortcuts,
   onCloseShortcuts,
 }: TopBarProps) {
+  const navigate = useNavigate();
   const {
     activeProjectId,
     activeWorktreeId,
@@ -315,6 +319,28 @@ export function TopBar({
           <ToolbarOutlet paneKey={WORKSPACE_CANVAS_TOOLBAR_KEY} />
         ) : null}
         <ConnectionStatus />
+        {!isMobile && layoutMode === "dashboard" ? (
+          <>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts"
+              onClick={onOpenShortcuts}
+            >
+              <Keyboard size={18} />
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => navigate("/settings")}
+            >
+              <Settings size={18} />
+            </button>
+          </>
+        ) : null}
         {layoutMode === "workspace" || layoutMode === "project-workspace" ? (
           <>
             <button

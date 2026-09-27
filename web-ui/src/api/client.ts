@@ -13,6 +13,7 @@ import type {
   MobileQrResponse,
   PrInfo,
   PrLookupResult,
+  OobeState,
   CreateDirectSessionBody,
   CreateDraftSessionBody,
   CreateModeBody,
@@ -20,6 +21,7 @@ import type {
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DetectAndBundleResult,
   DiffStat,
   DiskUsageResponse,
   DraftConfig,
@@ -38,6 +40,7 @@ import type {
   SessionMeta,
   Settings,
   SkillsResponse,
+  StarterBundleResult,
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
@@ -1163,6 +1166,48 @@ export function createClientApi() {
         method: "DELETE",
       });
       return parseJson<{ ok: true; affectedSessions: number }>(res);
+    },
+
+    // ── OOBE onboarding ─────────────────────────────────────────────────────────
+
+    async getOobeState(): Promise<OobeState> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/oobe/state`);
+      return parseJson<OobeState>(res);
+    },
+
+    async confirmOobeStep1(defaultProjectsDir: string): Promise<{ ok: true; defaultProjectsDir: string }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/oobe/step1`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultProjectsDir }),
+      });
+      return parseJson<{ ok: true; defaultProjectsDir: string }>(res);
+    },
+
+    async detectAndBundleOobe(): Promise<DetectAndBundleResult> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/oobe/detect-and-bundle`, {
+        method: "POST",
+      });
+      return parseJson<DetectAndBundleResult>(res);
+    },
+
+    async createStarterBundle(cli: CliId): Promise<StarterBundleResult> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/modes/${encodeURIComponent(cli)}/starter-bundle`, {
+        method: "POST",
+      });
+      return parseJson<StarterBundleResult>(res);
+    },
+
+    async completeOobe(): Promise<{ ok: true; completed: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/oobe/complete`, {
+        method: "POST",
+      });
+      return parseJson<{ ok: true; completed: true }>(res);
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

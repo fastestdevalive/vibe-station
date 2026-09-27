@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createClientApi } from "./client";
-
 /** Creates a fake WebSocket class that auto-opens and records sent messages. */
 function makeFakeWsFactory() {
   const sent: string[] = [];
@@ -641,3 +640,75 @@ describe("reconnect auth gate (Phase 4)", () => {
   });
 });
 
+
+/**
+ * Phase 3 (OOBE onboarding) — REST client methods for the onboarding flow.
+ * `baseUrl()` resolves to "/api" because `window` is stubbed without
+ * `__VST_PORT__`, so requests are correctly `/api`-prefixed.
+ */
+describe("OOBE client methods (3.T1)", () => {
+  function jsonResponse(body: unknown, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: String(status),
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("getOobeState() issues GET /api/oobe/state and parses OobeState", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        completed: false,
+        currentStep: 1,
+        defaultProjectsDir: "/home/user/projects",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = createClientApi();
+    const state = await api.getOobeState();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe("/api/oobe/state");
+    expect(state).toEqual({
+      completed: false,
+      currentStep: 1,
+      defaultProjectsDir: "/home/user/projects",
+    });
+  });
+
+  it("createStarterBundle('claude') issues POST /api/modes/claude/starter-bundle and parses StarterBundleResult", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        created: [{ id: "m1", name: "Bugfix", cli: "claude", context: "" }],
+        alreadyPresent: [],
+        skipped: [],
+        usedFallback: false,
+        alreadyComplete: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = createClientApi();
+    const result = await api.createStarterBundle("claude");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/modes/claude/starter-bundle");
+    expect(init.method).toBe("POST");
+    expect(result).toEqual({
+      created: [{ id: "m1", name: "Bugfix", cli: "claude", context: "" }],
+      alreadyPresent: [],
+      skipped: [],
+      usedFallback: false,
+      alreadyComplete: false,
+    });
+  });
+});
