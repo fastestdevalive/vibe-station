@@ -5425,6 +5425,16 @@ button.dashboard-card {
   border-radius: var(--radius-md);
   background: var(--bg-primary);
   overflow: hidden;
+  /* .dashboard-panel__inner is a flex column, and this is a flex item with
+     overflow: hidden, whose automatic min-height resolves to 0. When a
+     sibling below it (e.g. the projects list) is tall enough to push past
+     the viewport, the flex container shrinks this element down to ~nothing
+     (its default flex-shrink: 1 wins) instead of letting the panel scroll,
+     clipping every kanban column down to just its header. Pin both so the
+     kanban always renders at its natural (content) height and the panel's
+     own overflow: auto (see .dashboard-panel) handles the scrolling instead. */
+  flex-shrink: 0;
+  min-height: min-content;
 }
 
 /* Show finished adds a 5th column */
