@@ -1,5 +1,11 @@
 # vibe-station
 
+[![GitHub stars](https://img.shields.io/github/stars/fastestdevalive/vibe-station?style=flat&logo=github)](https://github.com/fastestdevalive/vibe-station/stargazers)
+[![Latest release](https://img.shields.io/github/v/release/fastestdevalive/vibe-station?include_prereleases&label=release)](https://github.com/fastestdevalive/vibe-station/releases)
+[![License](https://img.shields.io/github/license/fastestdevalive/vibe-station)](LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/fastestdevalive/vibe-station/total?label=downloads)](https://github.com/fastestdevalive/vibe-station/releases)
+[![Desktop Build](https://img.shields.io/github/actions/workflow/status/fastestdevalive/vibe-station/desktop-build.yml?branch=main&label=build)](https://github.com/fastestdevalive/vibe-station/actions/workflows/desktop-build.yml)
+
 **Local-first orchestrator for parallel AI coding agents.**
 
 vibe-station runs multiple AI coding agents (Claude Code, Cursor, OpenCode, agy) simultaneously on isolated git branches — each with its own worktree, terminal, and file preview — managed from a native desktop app, your browser, or the `vst` CLI.
