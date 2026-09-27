@@ -114,6 +114,17 @@ pub struct ListModelsResult {
     pub error: Option<String>,
 }
 
+/// One entry in a CLI's starter mode bundle. `model_name` is a name to look
+/// up in this CLI's OWN discovery/curated list at creation time (R13a) — e.g.
+/// "sonnet" for claude, matched by plain membership against
+/// `resolve_cli_models(cli).models`. `None` means "use `default_model()`
+/// literally, no discovery lookup required" (the generic-CLI shape, R14).
+pub struct StarterBundleEntry {
+    pub name: String,
+    pub model_name: Option<String>,
+    pub context: String,
+}
+
 /// Args passed to the chat-id methods (`provide_chat_id` / `capture_chat_id` /
 /// `refresh_chat_id_on_toggle`).
 #[derive(Clone, Debug)]
@@ -270,6 +281,27 @@ pub trait AgentPlugin: Send + Sync {
 
     /// Return the list of models available for this CLI.
     fn list_models(&self) -> AsyncResult<ListModelsResult>;
+
+    /// The binary name to check for on PATH (`which <binary_name()>`) when
+    /// deciding whether this CLI is "detected" (R10). Defaults to `self.name()`
+    /// — correct for claude/opencode/agy, whose plugin id IS their binary name.
+    /// Cursor overrides this: its plugin id is `"cursor"` but the binary it
+    /// actually spawns is `cursor-agent` (`get_launch_command`, cursor.rs:343).
+    fn binary_name(&self) -> &str {
+        self.name()
+    }
+
+    /// Starter bundle offered the first time this CLI is detected (R12) or via
+    /// the explicit "create starter modes" action (R23). Default: one generic
+    /// mode named "<cli>-default" with no discovery-dependent model (R14).
+    /// Claude overrides with its 3 named modes (R13).
+    fn starter_bundle(&self) -> Vec<StarterBundleEntry> {
+        vec![StarterBundleEntry {
+            name: format!("{}-default", self.name()),
+            model_name: None,
+            context: "You are a helpful coding assistant.".to_string(),
+        }]
+    }
 
     /// Fork capability (claude only, `--fork-session`). Presence is the gate.
     fn get_fork_command(&self) -> Option<Vec<String>> {

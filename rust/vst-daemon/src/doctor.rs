@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use vst_agents::registry::SUPPORTED_CLIS;
+use vst_agents::registry::{check_binary, SUPPORTED_CLIS};
 use vst_git::paths::Paths;
 use vst_proc::tmux::Tmux;
 use vst_store::StoreHandle;
@@ -37,15 +37,6 @@ pub enum DoctorStatus {
     Ok,
     Warn,
     Error,
-}
-
-/// Check if a binary exists on PATH using `which <binary>`.
-pub fn check_binary(binary: &str) -> bool {
-    Command::new("which")
-        .arg(binary)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 /// Check git version is >= 2.20.

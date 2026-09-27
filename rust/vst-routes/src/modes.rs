@@ -21,7 +21,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use vst_agents::home::home_dir;
 use vst_agents::native_history_importer::has_native_history_importer;
-use vst_agents::registry::{resolve_plugin, SUPPORTED_CLIS};
+use vst_agents::plugin::AgentPlugin;
+use vst_agents::registry::{check_binary, resolve_plugin, SUPPORTED_CLIS};
 use vst_git::paths::Paths;
 use vst_store::StoreHandle;
 use vst_types::domain::LifecycleState;
@@ -188,6 +189,20 @@ pub struct ModeRoutes {
     modes_cache: Arc<RwLock<Option<Vec<Mode>>>>,
     cli_model_cache: Arc<RwLock<HashMap<CliId, CliModelCacheEntry>>>,
     cli_model_inflight: Arc<Mutex<HashMap<CliId, Arc<Mutex<()>>>>>,
+    /// Serializes `create_mode`'s check-then-write (name-uniqueness check +
+    /// `save_modes`) across concurrent callers. Without this, two concurrent
+    /// `create_mode` calls for different names can both pass the
+    /// `load_modes()` snapshot check before either writes, so the second
+    /// `save_modes` (last-write-wins over the whole file) silently discards
+    /// the first mode even though its caller already got back `Ok`. This is
+    /// exercised for real by `ensure_starter_bundle` (OOBE's
+    /// `detect-and-bundle` fans out over every detected CLI) combined with
+    /// React StrictMode's double-invoked effects in dev.
+    create_mode_lock: Arc<Mutex<()>>,
+    /// Resolve a CLI to its [`AgentPlugin`] — test seam (default `resolve_plugin`).
+    plugin_resolver: fn(CliId) -> Box<dyn AgentPlugin>,
+    /// Check whether a binary exists on PATH — test seam (default `check_binary`).
+    binary_checker: fn(&str) -> bool,
 }
 
 impl ModeRoutes {
@@ -200,12 +215,27 @@ impl ModeRoutes {
             modes_cache: Arc::new(RwLock::new(None)),
             cli_model_cache: Arc::new(RwLock::new(HashMap::new())),
             cli_model_inflight: Arc::new(Mutex::new(HashMap::new())),
+            create_mode_lock: Arc::new(Mutex::new(())),
+            plugin_resolver: resolve_plugin,
+            binary_checker: check_binary,
         }
     }
 
     /// Set an explicit modes.json file path (test seam).
     pub fn with_modes_file(mut self, path: PathBuf) -> Self {
         self.modes_file = Some(path);
+        self
+    }
+
+    /// Override the plugin resolver (test seam).
+    pub fn with_plugin_resolver(mut self, f: fn(CliId) -> Box<dyn AgentPlugin>) -> Self {
+        self.plugin_resolver = f;
+        self
+    }
+
+    /// Override the binary checker (test seam).
+    pub fn with_binary_checker(mut self, f: fn(&str) -> bool) -> Self {
+        self.binary_checker = f;
         self
     }
 
@@ -271,11 +301,12 @@ impl ModeRoutes {
     }
 
     // ── 1. GET /supported-clis ─────────────────────────────────────────────
-    pub fn list_supported_clis(&self) -> Vec<SupportedCli> {
+    pub async fn list_supported_clis(&self) -> Vec<SupportedCli> {
+        let modes = self.load_modes().await;
         SUPPORTED_CLIS
             .iter()
             .map(|&cli| {
-                let plugin = resolve_plugin(cli);
+                let plugin = (self.plugin_resolver)(cli);
                 let default_model = plugin.default_model().to_string();
                 let supports_json = plugin.supports_json();
                 let cli_name = match cli {
@@ -287,12 +318,26 @@ impl ModeRoutes {
                 let imports_native_history = has_native_history_importer(cli_name);
                 let supports_json_to_terminal_resume = plugin.supports_json_to_terminal_resume();
 
+                let detected = (self.binary_checker)(plugin.binary_name());
+                let starter_bundle_names: Vec<String> = plugin
+                    .starter_bundle()
+                    .iter()
+                    .map(|e| e.name.clone())
+                    .collect();
+                let has_named_entry = |n: &str| modes.iter().any(|m| m.cli == cli && m.name == n);
+                let using_fallback_only = starter_bundle_names.len() > 1
+                    && !starter_bundle_names.iter().any(|n| has_named_entry(n))
+                    && has_named_entry(&format!("{}-default", plugin.name()));
+
                 SupportedCli {
                     id: cli,
                     default_model,
                     supports_json,
                     imports_native_history,
                     supports_json_to_terminal_resume,
+                    detected,
+                    starter_bundle_names,
+                    using_fallback_only,
                 }
             })
             .collect()
@@ -336,7 +381,7 @@ impl ModeRoutes {
             }
         }
 
-        let plugin = resolve_plugin(cli);
+        let plugin = (self.plugin_resolver)(cli);
         let result = plugin.list_models().await;
 
         let res = if let Some(ref err) = result.error {
@@ -400,6 +445,11 @@ impl ModeRoutes {
 
         let model_norm = normalize_model_field(body.model.as_deref());
 
+        // Held across the whole check-then-write below (load_modes' snapshot,
+        // the length/name checks, and the final save_modes) — see the lock's
+        // own doc comment for why an unguarded version of this is racy.
+        let _create_guard = self.create_mode_lock.lock().await;
+
         let modes = self.load_modes().await;
         if modes.len() >= MAX_MODES {
             return Err(ModeRouteError::validation(format!(
@@ -425,7 +475,7 @@ impl ModeRoutes {
         // Explicit icon wins; otherwise derive from the CLI + model (Decision 1).
         let icon = match body.icon.as_deref() {
             Some(icon) => validate_icon(icon)?,
-            None => resolve_plugin(body.cli)
+            None => (self.plugin_resolver)(body.cli)
                 .default_mode_icon(model_norm.as_deref())
                 .to_string(),
         };
@@ -536,7 +586,7 @@ impl ModeRoutes {
             updated.icon = Some(validate_icon(icon)?);
         } else if cli_changed || model_changed {
             updated.icon = Some(
-                resolve_plugin(updated.cli)
+                (self.plugin_resolver)(updated.cli)
                     .default_mode_icon(updated.model.as_deref())
                     .to_string(),
             );
@@ -602,5 +652,420 @@ impl ModeRoutes {
             }
         }
         count
+    }
+
+    /// Ensure this CLI's starter mode bundle exists, creating any missing
+    /// modes. In-process return value consumed by `OobeRoutes`/route handlers
+    /// (which map it into the wire `DetectAndBundleResult`/`StarterBundleResult`).
+    pub async fn ensure_starter_bundle(&self, cli: CliId) -> BundleOutcome {
+        let plugin = (self.plugin_resolver)(cli);
+        let entries = plugin.starter_bundle();
+        let mut created = vec![];
+        let mut already_present = vec![];
+        let mut skipped = vec![];
+        let has_named_entries = entries.iter().any(|e| e.model_name.is_some());
+        let existing_modes = self.load_modes().await;
+
+        for entry in &entries {
+            // An existing mode with this bundle name is ALWAYS "satisfied" —
+            // check this BEFORE attempting any discovery lookup or create_mode
+            // call, so a pre-existing mode never depends on discovery succeeding
+            // again.
+            if let Some(existing) = existing_modes
+                .iter()
+                .find(|m| m.cli == cli && m.name == entry.name)
+            {
+                already_present.push(existing.clone());
+                continue;
+            }
+
+            let model = match &entry.model_name {
+                None => plugin.default_model().to_string(),
+                Some(name) => {
+                    let models = self.resolve_cli_models(cli).await; // TTL-cached
+                    if models.models.iter().any(|m| m == name) {
+                        name.clone()
+                    } else {
+                        skipped.push(entry.name.clone()); // R13b: skip only this one
+                        continue;
+                    }
+                }
+            };
+            match self
+                .create_mode(CreateModeBody {
+                    name: entry.name.clone(),
+                    cli,
+                    context: entry.context.clone(),
+                    preset_id: None,
+                    model: Some(model),
+                    icon: None,
+                })
+                .await
+            {
+                Ok(mode) => created.push(mode),
+                // A conflict here has two distinct causes that must be told
+                // apart — `create_mode`'s name check is global, not
+                // per-CLI (see its own `modes.iter().any(|m| m.name == name)`):
+                // (1) a concurrent caller created THIS bundle entry (same cli +
+                // name) between our snapshot and this call — genuinely
+                // "already present", never a failure; (2) the name is taken by
+                // a mode under a DIFFERENT cli (e.g. a user-created "opus-planner"
+                // under cursor) — this entry can never be created under that
+                // name, so it must land in `skipped`, not be silently dropped
+                // (dropping it would leave "Recreate" permanently unable to
+                // report progress on this entry with no explanation).
+                Err(ModeRouteError::Conflict { .. }) => {
+                    match self
+                        .load_modes()
+                        .await
+                        .into_iter()
+                        .find(|m| m.name == entry.name)
+                    {
+                        Some(m) if m.cli == cli => already_present.push(m),
+                        _ => skipped.push(entry.name.clone()),
+                    }
+                }
+                Err(_) => skipped.push(entry.name.clone()),
+            }
+        }
+
+        // R13c: fallback fires ONLY when truly nothing named exists yet — not
+        // when an explicit "Recreate" is called on an already-complete bundle.
+        let nothing_named_exists =
+            has_named_entries && created.is_empty() && already_present.is_empty();
+        let used_fallback = nothing_named_exists;
+        if used_fallback {
+            let fallback_name = format!("{}-default", plugin.name());
+            // R13c-iii: reuse the existing fallback mode by name instead of
+            // duplicating it.
+            if let Some(existing) = existing_modes
+                .iter()
+                .find(|m| m.cli == cli && m.name == fallback_name)
+            {
+                already_present.push(existing.clone());
+            } else if let Ok(mode) = self
+                .create_mode(CreateModeBody {
+                    name: fallback_name,
+                    cli,
+                    context: "You are a helpful coding assistant.".into(),
+                    preset_id: None,
+                    model: Some(plugin.default_model().to_string()),
+                    icon: None,
+                })
+                .await
+            {
+                created.push(mode);
+            }
+        }
+
+        // R13c-i: the "primary satisfied" marker only counts real named entries
+        // (new or pre-existing), never the fallback mode.
+        let primary_satisfied =
+            !used_fallback && (!created.is_empty() || !already_present.is_empty());
+        BundleOutcome {
+            created,
+            already_present,
+            skipped,
+            used_fallback,
+            primary_satisfied,
+        }
+    }
+}
+
+/// Result of [`ModeRoutes::ensure_starter_bundle`] — a plain in-process return
+/// value (NOT a wire type). The route handlers map it into the wire
+/// `DetectAndBundleResult`/`StarterBundleResult` shapes.
+pub struct BundleOutcome {
+    pub created: Vec<Mode>,
+    pub already_present: Vec<Mode>,
+    pub skipped: Vec<String>,
+    pub used_fallback: bool,
+    pub primary_satisfied: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use tempfile::tempdir;
+    use vst_agents::claude::create_claude_plugin;
+    use vst_agents::plugin::{
+        AsyncResult, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
+        PromptDelivery, ReadySignal, StarterBundleEntry,
+    };
+
+    /// A real claude bundle's 3 named starter entries, shared by the test-only
+    /// plugins below so 2.T2/2.T3 exercise the same curated shape.
+    fn claude_like_bundle() -> Vec<StarterBundleEntry> {
+        vec![
+            StarterBundleEntry {
+                name: "sonnet-implementer".to_string(),
+                model_name: Some("sonnet".to_string()),
+                context: "c".to_string(),
+            },
+            StarterBundleEntry {
+                name: "opus-planner".to_string(),
+                model_name: Some("opus".to_string()),
+                context: "c".to_string(),
+            },
+            StarterBundleEntry {
+                name: "fable-security-reviewer".to_string(),
+                model_name: Some("fable".to_string()),
+                context: "c".to_string(),
+            },
+        ]
+    }
+
+    /// Minimal required-method stub for the test-only plugins.
+    macro_rules! stub_plugin_base {
+        () => {
+            fn name(&self) -> &str {
+                "claude"
+            }
+            fn default_model(&self) -> &str {
+                "sonnet"
+            }
+            fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
+                "claude"
+            }
+            fn prompt_delivery(&self) -> PromptDelivery {
+                PromptDelivery::Inline
+            }
+            fn get_launch_command(&self, _cfg: &LaunchConfig) -> Vec<String> {
+                vec![]
+            }
+            fn get_environment(&self, _cfg: &LaunchConfig) -> BTreeMap<String, String> {
+                BTreeMap::new()
+            }
+            fn get_ready_signal(&self) -> ReadySignal {
+                ReadySignal {
+                    sentinel: None,
+                    fallback_ms: 0,
+                }
+            }
+            fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
+                ComposePromptResult::default()
+            }
+        };
+    }
+
+    struct FailingModelsPlugin;
+
+    impl AgentPlugin for FailingModelsPlugin {
+        stub_plugin_base!();
+        fn list_models(&self) -> AsyncResult<ListModelsResult> {
+            Box::pin(async {
+                ListModelsResult {
+                    models: vec![],
+                    error: Some("offline".into()),
+                }
+            })
+        }
+        fn starter_bundle(&self) -> Vec<StarterBundleEntry> {
+            claude_like_bundle()
+        }
+    }
+
+    struct PartialModelsPlugin;
+
+    impl AgentPlugin for PartialModelsPlugin {
+        stub_plugin_base!();
+        fn list_models(&self) -> AsyncResult<ListModelsResult> {
+            Box::pin(async {
+                ListModelsResult {
+                    models: vec!["sonnet".into()],
+                    error: None,
+                }
+            })
+        }
+        fn starter_bundle(&self) -> Vec<StarterBundleEntry> {
+            claude_like_bundle()
+        }
+    }
+
+    fn empty_routes() -> ModeRoutes {
+        let dir = tempdir().unwrap();
+        let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+        ModeRoutes::new(store, Broadcaster::new(16))
+            .with_modes_file(dir.path().join("modes.json"))
+            .with_plugin_resolver(|_| Box::new(create_claude_plugin()))
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_empty_creates_all() {
+        let routes = empty_routes();
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert_eq!(out.created.len(), 3);
+        assert!(out.already_present.is_empty());
+        assert!(!out.used_fallback);
+        assert!(out.primary_satisfied);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_models_offline_falls_back() {
+        let routes = empty_routes().with_plugin_resolver(|_| Box::new(FailingModelsPlugin));
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert_eq!(
+            out.created
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["claude-default"]
+        );
+        assert!(out.already_present.is_empty());
+        assert!(out.used_fallback);
+        assert!(!out.primary_satisfied);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_partial_models_skips_missing() {
+        let routes = empty_routes().with_plugin_resolver(|_| Box::new(PartialModelsPlugin));
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert_eq!(out.created.len(), 1);
+        assert_eq!(out.created[0].name, "sonnet-implementer");
+        assert_eq!(
+            out.skipped,
+            vec![
+                "opus-planner".to_string(),
+                "fable-security-reviewer".to_string()
+            ]
+        );
+        assert!(out.already_present.is_empty());
+        assert!(!out.used_fallback);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_partial_preexisting_satisfied() {
+        let routes = empty_routes();
+        routes
+            .create_mode(CreateModeBody {
+                name: "sonnet-implementer".to_string(),
+                cli: CliId::Claude,
+                context: "c".to_string(),
+                preset_id: None,
+                model: Some("sonnet".to_string()),
+                icon: None,
+            })
+            .await
+            .unwrap();
+        routes
+            .create_mode(CreateModeBody {
+                name: "opus-planner".to_string(),
+                cli: CliId::Claude,
+                context: "c".to_string(),
+                preset_id: None,
+                model: Some("opus".to_string()),
+                icon: None,
+            })
+            .await
+            .unwrap();
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert_eq!(out.already_present.len(), 2);
+        assert_eq!(out.created.len(), 1);
+        assert_eq!(out.created[0].name, "fable-security-reviewer");
+        assert!(!out.used_fallback);
+        assert!(out.primary_satisfied);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_complete_no_spurious_fallback() {
+        let routes = empty_routes();
+        for name in [
+            "sonnet-implementer",
+            "opus-planner",
+            "fable-security-reviewer",
+        ] {
+            routes
+                .create_mode(CreateModeBody {
+                    name: name.to_string(),
+                    cli: CliId::Claude,
+                    context: "c".to_string(),
+                    preset_id: None,
+                    model: Some("x".to_string()),
+                    icon: None,
+                })
+                .await
+                .unwrap();
+        }
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert!(out.created.is_empty());
+        assert_eq!(out.already_present.len(), 3);
+        assert!(!out.used_fallback);
+        assert!(out.primary_satisfied);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_cross_cli_name_conflict_is_skipped_not_dropped() {
+        // A mode named "opus-planner" already exists, but under CURSOR, not
+        // claude. create_mode's name check is global, so claude's attempt to
+        // create its own "opus-planner" entry conflicts — this must land in
+        // `skipped` (a real, permanent gap the caller can see), never be
+        // silently swallowed by both `created` and `already_present`.
+        let routes = empty_routes();
+        routes
+            .create_mode(CreateModeBody {
+                name: "opus-planner".to_string(),
+                cli: CliId::Cursor,
+                context: "c".to_string(),
+                preset_id: None,
+                model: Some("auto".to_string()),
+                icon: None,
+            })
+            .await
+            .unwrap();
+
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert_eq!(out.skipped, vec!["opus-planner".to_string()]);
+        assert!(out.already_present.iter().all(|m| m.name != "opus-planner"));
+        assert!(out.created.iter().all(|m| m.name != "opus-planner"));
+        // The other 2 entries are unaffected.
+        assert_eq!(out.created.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_create_mode_concurrent_calls_never_lose_a_mode() {
+        // Regression for the create_mode_lock: two concurrent create_mode
+        // calls with DIFFERENT names must both survive — without the lock,
+        // both could pass the load_modes() snapshot check before either
+        // writes, and the second (last-write-wins) save_modes call would
+        // silently discard the first mode despite it having returned Ok.
+        let routes = empty_routes();
+        let a = {
+            let routes = routes.clone();
+            tokio::spawn(async move {
+                routes
+                    .create_mode(CreateModeBody {
+                        name: "concurrent-a".to_string(),
+                        cli: CliId::Claude,
+                        context: "c".to_string(),
+                        preset_id: None,
+                        model: Some("sonnet".to_string()),
+                        icon: None,
+                    })
+                    .await
+            })
+        };
+        let b = {
+            let routes = routes.clone();
+            tokio::spawn(async move {
+                routes
+                    .create_mode(CreateModeBody {
+                        name: "concurrent-b".to_string(),
+                        cli: CliId::Claude,
+                        context: "c".to_string(),
+                        preset_id: None,
+                        model: Some("sonnet".to_string()),
+                        icon: None,
+                    })
+                    .await
+            })
+        };
+        let (a, b) = tokio::join!(a, b);
+        a.unwrap().expect("mode a should be created");
+        b.unwrap().expect("mode b should be created");
+
+        let names: Vec<String> = routes.load_modes().await.into_iter().map(|m| m.name).collect();
+        assert!(names.contains(&"concurrent-a".to_string()));
+        assert!(names.contains(&"concurrent-b".to_string()));
     }
 }

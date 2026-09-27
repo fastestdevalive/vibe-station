@@ -41,13 +41,19 @@ fn num(v: &Value) -> i64 {
 }
 
 /// Fallback default model, used before a live `list_models()` fetch has ever
-/// run (e.g. to pick an initial `--model` for a brand-new session). Not a
-/// model *list* — see `list_models()` below for the live, non-stale source
-/// of truth. This value is still current as of writing (present in `agy
-/// models`' live output), but isn't re-validated at runtime; if agy ever
-/// retires it, the daemon just passes a `--model` agy no longer recognizes
-/// on first spawn, which agy itself will report as its own CLI error.
-pub const AGY_DEFAULT_MODEL: &str = "Gemini 3.1 Pro (High)";
+/// run (e.g. to pick an initial `--model` for a brand-new session, or agy's
+/// own entry in a generic starter-mode bundle — `AgentPlugin::starter_bundle`'s
+/// default impl). Not a model *list* — see `list_models()` below for the
+/// live, non-stale source of truth. A flash-tier model at Medium effort
+/// (not the heaviest Pro/High tier) is the right default here specifically
+/// because this is what a brand-new mode silently runs on before anyone has
+/// looked at the model picker — fast and cheap beats maximal capability for
+/// an unreviewed default. "3.8" is the newest flash generation as of
+/// writing (verified live via `agy models`); isn't re-validated at runtime —
+/// if agy ever retires it, the daemon just passes a `--model` agy no longer
+/// recognizes on first spawn, which agy itself will report as its own CLI
+/// error.
+pub const AGY_DEFAULT_MODEL: &str = "Gemini 3.8 Flash (Medium)";
 
 /// Parse `agy models`' stdout into the flat list of selectable model
 /// strings `list_models()` returns.

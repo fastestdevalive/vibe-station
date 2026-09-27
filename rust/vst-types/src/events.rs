@@ -164,6 +164,9 @@ pub enum ServerEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         markdown_style: Option<MarkdownStyle>,
     },
+    /// OOBE onboarding state changed.
+    #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]
+    OobeStateUpdated { completed: bool },
 }
 
 /// Sender-side handle for broadcasting `ServerEvent`s.

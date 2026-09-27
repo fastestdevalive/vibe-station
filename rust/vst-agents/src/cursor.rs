@@ -326,6 +326,10 @@ impl AgentPlugin for CursorPlugin {
         "cursor"
     }
 
+    fn binary_name(&self) -> &str {
+        "cursor-agent"
+    }
+
     fn default_model(&self) -> &str {
         "auto"
     }
@@ -540,4 +544,26 @@ async fn ensure_gitignore_entry(gitignore_path: PathBuf, entry: &str) {
         format!("{content}\n{entry}\n")
     };
     let _ = fs::write(&gitignore_path, new_content).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_starter_bundle_returns_one_generic_mode() {
+        let plugin = CursorPlugin;
+        let bundle = plugin.starter_bundle();
+        assert_eq!(bundle.len(), 1);
+        assert_eq!(bundle[0].name, "cursor-default");
+        assert_eq!(bundle[0].model_name, None);
+    }
+
+    #[test]
+    fn binary_name_differs_from_name() {
+        let plugin = CursorPlugin;
+        assert_eq!(plugin.name(), "cursor");
+        assert_eq!(plugin.binary_name(), "cursor-agent");
+        assert_ne!(plugin.binary_name(), plugin.name());
+    }
 }

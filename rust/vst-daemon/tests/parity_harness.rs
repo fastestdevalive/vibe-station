@@ -111,6 +111,17 @@ fn is_structural_only(url: &str) -> bool {
     url == "/settings" || url == "/tailscale/status" || url == "/skills"
 }
 
+/// Routes whose body the Rust daemon intentionally diverges from the legacy
+/// Node baseline. `GET /supported-clis` gained real `detected` /
+/// `starterBundleNames` / `usingFallbackOnly` values in Phase 2 of
+/// `oobe-onboarding` (computed from the plugin + binary checker, replacing the
+/// Node-side `false`/`[]`/`false` placeholders). The Node fixture cannot be
+/// regenerated (no Node tooling in this checkout), so the status code is still
+/// asserted but the body is exempt — exactly like the env-dependent routes.
+fn is_phase2_intentional_divergence(url: &str) -> bool {
+    url == "/supported-clis"
+}
+
 #[tokio::test]
 async fn rust_matches_node_byte_for_byte_on_deterministic_routes() {
     let tmp = tempdir().unwrap();
@@ -146,6 +157,16 @@ async fn rust_matches_node_byte_for_byte_on_deterministic_routes() {
             assert_eq!(
                 status, fx.status_code,
                 "{} {} status diverged (env-dependent route)",
+                fx.method, fx.url
+            );
+            continue;
+        }
+
+        if is_phase2_intentional_divergence(&fx.url) {
+            // Intentional Phase 2 divergence; only the status must match.
+            assert_eq!(
+                status, fx.status_code,
+                "{} {} status diverged (Phase 2 intentional divergence)",
                 fx.method, fx.url
             );
             continue;
