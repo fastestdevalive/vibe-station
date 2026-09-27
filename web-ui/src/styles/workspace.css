@@ -5519,7 +5519,8 @@ button.dashboard-card {
   word-break: break-word;
 }
 
-.dashboard-kanban__more-btn {
+.dashboard-kanban__more-btn,
+.dashboard-more-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5534,7 +5535,8 @@ button.dashboard-card {
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
-.dashboard-kanban__more-btn:hover {
+.dashboard-kanban__more-btn:hover,
+.dashboard-more-btn:hover {
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--fg-primary);

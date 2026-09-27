@@ -494,6 +494,30 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     [projectById, worktreePrById, sessions, sessionStates, setActiveWorktree, navigate, api],
   );
 
+  const renderCardList = <T,>(
+    sectionKey: string,
+    items: T[],
+    renderItem: (item: T) => React.ReactNode,
+  ) => {
+    const isExpanded = !!expandedCols[sectionKey];
+    const visible = isExpanded ? items : items.slice(0, 10);
+    const hasMore = items.length > 10 && !isExpanded;
+    return (
+      <div className="dashboard-card-list">
+        {visible.map(renderItem)}
+        {hasMore ? (
+          <button
+            type="button"
+            className="dashboard-kanban__more-btn dashboard-more-btn"
+            onClick={() => setExpandedCols((prev) => ({ ...prev, [sectionKey]: true }))}
+          >
+            More (+{items.length - 10})
+          </button>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderKanbanCol = <T,>(
     colKey: keyof typeof KANBAN_COLS,
     items: T[],
@@ -501,9 +525,6 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   ) => {
     const config = KANBAN_COLS[colKey];
     const Icon = config.icon;
-    const isExpanded = !!expandedCols[colKey];
-    const visible = isExpanded ? items : items.slice(0, 10);
-    const hasMore = items.length > 10 && !isExpanded;
     return (
       <div className={`dashboard-kanban__col dashboard-kanban__col--${colKey}`} key={colKey}>
         <div className="dashboard-kanban__col-header">
@@ -513,18 +534,7 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
           </span>
           <span className="dashboard-kanban__col-count">{items.length}</span>
         </div>
-        <div className="dashboard-card-list">
-          {visible.map(renderItem)}
-          {hasMore ? (
-            <button
-              type="button"
-              className="dashboard-kanban__more-btn"
-              onClick={() => setExpandedCols((prev) => ({ ...prev, [colKey]: true }))}
-            >
-              More (+{items.length - 10})
-            </button>
-          ) : null}
-        </div>
+        {renderCardList(colKey, items, renderItem)}
       </div>
     );
   };
@@ -578,35 +588,35 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
             {working.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">working</div>
-                <div className="dashboard-card-list">{working.map((s) => renderDashboardItem(s))}</div>
+                {renderCardList("working", working, renderDashboardItem)}
               </section>
             ) : null}
 
             {needsYou.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">needs you</div>
-                <div className="dashboard-card-list">{needsYou.map((s) => renderDashboardItem(s))}</div>
+                {renderCardList("needsYou", needsYou, renderDashboardItem)}
               </section>
             ) : null}
 
             {idle.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">idle</div>
-                <div className="dashboard-card-list">{idle.map((s) => renderDashboardItem(s))}</div>
+                {renderCardList("idle", idle, renderDashboardItem)}
               </section>
             ) : null}
 
             {rolledUpPr.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">pr created</div>
-                <div className="dashboard-card-list">{rolledUpPr.map((group) => renderDashboardWorktreeItem(group))}</div>
+                {renderCardList("pr", rolledUpPr, renderDashboardWorktreeItem)}
               </section>
             ) : null}
 
             {showFinished && finished.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">finished</div>
-                <div className="dashboard-card-list">{finished.map((s) => renderDashboardItem(s))}</div>
+                {renderCardList("finished", finished, renderDashboardItem)}
               </section>
             ) : null}
 

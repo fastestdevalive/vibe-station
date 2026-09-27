@@ -770,5 +770,62 @@ describe("DashboardPanel", () => {
       expect(h.count).not.toMatch(/[()]/);
     }
   });
+
+  it("list view sections cap at 10 before expand, full length after", async () => {
+    localStorage.setItem("dashboard:view", "list");
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("working")).toBeInTheDocument();
+    });
+
+    for (let i = 1; i <= 15; i++) {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: `sess-extra-list-${i}`,
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        sessionType: "agent",
+        snapshot: {
+          id: `sess-extra-list-${i}`,
+          worktreeId: "wt-1",
+          projectId: "proj-a",
+          modeId: "mode-1",
+          type: "agent",
+          name: `Extra List Agent ${i}`,
+          isMain: false,
+          state: "working",
+          lifecycleState: "working",
+          tmuxName: `sess-extra-list-${i}`,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    const workingSection = screen.getByText("working").closest(".dashboard-section") as HTMLElement;
+    expect(workingSection).not.toBeNull();
+
+    await waitFor(() => {
+      const chips = workingSection.querySelectorAll(".session-chip");
+      expect(chips.length).toBe(10);
+      expect(within(workingSection).getByRole("button", { name: /more/i })).toBeInTheDocument();
+    });
+
+    const moreBtn = within(workingSection).getByRole("button", { name: /more/i });
+    await userEvent.click(moreBtn);
+
+    await waitFor(() => {
+      const chips = workingSection.querySelectorAll(".session-chip");
+      expect(chips.length).toBe(16);
+      expect(within(workingSection).queryByRole("button", { name: /more/i })).toBeNull();
+    });
+  });
 });
 
