@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
+import { GlobalStatusBar } from "@/components/layout/GlobalStatusBar";
 import { TopBar } from "@/components/layout/TopBar";
 import { LeftSidebar } from "@/components/layout/LeftSidebar";
 import { TabsStrip } from "@/components/layout/TabsStrip";
@@ -907,6 +908,7 @@ export function Workspace() {
             onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
           />
         }
+        globalStatusBar={<GlobalStatusBar api={api} projects={projects} worktrees={worktrees} />}
         leftSidebar={
           <LeftSidebar
             api={api}
