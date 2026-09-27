@@ -165,16 +165,32 @@ mod claude_plugin {
 
         let meta_sonnet = plugin.acp_meta("sonnet").expect("should have acp_meta");
         assert_eq!(meta_sonnet["claudeCode"]["options"]["model"], "sonnet");
-        assert_eq!(meta_sonnet["claudeCode"]["options"]["betas"][0], "context-1m-2025-08-07");
+        assert_eq!(
+            meta_sonnet["claudeCode"]["options"]["betas"][0],
+            "context-1m-2025-08-07"
+        );
 
-        let meta_pinned = plugin.acp_meta("claude-sonnet-4-5").expect("should have acp_meta");
-        assert_eq!(meta_pinned["claudeCode"]["options"]["model"], "claude-sonnet-4-5[1m]");
+        let meta_pinned = plugin
+            .acp_meta("claude-sonnet-4-5")
+            .expect("should have acp_meta");
+        assert_eq!(
+            meta_pinned["claudeCode"]["options"]["model"],
+            "claude-sonnet-4-5[1m]"
+        );
 
-        let meta_opus = plugin.acp_meta("claude-opus-4-5").expect("should have acp_meta");
-        assert_eq!(meta_opus["claudeCode"]["options"]["model"], "claude-opus-4-5[1m]");
+        let meta_opus = plugin
+            .acp_meta("claude-opus-4-5")
+            .expect("should have acp_meta");
+        assert_eq!(
+            meta_opus["claudeCode"]["options"]["model"],
+            "claude-opus-4-5[1m]"
+        );
 
         let meta_explicit = plugin.acp_meta("sonnet[1m]").expect("should have acp_meta");
-        assert_eq!(meta_explicit["claudeCode"]["options"]["model"], "sonnet[1m]");
+        assert_eq!(
+            meta_explicit["claudeCode"]["options"]["model"],
+            "sonnet[1m]"
+        );
 
         // Non-claude plugins return None
         assert_eq!(create_cursor_plugin().acp_meta("auto"), None);

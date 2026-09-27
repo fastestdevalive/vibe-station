@@ -384,7 +384,9 @@ mod tests {
     use std::fs;
 
     use crate::connection::{WsConnection, WsSinkHandle};
-    use crate::handlers::file_watch::{WatcherRegistry, WatcherRegistryInner, WorktreePathResolver};
+    use crate::handlers::file_watch::{
+        WatcherRegistry, WatcherRegistryInner, WorktreePathResolver,
+    };
     use crate::services::file_list::FileList;
     use crate::streams::file_watcher::WatcherHandle;
     use std::sync::Mutex;
@@ -411,9 +413,7 @@ mod tests {
         let abs = root.path().join("newfile.rs");
         apply_tree_change(&idx, "wt1", root.path(), &abs.to_string_lossy(), false).await;
 
-        let res = idx
-            .search("wt1", root.path(), "newfile", 100)
-            .await;
+        let res = idx.search("wt1", root.path(), "newfile", 100).await;
         assert_eq!(res.files, vec!["newfile.rs".to_string()]);
     }
 
@@ -625,7 +625,16 @@ mod tests {
         handle_tree_watch(&conn_a, &registry, &resolve_root, &file_search, &msg()).await;
         // conn_b joins too, taking the second (and only other) global ref.
         handle_tree_watch(&conn_b, &registry, &resolve_root, &file_search, &msg()).await;
-        assert_eq!(registry.lock().unwrap().watchers.get(&key).unwrap().ref_count, 2);
+        assert_eq!(
+            registry
+                .lock()
+                .unwrap()
+                .watchers
+                .get(&key)
+                .unwrap()
+                .ref_count,
+            2
+        );
 
         // conn_a's tab closes without ever sending tree:unwatch.
         release_connection_tree_watches(&conn_a, &registry, &file_search).await;
@@ -639,7 +648,10 @@ mod tests {
             .get(&key)
             .cloned()
             .expect("conn_b's watcher must still be registered");
-        assert_eq!(sw.ref_count, 1, "only conn_a's single global ref should have been released");
+        assert_eq!(
+            sw.ref_count, 1,
+            "only conn_a's single global ref should have been released"
+        );
         assert_eq!(sw.subscribers.len(), 1);
         assert_eq!(sw.subscribers.values().next().unwrap().id(), conn_b.id());
 
@@ -779,7 +791,9 @@ mod tests {
         .await;
         assert!(!registry.lock().unwrap().watchers.contains_key(&subdir_key));
         assert!(registry.lock().unwrap().watchers.contains_key(&root_key));
-        let before = file_search.search("wt1", tempfile::tempdir().unwrap().path(), "", 100).await;
+        let before = file_search
+            .search("wt1", tempfile::tempdir().unwrap().path(), "", 100)
+            .await;
         assert!(
             before.files.contains(&"src/a.rs".to_string()),
             "a subdir watch closing must not evict while the root watch is live"
@@ -799,7 +813,9 @@ mod tests {
         )
         .await;
         assert!(registry.lock().unwrap().watchers.is_empty());
-        let after = file_search.search("wt1", tempfile::tempdir().unwrap().path(), "", 100).await;
+        let after = file_search
+            .search("wt1", tempfile::tempdir().unwrap().path(), "", 100)
+            .await;
         assert!(
             after.files.is_empty(),
             "closing the last watcher must evict the worktree's index entry"
@@ -819,12 +835,12 @@ mod tests {
         let registry: WatcherRegistry = Arc::new(Mutex::new(WatcherRegistryInner::default()));
         let resolve_root: WorktreePathResolver = {
             let root = root.path().to_path_buf();
-            Arc::new(move |id: &str, scope: vst_types::ws::WatchScope| {
-                match scope {
+            Arc::new(
+                move |id: &str, scope: vst_types::ws::WatchScope| match scope {
                     vst_types::ws::WatchScope::Project if id == "proj1" => Some(root.clone()),
                     _ => None,
-                }
-            })
+                },
+            )
         };
 
         let sent = Arc::new(Mutex::new(Vec::new()));
@@ -848,11 +864,19 @@ mod tests {
         .await;
 
         assert!(
-            registry.lock().unwrap().watchers.contains_key("tree:proj1:"),
+            registry
+                .lock()
+                .unwrap()
+                .watchers
+                .contains_key("tree:proj1:"),
             "project-scope tree watcher must register successfully"
         );
         assert!(
-            !sent.lock().unwrap().iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
+            !sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
             "project-scope resolution must not send SystemError"
         );
 

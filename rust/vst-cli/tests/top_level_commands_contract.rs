@@ -361,11 +361,17 @@ fn test_open_parses_force_create_flag() {
     let with_flag =
         parse_open_options(&["/some/dir".into(), "--force-create".into()]).expect("parse ok");
     assert_eq!(with_flag.path.as_deref(), Some("/some/dir"));
-    assert!(with_flag.force_create, "force_create should be true with --force-create");
+    assert!(
+        with_flag.force_create,
+        "force_create should be true with --force-create"
+    );
 
     let without_flag = parse_open_options(&["/some/dir".into()]).expect("parse ok");
     assert_eq!(without_flag.path.as_deref(), Some("/some/dir"));
-    assert!(!without_flag.force_create, "force_create should default to false");
+    assert!(
+        !without_flag.force_create,
+        "force_create should default to false"
+    );
 }
 
 #[test]
@@ -405,7 +411,10 @@ fn test_open_resolve_path_normalizes_dot_and_dotdot() {
 
     let result = resolve_path(Some("./sub/../target"));
     let expected = tmp.path().join("target").to_string_lossy().to_string();
-    assert_eq!(result, expected, "normalized path should collapse ./ and ..");
+    assert_eq!(
+        result, expected,
+        "normalized path should collapse ./ and .."
+    );
 
     let no_dot = resolve_path(Some("./new"));
     assert_eq!(
@@ -459,7 +468,10 @@ async fn test_post_open_success_returns_project_id() {
                 Some(false),
                 "forceCreate should be threaded through the body"
             );
-            (StatusCode::OK, Json(json!({ "projectId": "proj-abc", "isGit": true })))
+            (
+                StatusCode::OK,
+                Json(json!({ "projectId": "proj-abc", "isGit": true })),
+            )
         }),
     );
     let addr = spawn_mock_server(router).await;

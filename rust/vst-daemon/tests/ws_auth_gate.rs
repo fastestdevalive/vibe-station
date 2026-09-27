@@ -31,10 +31,7 @@ use vst_types::events::Broadcaster;
 
 use vst_daemon::server::{build_app, BuildServerOptions};
 
-fn make_opts(
-    tmp: &std::path::Path,
-    auth_state: Option<AuthState>,
-) -> BuildServerOptions {
+fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
     let store = StoreHandle::open(&db_path).unwrap();
     let broadcaster = Broadcaster::new(16);
@@ -58,10 +55,7 @@ fn make_opts(
 
 /// Bind the app on an ephemeral loopback port and serve it in the background.
 /// Returns the `ws://` base URL to connect to.
-async fn serve(
-    tmp: &std::path::Path,
-    auth_state: AuthState,
-) -> String {
+async fn serve(tmp: &std::path::Path, auth_state: AuthState) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = build_app(make_opts(tmp, Some(auth_state)));
@@ -75,11 +69,10 @@ async fn serve(
 
 /// Open a WS connection to `url`, tagging it as a tunnel (non-loopback) request
 /// via `cf-connecting-ip` so the upgrade auth gate is actually enforced.
-async fn connect_remote(
-    url: &str,
-    token: &str,
-) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
-    let mut req = format!("{url}?token={token}").into_client_request().unwrap();
+async fn connect_remote(url: &str, token: &str) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
+    let mut req = format!("{url}?token={token}")
+        .into_client_request()
+        .unwrap();
     req.headers_mut()
         .insert("cf-connecting-ip", HeaderValue::from_static("1.2.3.4"));
     let (ws, _resp) = connect_async(req).await.unwrap();

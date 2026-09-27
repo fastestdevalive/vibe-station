@@ -49,8 +49,6 @@ use tempfile::tempdir;
 /// stays `None`).
 static MOCK_DAEMON_URL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-use vst_cli::commands::mode::add::{parse_mode_add_options, run_mode_add, ModeAddOptions};
-use vst_cli::commands::mode::ls::{parse_mode_ls_options, run_mode_ls, ModeLsOptions};
 use vst_cli::commands::agent::create::{
     parse_agent_create_options, run_agent_create, AgentCreateOptions,
 };
@@ -75,6 +73,8 @@ use vst_cli::commands::agent::terminate::run_session_terminate;
 use vst_cli::commands::agent::transcript::{
     parse_session_transcript_options, run_session_transcript, SessionTranscriptOptions,
 };
+use vst_cli::commands::mode::add::{parse_mode_add_options, run_mode_add, ModeAddOptions};
+use vst_cli::commands::mode::ls::{parse_mode_ls_options, run_mode_ls, ModeLsOptions};
 use vst_cli::commands::terminal::create::parse_terminal_create_options;
 
 #[test]
@@ -127,11 +127,9 @@ fn test_agent_create_options_parsing() {
     assert_eq!(opts.channel, Some("json".to_string()));
     assert!(opts.no_parent);
 
-    let opts_parent = parse_agent_create_options(&[
-        "wt-100".to_string(),
-        "--parent=p-sess-1".to_string(),
-    ])
-    .expect("parse parent ok");
+    let opts_parent =
+        parse_agent_create_options(&["wt-100".to_string(), "--parent=p-sess-1".to_string()])
+            .expect("parse parent ok");
     assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
     // No --channel passed -> default is None (daemon resolves the effective default).
     assert_eq!(opts_parent.channel, None);
@@ -173,19 +171,14 @@ fn test_agent_create_invalid_channel_rejected() {
 
 #[test]
 fn test_terminal_create_options_parsing() {
-    let args = vec![
-        "wt-100".to_string(),
-        "--no-parent".to_string(),
-    ];
+    let args = vec!["wt-100".to_string(), "--no-parent".to_string()];
     let opts = parse_terminal_create_options(&args).expect("parse ok");
     assert_eq!(opts.worktree_id, "wt-100");
     assert!(opts.no_parent);
 
-    let opts_parent = parse_terminal_create_options(&[
-        "wt-200".to_string(),
-        "--parent=p-sess-1".to_string(),
-    ])
-    .expect("parse parent ok");
+    let opts_parent =
+        parse_terminal_create_options(&["wt-200".to_string(), "--parent=p-sess-1".to_string()])
+            .expect("parse parent ok");
     assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
 
     let err = parse_terminal_create_options(&[]);
@@ -305,8 +298,12 @@ fn test_session_send_options_parsing() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_mock_daemon_session_and_mode_endpoints() {
     // Serialize against the other VST_DAEMON_URL-mutating mock test (3.T6).
+    // Intentionally held for the whole test: it guards the process-global
+    // VST_DAEMON_URL env var, not a real async resource, so holding it across
+    // awaits is the point, not a deadlock risk.
     let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
     let app = Router::new()
         .route(
@@ -719,8 +716,12 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn test_mock_agent_create_channel_body_omitted_vs_explicit() {
     // Serialize against the other VST_DAEMON_URL-mutating mock test.
+    // Intentionally held for the whole test; see comment on the sibling test
+    // above for why this is safe (guards a global env var, not an async
+    // resource).
     let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
     // 3.T6 (a)+(b): a body-capturing POST /api/sessions mock. Omitting
     // --channel must send a body where the channel key is ABSENT (the daemon

@@ -1055,7 +1055,10 @@ async fn open_force_create_creates_missing_directory() {
         .expect("force_create should succeed on a missing path");
 
     assert!(
-        tokio::fs::metadata(&missing).await.map(|m| m.is_dir()).unwrap_or(false),
+        tokio::fs::metadata(&missing)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false),
         "directory should now exist on disk"
     );
     assert_eq!(result.project_id, "brand-new-dir");

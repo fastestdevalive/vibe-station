@@ -170,18 +170,14 @@ pub fn handle_file_watch(
     let watcher = Arc::new(FileWatcher::new(callbacks, root.clone()));
     // Register before starting so a follow-up consumer retains the entry.
     conn.register_file_watcher(&watch_key, watch_key.clone());
-    registry
-        .lock()
-        .unwrap()
-        .watchers
-        .insert(
-            watch_key.clone(),
-            SharedWatcher {
-                watcher: watcher.clone(),
-                ref_count: 1,
-                subscribers: HashMap::from([(conn.id().to_string(), conn.clone())]),
-            },
-        );
+    registry.lock().unwrap().watchers.insert(
+        watch_key.clone(),
+        SharedWatcher {
+            watcher: watcher.clone(),
+            ref_count: 1,
+            subscribers: HashMap::from([(conn.id().to_string(), conn.clone())]),
+        },
+    );
 
     if let Err(e) = watcher.watch_file(abs_path.to_str().unwrap_or("")) {
         conn.send(ServerMessage::SystemError {
@@ -244,11 +240,7 @@ pub async fn release_connection_file_watches(conn: &WsConnection, registry: &Wat
 /// close the underlying `FileWatcher` (blocking teardown of its inotify
 /// watches). Unlike tree watchers, file watchers don't feed the
 /// `FileSearchIndex`, so there is no per-worktree count or eviction to manage.
-async fn release_shared_file_watcher(
-    registry: &WatcherRegistry,
-    watch_key: &str,
-    conn_id: &str,
-) {
+async fn release_shared_file_watcher(registry: &WatcherRegistry, watch_key: &str, conn_id: &str) {
     let closed_watcher = {
         let mut reg = registry.lock().unwrap();
         match reg.watchers.get_mut(watch_key) {
@@ -534,7 +526,16 @@ mod tests {
         handle_file_watch(&conn_a, &registry, &resolve_root, &msg());
         // conn_b joins too, taking the second (and only other) global ref.
         handle_file_watch(&conn_b, &registry, &resolve_root, &msg());
-        assert_eq!(registry.lock().unwrap().watchers.get(&key).unwrap().ref_count, 2);
+        assert_eq!(
+            registry
+                .lock()
+                .unwrap()
+                .watchers
+                .get(&key)
+                .unwrap()
+                .ref_count,
+            2
+        );
 
         // conn_a's tab closes without ever sending file:unwatch.
         release_connection_file_watches(&conn_a, &registry).await;
@@ -548,7 +549,10 @@ mod tests {
             .get(&key)
             .cloned()
             .expect("conn_b's watcher must still be registered");
-        assert_eq!(sw.ref_count, 1, "only conn_a's single global ref should have been released");
+        assert_eq!(
+            sw.ref_count, 1,
+            "only conn_a's single global ref should have been released"
+        );
         assert_eq!(sw.subscribers.len(), 1);
         assert_eq!(sw.subscribers.values().next().unwrap().id(), conn_b.id());
 
@@ -615,12 +619,14 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("proj.rs"), "x").unwrap();
         let registry = registry();
-        let resolve_root: WorktreePathResolver = Arc::new(move |id: &str, scope: vst_types::ws::WatchScope| {
-            match scope {
-                vst_types::ws::WatchScope::Project if id == "proj1" => Some(root.path().to_path_buf()),
+        let resolve_root: WorktreePathResolver = Arc::new(
+            move |id: &str, scope: vst_types::ws::WatchScope| match scope {
+                vst_types::ws::WatchScope::Project if id == "proj1" => {
+                    Some(root.path().to_path_buf())
+                }
                 _ => None,
-            }
-        });
+            },
+        );
 
         let sent = Arc::new(Mutex::new(Vec::new()));
         let conn = WsConnection::new(WsSinkHandle::from_parts(
@@ -641,11 +647,19 @@ mod tests {
         );
 
         assert!(
-            registry.lock().unwrap().watchers.contains_key("file:proj1:proj.rs"),
+            registry
+                .lock()
+                .unwrap()
+                .watchers
+                .contains_key("file:proj1:proj.rs"),
             "project-scope watcher must register successfully"
         );
         assert!(
-            !sent.lock().unwrap().iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
+            !sent
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|v| v.get("type").and_then(|t| t.as_str()) == Some("system:error")),
             "project-scope resolution must not send SystemError"
         );
 

@@ -9,19 +9,19 @@
 
 pub mod attachments;
 pub mod auth;
+pub mod file_serving;
 pub mod fs;
 pub mod health;
+pub mod lsp;
 pub mod mobile_auth;
 pub mod modes;
 pub mod oobe;
 pub mod open;
 pub mod ordered_lists;
 pub mod projects;
+pub mod search_util;
 pub mod sessions;
 pub mod settings;
 pub mod skills;
 pub mod tailscale;
 pub mod worktrees;
-pub mod file_serving;
-pub mod lsp;
-pub mod search_util;

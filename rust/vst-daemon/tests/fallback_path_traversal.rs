@@ -87,7 +87,9 @@ async fn traversal_assets_dotdot_is_rejected_not_served() {
         .unwrap();
 
     assert_ne!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let text = String::from_utf8_lossy(&body);
     assert!(!text.contains("inside-content"));
     assert!(!text.contains("TOP-SECRET"));
@@ -105,7 +107,9 @@ async fn traversal_percent_encoded_dotdot_is_rejected() {
         .unwrap();
 
     assert_ne!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let text = String::from_utf8_lossy(&body);
     assert!(!text.contains("TOP-SECRET"));
 }
@@ -125,7 +129,9 @@ async fn traversal_mixed_dotdot_and_dotdotdot_is_rejected() {
         .unwrap();
 
     assert_ne!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let text = String::from_utf8_lossy(&body);
     assert!(!text.contains("TOP-SECRET"));
     assert!(!text.contains("outside-secret"));
@@ -136,9 +142,14 @@ async fn legitimate_file_within_dist_is_still_served() {
     let fx = DistFixture::new();
     let router = build_app(make_opts(fx.tmp.path(), fx.dist.clone()));
 
-    let resp = router.oneshot(remote_get("/assets/hello.txt")).await.unwrap();
+    let resp = router
+        .oneshot(remote_get("/assets/hello.txt"))
+        .await
+        .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert_eq!(String::from_utf8_lossy(&body), "inside-content");
 }

@@ -80,9 +80,10 @@ pub async fn rg_search(
             }
         })?;
 
-    let stdout = child.stdout.take().ok_or_else(|| {
-        RgSearchError::ProcessError("Failed to capture rg stdout".into())
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| RgSearchError::ProcessError("Failed to capture rg stdout".into()))?;
 
     let reader = tokio::io::BufReader::new(stdout);
     let mut lines = reader.lines();
@@ -170,7 +171,14 @@ pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String
     // --- pre ---
     let mut pre: String = raw_pre.trim_start_matches([' ', '\t']).to_string();
     if pre.chars().count() > SNIP_LEAD {
-        let keep: String = pre.chars().rev().take(SNIP_KEEP).collect::<Vec<_>>().into_iter().rev().collect();
+        let keep: String = pre
+            .chars()
+            .rev()
+            .take(SNIP_KEEP)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         pre = format!("…{keep}");
     }
 
@@ -183,7 +191,9 @@ pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String
     }
 
     // --- post ---
-    let budget = SNIP_MAX.saturating_sub(pre.chars().count()).saturating_sub(mid.chars().count());
+    let budget = SNIP_MAX
+        .saturating_sub(pre.chars().count())
+        .saturating_sub(mid.chars().count());
     let mut post: String = if budget > 0 {
         let p = raw_post.to_string();
         if p.chars().count() > budget {
@@ -200,10 +210,7 @@ pub fn truncate_snippet(line: &str, start: usize, end: usize) -> (String, String
 }
 
 /// Shape flat `RgRawMatch`es into grouped `SearchResult` with truncated snippets.
-pub fn shape_search_matches(
-    raw_matches: &[RgRawMatch],
-    limit: usize,
-) -> SearchResult {
+pub fn shape_search_matches(raw_matches: &[RgRawMatch], limit: usize) -> SearchResult {
     let mut files: Vec<SearchFileMatches> = Vec::new();
     let mut file_index: HashMap<String, usize> = HashMap::new();
     let mut total_matches: usize = 0;

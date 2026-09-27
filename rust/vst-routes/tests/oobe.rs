@@ -74,7 +74,12 @@ async fn test_get_state_empty_fresh() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     let state = oobe.get_state().await;
     assert!(!state.completed);
@@ -90,7 +95,12 @@ async fn test_get_state_ignores_preexisting_project_and_mode() {
     let modes_file = dir.path().join("modes.json");
     let mode_routes = build_mode_routes(&store, &broadcaster, modes_file.clone(), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // A daemon that already has a project AND a mode (e.g. seeded demo data,
     // or an upgrade from a pre-OOBE version) — OOBE still starts fresh.
@@ -111,7 +121,12 @@ async fn test_get_state_ignores_preexisting_project_alone() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     store.add_project(project("p1")).await.unwrap();
 
@@ -138,14 +153,23 @@ async fn test_detect_and_bundle_fills_gaps_in_a_preexisting_partial_bundle() {
     let mode_routes = build_mode_routes(&store, &broadcaster, modes_file, &paths)
         .with_binary_checker(|b| b == "claude");
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes, settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes,
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     let result = oobe.detect_and_bundle().await;
     // The pre-existing "sonnet-implementer" is left alone (not re-created);
     // the 2 missing named entries are filled in — no marker suppresses this,
     // since OOBE never seeds `auto_bundle_created_for` from pre-existing state.
     let created_names: Vec<&str> = result.created.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(created_names.len(), 2, "expected 2 filled-in modes, got {created_names:?}");
+    assert_eq!(
+        created_names.len(),
+        2,
+        "expected 2 filled-in modes, got {created_names:?}"
+    );
     assert!(created_names.contains(&"opus-planner"));
     assert!(created_names.contains(&"fable-security-reviewer"));
     assert!(!created_names.contains(&"sonnet-implementer"));
@@ -160,7 +184,12 @@ async fn test_confirm_step1_validation_then_success() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // Relative path -> 400 ValidationError.
     let rel = oobe.confirm_step1("relative/path".to_string()).await;
@@ -191,7 +220,12 @@ async fn test_step1_confirmation_survives_a_fresh_instance() {
         let mode_routes =
             build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
         let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-        let oobe_a = OobeRoutes::new(mode_routes, settings_routes, broadcaster.clone(), paths.clone());
+        let oobe_a = OobeRoutes::new(
+            mode_routes,
+            settings_routes,
+            broadcaster.clone(),
+            paths.clone(),
+        );
 
         let abs = dir.path().join("projects").to_string_lossy().to_string();
         oobe_a
@@ -209,7 +243,12 @@ async fn test_step1_confirmation_survives_a_fresh_instance() {
     let mode_routes_b =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes_b = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe_b = OobeRoutes::new(mode_routes_b, settings_routes_b, broadcaster.clone(), paths.clone());
+    let oobe_b = OobeRoutes::new(
+        mode_routes_b,
+        settings_routes_b,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     let state = oobe_b.get_state().await;
     assert!(!state.completed);
@@ -226,7 +265,12 @@ async fn test_complete_requires_mode_for_detected_cli() {
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths)
             .with_binary_checker(|_| true);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // Zero modes -> 409 NoModeForDetectedCli.
     let err = oobe.complete().await.unwrap_err();
@@ -256,10 +300,16 @@ async fn test_complete_during_detect_and_bundle_is_not_undone() {
     let paths = Paths::with_home(dir.path().join("vst"));
     let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
     let broadcaster = Broadcaster::new(16);
-    let mode_routes = build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths)
-        .with_binary_checker(|b| b == "claude");
+    let mode_routes =
+        build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths)
+            .with_binary_checker(|b| b == "claude");
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // Seed a mode directly (bypassing detect_and_bundle) so complete() can
     // succeed, then call complete() — simulating it landing on oobe.json
@@ -287,7 +337,12 @@ async fn test_confirm_step1_rejects_an_existing_unwritable_directory() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes, settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes,
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // A directory that already EXISTS but is read-only — create_dir_all alone
     // would report success here since it's a no-op on an existing dir; the
@@ -302,8 +357,13 @@ async fn test_confirm_step1_rejects_an_existing_unwritable_directory() {
         .confirm_step1(readonly_dir.to_string_lossy().to_string())
         .await;
 
-    // Restore write permission so the tempdir can clean itself up.
-    perms.set_readonly(false);
+    // Restore write permission so the tempdir can clean itself up. Set an
+    // explicit owner-writable mode rather than `set_readonly(false)`, which
+    // on Unix would make the directory world-writable.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+    }
     std::fs::set_permissions(&readonly_dir, perms).unwrap();
 
     assert!(

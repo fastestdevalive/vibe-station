@@ -41,19 +41,26 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 # Map Rust target triple → cloudflared GitHub release asset name.
-# Cloudflare's release naming: cloudflared-linux-amd64, cloudflared-darwin-amd64, etc.
+# Cloudflare's release naming differs by OS: Linux ships the raw binary
+# directly under the asset name (cloudflared-linux-amd64, etc.); macOS ships
+# a .tgz archive (cloudflared-darwin-amd64.tgz, cloudflared-darwin-arm64.tgz)
+# containing a `cloudflared` binary — there is no raw-binary macOS asset.
 case "$TARGET" in
   x86_64-unknown-linux-gnu)
     CF_ASSET="cloudflared-linux-amd64"
+    CF_IS_ARCHIVE=0
     ;;
   aarch64-unknown-linux-gnu)
     CF_ASSET="cloudflared-linux-arm64"
+    CF_IS_ARCHIVE=0
     ;;
   aarch64-apple-darwin)
-    CF_ASSET="cloudflared-darwin-arm64"
+    CF_ASSET="cloudflared-darwin-arm64.tgz"
+    CF_IS_ARCHIVE=1
     ;;
   x86_64-apple-darwin)
-    CF_ASSET="cloudflared-darwin-amd64"
+    CF_ASSET="cloudflared-darwin-amd64.tgz"
+    CF_IS_ARCHIVE=1
     ;;
   *)
     echo "Error: unsupported target triple: $TARGET" >&2
@@ -74,13 +81,35 @@ echo "==> Downloading cloudflared for $TARGET"
 echo "    URL:    $DOWNLOAD_URL"
 echo "    Output: $OUT_FILE"
 
-if command -v curl &>/dev/null; then
-  curl -fSL "$DOWNLOAD_URL" -o "$OUT_FILE"
-elif command -v wget &>/dev/null; then
-  wget -qO "$OUT_FILE" "$DOWNLOAD_URL"
+if [[ "$CF_IS_ARCHIVE" -eq 1 ]]; then
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+  TMP_TGZ="$TMP_DIR/cloudflared.tgz"
+
+  if command -v curl &>/dev/null; then
+    curl -fSL "$DOWNLOAD_URL" -o "$TMP_TGZ"
+  elif command -v wget &>/dev/null; then
+    wget -qO "$TMP_TGZ" "$DOWNLOAD_URL"
+  else
+    echo "Error: neither curl nor wget found on PATH." >&2
+    exit 1
+  fi
+
+  tar -xzf "$TMP_TGZ" -C "$TMP_DIR"
+  if [[ ! -f "$TMP_DIR/cloudflared" ]]; then
+    echo "Error: expected a 'cloudflared' binary inside $CF_ASSET, none found." >&2
+    exit 1
+  fi
+  mv "$TMP_DIR/cloudflared" "$OUT_FILE"
 else
-  echo "Error: neither curl nor wget found on PATH." >&2
-  exit 1
+  if command -v curl &>/dev/null; then
+    curl -fSL "$DOWNLOAD_URL" -o "$OUT_FILE"
+  elif command -v wget &>/dev/null; then
+    wget -qO "$OUT_FILE" "$DOWNLOAD_URL"
+  else
+    echo "Error: neither curl nor wget found on PATH." >&2
+    exit 1
+  fi
 fi
 
 chmod +x "$OUT_FILE"

@@ -187,7 +187,10 @@ fn session_updated_delink_serializes_parent_session_id_null() {
     let value = serde_json::to_value(&msg).unwrap();
     let obj = value.as_object().unwrap();
     assert_eq!(obj.get("type").unwrap(), "session:updated");
-    assert_eq!(obj.get("parentSessionId").unwrap(), &serde_json::Value::Null);
+    assert_eq!(
+        obj.get("parentSessionId").unwrap(),
+        &serde_json::Value::Null
+    );
 }
 
 /// Id newtypes serialize as the bare string, not `{"0": "..."}`.

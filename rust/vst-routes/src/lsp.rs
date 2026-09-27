@@ -62,9 +62,7 @@ impl From<crate::search_util::RgSearchError> for LspRouteError {
             crate::search_util::RgSearchError::NotFound => {
                 LspRouteError::Internal("ripgrep not found on PATH".into())
             }
-            crate::search_util::RgSearchError::ProcessError(msg) => {
-                LspRouteError::Internal(msg)
-            }
+            crate::search_util::RgSearchError::ProcessError(msg) => LspRouteError::Internal(msg),
         }
     }
 }
@@ -110,9 +108,7 @@ fn extract_word_at_pos(content: &str, line: u32, character: u32) -> Option<Strin
     }
 }
 
-pub fn lsp_err_to_response(
-    err: LspRouteError,
-) -> (StatusCode, Json<serde_json::Value>) {
+pub fn lsp_err_to_response(err: LspRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         LspRouteError::NotFound(msg) => (
             StatusCode::NOT_FOUND,
@@ -120,7 +116,9 @@ pub fn lsp_err_to_response(
         ),
         LspRouteError::ExternalTokenExpired => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "External token expired", "code": "LSP_EXTERNAL_TOKEN_EXPIRED" })),
+            Json(
+                json!({ "error": "External token expired", "code": "LSP_EXTERNAL_TOKEN_EXPIRED" }),
+            ),
         ),
         LspRouteError::NotReady(msg) => (
             StatusCode::CONFLICT,
@@ -128,7 +126,9 @@ pub fn lsp_err_to_response(
         ),
         LspRouteError::Disabled => (
             StatusCode::CONFLICT,
-            Json(json!({ "error": "Code navigation is disabled for this workspace", "code": "LSP_DISABLED" })),
+            Json(
+                json!({ "error": "Code navigation is disabled for this workspace", "code": "LSP_DISABLED" }),
+            ),
         ),
         LspRouteError::Unsupported(msg) => (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -185,10 +185,7 @@ impl LspRoutes {
         }
     }
 
-    async fn find_project_for_worktree(
-        &self,
-        wt_id: &str,
-    ) -> Result<ProjectRecord, LspRouteError> {
+    async fn find_project_for_worktree(&self, wt_id: &str) -> Result<ProjectRecord, LspRouteError> {
         let all = self.store.get_all_projects().await;
         for p in all {
             if p.worktrees.iter().any(|w| w.id == wt_id) {
@@ -208,7 +205,9 @@ impl LspRoutes {
                     .worktrees
                     .iter()
                     .find(|w| &w.id == worktree_id)
-                    .ok_or_else(|| LspRouteError::NotFound(format!("Worktree '{worktree_id}' not found")))?;
+                    .ok_or_else(|| {
+                        LspRouteError::NotFound(format!("Worktree '{worktree_id}' not found"))
+                    })?;
                 Ok(wt.lsp_enabled.unwrap_or(false))
             }
             WorkspaceKey::Project { project_id } => {
@@ -280,8 +279,12 @@ impl LspRoutes {
 
         let mut out = Vec::with_capacity(languages.len());
         for lang in languages {
-            let Some(cfg) = vst_lsp::lookup_by_language(lang) else { continue };
-            let Some(ext) = cfg.extensions.first() else { continue };
+            let Some(cfg) = vst_lsp::lookup_by_language(lang) else {
+                continue;
+            };
+            let Some(ext) = cfg.extensions.first() else {
+                continue;
+            };
             let synthetic_path = format!("_.{ext}");
             let (status, resolved_language) = self
                 .lsp_manager
@@ -345,15 +348,12 @@ impl LspRoutes {
         let abs_path = match &file {
             // Path confinement: reject absolute / escaping / sensitive paths
             // before we ever read the file for the text-search fallback.
-            LspFileRef::Workspace { path } => {
-                vst_lsp::resolve_workspace_path(&root, path)?
-            }
-            LspFileRef::External { token } => {
-                self.lsp_manager
-                    .resolve_external_token(&workspace, token)
-                    .await
-                    .ok_or(LspRouteError::ExternalTokenExpired)?
-            }
+            LspFileRef::Workspace { path } => vst_lsp::resolve_workspace_path(&root, path)?,
+            LspFileRef::External { token } => self
+                .lsp_manager
+                .resolve_external_token(&workspace, token)
+                .await
+                .ok_or(LspRouteError::ExternalTokenExpired)?,
         };
 
         let req_res = self
@@ -379,7 +379,9 @@ impl LspRoutes {
                         | vst_lsp::LspError::NotFound
                         | vst_lsp::LspError::Unsupported
                 );
-                if fallback_eligible && !self.lsp_manager.has_ever_been_ready(&workspace, lang).await {
+                if fallback_eligible
+                    && !self.lsp_manager.has_ever_been_ready(&workspace, lang).await
+                {
                     let word_opt = if let Ok(content) = tokio::fs::read_to_string(&abs_path).await {
                         extract_word_at_pos(&content, line, character)
                     } else {
@@ -388,13 +390,7 @@ impl LspRoutes {
 
                     if let Some(word_text) = word_opt {
                         let raw_matches = crate::search_util::rg_search(
-                            &root,
-                            &word_text,
-                            false,
-                            true,
-                            true,
-                            None,
-                            50,
+                            &root, &word_text, false, true, true, None, 50,
                         )
                         .await?;
 
@@ -404,7 +400,10 @@ impl LspRoutes {
                                 let rel = m.path.strip_prefix("./").unwrap_or(&m.path).to_string();
                                 Location {
                                     line: m.line_number.saturating_sub(1),
-                                    character: vst_lsp::byte_offset_to_utf16_col(&m.line_text, m.start_byte),
+                                    character: vst_lsp::byte_offset_to_utf16_col(
+                                        &m.line_text,
+                                        m.start_byte,
+                                    ),
                                     preview: m.line_text,
                                     confidence: "text".into(),
                                     external: false,
@@ -443,8 +442,13 @@ impl LspRoutes {
                         let mut token = None;
                         let mut display_path = None;
                         if let Ok(canon) = loc.abs_path.canonicalize() {
-                            if canon.is_file() && !vst_lsp::is_sensitive_path(&canon, Some(self.paths.vst_home())) {
-                                let t = self.lsp_manager.get_or_mint_external_token(&workspace, &canon).await;
+                            if canon.is_file()
+                                && !vst_lsp::is_sensitive_path(&canon, Some(self.paths.vst_home()))
+                            {
+                                let t = self
+                                    .lsp_manager
+                                    .get_or_mint_external_token(&workspace, &canon)
+                                    .await;
                                 display_path = Some(canon.to_string_lossy().to_string());
                                 token = Some(t);
                             }
@@ -463,7 +467,9 @@ impl LspRoutes {
                 }
                 Ok(LspDefinitionResponse { locations })
             }
-            _ => Err(LspRouteError::Internal("Unexpected LSP response variant".to_string())),
+            _ => Err(LspRouteError::Internal(
+                "Unexpected LSP response variant".to_string(),
+            )),
         }
     }
 
@@ -562,7 +568,9 @@ impl LspRoutes {
 
         match resp {
             LspResponse::Hover(val) => Ok(parse_hover_response(val)),
-            _ => Err(LspRouteError::Internal("Unexpected LSP response variant".to_string())),
+            _ => Err(LspRouteError::Internal(
+                "Unexpected LSP response variant".to_string(),
+            )),
         }
     }
 
@@ -606,15 +614,12 @@ impl LspRoutes {
         let abs_path = match &file {
             // Path confinement: reject absolute / escaping / sensitive paths
             // before we ever read the file for the text-search fallback.
-            LspFileRef::Workspace { path } => {
-                vst_lsp::resolve_workspace_path(&root, path)?
-            }
-            LspFileRef::External { token } => {
-                self.lsp_manager
-                    .resolve_external_token(&workspace, token)
-                    .await
-                    .ok_or(LspRouteError::ExternalTokenExpired)?
-            }
+            LspFileRef::Workspace { path } => vst_lsp::resolve_workspace_path(&root, path)?,
+            LspFileRef::External { token } => self
+                .lsp_manager
+                .resolve_external_token(&workspace, token)
+                .await
+                .ok_or(LspRouteError::ExternalTokenExpired)?,
         };
 
         let req_res = self
@@ -640,7 +645,9 @@ impl LspRoutes {
                         | vst_lsp::LspError::NotFound
                         | vst_lsp::LspError::Unsupported
                 );
-                if fallback_eligible && !self.lsp_manager.has_ever_been_ready(&workspace, lang).await {
+                if fallback_eligible
+                    && !self.lsp_manager.has_ever_been_ready(&workspace, lang).await
+                {
                     let word_opt = if let Ok(content) = tokio::fs::read_to_string(&abs_path).await {
                         extract_word_at_pos(&content, line, character)
                     } else {
@@ -649,13 +656,7 @@ impl LspRoutes {
 
                     if let Some(word_text) = word_opt {
                         let raw_matches = crate::search_util::rg_search(
-                            &root,
-                            &word_text,
-                            false,
-                            true,
-                            true,
-                            None,
-                            50,
+                            &root, &word_text, false, true, true, None, 50,
                         )
                         .await?;
 
@@ -666,7 +667,10 @@ impl LspRoutes {
                             let rel = m.path.strip_prefix("./").unwrap_or(&m.path).to_string();
                             let entry = ReferenceEntry {
                                 line: m.line_number.saturating_sub(1),
-                                character: vst_lsp::byte_offset_to_utf16_col(&m.line_text, m.start_byte),
+                                character: vst_lsp::byte_offset_to_utf16_col(
+                                    &m.line_text,
+                                    m.start_byte,
+                                ),
                                 preview: m.line_text,
                                 is_declaration: false,
                                 confidence: "text".into(),
@@ -715,9 +719,17 @@ impl LspRoutes {
                 }
 
                 let end = (offset + 50).min(n);
-                let page_targets = if n == 0 { &[][..] } else { &targets[offset..end] };
+                let page_targets = if n == 0 {
+                    &[][..]
+                } else {
+                    &targets[offset..end]
+                };
                 let has_more = end < n;
-                let next_cursor = if has_more { Some(end.to_string()) } else { None };
+                let next_cursor = if has_more {
+                    Some(end.to_string())
+                } else {
+                    None
+                };
 
                 let mut groups: Vec<ReferenceGroup> = Vec::new();
                 let mut file_indices: HashMap<PathBuf, usize> = HashMap::new();
@@ -736,7 +748,10 @@ impl LspRoutes {
                     } else {
                         let is_internal = target.abs_path.starts_with(&root);
                         let group = if is_internal {
-                            let rel = target.abs_path.strip_prefix(&root).unwrap_or(&target.abs_path);
+                            let rel = target
+                                .abs_path
+                                .strip_prefix(&root)
+                                .unwrap_or(&target.abs_path);
                             ReferenceGroup {
                                 path: Some(rel.to_string_lossy().to_string()),
                                 external: false,
@@ -748,8 +763,16 @@ impl LspRoutes {
                             let mut token = None;
                             let mut display_path = None;
                             if let Ok(canon) = target.abs_path.canonicalize() {
-                                if canon.is_file() && !vst_lsp::is_sensitive_path(&canon, Some(self.paths.vst_home())) {
-                                    let t = self.lsp_manager.get_or_mint_external_token(&workspace, &canon).await;
+                                if canon.is_file()
+                                    && !vst_lsp::is_sensitive_path(
+                                        &canon,
+                                        Some(self.paths.vst_home()),
+                                    )
+                                {
+                                    let t = self
+                                        .lsp_manager
+                                        .get_or_mint_external_token(&workspace, &canon)
+                                        .await;
                                     display_path = Some(canon.to_string_lossy().to_string());
                                     token = Some(t);
                                 }
@@ -773,7 +796,9 @@ impl LspRoutes {
                     cursor: next_cursor,
                 })
             }
-            _ => Err(LspRouteError::Internal("Unexpected LSP response variant".to_string())),
+            _ => Err(LspRouteError::Internal(
+                "Unexpected LSP response variant".to_string(),
+            )),
         }
     }
 
@@ -791,9 +816,7 @@ impl LspRoutes {
                 path: path.to_string(),
             }
         } else {
-            LspFileRef::Workspace {
-                path: file_param,
-            }
+            LspFileRef::Workspace { path: file_param }
         };
 
         let root = self.resolve_workspace_root(&workspace).await?;
@@ -847,7 +870,9 @@ impl LspRoutes {
 
         match resp {
             LspResponse::Outline(val) => Ok(parse_outline_response(val)),
-            _ => Err(LspRouteError::Internal("Unexpected LSP response variant".to_string())),
+            _ => Err(LspRouteError::Internal(
+                "Unexpected LSP response variant".to_string(),
+            )),
         }
     }
 }
@@ -1044,10 +1069,7 @@ fn extract_signature_and_doc(raw: &str) -> (String, Option<String>) {
             if let Some(end_fence) = code_content.find("```") {
                 let signature = code_content[..end_fence].trim().to_string();
                 let remaining = code_content[end_fence + 3..].trim();
-                let doc_str = remaining
-                    .strip_prefix("---")
-                    .unwrap_or(remaining)
-                    .trim();
+                let doc_str = remaining.strip_prefix("---").unwrap_or(remaining).trim();
                 let doc = if doc_str.is_empty() {
                     None
                 } else {
@@ -1060,6 +1082,9 @@ fn extract_signature_and_doc(raw: &str) -> (String, Option<String>) {
 
     let mut parts = raw.splitn(2, "\n\n");
     let first = parts.next().unwrap_or("").trim().to_string();
-    let rest = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let rest = parts
+        .next()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     (first, rest)
 }

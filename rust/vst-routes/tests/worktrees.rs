@@ -492,7 +492,10 @@ async fn create_worktree_agy_mode_defaults_main_channel_to_tmux() {
     init_git_repo(git_repo_dir.path());
     let vst_data_dir = tempdir().unwrap();
     routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
-    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+    store
+        .add_project(real_git_project(git_repo_dir.path()))
+        .await
+        .unwrap();
 
     let res = routes
         .create_worktree(CreateWorktreeBody {
@@ -529,7 +532,10 @@ async fn create_worktree_cursor_mode_defaults_main_channel_to_json() {
     init_git_repo(git_repo_dir.path());
     let vst_data_dir = tempdir().unwrap();
     routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
-    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+    store
+        .add_project(real_git_project(git_repo_dir.path()))
+        .await
+        .unwrap();
 
     let res = routes
         .create_worktree(CreateWorktreeBody {
@@ -599,7 +605,10 @@ async fn create_worktree_use_tmux_false_without_channel_yields_pty() {
     init_git_repo(git_repo_dir.path());
     let vst_data_dir = tempdir().unwrap();
     routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
-    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+    store
+        .add_project(real_git_project(git_repo_dir.path()))
+        .await
+        .unwrap();
 
     let res = routes
         .create_worktree(CreateWorktreeBody {
@@ -871,7 +880,10 @@ async fn test_worktree_patch_lsp_enabled() {
         .unwrap();
     assert!(patch_res2.ok);
     assert!(patch_res2.worktree.lsp_enabled);
-    assert!(rx.try_recv().is_err(), "Idempotent patch should not broadcast");
+    assert!(
+        rx.try_recv().is_err(),
+        "Idempotent patch should not broadcast"
+    );
 
     // 3. PATCH with enabled: false
     let patch_res3 = routes
@@ -1141,9 +1153,9 @@ fn test_search_snippet_basic_split() {
 #[test]
 fn test_search_snippet_truncation_240() {
     // Build a line > 240 chars with a match in the middle.
-    let prefix = "a".repeat(100);    // 100 chars
-    let matched = "MATCH";           // 5 chars
-    let suffix = "z".repeat(200);    // 200 chars
+    let prefix = "a".repeat(100); // 100 chars
+    let matched = "MATCH"; // 5 chars
+    let suffix = "z".repeat(200); // 200 chars
     let line = format!("{prefix}{matched}{suffix}");
 
     let start = prefix.len();
@@ -1160,7 +1172,10 @@ fn test_search_snippet_truncation_240() {
     );
     assert_eq!(mid, "MATCH");
     // pre was 100 chars > SNIP_LEAD(32), so it should be elided to "…" + 16 chars
-    assert!(pre.starts_with('…'), "pre should start with ellipsis: {pre:?}");
+    assert!(
+        pre.starts_with('…'),
+        "pre should start with ellipsis: {pre:?}"
+    );
     assert_eq!(pre.chars().count(), 17); // "…" (1 char) + 16 kept
 }
 
@@ -1215,7 +1230,9 @@ async fn test_search_integration_real_rg() {
     tokio::fs::write(wt_path.join("hello.txt"), "hello world\ngoodbye world\n")
         .await
         .unwrap();
-    tokio::fs::create_dir_all(wt_path.join("sub")).await.unwrap();
+    tokio::fs::create_dir_all(wt_path.join("sub"))
+        .await
+        .unwrap();
     tokio::fs::write(wt_path.join("sub/deep.txt"), "another world here\n")
         .await
         .unwrap();
@@ -1278,19 +1295,20 @@ async fn test_file_search_integration() {
 
     let wt_path = routes.paths.worktree_path("proj-1", "wt-1");
     tokio::fs::create_dir_all(&wt_path).await.unwrap();
-    tokio::fs::create_dir_all(wt_path.join("src/other")).await.unwrap();
+    tokio::fs::create_dir_all(wt_path.join("src/other"))
+        .await
+        .unwrap();
     tokio::fs::write(wt_path.join("src/main.rs"), "fn main() {}\n")
         .await
         .unwrap();
     tokio::fs::write(wt_path.join("src/other/zzmain.rs"), "// not main\n")
         .await
         .unwrap();
-    tokio::fs::write(wt_path.join("README.md"), "# Title\n").await.unwrap();
-
-    let result = routes
-        .file_search("wt-1", "main", None)
+    tokio::fs::write(wt_path.join("README.md"), "# Title\n")
         .await
         .unwrap();
+
+    let result = routes.file_search("wt-1", "main", None).await.unwrap();
 
     // `main` is a filename prefix-match for src/main.rs, so it ranks first.
     assert_eq!(
@@ -1390,7 +1408,10 @@ fn test_gutter_parse_diff_hunks() {
         "line 21 should be in modified, got modified: {:?}",
         result.modified
     );
-    assert!(result.modified.contains(&22), "line 22 should be in modified");
+    assert!(
+        result.modified.contains(&22),
+        "line 22 should be in modified"
+    );
 }
 
 /// 4.T1 variant: Test the `0`-sentinel case for deletion before line 1.
@@ -1448,7 +1469,8 @@ async fn test_gutter_untracked_files() {
 
     // All 3 lines should be marked as added
     assert_eq!(
-        result.added, vec![1, 2, 3],
+        result.added,
+        vec![1, 2, 3],
         "untracked UTF-8 file should mark all lines as added"
     );
     assert!(result.deleted.is_empty(), "deleted should be empty");
@@ -1467,8 +1489,14 @@ async fn test_gutter_untracked_files() {
 
     // Binary file should return all-empty
     assert!(result.added.is_empty(), "added should be empty for binary");
-    assert!(result.deleted.is_empty(), "deleted should be empty for binary");
-    assert!(result.modified.is_empty(), "modified should be empty for binary");
+    assert!(
+        result.deleted.is_empty(),
+        "deleted should be empty for binary"
+    );
+    assert!(
+        result.modified.is_empty(),
+        "modified should be empty for binary"
+    );
 }
 
 /// 4.T2 variant: Empty untracked file should return empty `added`.
@@ -1486,16 +1514,27 @@ async fn test_gutter_untracked_empty_file() {
     init_git_repo(&wt_path);
 
     // Empty untracked file
-    tokio::fs::write(wt_path.join("empty.txt"), "").await.unwrap();
+    tokio::fs::write(wt_path.join("empty.txt"), "")
+        .await
+        .unwrap();
 
     let result = routes
         .gutter("wt-1", "empty.txt")
         .await
         .expect("gutter should succeed for empty file");
 
-    assert!(result.added.is_empty(), "empty file should have no added lines");
-    assert!(result.deleted.is_empty(), "empty file should have no deleted lines");
-    assert!(result.modified.is_empty(), "empty file should have no modified lines");
+    assert!(
+        result.added.is_empty(),
+        "empty file should have no added lines"
+    );
+    assert!(
+        result.deleted.is_empty(),
+        "empty file should have no deleted lines"
+    );
+    assert!(
+        result.modified.is_empty(),
+        "empty file should have no modified lines"
+    );
 }
 
 /// 4.T3: Integration test — tempdir git fixture — modify a tracked file
@@ -1579,9 +1618,7 @@ async fn test_gutter_binary_tracked_file() {
     // Commit a binary file
     let binary_content = vec![0xFF, 0xFE, 0x00, 0x01, 0x00];
     let bin_path = wt_path.join("binary.bin");
-    tokio::fs::write(&bin_path, &binary_content)
-        .await
-        .unwrap();
+    tokio::fs::write(&bin_path, &binary_content).await.unwrap();
 
     std::process::Command::new("git")
         .args(["add", "binary.bin"])
@@ -1677,7 +1714,12 @@ async fn test_open_files_append_is_idempotent() {
     store.add_project(project).await.unwrap();
 
     routes
-        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .open_file_durable(
+            "wt-1",
+            OpenFilesBody {
+                path: "src/a.rs".into(),
+            },
+        )
         .await
         .expect("open_file_durable should succeed");
     let list = routes
@@ -1687,7 +1729,12 @@ async fn test_open_files_append_is_idempotent() {
     assert_eq!(list.paths, vec!["src/a.rs".to_string()]);
 
     routes
-        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .open_file_durable(
+            "wt-1",
+            OpenFilesBody {
+                path: "src/a.rs".into(),
+            },
+        )
         .await
         .expect("re-opening the same path should succeed");
     let list = routes
@@ -1705,11 +1752,21 @@ async fn test_open_files_delete_removes_path() {
     store.add_project(project).await.unwrap();
 
     routes
-        .open_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .open_file_durable(
+            "wt-1",
+            OpenFilesBody {
+                path: "src/a.rs".into(),
+            },
+        )
         .await
         .expect("open_file_durable should succeed");
     routes
-        .close_file_durable("wt-1", OpenFilesBody { path: "src/a.rs".into() })
+        .close_file_durable(
+            "wt-1",
+            OpenFilesBody {
+                path: "src/a.rs".into(),
+            },
+        )
         .await
         .expect("close_file_durable should succeed");
     let list = routes
@@ -1727,7 +1784,12 @@ async fn test_open_files_rejects_escaping_path() {
     store.add_project(project).await.unwrap();
 
     let err = routes
-        .open_file_durable("wt-1", OpenFilesBody { path: "../../etc/passwd".into() })
+        .open_file_durable(
+            "wt-1",
+            OpenFilesBody {
+                path: "../../etc/passwd".into(),
+            },
+        )
         .await
         .expect_err("escaping path should be rejected");
     assert!(

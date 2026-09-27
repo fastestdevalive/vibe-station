@@ -416,7 +416,11 @@ mod tests {
         // Wait for the debounce to fire.
         tokio::time::sleep(Duration::from_millis(80)).await;
 
-        assert_eq!(call_count.load(Ordering::SeqCst), 1, "should fire exactly once");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "should fire exactly once"
+        );
         assert_eq!(
             received_path.lock().unwrap().as_deref(),
             Some("/tmp/fake/single.txt"),

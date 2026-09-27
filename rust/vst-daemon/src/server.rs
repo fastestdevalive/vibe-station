@@ -26,7 +26,10 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
 use vst_git::paths::Paths;
-use vst_lifecycle::subagent_notify::{NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle};
+use vst_lifecycle::subagent_notify::{
+    NotifyDeps, PillPayload, SessionLookup, SubagentNotifyHandle,
+};
+use vst_lsp::{LspManager, WorkspaceKey};
 use vst_proc::tmux::Tmux;
 use vst_routes::attachments::{
     AttachmentRouteError, AttachmentRoutes, UploadPart, MAX_BODY_BYTES, MAX_FILE_BYTES,
@@ -37,6 +40,7 @@ use vst_routes::auth::{
 };
 use vst_routes::fs::FsRoutes;
 use vst_routes::health::HealthRoutes;
+use vst_routes::lsp::{lsp_err_to_response, LspRoutes};
 use vst_routes::mobile_auth::{MobileAuthRouteError, MobileAuthRoutes, OneTimeCodeStore};
 use vst_routes::modes::{json_unsupported_cli, ModeRouteError, ModeRoutes};
 use vst_routes::oobe::{OobeRouteError, OobeRoutes};
@@ -49,8 +53,6 @@ use vst_routes::sessions::{
     TranscriptError, TranscriptQuery, TranscriptResponse,
 };
 use vst_routes::settings::{SettingsRouteError, SettingsRoutes};
-use vst_lsp::{LspManager, WorkspaceKey};
-use vst_routes::lsp::{lsp_err_to_response, LspRoutes};
 use vst_routes::skills::SkillsRoutes;
 use vst_routes::tailscale::{TailscaleRouteError, TailscaleRoutes};
 use vst_routes::worktrees::{DiffResponse, FileResponse, WorktreeRouteError, WorktreeRoutes};
@@ -296,9 +298,7 @@ fn spawn_subagent_notify_listener(
             };
             match event {
                 vst_types::events::ServerEvent::SessionState {
-                    session_id,
-                    state,
-                    ..
+                    session_id, state, ..
                 } => {
                     let prev = last_states
                         .get(&session_id)
@@ -500,7 +500,9 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
-        dist_path: opts.dist_path.map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
+        dist_path: opts
+            .dist_path
+            .map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
         persist_epoch: opts.persist_epoch,
         store: opts.store,
         broadcaster: opts.broadcaster,
@@ -570,7 +572,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/projects/:id",
             patch(handle_patch_project).delete(handle_delete_project),
         )
-        .route("/projects/:id/lsp-enabled", patch(handle_patch_project_lsp_enabled))
+        .route(
+            "/projects/:id/lsp-enabled",
+            patch(handle_patch_project_lsp_enabled),
+        )
         .route("/projects/:id/tree", get(handle_project_tree))
         .route("/projects/:id/file-list", get(handle_project_file_list))
         .route("/projects/:id/search", get(handle_project_search))
@@ -583,10 +588,19 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/projects/:id/diff/*path", get(handle_project_diff))
         .route("/projects/:id/commits", get(handle_project_commits))
         .route("/projects/:id/lsp/status", get(handle_project_lsp_status))
-        .route("/projects/:id/lsp/statuses", get(handle_project_lsp_statuses))
-        .route("/projects/:id/lsp/definition", post(handle_project_lsp_definition))
+        .route(
+            "/projects/:id/lsp/statuses",
+            get(handle_project_lsp_statuses),
+        )
+        .route(
+            "/projects/:id/lsp/definition",
+            post(handle_project_lsp_definition),
+        )
         .route("/projects/:id/lsp/hover", post(handle_project_lsp_hover))
-        .route("/projects/:id/lsp/references", post(handle_project_lsp_references))
+        .route(
+            "/projects/:id/lsp/references",
+            post(handle_project_lsp_references),
+        )
         .route("/projects/:id/lsp/outline", get(handle_project_lsp_outline))
         .route(
             "/projects/:id/lsp/external-file/:token",
@@ -607,7 +621,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/worktrees/disk-usage", get(handle_worktrees_disk_usage))
         .route("/worktrees/:id/pin", patch(handle_worktree_pin))
         .route("/worktrees/:id/hide", patch(handle_worktree_hide))
-        .route("/worktrees/:id/lsp-enabled", patch(handle_patch_worktree_lsp_enabled))
+        .route(
+            "/worktrees/:id/lsp-enabled",
+            patch(handle_patch_worktree_lsp_enabled),
+        )
         .route("/worktrees/:id/rename", patch(handle_worktree_rename))
         .route("/worktrees/:id/reorder", patch(handle_worktree_reorder))
         .route("/worktrees/:id/done", post(handle_worktree_done))
@@ -615,7 +632,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/worktrees/:id/tree", get(handle_worktree_tree))
         .route("/worktrees/:id/file-list", get(handle_worktree_file_list))
         .route("/worktrees/:id/search", get(handle_worktree_search))
-        .route("/worktrees/:id/file-search", get(handle_worktree_file_search))
+        .route(
+            "/worktrees/:id/file-search",
+            get(handle_worktree_file_search),
+        )
         .route("/worktrees/:id/files/*path", get(handle_worktree_get_file))
         .route("/worktrees/:id/gutter/*path", get(handle_worktree_gutter))
         .route("/worktrees/:id/diff/*path", get(handle_worktree_diff))
@@ -634,11 +654,23 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
                 .delete(handle_worktree_delete_pending_file_opens),
         )
         .route("/worktrees/:id/lsp/status", get(handle_worktree_lsp_status))
-        .route("/worktrees/:id/lsp/statuses", get(handle_worktree_lsp_statuses))
-        .route("/worktrees/:id/lsp/definition", post(handle_worktree_lsp_definition))
+        .route(
+            "/worktrees/:id/lsp/statuses",
+            get(handle_worktree_lsp_statuses),
+        )
+        .route(
+            "/worktrees/:id/lsp/definition",
+            post(handle_worktree_lsp_definition),
+        )
         .route("/worktrees/:id/lsp/hover", post(handle_worktree_lsp_hover))
-        .route("/worktrees/:id/lsp/references", post(handle_worktree_lsp_references))
-        .route("/worktrees/:id/lsp/outline", get(handle_worktree_lsp_outline))
+        .route(
+            "/worktrees/:id/lsp/references",
+            post(handle_worktree_lsp_references),
+        )
+        .route(
+            "/worktrees/:id/lsp/outline",
+            get(handle_worktree_lsp_outline),
+        )
         .route(
             "/worktrees/:id/lsp/external-file/:token",
             get(handle_worktree_lsp_external_file),
@@ -1175,6 +1207,11 @@ fn dispatch_lane_key(msg: &ClientMessage) -> Option<String> {
     }
 }
 
+// Each parameter is a distinct piece of the accepted connection's context
+// (dispatch wiring, auth scope/identity, token lifetime, rejection flag);
+// bundling them into a struct just to satisfy this lint would obscure the
+// single call site more than it would clarify it.
+#[allow(clippy::too_many_arguments)]
 async fn handle_socket(
     socket: WebSocket,
     dispatch_ctx: DispatchContext,
@@ -1416,8 +1453,7 @@ async fn handle_socket(
     // reload / crashed tab / lost socket can't leak a watcher (or its inotify
     // fds) forever. Must run BEFORE `conn.cleanup()` clears the connection's
     // watcher maps, or `tree_watch_keys()` would report nothing to release.
-    release_connection_tree_watches(&conn, &dispatch_ctx.watchers, &dispatch_ctx.file_search)
-        .await;
+    release_connection_tree_watches(&conn, &dispatch_ctx.watchers, &dispatch_ctx.file_search).await;
     conn.cleanup().await;
     ready_state.store(3, Ordering::SeqCst);
     let _ = forwarder_handle.await;

@@ -33,6 +33,9 @@ jobs:
 
       - name: Install cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rust/Cargo.toml
+          arguments: --all-features
 
       - name: Run the gate
         run: rust/scripts/rust-gate.sh --workspace

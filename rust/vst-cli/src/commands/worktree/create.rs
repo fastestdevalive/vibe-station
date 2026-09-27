@@ -13,7 +13,7 @@ use crate::text_source::resolve_file_or_inline;
 
 use vst_types::rest::shared::Worktree;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorktreeCreateOptions {
     pub project_id: String,
     pub mode: String,
@@ -25,23 +25,6 @@ pub struct WorktreeCreateOptions {
     pub channel: Option<String>,
     pub parent: Option<String>,
     pub no_parent: bool,
-}
-
-impl Default for WorktreeCreateOptions {
-    fn default() -> Self {
-        Self {
-            project_id: String::new(),
-            mode: String::new(),
-            name: None,
-            base: None,
-            branch: None,
-            prompt: None,
-            prompt_file: None,
-            channel: None,
-            parent: None,
-            no_parent: false,
-        }
-    }
 }
 
 pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOptions, String> {

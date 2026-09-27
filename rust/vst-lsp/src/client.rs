@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -40,11 +39,12 @@ pub struct ProgressNotification {
     pub percentage: Option<u32>,
 }
 
-
-
 pub struct LspClient {
     next_id: AtomicU64,
     outgoing_tx: mpsc::UnboundedSender<String>,
+    // The map's value is "the reply channel for one in-flight LSP request";
+    // a type alias wouldn't make the field any clearer than it already is.
+    #[allow(clippy::type_complexity)]
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, LspClientError>>>>>,
 }
 
@@ -59,7 +59,10 @@ impl LspClient {
     {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<String>();
         let (progress_tx, progress_rx) = mpsc::unbounded_channel::<ProgressNotification>();
-        let pending_requests = Arc::new(Mutex::new(HashMap::<u64, oneshot::Sender<Result<Value, LspClientError>>>::new()));
+        let pending_requests = Arc::new(Mutex::new(HashMap::<
+            u64,
+            oneshot::Sender<Result<Value, LspClientError>>,
+        >::new()));
 
         let client = Arc::new(Self {
             next_id: AtomicU64::new(1),
@@ -146,15 +149,18 @@ impl LspClient {
                             let sender = pending_for_reader.lock().await.remove(&id);
                             if let Some(tx) = sender {
                                 if let Some(err) = value.get("error") {
-                                    let code = err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+                                    let code =
+                                        err.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
                                     let message = err
                                         .get("message")
                                         .and_then(|m| m.as_str())
                                         .unwrap_or("Unknown RPC error")
                                         .to_string();
-                                    let _ = tx.send(Err(LspClientError::RpcError { code, message }));
+                                    let _ =
+                                        tx.send(Err(LspClientError::RpcError { code, message }));
                                 } else {
-                                    let result = value.get("result").cloned().unwrap_or(Value::Null);
+                                    let result =
+                                        value.get("result").cloned().unwrap_or(Value::Null);
                                     let _ = tx.send(Ok(result));
                                 }
                             }
@@ -237,9 +243,18 @@ impl LspClient {
             "end" => ProgressKind::End,
             _ => return None,
         };
-        let title = value.get("title").and_then(|t| t.as_str()).map(String::from);
-        let message = value.get("message").and_then(|m| m.as_str()).map(String::from);
-        let percentage = value.get("percentage").and_then(|p| p.as_u64()).map(|p| p as u32);
+        let title = value
+            .get("title")
+            .and_then(|t| t.as_str())
+            .map(String::from);
+        let message = value
+            .get("message")
+            .and_then(|m| m.as_str())
+            .map(String::from);
+        let percentage = value
+            .get("percentage")
+            .and_then(|p| p.as_u64())
+            .map(|p| p as u32);
 
         Some(ProgressNotification {
             token,

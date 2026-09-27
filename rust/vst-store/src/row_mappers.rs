@@ -347,7 +347,6 @@ pub fn row_to_worktree(row: &WorktreeRow, sessions: Vec<SessionRecord>) -> Workt
     }
 }
 
-
 pub fn worktree_to_row(w: &WorktreeRecord, project_id: &str) -> WorktreeRow {
     WorktreeRow {
         id: w.id.clone(),

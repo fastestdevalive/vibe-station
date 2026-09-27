@@ -57,7 +57,9 @@ pub fn resolve_path(target: Option<&str>) -> String {
                 Ok(abs) => abs.to_string_lossy().to_string(),
                 Err(_) => {
                     let cwd = std::env::current_dir().unwrap_or_default();
-                    normalize_lexically(&cwd.join(t)).to_string_lossy().to_string()
+                    normalize_lexically(&cwd.join(t))
+                        .to_string_lossy()
+                        .to_string()
                 }
             }
         }
@@ -139,7 +141,10 @@ pub async fn post_open_at(
                 // surface the real error instead of misreporting it as
                 // "daemon not running" and kicking off a pointless
                 // launch-and-retry cycle.
-                Err(OpenFailure::Http { status: 0, message: msg })
+                Err(OpenFailure::Http {
+                    status: 0,
+                    message: msg,
+                })
             } else {
                 Err(OpenFailure::NoDaemon)
             }
@@ -277,9 +282,7 @@ pub async fn run_open(opts: OpenOptions) -> Result<(), (String, i32)> {
 /// `path_not_found` (missing path) is the one case that hints at `--force-create`.
 fn open_failure_message(message: &str, abs_path: &str) -> String {
     if message == "path_not_found" {
-        format!(
-            "Path does not exist: {abs_path}\nUse --force-create to create it."
-        )
+        format!("Path does not exist: {abs_path}\nUse --force-create to create it.")
     } else {
         format!("Failed to open project: {message}")
     }

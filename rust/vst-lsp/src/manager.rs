@@ -13,10 +13,7 @@ use crate::client::{LspClient, LspClientError, ProgressKind};
 use crate::registry::{self, LanguageServerConfig};
 
 pub fn is_sensitive_path(path: &Path, vst_home: Option<&Path>) -> bool {
-    let mut prefixes: Vec<PathBuf> = vec![
-        PathBuf::from("/etc"),
-        PathBuf::from("/root"),
-    ];
+    let mut prefixes: Vec<PathBuf> = vec![PathBuf::from("/etc"), PathBuf::from("/root")];
 
     let home = std::env::var("HOME").ok().map(PathBuf::from);
     if let Some(h) = &home {
@@ -112,8 +109,10 @@ impl ExternalTokenMap {
             }
         }
 
-        self.tokens.insert(token.clone(), canonical_path.to_path_buf());
-        self.paths.insert(canonical_path.to_path_buf(), token.clone());
+        self.tokens
+            .insert(token.clone(), canonical_path.to_path_buf());
+        self.paths
+            .insert(canonical_path.to_path_buf(), token.clone());
         self.order.push_back(token.clone());
 
         token
@@ -157,14 +156,22 @@ impl From<LspClientError> for LspError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WorkspaceKey {
-    Worktree { project_id: String, worktree_id: String },
-    Project { project_id: String },
+    Worktree {
+        project_id: String,
+        worktree_id: String,
+    },
+    Project {
+        project_id: String,
+    },
 }
 
 impl WorkspaceKey {
     pub fn to_key_string(&self) -> String {
         match self {
-            Self::Worktree { project_id, worktree_id } => format!("{}-{}", project_id, worktree_id),
+            Self::Worktree {
+                project_id,
+                worktree_id,
+            } => format!("{}-{}", project_id, worktree_id),
             Self::Project { project_id } => project_id.clone(),
         }
     }
@@ -297,7 +304,12 @@ impl LspManager {
     }
 
     /// Query the LSP status for a given workspace and file path (or extension).
-    pub async fn status(&self, workspace: &WorkspaceKey, path: &str, enabled: bool) -> (LspStatus, Option<String>) {
+    pub async fn status(
+        &self,
+        workspace: &WorkspaceKey,
+        path: &str,
+        enabled: bool,
+    ) -> (LspStatus, Option<String>) {
         let ext = Path::new(path)
             .extension()
             .and_then(|s| s.to_str())
@@ -350,13 +362,22 @@ impl LspManager {
     }
 
     /// For tests: manually insert a ServerHandle
-    pub async fn insert_server_handle(&self, key: WorkspaceKey, lang: String, handle: ServerHandle) {
+    pub async fn insert_server_handle(
+        &self,
+        key: WorkspaceKey,
+        lang: String,
+        handle: ServerHandle,
+    ) {
         self.servers.lock().await.insert((key, lang), handle);
     }
 
     /// For tests: get a ServerHandle
     pub async fn get_server_handle(&self, key: &WorkspaceKey, lang: &str) -> Option<ServerHandle> {
-        self.servers.lock().await.get(&(key.clone(), lang.to_string())).cloned()
+        self.servers
+            .lock()
+            .await
+            .get(&(key.clone(), lang.to_string()))
+            .cloned()
     }
 
     /// For tests: insert an Arc<FileWatcher>
@@ -369,21 +390,38 @@ impl LspManager {
         self.watchers.lock().await.get(key).cloned()
     }
 
-    pub async fn get_or_mint_external_token(&self, workspace: &WorkspaceKey, canonical_path: &Path) -> String {
+    pub async fn get_or_mint_external_token(
+        &self,
+        workspace: &WorkspaceKey,
+        canonical_path: &Path,
+    ) -> String {
         let mut tokens_map = self.external_tokens.lock().await;
-        let entry = tokens_map.entry(workspace.clone()).or_insert_with(ExternalTokenMap::new);
+        let entry = tokens_map
+            .entry(workspace.clone())
+            .or_insert_with(ExternalTokenMap::new);
         entry.get_or_mint(canonical_path)
     }
 
-    pub async fn resolve_external_token(&self, workspace: &WorkspaceKey, token: &str) -> Option<PathBuf> {
+    pub async fn resolve_external_token(
+        &self,
+        workspace: &WorkspaceKey,
+        token: &str,
+    ) -> Option<PathBuf> {
         let tokens_map = self.external_tokens.lock().await;
         tokens_map.get(workspace).and_then(|m| m.resolve(token))
     }
 
     /// For tests: directly insert an external token mapping
-    pub async fn insert_external_token(&self, workspace: WorkspaceKey, token: String, path: PathBuf) {
+    pub async fn insert_external_token(
+        &self,
+        workspace: WorkspaceKey,
+        token: String,
+        path: PathBuf,
+    ) {
         let mut tokens_map = self.external_tokens.lock().await;
-        let entry = tokens_map.entry(workspace).or_insert_with(ExternalTokenMap::new);
+        let entry = tokens_map
+            .entry(workspace)
+            .or_insert_with(ExternalTokenMap::new);
         entry.tokens.insert(token.clone(), path.clone());
         entry.paths.insert(path, token.clone());
         entry.order.push_back(token);
@@ -396,6 +434,11 @@ impl LspManager {
             .contains(&(workspace.clone(), lang.to_string()))
     }
 
+    // Each parameter is a distinct piece of request context (workspace,
+    // language, file, request kind, cursor position, feature flag); bundling
+    // them into a struct just to satisfy this lint would obscure call sites
+    // more than it would clarify this signature.
+    #[allow(clippy::too_many_arguments)]
     pub async fn request(
         &self,
         workspace: WorkspaceKey,
@@ -463,7 +506,9 @@ impl LspManager {
         {
             let mut open_files = handle.open_files.lock().await;
             if !open_files.contains(&abs_path) {
-                let content = tokio::fs::read_to_string(&abs_path).await.unwrap_or_default();
+                let content = tokio::fs::read_to_string(&abs_path)
+                    .await
+                    .unwrap_or_default();
                 let did_open = json!({
                     "textDocument": {
                         "uri": uri,
@@ -474,7 +519,11 @@ impl LspManager {
                 });
                 let _ = handle.client.notify("textDocument/didOpen", did_open);
                 open_files.insert(abs_path.clone());
-                handle.file_versions.lock().await.insert(abs_path.clone(), 1);
+                handle
+                    .file_versions
+                    .lock()
+                    .await
+                    .insert(abs_path.clone(), 1);
             }
         }
 
@@ -500,7 +549,10 @@ impl LspManager {
                     "textDocument": { "uri": uri },
                     "position": { "line": line, "character": character }
                 });
-                let res = handle.client.request("textDocument/definition", params).await?;
+                let res = handle
+                    .client
+                    .request("textDocument/definition", params)
+                    .await?;
                 let locations = parse_definition_response(res).await;
                 Ok(LspResponse::Definition(locations))
             }
@@ -520,7 +572,10 @@ impl LspManager {
                     "position": { "line": line, "character": character },
                     "context": { "includeDeclaration": true }
                 });
-                let res = handle.client.request("textDocument/references", params).await?;
+                let res = handle
+                    .client
+                    .request("textDocument/references", params)
+                    .await?;
                 let targets = parse_references_response(res, Some(&abs_path), pos).await;
                 Ok(LspResponse::References(targets))
             }
@@ -528,7 +583,10 @@ impl LspManager {
                 let params = json!({
                     "textDocument": { "uri": uri }
                 });
-                let res = handle.client.request("textDocument/documentSymbol", params).await?;
+                let res = handle
+                    .client
+                    .request("textDocument/documentSymbol", params)
+                    .await?;
                 Ok(LspResponse::Outline(res))
             }
         }
@@ -595,14 +653,20 @@ impl LspManager {
 
         // Decision 3: dedicated CARGO_TARGET_DIR for rust-analyzer
         if cfg.language == "rust" {
-            let target_dir = self.vst_home.join("lsp-target").join(workspace.to_key_string());
+            let target_dir = self
+                .vst_home
+                .join("lsp-target")
+                .join(workspace.to_key_string());
             let _ = tokio::fs::create_dir_all(&target_dir).await;
             cmd.env("CARGO_TARGET_DIR", target_dir);
         }
 
         // Decision 11: Java's per-workspace -data directory
         if cfg.language == "java" {
-            let data_dir = self.vst_home.join("lsp-jdtls-data").join(workspace.to_key_string());
+            let data_dir = self
+                .vst_home
+                .join("lsp-jdtls-data")
+                .join(workspace.to_key_string());
             let _ = tokio::fs::create_dir_all(&data_dir).await;
             cmd.arg("-data").arg(&data_dir);
         }
@@ -861,8 +925,14 @@ async fn parse_definition_response(val: Value) -> Vec<LocationTarget> {
             .or_else(|| item.get("targetRange"));
 
         let start = range.and_then(|r| r.get("start"));
-        let line = start.and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
-        let character = start.and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+        let line = start
+            .and_then(|s| s.get("line"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(0) as u32;
+        let character = start
+            .and_then(|s| s.get("character"))
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0) as u32;
 
         if let Some(uri) = uri_str {
             let path_str = uri.strip_prefix("file://").unwrap_or(uri);
@@ -907,8 +977,14 @@ async fn parse_references_response(
             .or_else(|| item.get("targetRange"));
 
         let start = range.and_then(|r| r.get("start"));
-        let line = start.and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as u32;
-        let character = start.and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as u32;
+        let line = start
+            .and_then(|s| s.get("line"))
+            .and_then(|l| l.as_u64())
+            .unwrap_or(0) as u32;
+        let character = start
+            .and_then(|s| s.get("character"))
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0) as u32;
 
         let is_declaration = item
             .get("isDeclaration")
