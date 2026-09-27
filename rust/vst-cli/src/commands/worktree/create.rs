@@ -22,7 +22,7 @@ pub struct WorktreeCreateOptions {
     pub branch: Option<String>,
     pub prompt: Option<String>,
     pub prompt_file: Option<String>,
-    pub channel: String,
+    pub channel: Option<String>,
     pub parent: Option<String>,
     pub no_parent: bool,
 }
@@ -37,7 +37,7 @@ impl Default for WorktreeCreateOptions {
             branch: None,
             prompt: None,
             prompt_file: None,
-            channel: "tmux".to_string(),
+            channel: None,
             parent: None,
             no_parent: false,
         }
@@ -91,13 +91,14 @@ pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOp
                 opts.prompt_file = Some(s.trim_start_matches("--prompt-file=").to_string());
             }
             "--channel" => {
-                opts.channel = iter
-                    .next()
-                    .cloned()
-                    .ok_or_else(|| "--channel requires an argument".to_string())?;
+                opts.channel = Some(
+                    iter.next()
+                        .cloned()
+                        .ok_or_else(|| "--channel requires an argument".to_string())?,
+                );
             }
             s if s.starts_with("--channel=") => {
-                opts.channel = s.trim_start_matches("--channel=").to_string();
+                opts.channel = Some(s.trim_start_matches("--channel=").to_string());
             }
             "--parent" | "--source-agent" => {
                 opts.parent = iter.next().cloned();
@@ -133,10 +134,13 @@ pub fn parse_worktree_create_options(args: &[String]) -> Result<WorktreeCreateOp
 }
 
 pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (String, i32)> {
-    let channel = match opts.channel.as_str() {
-        "tmux" => Channel::Tmux,
-        "json" => Channel::Json,
-        other => {
+    // Validate channel value: omitted -> send None and let the daemon resolve
+    // the effective default (Decision 4); explicit tmux/json -> that literal.
+    let channel = match opts.channel.as_deref() {
+        None => None,
+        Some("tmux") => Some(Channel::Tmux),
+        Some("json") => Some(Channel::Json),
+        Some(other) => {
             return Err((
                 format!("--channel must be 'tmux' or 'json' (got '{other}')"),
                 1,
@@ -167,7 +171,7 @@ pub async fn run_worktree_create(opts: WorktreeCreateOptions) -> Result<(), (Str
         base_branch: opts.base,
         prompt,
         use_tmux: None,
-        channel: Some(channel),
+        channel,
         name: opts.name,
         source_agent_id,
         skip_auto_turn: None,

@@ -1,6 +1,7 @@
-<!-- vst-skill-version: 0.0.0 -->
+<!-- vst-skill-version: 1.0.0 -->
 ---
 name: vst
+version: 1.0.0
 description: Spawn isolated git-worktree coding sessions (claude, cursor, opencode) on a developer's machine via the vst daemon, send messages, stream output, and tear down. Use when an external agent or service needs to drive background coding work and coordinate with it.
 ---
 
@@ -100,9 +101,7 @@ WORKTREE_ID=$(vst worktree create <projectId> \
 SESSION_ID=$(vst agent ls --worktree="$WORKTREE_ID" --json | jq -r '.[0].id')
 ```
 
-**Sessions default to a tmux-backed terminal channel** — this applies to both `vst agent create` and `vst worktree create` (its main session inherits the same `--channel` flag and default). Pass `--channel=json` explicitly on either command if you need **Rich Chat** (the UI's name for the structured, per-turn `json` channel) instead. `--channel=pty` is not supported by the CLI.
-
-**For `agy`-mode sessions, prefer `tmux`** (the default) unless the user explicitly asks for Rich Chat/json — don't pass `--channel=json` for an `agy` session on your own initiative.
+**The default channel is per-CLI**: sessions default to **Rich Chat** (`json`) for `claude`/`cursor`/`opencode` modes, and **Terminal** (`tmux`) for `agy` modes — this applies to both `vst agent create` and `vst worktree create` (its main session inherits the same `--channel` flag and default). A user can override a CLI's default in the Settings UI ("Default channel"). Pass `--channel=json` or `--channel=tmux` explicitly on either command to override the default either way. `--channel=pty` is not supported by the CLI.
 
 **Modes** bind an agent CLI (`claude`, `cursor`, `opencode`) + mode-specific system-prompt context. The mode determines which CLI is used — do not pass `--agent` separately. Use `vst mode ls --json` to discover available modes.
 
@@ -134,6 +133,8 @@ vst terminal create "$VST_WORKTREE"
 ```
 
 Output is always plain text — two lines: a label then the session id. Capture it with `tail -1`. Do not use this after `vst worktree create` for the same worktree — the main session already exists.
+
+**Subagent channel inheritance.** When you omit `--mode` on `vst agent create`, the subagent inherits your mode — and with it your channel (same CLI). If you pass an explicit `--mode` naming a mode on a *different* CLI, the subagent gets that CLI's own default channel instead (e.g. an `agy` subagent spawned from a Rich Chat `claude` parent gets Terminal, never the parent's Rich Chat). Omitting `--channel` lets the daemon resolve the effective default (see §5); pass `--channel=json`/`--channel=tmux` to force a specific channel.
 
 ### Subagent Wake-up Lifecycle (What to do when woken up)
 

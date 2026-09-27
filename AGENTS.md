@@ -179,6 +179,7 @@ else if (mode.cli === "opencode") { ... }
 | `getEnvironment(cfg)` | yes | Extra env vars for the process |
 | `getReadySignal()` | yes | Sentinel string or fallback timeout |
 | `composeLaunchPrompt(...)` | yes | Build the shell line / post-launch input |
+| `default_channel()` | yes | Default execution channel for this CLI (`json` for claude/cursor/opencode, `tmux` for agy); used when no explicit/inherited channel and no user override resolve otherwise |
 | `setupWorkspaceHooks?(path)` | optional | Write hook scripts into the worktree |
 | `provideChatId?(args)` | optional | Pre-spawn: mint a chat ID (cursor) |
 | `captureChatId?(args)` | optional | Post-ready: read chat ID from token file |
