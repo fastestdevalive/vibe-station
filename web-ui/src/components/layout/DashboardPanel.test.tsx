@@ -281,13 +281,11 @@ describe("DashboardPanel", () => {
       const prSection = screen.getByText("pr created").closest("section");
       expect(prSection).not.toBeNull();
       const links = within(prSection!).getAllByRole("link", { name: /Proj A/i });
-      expect(links).toHaveLength(2);
+      // Rolled up to 1 worktree card (Phase 3)
+      expect(links).toHaveLength(1);
       for (const link of links) expect(link).toHaveAttribute("href", "/worktree/wt-1");
-      // Both cards' dots resolve to pr-open — no isMain preference on which
-      // CARD shows the branch's PR, even though only the isMain session's
-      // own `.pr` field was ever written.
       const dots = within(prSection!).getAllByLabelText(/status: pr-open/i);
-      expect(dots).toHaveLength(2);
+      expect(dots).toHaveLength(1);
     });
   });
 
@@ -660,4 +658,117 @@ describe("DashboardPanel", () => {
       expect(flat).not.toContain("sess-direct-1");
     });
   });
+
+  it("2.T3 — kanban column render caps at 10 before expand, full length after", async () => {
+    localStorage.setItem("dashboard:view", "kanban");
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("working")).toBeInTheDocument();
+    });
+
+    for (let i = 1; i <= 15; i++) {
+      api.__test.emit({
+        type: "session:created",
+        sessionId: `sess-extra-${i}`,
+        worktreeId: "wt-1",
+        projectId: "proj-a",
+        sessionType: "agent",
+        snapshot: {
+          id: `sess-extra-${i}`,
+          worktreeId: "wt-1",
+          projectId: "proj-a",
+          modeId: "mode-1",
+          type: "agent",
+          name: `Extra Agent ${i}`,
+          isMain: false,
+          state: "working",
+          lifecycleState: "working",
+          tmuxName: `sess-extra-${i}`,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    const workingCol = screen.getByText("working").closest(".dashboard-kanban__col") as HTMLElement;
+    expect(workingCol).not.toBeNull();
+
+    await waitFor(() => {
+      const chips = workingCol.querySelectorAll(".session-chip");
+      expect(chips.length).toBe(10);
+      expect(within(workingCol).getByRole("button", { name: /more/i })).toBeInTheDocument();
+    });
+
+    const moreBtn = within(workingCol).getByRole("button", { name: /more/i });
+    await userEvent.click(moreBtn);
+
+    await waitFor(() => {
+      const chips = workingCol.querySelectorAll(".session-chip");
+      expect(chips.length).toBe(16);
+      expect(within(workingCol).queryByRole("button", { name: /more/i })).toBeNull();
+    });
+  });
+
+  it("renders project cards as clickable links to /project/:projectId", async () => {
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const projLink = document.querySelector('a[href="/project/proj-a"]');
+      expect(projLink).not.toBeNull();
+      expect(projLink).toHaveClass("dashboard-card--project");
+    });
+  });
+
+  it("renders kanban column headers with minimal icons, uncapitalized labels, and counts without brackets", async () => {
+    localStorage.setItem("dashboard:view", "kanban");
+    const api = createMockApi();
+    render(
+      <MemoryRouter>
+        <Harness api={api}>
+          <DashboardPanel api={api} />
+        </Harness>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      const headers = document.querySelectorAll(".dashboard-kanban__col-header");
+      expect(headers.length).toBeGreaterThanOrEqual(4);
+    });
+
+    const headers = document.querySelectorAll(".dashboard-kanban__col-header");
+    const headerTexts = Array.from(headers).map((h) => {
+      const title = h.querySelector(".dashboard-kanban__col-title")?.textContent;
+      const count = h.querySelector(".dashboard-kanban__col-count")?.textContent;
+      const icon = h.querySelector(".dashboard-kanban__col-icon");
+      return { title, count, hasIcon: !!icon };
+    });
+
+    expect(headerTexts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: "working", count: expect.any(String), hasIcon: true }),
+        expect.objectContaining({ title: "needs you", count: expect.any(String), hasIcon: true }),
+        expect.objectContaining({ title: "idle", count: expect.any(String), hasIcon: true }),
+        expect.objectContaining({ title: "pr created", count: expect.any(String), hasIcon: true }),
+      ]),
+    );
+
+    for (const h of headerTexts) {
+      expect(h.count).not.toMatch(/[()]/);
+    }
+  });
 });
+

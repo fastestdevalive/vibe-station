@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { GitBranch, GitCommitHorizontal, Sparkles } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, Worktree } from "@/api/types";
@@ -7,9 +7,12 @@ import { useWorkspaceStore } from "@/hooks/useStore";
 import { resolveDefaultModeId } from "@/lib/defaultMode";
 import { createProjectDirectDraft } from "@/lib/projectDraft";
 import { useSessionBuckets } from "@/components/layout/DashboardPanel";
+import { SessionChip } from "@/components/layout/SessionChip";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus } from "@/lib/worktreeStatus";
 import { sessionLabel, worktreeLabel } from "@/lib/sessionLabel";
+import { worktreePrStatus } from "@/lib/statusColor";
+import { rollupPrSessionsByWorktree, type PrWorktreeGroup } from "@/lib/prWorktreeRollup";
 
 export interface ProjectHomeTabProps {
   api: ApiInstance;
@@ -66,6 +69,19 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
   // "Direct agents" list below). `bucketForRollup` is untouched, so no
   // docs/STATUS-INDICATORS.md update is needed.
   const { working, needsYou, idle, pr, finished } = useSessionBuckets(project.id, { worktreeOnly: true });
+
+  const worktreeById = useMemo(() => {
+    const map = new Map<string, Worktree>();
+    for (const wt of worktrees) {
+      map.set(wt.id, wt);
+    }
+    return map;
+  }, [worktrees]);
+
+  const rolledUpPr = useMemo(
+    () => rollupPrSessionsByWorktree(pr, worktreeById),
+    [pr, worktreeById],
+  );
 
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
 
@@ -153,25 +169,52 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
   // chip before the session name, since "main"/"Agent" alone doesn't say
   // which worktree a row belongs to.
   const renderSessionRow = (s: Session) => {
-    const wt = worktrees.find((w) => w.id === s.worktreeId);
+    const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
     return (
-      <button
+      <SessionChip
         key={s.id}
-        type="button"
-        className="project-home__worktree-row"
+        status={sessionStatus(sessionStates[s.id] ?? s.state)}
+        pr={null}
+        sessionLabel={sessionLabel(s)}
+        worktreeLabel={wt ? worktreeLabel(wt) : "direct"}
+        projectLabel={project.name}
+        groupLabel={wt ? worktreeLabel(wt) : project.name}
+        isDirect={!wt}
+        channel={s.channel}
+        createdAt={s.createdAt}
         onClick={() => onOpenAgent({ worktreeId: s.worktreeId ?? undefined, sessionId: s.id })}
-      >
-        <StatusDot status={sessionStatus(sessionStates[s.id] ?? s.state)} pr={null} />
-        {wt ? (
-          <span className="project-home__wt-chip" title={worktreeLabel(wt)}>
-            <GitBranch size={11} />
-            {worktreeLabel(wt)}
-          </span>
-        ) : null}
-        <span className="project-home__direct-name" title={sessionLabel(s)}>
-          {sessionLabel(s)}
-        </span>
-      </button>
+      />
+    );
+  };
+
+  // `prSessions` is the pr-bucket group's own sessions (from
+  // `rollupPrSessionsByWorktree`) — NOT every session on the worktree, so a
+  // `working` sibling outside the pr bucket can never win this row's status
+  // dot (found in review). `worktreePrStatus` still needs the FULL
+  // per-worktree session list (it reads the `isMain` session specifically,
+  // per its own branch-guard contract), so that one keeps using `sessions`.
+  const renderWorktreePrRow = ({ worktree: wt, sessions: prSessions }: PrWorktreeGroup) => {
+    const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
+    const mainSession = prSessions.find((s) => s.isMain) ?? prSessions[0];
+    const liveState = mainSession ? (sessionStates[mainSession.id] ?? mainSession.state) : "idle";
+    const status = sessionStatus(liveState);
+    const prStatus = worktreePrStatus(sessionsForWt, wt.branch);
+
+    const agentLabel = mainSession ? sessionLabel(mainSession) : "main";
+    return (
+      <SessionChip
+        key={wt.id}
+        status={status}
+        pr={prStatus}
+        sessionLabel={agentLabel}
+        worktreeLabel={wt.branch}
+        projectLabel={project.name}
+        groupLabel={project.name}
+        isDirect={false}
+        channel={mainSession?.channel}
+        createdAt={mainSession?.createdAt ?? wt.createdAt}
+        onClick={() => onOpenAgent({ worktreeId: wt.id, sessionId: mainSession?.id })}
+      />
     );
   };
 
@@ -286,11 +329,11 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
             </section>
           ) : null}
 
-          {pr.length > 0 ? (
+          {rolledUpPr.length > 0 ? (
             <section className="dashboard-section">
               <div className="dashboard-section__label">pr created</div>
               <div className="project-home__card-list">
-                {pr.map((s) => renderSessionRow(s))}
+                {rolledUpPr.map((group) => renderWorktreePrRow(group))}
               </div>
             </section>
           ) : null}

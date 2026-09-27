@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Columns3, LayoutList } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  Columns3,
+  GitPullRequest,
+  LayoutList,
+  Play,
+} from "lucide-react";
+import { useNavigate, type NavigateFunction } from "react-router-dom";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import type { ApiInstance } from "@/api";
-import type { PrStatus, Session } from "@/api/types";
-import { StatusDot } from "@/components/layout/StatusDot";
+import type { Project, PrStatus, Session, SessionState, Worktree } from "@/api/types";
+import { SessionChip } from "@/components/layout/SessionChip";
 import { useSubscription } from "@/hooks/useSubscription";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { type WorktreeRolledUpStatus, sessionStatus } from "@/lib/worktreeStatus";
 import { worktreePrStatus } from "@/lib/statusColor";
+import { rollupPrSessionsByWorktree, type PrWorktreeGroup } from "@/lib/prWorktreeRollup";
 import { sessionLabel } from "@/lib/sessionLabel";
-import { ModeIcon } from "@/components/agent/ModeIcon";
 import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
 
@@ -180,15 +188,159 @@ const DASHBOARD_SHOW_FINISHED_KEY = "dashboard:showFinished";
  * resolves the icon key for a single session and re-renders as modes
  * load/update/delete.
  */
-function CardIcon({ session, api }: { session: Session; api: ApiInstance }) {
-  const iconKey = useModeIcon(sessionModeId(session), api);
-  // aria-hidden: decorative — the card's text label conveys the session name.
+interface DashboardSessionItemProps {
+  session: Session;
+  api: ApiInstance;
+  projectById: Record<string, Project>;
+  worktreeById: Map<string, Worktree>;
+  worktreePrById: Map<string, PrStatus | null>;
+  sessionStates: Record<string, SessionState>;
+  sessions: Session[];
+  setActiveWorktree: (projectId: string, worktreeId: string, sessions: Session[]) => void;
+  navigate: NavigateFunction;
+}
+
+function DashboardSessionItem({
+  session: s,
+  api,
+  projectById,
+  worktreeById,
+  worktreePrById,
+  sessionStates,
+  sessions,
+  setActiveWorktree,
+  navigate,
+}: DashboardSessionItemProps) {
+  const modeIconKey = useModeIcon(sessionModeId(s), api);
+  const status = sessionStatus(sessionStates[s.id] ?? s.state);
+  const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
+  const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
+  const proj = s.projectId != null ? projectById[s.projectId] : undefined;
+
+  if (!wt) {
+    const href = s.projectId ? `/project/${s.projectId}/${s.id}` : `/session/${s.id}`;
+    return (
+      <div className="dashboard-card-shell">
+        <SessionChip
+          status={status}
+          pr={sessionPr}
+          sessionLabel={sessionLabel(s)}
+          worktreeLabel="direct"
+          projectLabel={proj?.name}
+          groupLabel={proj?.name ? `direct · ${proj.name}` : "direct"}
+          isDirect={true}
+          modeIconKey={modeIconKey ?? undefined}
+          channel={s.channel}
+          createdAt={s.createdAt}
+          href={href}
+          onClick={() => navigate(href)}
+        />
+      </div>
+    );
+  }
+
+  const sessionsForWt = sessions.filter((s2) => s2.worktreeId === wt.id);
+  const href = `/worktree/${wt.id}`;
+  const groupLabel = proj?.name ? `${wt.branch} · ${proj.name}` : `${wt.branch} · ${wt.id}`;
+
   return (
-    <span className="dashboard-card__icon" aria-hidden="true">
-      <ModeIcon iconKey={iconKey} channel={session.channel} size={14} />
-    </span>
+    <div className="dashboard-card-shell">
+      <SessionChip
+        status={status}
+        pr={sessionPr}
+        sessionLabel={sessionLabel(s)}
+        worktreeLabel={wt.name || wt.branch}
+        projectLabel={proj?.name ?? wt.projectId}
+        groupLabel={groupLabel}
+        isDirect={false}
+        modeIconKey={modeIconKey ?? undefined}
+        channel={s.channel}
+        createdAt={s.createdAt}
+        href={href}
+        onClick={() => {
+          setActiveWorktree(wt.projectId, wt.id, sessionsForWt);
+          navigate(href);
+        }}
+      />
+    </div>
   );
 }
+
+function DashboardWorktreePrItem({
+  worktree: wt,
+  prSessions,
+  projectById,
+  worktreePrById,
+  sessions,
+  sessionStates,
+  setActiveWorktree,
+  navigate,
+  api,
+}: {
+  worktree: Worktree;
+  /** Only the sessions that put this worktree in the PR bucket (from
+   *  `rollupPrSessionsByWorktree`'s group) — NOT every session on the
+   *  worktree, so a `working` sibling outside this bucket can never win the
+   *  card's status dot (found in review). */
+  prSessions: Session[];
+  projectById: Record<string, Project>;
+  worktreePrById: Map<string, PrStatus | null>;
+  /** Full session list — needed only for `setActiveWorktree`'s click handler,
+   *  which wants every session on this worktree, not just the pr-bucket ones. */
+  sessions: Session[];
+  sessionStates: Record<string, SessionState>;
+  setActiveWorktree: (projectId: string, worktreeId: string, sessions: Session[]) => void;
+  navigate: NavigateFunction;
+  api: ApiInstance;
+}) {
+  const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
+  const mainSession = prSessions.find((s) => s.isMain) ?? prSessions[0];
+  const modeIconKey = useModeIcon(mainSession ? sessionModeId(mainSession) : null, api);
+  const liveState = mainSession ? (sessionStates[mainSession.id] ?? mainSession.state) : "idle";
+  const status = sessionStatus(liveState);
+  const pr = worktreePrById.get(wt.id) ?? null;
+  const proj = projectById[wt.projectId];
+  const href = `/worktree/${wt.id}`;
+
+  const agentLabel = mainSession ? sessionLabel(mainSession) : (wt.name && wt.name !== wt.branch ? wt.name : "main");
+
+  return (
+    <div key={wt.id} className="dashboard-card-shell">
+      <SessionChip
+        status={status}
+        pr={pr}
+        sessionLabel={agentLabel}
+        worktreeLabel={wt.branch}
+        projectLabel={proj?.name ?? wt.projectId}
+        groupLabel={proj?.name ?? "project"}
+        modeIconKey={modeIconKey ?? undefined}
+        channel={mainSession?.channel}
+        createdAt={mainSession?.createdAt ?? wt.createdAt}
+        href={href}
+        onClick={() => {
+          setActiveWorktree(wt.projectId, wt.id, sessionsForWt);
+          navigate(href);
+        }}
+      />
+    </div>
+  );
+}
+
+type KanbanColKey = "working" | "needsYou" | "idle" | "pr" | "finished";
+
+const KANBAN_COLS: Record<
+  KanbanColKey,
+  {
+    label: string;
+    icon: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean | "true" | "false" }>;
+  }
+> = {
+  working: { label: "working", icon: Play },
+  needsYou: { label: "needs you", icon: AlertCircle },
+  idle: { label: "idle", icon: Clock },
+  pr: { label: "pr created", icon: GitPullRequest },
+  finished: { label: "finished", icon: CheckCircle2 },
+};
 
 export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
   const navigate = useNavigate();
@@ -299,63 +451,83 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
 
   const { working, needsYou, idle, pr, finished } = useSessionBuckets(projectFilter);
 
-  const renderDashboardItem = useCallback(
-    (s: Session) => {
-      const status = sessionStatus(sessionStates[s.id] ?? s.state);
-      const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
-      const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
-      const proj = s.projectId != null ? projectById[s.projectId] : undefined;
-      if (!wt) {
-        // Direct (worktree-less) session — no worktree context to show, no
-        // dismiss affordance (nothing to dismiss).
-        return (
-          <div key={s.id} className="dashboard-card-shell">
-            <Link
-              to={s.projectId ? `/project/${s.projectId}/${s.id}` : `/session/${s.id}`}
-              className="dashboard-card dashboard-card--session dashboard-card--worktree"
-            >
-              <span className="dashboard-card__dot dashboard-card__dot--status">
-                <StatusDot status={status} pr={sessionPr} />
-              </span>
-              <span className="dashboard-card__session-main">
-                <CardIcon session={s} api={api} />
-                <span className="dashboard-card__primary" title={sessionLabel(s)}>
-                  {sessionLabel(s)}
-                </span>
-                <span className="dashboard-card__branch">direct</span>
-              </span>
-              <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
-            </Link>
-          </div>
-        );
-      }
-      const sessionsForWt = sessions.filter((s2) => s2.worktreeId === wt.id);
-      return (
-        <div key={s.id} className="dashboard-card-shell">
-          <Link
-            to={`/worktree/${wt.id}`}
-            className="dashboard-card dashboard-card--session dashboard-card--worktree"
-            onClick={() => setActiveWorktree(wt.projectId, wt.id, sessionsForWt)}
-          >
-            <span className="dashboard-card__dot dashboard-card__dot--status">
-              <StatusDot status={status} pr={sessionPr} />
-            </span>
-            <span className="dashboard-card__session-main">
-              <CardIcon session={s} api={api} />
-              <span className="dashboard-card__primary" title={sessionLabel(s)}>
-                {sessionLabel(s)}
-              </span>
-              <span className="dashboard-card__branch">
-                {wt.branch} · {wt.id}
-              </span>
-            </span>
-            <span className="dashboard-card__secondary">{proj?.name ?? ""}</span>
-          </Link>
-        </div>
-      );
-    },
-    [projectById, sessionStates, sessions, setActiveWorktree, worktreeById, worktreePrById, api],
+  const rolledUpPr = useMemo(
+    () => rollupPrSessionsByWorktree(pr, worktreeById),
+    [pr, worktreeById],
   );
+
+  const [expandedCols, setExpandedCols] = useState<Record<string, boolean>>({});
+
+  const renderDashboardItem = useCallback(
+    (s: Session) => (
+      <DashboardSessionItem
+        key={s.id}
+        session={s}
+        api={api}
+        projectById={projectById}
+        worktreeById={worktreeById}
+        worktreePrById={worktreePrById}
+        sessionStates={sessionStates}
+        sessions={sessions}
+        setActiveWorktree={setActiveWorktree}
+        navigate={navigate}
+      />
+    ),
+    [api, projectById, worktreeById, worktreePrById, sessionStates, sessions, setActiveWorktree, navigate],
+  );
+
+  const renderDashboardWorktreeItem = useCallback(
+    (group: PrWorktreeGroup) => (
+      <DashboardWorktreePrItem
+        key={group.worktree.id}
+        worktree={group.worktree}
+        prSessions={group.sessions}
+        projectById={projectById}
+        worktreePrById={worktreePrById}
+        sessions={sessions}
+        sessionStates={sessionStates}
+        setActiveWorktree={setActiveWorktree}
+        navigate={navigate}
+        api={api}
+      />
+    ),
+    [projectById, worktreePrById, sessions, sessionStates, setActiveWorktree, navigate, api],
+  );
+
+  const renderKanbanCol = <T,>(
+    colKey: keyof typeof KANBAN_COLS,
+    items: T[],
+    renderItem: (item: T) => React.ReactNode,
+  ) => {
+    const config = KANBAN_COLS[colKey];
+    const Icon = config.icon;
+    const isExpanded = !!expandedCols[colKey];
+    const visible = isExpanded ? items : items.slice(0, 10);
+    const hasMore = items.length > 10 && !isExpanded;
+    return (
+      <div className={`dashboard-kanban__col dashboard-kanban__col--${colKey}`} key={colKey}>
+        <div className="dashboard-kanban__col-header">
+          <span className="dashboard-kanban__col-title">
+            <Icon size={13} className="dashboard-kanban__col-icon" aria-hidden="true" />
+            <span>{config.label}</span>
+          </span>
+          <span className="dashboard-kanban__col-count">{items.length}</span>
+        </div>
+        <div className="dashboard-card-list">
+          {visible.map(renderItem)}
+          {hasMore ? (
+            <button
+              type="button"
+              className="dashboard-kanban__more-btn"
+              onClick={() => setExpandedCols((prev) => ({ ...prev, [colKey]: true }))}
+            >
+              More (+{items.length - 10})
+            </button>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
 
   const toggleViewLabel =
     dashboardView === "list" ? "Switch to kanban layout" : "Switch to list layout";
@@ -424,10 +596,10 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
               </section>
             ) : null}
 
-            {pr.length > 0 ? (
+            {rolledUpPr.length > 0 ? (
               <section className="dashboard-section">
                 <div className="dashboard-section__label">pr created</div>
-                <div className="dashboard-card-list">{pr.map((s) => renderDashboardItem(s))}</div>
+                <div className="dashboard-card-list">{rolledUpPr.map((group) => renderDashboardWorktreeItem(group))}</div>
               </section>
             ) : null}
 
@@ -441,45 +613,18 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
             {working.length === 0 &&
             needsYou.length === 0 &&
             idle.length === 0 &&
-            pr.length === 0 &&
+            rolledUpPr.length === 0 &&
             (!showFinished || finished.length === 0) ? (
               <p className="dashboard-empty">No agent sessions yet. Add a project with the CLI.</p>
             ) : null}
           </>
         ) : (
           <div className={`dashboard-kanban${showFinished ? " dashboard-kanban--with-finished" : ""}`}>
-            <div className="dashboard-kanban__col">
-              <div className="dashboard-kanban__col-header">
-                Working <span className="dashboard-kanban__col-count">({working.length})</span>
-              </div>
-              <div className="dashboard-card-list">{working.map((s) => renderDashboardItem(s))}</div>
-            </div>
-            <div className="dashboard-kanban__col">
-              <div className="dashboard-kanban__col-header">
-                Needs You <span className="dashboard-kanban__col-count">({needsYou.length})</span>
-              </div>
-              <div className="dashboard-card-list">{needsYou.map((s) => renderDashboardItem(s))}</div>
-            </div>
-            <div className="dashboard-kanban__col">
-              <div className="dashboard-kanban__col-header">
-                Idle <span className="dashboard-kanban__col-count">({idle.length})</span>
-              </div>
-              <div className="dashboard-card-list">{idle.map((s) => renderDashboardItem(s))}</div>
-            </div>
-            <div className="dashboard-kanban__col">
-              <div className="dashboard-kanban__col-header">
-                PR Created <span className="dashboard-kanban__col-count">({pr.length})</span>
-              </div>
-              <div className="dashboard-card-list">{pr.map((s) => renderDashboardItem(s))}</div>
-            </div>
-            {showFinished ? (
-              <div className="dashboard-kanban__col">
-                <div className="dashboard-kanban__col-header">
-                  Finished <span className="dashboard-kanban__col-count">({finished.length})</span>
-                </div>
-                <div className="dashboard-card-list">{finished.map((s) => renderDashboardItem(s))}</div>
-              </div>
-            ) : null}
+            {renderKanbanCol("working", working, renderDashboardItem)}
+            {renderKanbanCol("needsYou", needsYou, renderDashboardItem)}
+            {renderKanbanCol("idle", idle, renderDashboardItem)}
+            {renderKanbanCol("pr", rolledUpPr, renderDashboardWorktreeItem)}
+            {showFinished ? renderKanbanCol("finished", finished, renderDashboardItem) : null}
           </div>
         )}
 
@@ -495,14 +640,27 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
                     (s) => s.worktreeId === w.id && (s.state === "working" || s.state === "idle"),
                   ),
                 ).length;
+                const href = `/project/${p.id}`;
                 return (
-                  <div key={p.id} className="dashboard-card dashboard-card--project">
+                  <a
+                    key={p.id}
+                    href={href}
+                    className="dashboard-card dashboard-card--project"
+                    onClick={(e) => {
+                      // Same modifier-key guard as SessionChip — let ctrl/cmd/
+                      // shift/middle-click open in a new tab instead of always
+                      // intercepting (found in review).
+                      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      e.preventDefault();
+                      navigate(href);
+                    }}
+                  >
                     <span className="dashboard-card__primary">{p.name}</span>
                     <span className="dashboard-card__secondary">
                       {wts.length} {wts.length === 1 ? "worktree" : "worktrees"}
                       {activeCount > 0 ? ` · ${activeCount} active` : ""}
                     </span>
-                  </div>
+                  </a>
                 );
               })}
             </div>

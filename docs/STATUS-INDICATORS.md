@@ -118,7 +118,8 @@ done.
 | Surface | File | Notes |
 |---|---|---|
 | Sidebar rows | `LeftSidebar.tsx` (4 `<StatusDot>` sites) | worktree rows roll up per worktree; the sidebar's session rows are both direct-session sites, hardcoded to `pr={null}` — a direct session never has a worktree to show a PR for |
-| Dashboard cards | `DashboardPanel.tsx` | one card per non-archived agent session (Phase 6) — worktree-attached and direct alike, no rollup |
+| Dashboard cards | `DashboardPanel.tsx` | one card per non-archived agent session (Phase 6) for the `working`/`needs-you`/`idle`/`finished` buckets — **except** the `pr` bucket, which rolls up to one card per worktree (dashboard-polish, 2026-09) — see below |
+| Project overview rows | `ProjectHomeTab.tsx` | same per-session-except-`pr`-bucket rule as the Dashboard, reusing `bucketForRollup`/`rollupPrSessionsByWorktree` verbatim (`worktreeOnly: true` — direct sessions get their own list, never bucketed) |
 | Canvas tile border | `WorkspaceCanvas.tsx` | gated on the `showAgentStatusBorders` setting; per-session (`sessionStatus(session.state)` + a per-tile branch-guarded `session.pr`), not rolled up |
 | Agent pane border | `AgentPaneSlot.tsx` | single session, so no rollup |
 | VCS panel PR pill | `workspace.css` `.vcs-pr--*` | must use the same `--pr-*` tokens |
@@ -160,6 +161,27 @@ done.
     different session than a moment ago. The promotion itself carries the old main's `pr` forward
     onto the promoted session in the same atomic step, so there is no gap where the worktree's PR
     colour blanks while waiting for the next poll tick.
+- **The `pr` bucket only is rolled up per worktree, not per session** (dashboard-polish, 2026-09
+  — `web-ui/src/lib/prWorktreeRollup.ts`, `rollupPrSessionsByWorktree()`). This is a narrow,
+  deliberately-scoped exception to the per-session-cards rule above, not a reintroduction of the
+  `966b676` bug it replaced:
+  - `bucketForRollup` still runs first, per session, exactly as described above — a session whose
+    lifecycle is `working`/`spawning` or `waiting_for_human` (or `done`/`exited`) never lands in
+    the `pr` bucket regardless of its PR state, so it is never eligible to be grouped away. Only
+    sessions `bucketForRollup` already placed in `pr` are given to the rollup.
+  - The rollup then only **groups** those already-same-bucket sessions by worktree (one row
+    instead of N duplicate rows for the same branch) — it does not pick a "winning" status across
+    sessions that disagree on urgency, because by construction every session in one group agrees
+    on being in the `pr` bucket.
+  - The group's representative session (its `isMain`, falling back to the first) must be chosen
+    from the **group's own sessions**, never from the worktree's full session list — a `working`
+    sibling that isn't in this `pr` group (it has its own card in the `working` bucket) must never
+    donate its status to this card. `DashboardWorktreePrItem` (`DashboardPanel.tsx`) and
+    `renderWorktreePrRow` (`ProjectHomeTab.tsx`) both take the rollup's per-group `sessions`
+    array for this, separately from whatever full session list they otherwise need (e.g.
+    `setActiveWorktree`'s click handler still wants the worktree's complete session list).
+  - The other four buckets (`working`/`needs-you`/`idle`/`finished`) are untouched — still one
+    card per session, no rollup.
 - **The sidebar's worktree rows roll up per worktree** (unchanged by Phase 6) — see
   `worktreeRolledUpStatus()` in `web-ui/src/lib/worktreeStatus.ts`, used by `LeftSidebar.tsx`'s
   worktree-row `<StatusDot>` sites. There, the rolled-up worktree PR colour comes from

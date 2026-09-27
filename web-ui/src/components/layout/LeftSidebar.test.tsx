@@ -2291,4 +2291,87 @@ describe("LeftSidebar - global Workspaces section", () => {
       expect(screen.getByTestId("location-probe").textContent).toBe("/worktree/wt-2");
     });
   });
+
+  describe("Phase 4 — sidebar search", () => {
+    it("4.T1 — typing a query expands groups and narrows to matches across sections", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.setState({
+        workspaceDocs: {
+          "ws-1": { id: "ws-1", name: "Alpha Workspace", contextKey: "proj-a", mode: "free" as const, tiles: [], tree: null, freeRects: {} },
+          "ws-2": { id: "ws-2", name: "Beta Workspace", contextKey: "proj-a", mode: "free" as const, tiles: [], tree: null, freeRects: {} },
+        },
+      });
+
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      // Wait for projects and worktrees to render
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+      expect(screen.getByRole("link", { name: /Open worktree wt-2/i })).toBeInTheDocument();
+      expect(screen.getByText("Alpha Workspace")).toBeInTheDocument();
+      expect(screen.getByText("Beta Workspace")).toBeInTheDocument();
+
+      // Collapse Proj A initially
+      const projToggle = screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i });
+      await user.click(projToggle);
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+
+      // Now type into the search input
+      const searchInput = screen.getByRole("textbox", { name: /Search sidebar/i });
+      await user.type(searchInput, "wt-1");
+
+      // Group Proj A is force-expanded and only matching worktree wt-1 is shown
+      expect(screen.getByRole("link", { name: /Open worktree wt-1/i })).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /Open worktree wt-2/i })).toBeNull();
+
+      // Workspaces that don't match are filtered out
+      expect(screen.queryByText("Alpha Workspace")).toBeNull();
+      expect(screen.queryByText("Beta Workspace")).toBeNull();
+      expect(screen.getByText("No matching workspaces")).toBeInTheDocument();
+
+      // Search for workspace
+      await user.clear(searchInput);
+      await user.type(searchInput, "alpha");
+      expect(screen.getByText("Alpha Workspace")).toBeInTheDocument();
+      expect(screen.queryByText("Beta Workspace")).toBeNull();
+      expect(screen.getByText("No matching projects or sessions")).toBeInTheDocument();
+    });
+
+    it("4.T2 — clearing the query restores the exact pre-search expand/collapse state", async () => {
+      const user = userEvent.setup();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={api}>
+            <LeftSidebar api={api} />
+          </Harness>
+        </MemoryRouter>,
+      );
+
+      await screen.findByRole("link", { name: /Open worktree wt-1/i });
+
+      // Collapse Proj A before searching
+      const projToggle = screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i });
+      await user.click(projToggle);
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+
+      const searchInput = screen.getByRole("textbox", { name: /Search sidebar/i });
+      await user.type(searchInput, "wt-1");
+
+      // While search is active, Proj A is force-expanded and wt-1 is visible
+      expect(screen.getByRole("link", { name: /Open worktree wt-1/i })).toBeInTheDocument();
+
+      // Clear via clear button
+      const clearBtn = screen.getByRole("button", { name: /Clear search/i });
+      await user.click(clearBtn);
+
+      // Pre-search state restored: Proj A was collapsed, so it is collapsed again
+      expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
+      expect(searchInput).toHaveValue("");
+    });
+  });
 });

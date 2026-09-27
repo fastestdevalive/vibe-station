@@ -1,0 +1,15 @@
+feature: dashboard-polish
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-181
+master: {prd: skipped, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: done
+    last_completed: "4.T3"
+    awaiting_phase: null
+    awaiting_artifact: null
+    review_note: "opus sanity review 2026-09-26 (pre-implementation) — ship with 3 small fixes, applied to plan-dashboard-polish.md"
+    post_implementation_review_note: "opus review 2026-09-27 on squashed commit f0856162 — ship with 3 must-fix + several nice-to-have; all 3 must-fix applied (docs/STATUS-INDICATORS.md two-file update, prWorktreeRollup group-aware status fix, drag-and-drop disabled during sidebar search), plus id-flooding, whitespace-query, and ctrl/cmd-click regressions from the nice-to-have list; amended into the same commit before PR"
+    commit: f0856162
+    drift_note: "implementation went beyond the plan's stated scope (clickable project cards, timeAgo.ts, multiple SessionChip layout iterations) per further user requests mid-flight to the implementing subagent; plan text not retroactively updated, documented here instead per review finding"

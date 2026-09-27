@@ -1639,25 +1639,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({ themeAgentTerminals: !s.themeAgentTerminals })),
         setWorkspacePaneFullscreen: (next) => set({ workspacePaneFullscreen: next }),
         clearWorkspaceSelection: () =>
-          set((s) => {
-            // Deactivate the current tab without clearing the tab list (D10).
-            const key = layoutKey(s);
-            const nextIdxMap = key != null
-              ? { ...s.activeFileTabIdxByWorktree, [key]: -1 }
-              : s.activeFileTabIdxByWorktree;
-            return {
-              activeProjectId: null,
-              activeWorktreeId: null,
-              activeDirectContextId: null,
-              activeSessionId: null,
-              activeTerminalSessionId: null,
-              activeFilePath: null,
-              workspacePaneFullscreen: null,
-              activeFileTabIdxByWorktree: nextIdxMap,
-              peekFile: null,
-              pendingLineTarget: null,
-            };
-          }),
+          set(() => ({
+            activeProjectId: null,
+            activeWorktreeId: null,
+            activeDirectContextId: null,
+            activeSessionId: null,
+            activeTerminalSessionId: null,
+            activeFilePath: null,
+            workspacePaneFullscreen: null,
+            peekFile: null,
+            pendingLineTarget: null,
+          })),
         toggleDotFiles: () => set((s) => ({ showDotFiles: !s.showDotFiles })),
         patchSessionState: (sessionId, state) =>
           set((s) => ({
