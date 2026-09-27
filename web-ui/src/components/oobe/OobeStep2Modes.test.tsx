@@ -14,6 +14,8 @@ function cli(over: Partial<SupportedCli>): SupportedCli {
     detected: false,
     starterBundleNames: [],
     usingFallbackOnly: false,
+    defaultChannel: "json",
+    defaultChannelOverridden: false,
     ...over,
   };
 }

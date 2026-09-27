@@ -53,19 +53,27 @@ describe("CliDetectionPanel (3.T2)", () => {
     });
   });
 
-  it("renders the disabled '✓ all created' label when 0 are missing", async () => {
+  it("renders the '✓ all created' confirmation (oobe only) when 0 are missing", async () => {
     testApi.__test.seedModes([
       { id: "m-bugfix", name: "Bugfix", cli: "claude", context: "", presetId: "bug-fix-with-pr", icon: "claude" },
       { id: "m-plan", name: "Plan", cli: "claude", context: "", presetId: "planning-no-pr", icon: "claude" },
       { id: "m-arch", name: "Architect", cli: "claude", context: "" },
     ]);
-    render(<CliDetectionPanel api={testApi} variant="oobe" />);
+    const { unmount } = render(<CliDetectionPanel api={testApi} variant="oobe" />);
 
     const claudeRow = within(await screen.findByTestId("cli-row-claude"));
     await waitFor(() => {
-      expect(claudeRow.getByTestId("cli-all-created-claude")).toHaveTextContent("✓ all created");
+      expect(claudeRow.queryByRole("button")).toBeNull();
     });
-    expect(claudeRow.queryByRole("button")).toBeNull();
+    expect(claudeRow.getByTestId("cli-all-created-claude")).toHaveTextContent("✓ all created");
+    unmount();
+
+    // The settings variant fills that slot with the default-channel select
+    // instead — it never shows the confirmation label.
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("cli-all-created-claude")).toBeNull();
+    });
   });
 
   it("renders the warning banner when usingFallbackOnly is true", async () => {
@@ -104,6 +112,7 @@ describe("CliDetectionPanel (3.T2)", () => {
 
     expect(createSpy).toHaveBeenCalledWith("claude");
     await waitFor(() => {
+      expect(claudeRow.queryByRole("button")).toBeNull();
       expect(claudeRow.getByTestId("cli-all-created-claude")).toHaveTextContent("✓ all created");
     });
   });
@@ -122,6 +131,8 @@ describe("CliDetectionPanel (3.T2)", () => {
       detected: false,
       starterBundleNames: ["opencode-default"],
       usingFallbackOnly: false,
+      defaultChannel: "json",
+      defaultChannelOverridden: false,
     };
     const nowDetected: SupportedCli = { ...notDetected, detected: true };
     const getSpy = vi
@@ -145,5 +156,165 @@ describe("CliDetectionPanel (3.T2)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("cli-detected-opencode")).toHaveTextContent("✓ detected");
     });
+  });
+});
+
+describe("CliDetectionPanel default-channel toggle (6.T4)", () => {
+  it("settings variant renders the Default channel toggle; oobe renders none", async () => {
+    const { unmount } = render(<CliDetectionPanel api={testApi} variant="settings" />);
+    // claude is detected with defaultChannel json, not overridden -> Rich Chat is
+    // the plugin default and is labeled "(built-in)".
+    const claudeToggle = await screen.findByTestId("default-channel-claude");
+    const claudeSelect = within(claudeToggle).getByRole("combobox") as HTMLSelectElement;
+    expect(claudeSelect.value).toBe("json");
+    expect(within(claudeToggle).getByRole("option", { name: /Rich Chat \(built-in\)/ })).toBeInTheDocument();
+    unmount();
+
+    // Same data but the oobe variant renders no selector at all.
+    render(<CliDetectionPanel api={testApi} variant="oobe" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("cli-row-claude")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("default-channel-claude")).toBeNull();
+  });
+
+  it("toggling claude's default to Terminal persists via updateSettings and is reflected after refetch", async () => {
+    const updateSpy = vi.spyOn(testApi, "updateSettings");
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    await screen.findByTestId("default-channel-claude");
+
+    // Initially Rich Chat (the plugin default, not overridden) is selected.
+    const select = within(screen.getByTestId("default-channel-claude")).getByRole(
+      "combobox",
+    ) as HTMLSelectElement;
+    expect(select.value).toBe("json");
+
+    // Select Terminal (the non-default option) -> sends a single-key explicit override.
+    fireEvent.change(select, { target: { value: "tmux" } });
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenCalledWith({ defaultChannelByCli: { claude: "tmux" } });
+    });
+    // After the refetch, Terminal is now the effective default (and overridden).
+    await waitFor(() => {
+      expect(select.value).toBe("tmux");
+    });
+  });
+
+  it("selecting the (default)-labeled option sends null and reverts the override", async () => {
+    const updateSpy = vi.spyOn(testApi, "updateSettings");
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    await screen.findByTestId("default-channel-claude");
+
+    const select = within(screen.getByTestId("default-channel-claude")).getByRole(
+      "combobox",
+    ) as HTMLSelectElement;
+
+    // Override claude to Terminal first.
+    fireEvent.change(select, { target: { value: "tmux" } });
+    await waitFor(() => {
+      expect(select.value).toBe("tmux");
+    });
+
+    // Now Rich Chat is the (default) option; selecting it clears the override (null).
+    expect(
+      within(screen.getByTestId("default-channel-claude")).getByRole("option", { name: /Rich Chat \(built-in\)/ }),
+    ).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "json" } });
+    await waitFor(() => {
+      expect(updateSpy).toHaveBeenLastCalledWith({ defaultChannelByCli: { claude: null } });
+    });
+    // After the refetch, back to json and not overridden -> Rich Chat labeled (built-in) again.
+    await waitFor(() => {
+      expect(select.value).toBe("json");
+      expect(
+        within(screen.getByTestId("default-channel-claude")).getByRole("option", { name: /Rich Chat \(built-in\)/ }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("hides the default-channel field until at least one mode exists for the CLI", async () => {
+    testApi.__test.seedModes([]); // no modes for any CLI yet
+    const { unmount } = render(<CliDetectionPanel api={testApi} variant="settings" />);
+    await screen.findByTestId("cli-row-claude");
+    expect(screen.queryByTestId("default-channel-claude")).toBeNull();
+    unmount();
+
+    // Once a mode exists for claude, the field appears.
+    testApi.__test.seedModes([
+      { id: "m-bugfix", name: "Bugfix", cli: "claude", context: "", presetId: "bug-fix-with-pr", icon: "claude" },
+    ]);
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    await waitFor(() => {
+      expect(screen.getByTestId("default-channel-claude")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps a live override visible even if the CLI has zero modes (round-3 m5)", async () => {
+    const overridden: SupportedCli = {
+      id: "agy",
+      defaultModel: "m",
+      supportsJson: true,
+      importsNativeHistory: true,
+      supportsJsonToTerminalResume: true,
+      detected: true,
+      starterBundleNames: [],
+      usingFallbackOnly: false,
+      defaultChannel: "json",
+      defaultChannelOverridden: true,
+    };
+    vi.spyOn(testApi, "getSupportedClis").mockResolvedValue([overridden]);
+    testApi.__test.seedModes([]); // no modes for agy
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("default-channel-agy")).toBeInTheDocument();
+    });
+  });
+
+  it("shows an inline error and disables the select while a channel update is in flight (round-3 m3)", async () => {
+    let resolveUpdate!: () => void;
+    vi.spyOn(testApi, "updateSettings").mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          resolveUpdate = () => reject(new Error("cli does not support json"));
+        }),
+    );
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    const select = within(await screen.findByTestId("default-channel-claude")).getByRole(
+      "combobox",
+    ) as HTMLSelectElement;
+
+    fireEvent.change(select, { target: { value: "tmux" } });
+    expect(select).toBeDisabled();
+
+    resolveUpdate();
+    await waitFor(() => {
+      expect(select).not.toBeDisabled();
+      expect(screen.getByText("cli does not support json")).toBeInTheDocument();
+    });
+  });
+
+  it("Rich Chat is disabled (not merely hidden) for a !supportsJson CLI", async () => {
+    const noJson: SupportedCli = {
+      id: "weird",
+      defaultModel: "m",
+      supportsJson: false,
+      importsNativeHistory: true,
+      supportsJsonToTerminalResume: true,
+      detected: true,
+      starterBundleNames: [],
+      usingFallbackOnly: false,
+      defaultChannel: "tmux",
+      defaultChannelOverridden: false,
+    };
+    vi.spyOn(testApi, "getSupportedClis").mockResolvedValue([noJson]);
+    // The default-channel field only shows once at least one mode exists for
+    // the CLI — seed one so this test can reach the toggle it's asserting on.
+    testApi.__test.seedModes([{ id: "m-weird", name: "Weird", cli: "weird", context: "" }]);
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+
+    const toggle = await screen.findByTestId("default-channel-weird");
+    expect(within(toggle).getByRole("option", { name: /Rich Chat/ }) as HTMLOptionElement).toBeDisabled();
+    expect(within(toggle).getByRole("option", { name: /Terminal/ }) as HTMLOptionElement).toBeEnabled();
   });
 });

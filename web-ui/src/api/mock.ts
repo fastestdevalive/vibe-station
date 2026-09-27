@@ -83,7 +83,11 @@ export function createMockApi() {
   /** In-memory settings mirror (themeId/markdownStyle) — persisted across
    *  `updateSettings` calls within a single mock instance so `getSettings`
    *  reflects a prior PATCH, mirroring the real daemon. */
-  const mockSettings: { themeId?: string; markdownStyle?: MarkdownStyle } = {};
+  const mockSettings: {
+    themeId?: string;
+    markdownStyle?: MarkdownStyle;
+    defaultChannelByCli?: Record<string, "tmux" | "json">;
+  } = {};
   let connState: ConnectionState = "online";
   const connListeners = new Set<(s: ConnectionState) => void>();
 
@@ -1248,7 +1252,7 @@ export function createMockApi() {
     },
 
     async getSupportedClis(): Promise<SupportedCli[]> {
-      return [
+      const base: SupportedCli[] = [
         {
           id: "claude",
           defaultModel: "sonnet",
@@ -1258,6 +1262,8 @@ export function createMockApi() {
           detected: true,
           starterBundleNames: ["Bugfix", "Plan", "Architect"],
           usingFallbackOnly: false,
+          defaultChannel: "json",
+          defaultChannelOverridden: false,
         },
         {
           id: "cursor",
@@ -1268,6 +1274,8 @@ export function createMockApi() {
           detected: true,
           starterBundleNames: ["Generic"],
           usingFallbackOnly: false,
+          defaultChannel: "json",
+          defaultChannelOverridden: false,
         },
         {
           id: "opencode",
@@ -1278,6 +1286,8 @@ export function createMockApi() {
           detected: false,
           starterBundleNames: ["Generic"],
           usingFallbackOnly: false,
+          defaultChannel: "json",
+          defaultChannelOverridden: false,
         },
         {
           id: "agy",
@@ -1288,8 +1298,24 @@ export function createMockApi() {
           detected: false,
           starterBundleNames: ["Generic"],
           usingFallbackOnly: true,
+          defaultChannel: "tmux",
+          defaultChannelOverridden: false,
         },
       ];
+      // Apply any persisted defaultChannelByCli overrides (mirrors the daemon's
+      // override-aware default_channel / default_channel_overridden).
+      if (mockSettings.defaultChannelByCli) {
+        for (const cli of base) {
+          const ov = mockSettings.defaultChannelByCli[cli.id];
+          if (ov !== undefined) {
+            cli.defaultChannel = ov;
+            cli.defaultChannelOverridden = true;
+          } else {
+            cli.defaultChannelOverridden = false;
+          }
+        }
+      }
+      return base;
     },
 
     async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
@@ -1420,11 +1446,28 @@ export function createMockApi() {
       };
     },
 
-    async updateSettings(body: Partial<Settings> & { resetMarkdownStyle?: boolean }): Promise<{ ok: true }> {
+    async updateSettings(
+      body: Partial<Settings> & {
+        resetMarkdownStyle?: boolean;
+        defaultChannelByCli?: Partial<Record<CliId, "tmux" | "json" | null>>;
+      },
+    ): Promise<{ ok: true }> {
       // Persist the fields the mock cares about and broadcast a settings:updated
       // event mirroring the real daemon's narrow payload (themeId/markdownStyle).
       if (body.themeId !== undefined) mockSettings.themeId = body.themeId;
       if (body.markdownStyle !== undefined) mockSettings.markdownStyle = body.markdownStyle;
+      // Per-key merge for defaultChannelByCli (mirrors the Rust route): set or
+      // clear one CLI's override at a time, never a whole-map replace.
+      if (body.defaultChannelByCli !== undefined) {
+        mockSettings.defaultChannelByCli ??= {};
+        for (const [cli, ch] of Object.entries(body.defaultChannelByCli)) {
+          if (ch === undefined || ch === null) {
+            delete mockSettings.defaultChannelByCli[cli];
+          } else {
+            mockSettings.defaultChannelByCli[cli] = ch;
+          }
+        }
+      }
       // resetMarkdownStyle: true clears the persisted markdownStyle (mirrors the
       // Rust route — processed before any markdownStyle in the same request).
       if (body.resetMarkdownStyle === true) {

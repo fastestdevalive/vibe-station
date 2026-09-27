@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockApi, type MockApi } from "@/api/mock";
 import { ApiError } from "@/api/errors";
-import type { Project, Session, Worktree } from "@/api/types";
+import type { Mode, Project, Session, SupportedCli, Worktree } from "@/api/types";
 import { DraftComposer } from "./DraftComposer";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
@@ -327,5 +327,230 @@ describe("DraftComposer new-directory creation", () => {
     expect(body).toMatch(/overflow-y:\s*auto/);
     const bar = /\.draft-composer__bar \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(bar).toMatch(/flex-shrink:\s*0/);
+  });
+});
+
+describe("Phase 4 — channel default follows the mode's CLI defaultChannel", () => {
+  let api: MockApi;
+  let onStarted: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    api = makeApi();
+    onStarted = vi.fn();
+    useGlobalDraftStore.setState({ draft: null });
+    useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
+  });
+
+  function makeCli(over: Partial<SupportedCli>): SupportedCli {
+    return {
+      id: "claude",
+      defaultModel: "sonnet",
+      supportsJson: true,
+      importsNativeHistory: true,
+      supportsJsonToTerminalResume: true,
+      detected: true,
+      starterBundleNames: [],
+      usingFallbackOnly: false,
+      defaultChannel: "json",
+      defaultChannelOverridden: false,
+      ...over,
+    };
+  }
+
+  function makeMode(over: Partial<Mode>): Mode {
+    return { id: "m1", name: "Mode", cli: "claude", context: "c", ...over };
+  }
+
+  function renderTier2(modes: Mode[], clis: SupportedCli[]) {
+    vi.spyOn(api, "listModes").mockResolvedValue(modes);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue(clis);
+    return render(
+      <MemoryRouter initialEntries={["/draft/new"]}>
+        <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  function renderTier1(session: Session) {
+    const projectId = session.projectId ?? "p1";
+    const project: Project = {
+      id: projectId,
+      name: projectId,
+      path: "/tmp/proj",
+      prefix: "p",
+      isGit: true,
+      defaultBranch: "main",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      hidden: false,
+      lspEnabled: false,
+    };
+    useServerStore.setState({ projects: [project], worktrees: [], sessions: [session], loaded: true });
+    return render(
+      <MemoryRouter initialEntries={[`/draft/${session.id}`]}>
+        <DraftComposer api={api as never} draftSessionId={session.id} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+  }
+
+  function makeDraftSession(over: Partial<Session>): Session {
+    return {
+      id: "t1-draft",
+      worktreeId: null,
+      projectId: "p1",
+      modeId: "claude-mode",
+      type: "agent",
+      isMain: false,
+      state: "drafting",
+      lifecycleState: "drafting",
+      tmuxName: "tmux-t1-draft",
+      channel: "json",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      draftPrompt: "",
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new" },
+      ...over,
+    };
+  }
+
+  it("4.T1 — agy mode with no explicit channel defaults the radio to Terminal", async () => {
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+  });
+
+  it("4.T2 — claude mode defaults the radio to Rich Chat", async () => {
+    const claude = makeCli({ id: "claude" });
+    renderTier2([makeMode({ id: "claude-mode", cli: "claude" })], [claude]);
+    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
+    await waitFor(() => expect(rich).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Terminal/i })).not.toBeChecked();
+  });
+
+  it("4.T5 — scaffold draft with channel:json and no channelExplicit flips to Terminal for an agy mode (B1)", async () => {
+    // LeftSidebar's scaffold `{ entryPoint, worktreeChoice, channel: "json" }`
+    // carries channel but NOT channelExplicit — so the mode-follow effect must
+    // still fire and flip an agy mode's channel to Terminal.
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "agy-mode", cli: "agy" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([agy]);
+    const session = makeDraftSession({
+      modeId: "agy-mode",
+      channel: "json",
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new", modeId: "agy-mode", channel: "json" },
+    });
+    renderTier1(session);
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+  });
+
+  it("4.T4 — an explicit prior channel choice (channelExplicit) is respected, not flipped", async () => {
+    // Restored draft: user previously chose Terminal (channel tmux + explicit),
+    // mode is claude (defaultChannel json) — must STAY Terminal.
+    const claude = makeCli({ id: "claude" });
+    vi.spyOn(api, "listModes").mockResolvedValue([makeMode({ id: "claude-mode", cli: "claude" })]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([claude]);
+    const session = makeDraftSession({
+      modeId: "claude-mode",
+      channel: "tmux",
+      draftConfig: {
+        entryPoint: "worktree",
+        worktreeChoice: "new",
+        modeId: "claude-mode",
+        channel: "tmux",
+        channelExplicit: true,
+      },
+    });
+    renderTier1(session);
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+  });
+
+  it("4.T3 — a manual channel pick survives a later mode change (touched ref)", async () => {
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const claude = makeCli({ id: "claude", defaultChannel: "json" });
+    // Auto-select the agy mode first (ms[0]) so the default is Terminal.
+    renderTier2(
+      [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
+      [agy, claude],
+    );
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+
+    // User explicitly picks Terminal (touches the ref), then switches to claude.
+    await act(async () => {
+      screen.getByRole("radio", { name: /Rich Chat/i }).click(); // touch
+      screen.getByRole("radio", { name: /Terminal/i }).click(); // explicit Terminal
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
+    });
+    await waitFor(() => expect(screen.getByRole("radio", { name: /Terminal/i })).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Rich Chat/i })).not.toBeChecked();
+  });
+
+  it("4.T8a — an untouched agy default flips back to Rich Chat when the mode changes to claude", async () => {
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const claude = makeCli({ id: "claude", defaultChannel: "json" });
+    renderTier2(
+      [makeMode({ id: "agy-mode", cli: "agy" }), makeMode({ id: "claude-mode", cli: "claude" })],
+      [agy, claude],
+    );
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    // No manual pick -> switching to claude follows claude's json default.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Mode"), { target: { value: "claude-mode" } });
+    });
+    await waitFor(() => expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeChecked());
+  });
+
+  it("4.T8b — a CLI that can't do Rich Chat still forces Terminal via jsonSupported", async () => {
+    // defaultChannel json but supportsJson:false -> the capability override
+    // forces Terminal (independent of the mode-follow default).
+    const noJson = makeCli({ id: "weird", defaultChannel: "json", supportsJson: false });
+    renderTier2([makeMode({ id: "weird-mode", cli: "weird" })], [noJson]);
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Rich Chat/i })).toBeDisabled();
+  });
+
+  it("4.T10 — an override making agy's default json selects Rich Chat, not Terminal", async () => {
+    // Server reports agy's defaultChannel as json (a settings override), so the
+    // mode-follow default must be Rich Chat despite agy's plugin default being tmux.
+    const agyJson = makeCli({ id: "agy", defaultChannel: "json", defaultChannelOverridden: true });
+    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agyJson]);
+    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
+    await waitFor(() => expect(rich).toBeChecked());
+    expect(screen.getByRole("radio", { name: /Terminal/i })).not.toBeChecked();
+  });
+
+  it("4.T6 — Tier 2 agy mode: the default Terminal channel reaches the createWorktree payload as tmux", async () => {
+    const agy = makeCli({ id: "agy", defaultChannel: "tmux" });
+    const spy = vi.spyOn(api, "createWorktree");
+    renderTier2([makeMode({ id: "agy-mode", cli: "agy" })], [agy]);
+    const terminal = await screen.findByRole("radio", { name: /Terminal/i });
+    await waitFor(() => expect(terminal).toBeChecked());
+    await typePrompt("build the thing");
+    await selectNewDirectoryAndStart();
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    const body = spy.mock.calls[0]![0] as { channel?: string };
+    expect(body.channel).toBe("tmux");
+  });
+
+  it("4.T9 — with no modes/clis loaded yet, the channel falls back to Rich Chat (json)", async () => {
+    // On the very first render modes/clis are both empty, so selectedCli is
+    // undefined and the mode-follow effect's fallback (`?? "json"`) selects Rich
+    // Chat. The effect must not persist channelExplicit as true from this alone.
+    vi.spyOn(api, "listModes").mockResolvedValue([]);
+    vi.spyOn(api, "getSupportedClis").mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={["/draft/new"]}>
+        <DraftComposer api={api as never} draftSessionId={null} onStarted={onStarted} onDiscard={() => {}} />
+      </MemoryRouter>,
+    );
+    const rich = await screen.findByRole("radio", { name: /Rich Chat/i });
+    await waitFor(() => expect(rich).toBeChecked());
   });
 });
