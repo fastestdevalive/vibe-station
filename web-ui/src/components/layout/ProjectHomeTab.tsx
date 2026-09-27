@@ -1,11 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { GitBranch, GitCommitHorizontal, Sparkles } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { Project, Session, Worktree } from "@/api/types";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
-import { resolveDefaultModeId } from "@/lib/defaultMode";
-import { createProjectDirectDraft } from "@/lib/projectDraft";
+import { createProjectDirectDraft, createProjectWorktreeDraft } from "@/lib/projectDraft";
 import { useSessionBuckets } from "@/components/layout/DashboardPanel";
 import { SessionChip } from "@/components/layout/SessionChip";
 import { StatusDot } from "@/components/layout/StatusDot";
@@ -20,8 +20,7 @@ export interface ProjectHomeTabProps {
   sessions: Session[];
   worktrees: Worktree[];
   /**
-   * Called both after a worktree is created (so the workspace can navigate
-   * to it) AND when a bucket-row worktree agent is clicked (item 1). Reuses
+   * Called when a bucket-row worktree agent is clicked (item 1). Reuses
    * Workspace.tsx's `handleAgentCreated`, which selects the target worktree
    * in the store before navigating — sidestepping the one-shot worktree
    * URL-sync gap rather than hand-rolling `navigate('/worktree/:wt/:sid')`.
@@ -31,14 +30,14 @@ export interface ProjectHomeTabProps {
 
 /**
  * The pinned "Overview" tab of the project workspace. Shows the project's git
- * status, quick actions ("New worktree" / "New direct agent"), and an empty
+ * status, quick actions ("New agent in worktree" / "New direct agent"), and an empty
  * state that foregrounds those two actions (R11).
  */
 export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent }: ProjectHomeTabProps) {
   const [gitInitError, setGitInitError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [noModes, setNoModes] = useState(false);
   const [creating, setCreating] = useState<"worktree" | "direct" | null>(null);
+  const navigate = useNavigate();
 
   // `isGit`/`defaultBranch` come straight off the `project` prop. Workspace.tsx
   // re-derives `project` from the projects store each render (and keyed
@@ -47,7 +46,6 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
   // override needed.
   const isGit = project.isGit;
   const defaultBranch = project.defaultBranch;
-  const noModesTooltip = noModes ? "No agent modes configured" : undefined;
 
   // Direct agents only — excludes drafting sessions, matching
   // `seedProjectAgentTabsIfEmpty` and the sidebar (both treat drafts separately,
@@ -115,22 +113,20 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
     }
   };
 
-  const handleNewWorktree = async () => {
+  // Opens a DRAFT that creates its worktree only on Start — the same path as
+  // the sidebar's project "+" → "Agent in worktree" (`createProjectWorktreeDraft`),
+  // so an abandoned draft never leaves an orphan worktree behind.
+  // `DraftComposer` resolves its own default mode, so no `resolveDefaultModeId`
+  // gate here (same reasoning as `handleNewDirectAgent` below).
+  const handleNewWorktreeAgent = async () => {
     setActionError(null);
-    setNoModes(false);
     if (!isGit) return;
     try {
-      const modeId = await resolveDefaultModeId(api);
-      if (!modeId) {
-        setNoModes(true);
-        return;
-      }
       setCreating("worktree");
-      const wt = await api.createWorktree({ projectId: project.id, modeId });
-      useServerStore.getState().applyWorktreeCreated(wt);
-      onOpenAgent({ worktreeId: wt.id, sessionId: wt.mainSessionId ?? undefined });
+      const s = await createProjectWorktreeDraft(api, project.id);
+      navigate(`/draft/${s.id}`);
     } catch {
-      setActionError("Could not create the worktree. Please try again.");
+      setActionError("Could not start a new draft. Please try again.");
     } finally {
       setCreating(null);
     }
@@ -141,7 +137,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
   // instead of creating a live agent immediately, for consistency between
   // the two "new direct agent" entry points. `DraftComposer` (rendered by
   // `Workspace.tsx`'s drafting branch once the tab is active) resolves its
-  // own default mode, so this no longer needs `resolveDefaultModeId`/`noModes`.
+  // own default mode, so this no longer needs a `resolveDefaultModeId` gate.
   const handleNewDirectAgent = async () => {
     setActionError(null);
     try {
@@ -156,7 +152,7 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
     }
   };
 
-  const newWorktreeDisabled = !isGit || noModes || creating !== null;
+  const newWorktreeDisabled = !isGit || creating !== null;
   const newDirectDisabled = creating !== null;
 
   // A worktree-attached session row in one of the 5 bucket sections. The dot
@@ -240,12 +236,12 @@ export function ProjectHomeTab({ api, project, sessions, worktrees, onOpenAgent 
           <button
             type="button"
             className="project-home__action"
-            onClick={handleNewWorktree}
+            onClick={handleNewWorktreeAgent}
             disabled={newWorktreeDisabled}
-            title={!isGit ? "Run git init first" : noModesTooltip}
+            title={!isGit ? "Run git init first" : undefined}
           >
             <GitBranch size={14} />
-            New worktree
+            New agent in worktree
           </button>
           <button
             type="button"

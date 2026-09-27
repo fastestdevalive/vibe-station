@@ -25,7 +25,7 @@ import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/ap
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
-import { createProjectDirectDraft } from "@/lib/projectDraft";
+import { createProjectDirectDraft, createProjectWorktreeDraft } from "@/lib/projectDraft";
 import { markOrderedListWrite, clearOrderedListWrite } from "@/hooks/useServerSync";
 import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
@@ -1121,13 +1121,7 @@ export function LeftSidebar({
     void (async () => {
       try {
         // no worktree exists yet — the draft hangs off the project; the worktree is created on Start
-        const s = await api.createDraftSession({
-          target: "direct",
-          projectId: project.id,
-          type: "agent",
-          draftConfig: { entryPoint: "worktree", worktreeChoice: "new", channel: "json" },
-        });
-        useServerStore.getState().applySessionCreated(s);
+        const s = await createProjectWorktreeDraft(api, project.id);
         gotoDraft(s.id);
       } catch (err) {
         setDraftError(err instanceof Error ? err.message : "Couldn't start a new draft. Please try again.");

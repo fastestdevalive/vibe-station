@@ -209,6 +209,13 @@ function renderProjectWorkspace(
     if (locRef) locRef.current = location.pathname;
     return <Workspace />;
   }
+  // `/draft/:id` is rendered by DraftComposer's own route in the real app, not
+  // Workspace — this probe only records that navigation landed there.
+  function DraftProbe() {
+    const location = useLocation();
+    if (locRef) locRef.current = location.pathname;
+    return null;
+  }
   return render(
     <MemoryRouter initialEntries={initialEntries}>
       <Routes>
@@ -219,6 +226,7 @@ function renderProjectWorkspace(
         <Route path="/worktree/:wtId" element={<Harness />} />
         <Route path="/worktree/:wtId/:sessionId" element={<Harness />} />
         <Route path="/session/:directSessionId" element={<Harness />} />
+        <Route path="/draft/:draftId" element={<DraftProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -542,11 +550,9 @@ describe("Workspace project workspace (Phase 4)", () => {
     expect(open).toContain("s2");
   });
 
-  it("4.T13 — CUJ 4: clicking 'New worktree' from the project lands on the new worktree URL, not bare /worktree", async () => {
+  it("4.T13 — CUJ 4: clicking 'New agent in worktree' from the project opens a worktree draft at /draft/:id (no worktree created yet)", async () => {
     const nav: { current: Nav | null } = { current: null };
     const loc: { current: string | null } = { current: null };
-    // Render at a worktree first so the worktree URL-sync's one-shot read is
-    // consumed this page load.
     renderProjectWorkspace(["/worktree/wt-1"], nav, loc);
     await waitFor(() => {
       expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
@@ -559,17 +565,22 @@ describe("Workspace project workspace (Phase 4)", () => {
       expect(useWorkspaceStore.getState().activeDirectContextId).toBe("proj-a");
     });
 
-    const btn = await screen.findByRole("button", { name: /New worktree/i });
+    const worktreesBefore = useServerStore.getState().worktrees.length;
+    const btn = await screen.findByRole("button", { name: /New agent in worktree/i });
     await act(async () => {
       btn.click();
       await new Promise((r) => setTimeout(r, 0));
     });
 
     await waitFor(() => {
-      expect(useWorkspaceStore.getState().activeWorktreeId).toBeTruthy();
+      expect(loc.current).toMatch(/^\/draft\/[^/]+$/);
     });
-    const newId = useWorkspaceStore.getState().activeWorktreeId;
-    expect(loc.current).toBe(`/worktree/${newId}`);
+    const draftId = loc.current!.split("/")[2];
+    const draft = useServerStore.getState().sessions.find((s) => s.id === draftId);
+    expect(draft?.state).toBe("drafting");
+    expect(draft?.draftConfig).toMatchObject({ entryPoint: "worktree", worktreeChoice: "new" });
+    // The worktree is only created when the draft is started.
+    expect(useServerStore.getState().worktrees.length).toBe(worktreesBefore);
   });
 
   it("4.T1 — switching Project → agent → Project does NOT remount the shared tools pane or the terminal dock", async () => {
