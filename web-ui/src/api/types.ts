@@ -435,6 +435,11 @@ export interface SessionMeta {
   queuedTurnIds: string[];
   /** turnIds withdrawn into the editing hold (drives the "editing" bubble). */
   editingTurnIds: string[];
+  /** Live text/attachments for each queued or held (editing) turn — the daemon's
+   *  source of truth while the turn hasn't run yet (its transcript event doesn't
+   *  exist until it does). Optional only because mock.ts / an older daemon may
+   *  omit it — a real daemon always sends it. */
+  queuedTurns?: Array<{ turnId: string; message: string; attachments?: Attachment[] }>;
   usage?: UsageInfo;
   /** Absolute working directory for the session (worktree or project root). */
   cwd?: string;

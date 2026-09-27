@@ -120,8 +120,10 @@ export function groupEvents(events: NormalizedEvent[]): RenderItem[] {
     openTask = null;
     openTaskTurnId = undefined;
   }
-  // A superseding (edited) `user` event carries the same turnId — keep the bubble
-  // at its FIRST position but update to the LATEST text/attachments (A7).
+  // A repeated `user` event carrying the same turnId (e.g. a cancelled queued
+  // turn, whose `cancelled: true` row is now the ONLY row for that turnId —
+  // there is no enqueue-time row to supersede; Decision 7) keeps the bubble at
+  // its FIRST position but updates to the LATEST text/attachments (A7).
   const userIndexByTurnId = new Map<string, number>();
   // Same-turn thinking bursts merge into ONE RenderItem across intervening
   // tool_use/tool_result (a turn can reason, call a tool, then keep
