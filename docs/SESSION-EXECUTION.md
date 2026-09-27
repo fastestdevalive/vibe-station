@@ -4,6 +4,8 @@ Each session has an execution **channel**: `tmux`, `pty`, or `json`. Legacy rows
 
 ## tmux mode (default)
 
+The channel **default is per-CLI**, declared by each agent plugin: `tmux` for `agy`-mode sessions and for plain terminal sessions, `json` (Rich Chat) for `claude`/`cursor`/`opencode`-mode sessions. A `defaultChannelByCli` override (Settings UI) or an explicit `--channel=tmux|json` at create time changes it.
+
 ```
 daemon
   └─ tmux new-session -d -s <name>

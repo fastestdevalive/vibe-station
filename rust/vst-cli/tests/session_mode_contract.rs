@@ -40,7 +40,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+
+/// Serializes the mock-daemon tests that mutate the process-global
+/// `VST_DAEMON_URL` env var — they must not run concurrently, or a request
+/// from one test can be routed to another's mock server (flaky `captured`
+/// stays `None`).
+static MOCK_DAEMON_URL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 use vst_cli::commands::mode::add::{parse_mode_add_options, run_mode_add, ModeAddOptions};
 use vst_cli::commands::mode::ls::{parse_mode_ls_options, run_mode_ls, ModeLsOptions};
@@ -117,7 +124,7 @@ fn test_agent_create_options_parsing() {
     assert_eq!(opts.worktree_id, "wt-100");
     assert_eq!(opts.mode.as_deref(), Some("code"));
     assert_eq!(opts.prompt.as_deref(), Some("do work"));
-    assert_eq!(opts.channel, "json");
+    assert_eq!(opts.channel, Some("json".to_string()));
     assert!(opts.no_parent);
 
     let opts_parent = parse_agent_create_options(&[
@@ -126,6 +133,8 @@ fn test_agent_create_options_parsing() {
     ])
     .expect("parse parent ok");
     assert_eq!(opts_parent.parent.as_deref(), Some("p-sess-1"));
+    // No --channel passed -> default is None (daemon resolves the effective default).
+    assert_eq!(opts_parent.channel, None);
 
     let opts_src_agent = parse_agent_create_options(&[
         "wt-100".to_string(),
@@ -150,7 +159,7 @@ fn test_agent_create_options_parsing() {
 fn test_agent_create_invalid_channel_rejected() {
     let opts = AgentCreateOptions {
         worktree_id: "wt-1".to_string(),
-        channel: "pty".to_string(),
+        channel: Some("pty".to_string()),
         ..Default::default()
     };
     let res = tokio::runtime::Runtime::new()
@@ -297,6 +306,8 @@ fn test_session_send_options_parsing() {
 
 #[tokio::test]
 async fn test_mock_daemon_session_and_mode_endpoints() {
+    // Serialize against the other VST_DAEMON_URL-mutating mock test (3.T6).
+    let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
     let app = Router::new()
         .route(
             "/health",
@@ -602,7 +613,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
         mode: None,
         prompt: None,
         prompt_file: None,
-        channel: "json".to_string(),
+        channel: Some("json".to_string()),
         parent: None,
         no_parent: true,
     })
@@ -616,7 +627,7 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
         mode: None,
         prompt: None,
         prompt_file: None,
-        channel: "tmux".to_string(),
+        channel: None,
         parent: None,
         no_parent: true,
     })
@@ -703,6 +714,100 @@ async fn test_mock_daemon_session_and_mode_endpoints() {
     // Verify POST /sessions/:id/resume
     let sess_resume_res = run_session_restore("sess-wt-1").await;
     assert!(sess_resume_res.is_ok());
+
+    env::remove_var("VST_DAEMON_URL");
+}
+
+#[tokio::test]
+async fn test_mock_agent_create_channel_body_omitted_vs_explicit() {
+    // Serialize against the other VST_DAEMON_URL-mutating mock test.
+    let _url_guard = MOCK_DAEMON_URL_LOCK.lock().unwrap();
+    // 3.T6 (a)+(b): a body-capturing POST /api/sessions mock. Omitting
+    // --channel must send a body where the channel key is ABSENT (the daemon
+    // resolves the effective default); explicit --channel=tmux must send
+    // "channel":"tmux" (regression guard against the override path silently
+    // degrading to None).
+    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+
+    let app = Router::new()
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({ "ok": true, "version": "0.1.0", "port": 8888, "uptime": 1 }))
+            }),
+        )
+        .route(
+            "/api/sessions",
+            post({
+                let captured = captured.clone();
+                move |Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        Json(json!({
+                            "id": "sess-1",
+                            "worktreeId": "wt-1",
+                            "projectId": "p1",
+                            "isMain": false,
+                            "type": "agent",
+                            "tmuxName": "vst_sess1",
+                            "useTmux": false,
+                            "channel": "json",
+                            "state": "idle",
+                            "lifecycleState": "idle",
+                            "createdAt": "2026-09-15T00:00:00Z",
+                            "sortOrder": 1.0
+                        }))
+                    }
+                }
+            }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind listener");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve");
+    });
+    env::set_var("VST_DAEMON_URL", &base_url);
+
+    // (a) omitted --channel -> the channel key is absent in the request body.
+    let r = run_agent_create(AgentCreateOptions {
+        worktree_id: "wt-1".to_string(),
+        project_id: None,
+        mode: None,
+        prompt: None,
+        prompt_file: None,
+        channel: None,
+        parent: None,
+        no_parent: true,
+    })
+    .await;
+    assert!(r.is_ok());
+    let body = captured.lock().unwrap().clone().unwrap();
+    assert!(
+        body.get("channel").is_none(),
+        "omitted --channel must send an ABSENT channel key, got: {body}"
+    );
+
+    // (b) explicit --channel=tmux -> "channel":"tmux" is sent.
+    *captured.lock().unwrap() = None;
+    let r = run_agent_create(AgentCreateOptions {
+        worktree_id: "wt-1".to_string(),
+        project_id: None,
+        mode: None,
+        prompt: None,
+        prompt_file: None,
+        channel: Some("tmux".to_string()),
+        parent: None,
+        no_parent: true,
+    })
+    .await;
+    assert!(r.is_ok());
+    let body = captured.lock().unwrap().clone().unwrap();
+    assert_eq!(body.get("channel").and_then(|v| v.as_str()), Some("tmux"));
 
     env::remove_var("VST_DAEMON_URL");
 }

@@ -85,6 +85,12 @@ vst worktree create $VST_PROJECT --mode=<modeId> --branch=<name> --prompt="the t
 `vst agent create` — that would add a redundant second session. One
 `vst worktree create` call = one worktree + one ready-to-work agent.
 
+**The default channel is per-CLI** (applies to `vst agent create` and
+`vst worktree create` alike): sessions default to **Rich Chat** (`json`) for
+`claude`/`cursor`/`opencode` modes and **Terminal** (`tmux`) for `agy` modes.
+A user can override a CLI's default in the Settings UI; pass
+`--channel=json`/`--channel=tmux` to override it on a given command.
+
 `$VST_PROJECT` is your own project id. To target a different project, list them
 with `vst project ls --json`.
 

@@ -4,7 +4,8 @@
 //!
 //! ### Worktree commands
 //! - `parse_worktree_create_options` parses `<projectId>`, `--mode`, `--name`, `--base`,
-//!   `--branch`, `--prompt`, `--prompt-file`, `--channel` (`tmux`|`json`, default `tmux`),
+//!   `--branch`, `--prompt`, `--prompt-file`, `--channel` (`tmux`|`json`, optional — when
+//!   omitted the daemon resolves the effective default for the mode's CLI),
 //!   `--parent`, `--no-parent`.
 //! - `run_worktree_create` requires `--mode`, resolves source_agent_id from `$VST_SESSION` by
 //!   default, posts `POST /worktrees`, prints branch and id on success.
@@ -42,7 +43,9 @@ use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use serde_json::json;
 use std::collections::HashMap;
+use std::env;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use vst_cli::commands::daemon::status::parse_daemon_status_options;
 use vst_cli::commands::file::open::parse_file_open_options;
@@ -51,7 +54,9 @@ use vst_cli::commands::project::add::parse_project_add_options;
 use vst_cli::commands::project::create::parse_project_create_options;
 use vst_cli::commands::project::info::parse_project_info_options;
 use vst_cli::commands::project::ls::parse_project_ls_options;
-use vst_cli::commands::worktree::create::parse_worktree_create_options;
+use vst_cli::commands::worktree::create::{
+    parse_worktree_create_options, run_worktree_create, WorktreeCreateOptions,
+};
 use vst_cli::commands::worktree::info::parse_worktree_info_options;
 use vst_cli::commands::worktree::ls::parse_worktree_ls_options;
 use vst_cli::commands::worktree::rename::parse_worktree_rename_options;
@@ -65,7 +70,7 @@ fn test_worktree_create_parses_required_args() {
     let opts = parse_worktree_create_options(&args).expect("parse ok");
     assert_eq!(opts.project_id, "my-project");
     assert_eq!(opts.mode, "claude-mode");
-    assert_eq!(opts.channel, "tmux");
+    assert_eq!(opts.channel, None);
     assert!(opts.branch.is_none());
 }
 
@@ -95,7 +100,7 @@ fn test_worktree_create_parses_all_flags() {
     assert_eq!(opts.base.as_deref(), Some("main"));
     assert_eq!(opts.branch.as_deref(), Some("feat/abc"));
     assert_eq!(opts.prompt.as_deref(), Some("do stuff"));
-    assert_eq!(opts.channel, "json");
+    assert_eq!(opts.channel, Some("json".to_string()));
     assert_eq!(opts.parent.as_deref(), Some("sess-abc"));
 
     let opts_src = parse_worktree_create_options(&[
@@ -743,4 +748,97 @@ async fn test_run_project_rm_delete_endpoint() {
     .expect("request ok");
 
     assert!(result.is_ok(), "expected Ok result for 204");
+}
+
+#[tokio::test]
+async fn test_mock_worktree_create_channel_body_omitted_vs_explicit() {
+    // 3.T6 (a)+(b): a body-capturing POST /api/worktrees mock. Omitting
+    // --channel must send a body where the channel key is ABSENT (the daemon
+    // resolves the effective default); explicit --channel=tmux must send
+    // "channel":"tmux" (regression guard against the override path silently
+    // degrading to None).
+    let captured: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+
+    let router = Router::new()
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({ "ok": true, "version": "0.1.0", "port": 8888, "uptime": 1 }))
+            }),
+        )
+        .route(
+            "/api/worktrees",
+            post({
+                let captured = captured.clone();
+                move |Json(body): Json<serde_json::Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        *captured.lock().unwrap() = Some(body);
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "id": "wt-1",
+                                "projectId": "my-project",
+                                "name": null,
+                                "branch": "main",
+                                "branchIsPlaceholder": false,
+                                "baseBranch": "main",
+                                "baseSha": "abc123",
+                                "createdAt": "2024-01-01T00:00:00Z",
+                                "pinnedAt": null,
+                                "hiddenAt": null,
+                                "sortOrder": 1.0,
+                                "mainSessionId": "sess-1"
+                            })),
+                        )
+                    }
+                }
+            }),
+        );
+
+    let addr = spawn_mock_server(router).await;
+    let base_url = format!("http://{addr}");
+    env::set_var("VST_DAEMON_URL", &base_url);
+
+    // (a) omitted --channel -> the channel key is absent in the request body.
+    let r = run_worktree_create(WorktreeCreateOptions {
+        project_id: "my-project".to_string(),
+        mode: "claude-mode".to_string(),
+        name: None,
+        base: None,
+        branch: None,
+        prompt: None,
+        prompt_file: None,
+        channel: None,
+        parent: None,
+        no_parent: true,
+    })
+    .await;
+    assert!(r.is_ok());
+    let body = captured.lock().unwrap().clone().unwrap();
+    assert!(
+        body.get("channel").is_none(),
+        "omitted --channel must send an ABSENT channel key, got: {body}"
+    );
+
+    // (b) explicit --channel=tmux -> "channel":"tmux" is sent.
+    *captured.lock().unwrap() = None;
+    let r = run_worktree_create(WorktreeCreateOptions {
+        project_id: "my-project".to_string(),
+        mode: "claude-mode".to_string(),
+        name: None,
+        base: None,
+        branch: None,
+        prompt: None,
+        prompt_file: None,
+        channel: Some("tmux".to_string()),
+        parent: None,
+        no_parent: true,
+    })
+    .await;
+    assert!(r.is_ok());
+    let body = captured.lock().unwrap().clone().unwrap();
+    assert_eq!(body.get("channel").and_then(|v| v.as_str()), Some("tmux"));
+
+    env::remove_var("VST_DAEMON_URL");
 }

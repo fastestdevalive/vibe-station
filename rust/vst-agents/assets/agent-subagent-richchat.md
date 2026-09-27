@@ -43,7 +43,12 @@ That is the whole thing. No flags to look up, no tool to find.
 - **Mode and channel are inherited.** A subagent you spawn in your own worktree
   (or project) inherits your mode and channel by default, unless the user's
   instruction specifies a different mode (e.g. "review this in opus mode" — then
-  pass `--mode=<modeId>` explicitly).
+  pass `--mode=<modeId>` explicitly). Channel inheritance is **same-CLI only**:
+  it applies when the child's mode resolves to the same CLI as yours (which is
+  always the case when `--mode` is omitted). If you pass an explicit `--mode`
+  naming a mode on a *different* CLI, the child gets that CLI's own default
+  channel instead — e.g. an `agy` subagent spawned from a Rich Chat `claude`
+  parent gets Terminal, never the parent's Rich Chat.
 - **Direct sessions and worktree sessions.** If you have `$VST_WORKTREE` set,
   spawn with `vst agent create $VST_WORKTREE ...`. If running directly in a
   project without a worktree, spawn with `vst agent create --project=$VST_PROJECT ...`.
@@ -65,11 +70,12 @@ spawned it while running in Rich Chat".
 **Prefer Case B** (`vst agent create $VST_WORKTREE ...`). Only Case B
 inherits your mode and channel, so it is the one where you can omit `--mode`
 and `--channel`. `vst worktree create` (Case A) does NOT inherit either — pass
-`--mode=<modeId> --channel=json` explicitly there, or you will get a
-tmux-channel session in another worktree, which cannot be opened as Rich Chat
-from your subagent row.
+`--mode=<modeId>` explicitly there; the daemon resolves the effective default
+channel for that mode's CLI (Rich Chat for claude/cursor/opencode, Terminal
+for agy). An explicitly-passed `--channel` on either command is only needed to
+*override* that default — not to avoid an incorrect universal default.
 
-**Exception — `agy`-mode sessions:** prefer `--channel=tmux` (the default) for
-an `agy` subagent/worktree even while you yourself are running in Rich Chat,
-unless the user explicitly asks for Rich Chat/json. Only override this when
-told to.
+**Exception — `agy`-mode sessions:** the daemon's own default for `agy` is
+Terminal (`tmux`), so a spawned `agy` subagent/worktree is already tmux by
+default even while you yourself are running in Rich Chat; only override to
+`--channel=json` when the user explicitly asks for Rich Chat/json.

@@ -1,0 +1,24 @@
+feature: cli-plugin-default-channel
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-188
+created: 2026-09-27T00:00:00Z
+
+master:
+  prd: skipped
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "6.T6"
+    awaiting_phase: null
+    review_rounds: 3
+    awaiting_artifact: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null  # set once the PR branch's head commit is known post-squash
