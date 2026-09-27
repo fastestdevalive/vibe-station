@@ -1158,12 +1158,10 @@
   border-color: var(--border-default);
 }
 .chat-subagent-row__confirm-popup {
-  position: absolute;
-  top: calc(100% + var(--space-1));
-  left: 0;
-  /* Must clear the composer below it (`.chat-composer` and its focused
-     field), which otherwise paints over this popup — see the analogous
-     comment on `.chat-skill-popover`. */
+  /* `position: fixed` + `top`/`left` are set inline by DetachConfirmPopup
+     (SubagentRow.tsx) — portaled to document.body, see that component's
+     comment for why. z-index still matters at body level, to stack above
+     other in-app positioned elements (e.g. `.chat-skill-popover` at 60). */
   z-index: 70;
   display: inline-flex;
   align-items: center;
