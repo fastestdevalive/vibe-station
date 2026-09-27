@@ -163,19 +163,36 @@ describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () =
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("busy=true, text ready → Stop AND Send (queue variant) both render, so typing never hides Stop", async () => {
+  it("busy=true, text ready → Stop button still renders (typing must not hide it)", () => {
+    const api = createMockApi();
+    render(<Composer api={api} sessionId="s-busy-text" onSend={vi.fn()} busy onStop={vi.fn()} initialText="follow-up" />);
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeTruthy();
+    // The queue-send button is still available too — Stop and Send/queue
+    // coexist once there's text, they're no longer mutually exclusive.
+    const sendBtn = screen.getByLabelText("Send message (queues after current turn)");
+    expect(sendBtn.className).toContain("chat-composer__send--queue");
+  });
+
+  it("busy=true, text ready → clicking Stop only stops the turn; the typed text is left in the box, untouched and unsent", () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
     const onStop = vi.fn();
     render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={onStop} initialText="follow-up" />);
-    const stopBtn = screen.getByRole("button", { name: "Stop turn" });
-    const sendBtn = screen.getByLabelText("Send message (queues after current turn)");
-    expect(sendBtn.className).toContain("chat-composer__send--queue");
-    // Clicking Stop must only stop the turn — it must never submit/clear the typed text.
-    fireEvent.click(stopBtn);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop turn" }));
+
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onSend).not.toHaveBeenCalled();
-    fireEvent.click(sendBtn);
+    expect(screen.getByLabelText("Message").textContent).toBe("follow-up");
+  });
+
+  it("busy=true, text ready → the Send/queue button next to Stop still queues on its own click", async () => {
+    const api = createMockApi();
+    const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
+    render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
+
+    fireEvent.click(screen.getByLabelText("Send message (queues after current turn)"));
+
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("follow-up", []));
   });
 
