@@ -1541,7 +1541,7 @@ describe("TabsStrip", () => {
     };
   }
 
-  it("4.T3 — closing a direct-agent tab hides it (no terminate, no confirm) and the session stays in the store", async () => {
+  it("4.T3 — closing a direct-agent tab shows the terminate confirm dialog, and confirming terminates and prunes the open-tab set (matches worktree-tab behavior)", async () => {
     useModesStore.getState()._reset();
     const localApi = createMockApi();
     useServerStore.setState({
@@ -1554,7 +1554,8 @@ describe("TabsStrip", () => {
       activeSessionId: "s1",
       openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
     });
-    const terminateSpy = vi.spyOn(localApi, "terminateSession");
+    const terminateSpy = vi.spyOn(localApi, "terminateSession").mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
     render(
       <MemoryRouter>
         <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
@@ -1562,17 +1563,57 @@ describe("TabsStrip", () => {
     );
 
     const alphaTab = await screen.findByRole("tab", { name: /Alpha/i });
-    const closeBtn = within(alphaTab).getByRole("button", { name: /^Close Alpha/i });
-    fireEvent.click(closeBtn);
+    const closeBtn = within(alphaTab).getByRole("button", { name: /^Terminate Alpha/i });
+    await user.click(closeBtn);
 
-    // Removed from the open-tab set; the active (closed) tab clears to the
-    // Project tab sentinel (null).
+    // Same confirm dialog as a worktree agent tab — no silent client-only hide.
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/terminate this agent session/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Terminate" }));
+
+    await waitFor(() => {
+      expect(terminateSpy).toHaveBeenCalledWith("s1");
+    });
+    // Only after the terminate call succeeds is the id pruned from the
+    // client-only open-tab set, and the active (closed) tab clears to the
+    // Project tab sentinel (null) — kept in sync with the sidebar rather
+    // than desyncing from it.
     expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s2"]);
     expect(useWorkspaceStore.getState().activeSessionId).toBeNull();
-    // Not terminated — the session survives in the server store, and no
-    // confirm dialog appears (R16).
+    useModesStore.getState()._reset();
+  });
+
+  it("4.T3a — canceling the direct-agent terminate dialog leaves the tab and open-tab set untouched", async () => {
+    useModesStore.getState()._reset();
+    const localApi = createMockApi();
+    useServerStore.setState({
+      sessions: [
+        directAgentSession("s1", "proj-a", "Alpha"),
+        directAgentSession("s2", "proj-a", "Beta"),
+      ],
+    });
+    useWorkspaceStore.setState({
+      activeSessionId: "s1",
+      openDirectAgentTabsByProject: { "proj-a": ["s1", "s2"] },
+    });
+    const terminateSpy = vi.spyOn(localApi, "terminateSession").mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <TabsStrip api={localApi} worktreeId="proj-a" kind="agent" scope="project" />
+      </MemoryRouter>,
+    );
+
+    const alphaTab = await screen.findByRole("tab", { name: /Alpha/i });
+    const closeBtn = within(alphaTab).getByRole("button", { name: /^Terminate Alpha/i });
+    await user.click(closeBtn);
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
     expect(terminateSpy).not.toHaveBeenCalled();
-    expect(useServerStore.getState().sessions.some((s) => s.id === "s1")).toBe(true);
+    expect(useWorkspaceStore.getState().openDirectAgentTabsByProject["proj-a"]).toEqual(["s1", "s2"]);
+    expect(useWorkspaceStore.getState().activeSessionId).toBe("s1");
     expect(screen.queryByRole("dialog")).toBeNull();
     useModesStore.getState()._reset();
   });

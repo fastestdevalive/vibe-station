@@ -1877,13 +1877,30 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               }
             }
 
+            // Hardening: a direct-agent session can be terminated from a
+            // surface other than its own project-scope tab close button (the
+            // sidebar's terminate action, the CLI, another connected client)
+            // — prune it from every project's open-tab set too, so a stale
+            // id never lingers there. Harmless if it wasn't open anywhere:
+            // `projectSessions` already filters this set against the server
+            // store's live sessions.
+            let openDirectAgentTabsChanged = false;
+            const nextOpenDirectAgentTabsByProject = { ...s.openDirectAgentTabsByProject };
+            for (const [projectId, ids] of Object.entries(s.openDirectAgentTabsByProject)) {
+              if (ids.includes(sessionId)) {
+                nextOpenDirectAgentTabsByProject[projectId] = ids.filter((id) => id !== sessionId);
+                openDirectAgentTabsChanged = true;
+              }
+            }
+
             if (
               !layoutChanged &&
               !docsChanged &&
               !activeSessionChanged &&
               !activeTerminalChanged &&
               !lastSessionChanged &&
-              !lastTerminalChanged
+              !lastTerminalChanged &&
+              !openDirectAgentTabsChanged
             ) {
               return s;
             }
@@ -1894,6 +1911,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...(activeTerminalChanged ? { activeTerminalSessionId: null } : {}),
               ...(lastSessionChanged ? { lastSessionByWorktree: nextLastSessionByWorktree } : {}),
               ...(lastTerminalChanged ? { lastTerminalByWorktree: nextLastTerminalByWorktree } : {}),
+              ...(openDirectAgentTabsChanged
+                ? { openDirectAgentTabsByProject: nextOpenDirectAgentTabsByProject }
+                : {}),
             };
           }),
         reorderWorkspace: (scopeKey, orderedIds) =>
