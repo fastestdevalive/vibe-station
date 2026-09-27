@@ -212,6 +212,11 @@ function DraftComposerInner({
   // Guard so selecting a project (which navigates away) only runs once even if
   // the combobox fires onSelectExisting more than once before unmount.
   const selectingRef = useRef(false);
+  // Whether the user (or a prior explicit save) chose the channel on purpose.
+  // Seeded from `channelExplicit` — NOT from `channel` merely being present,
+  // since scaffold/autosave values populate `channel` for unrelated reasons
+  // (B1). The mode-follow effect only overrides the channel while this is false.
+  const channelTouchedRef = useRef(initialConfig?.channelExplicit === true);
 
   // ── Load static data on mount (modes, clis, projects). ────────────────────
   useEffect(() => {
@@ -272,12 +277,28 @@ function DraftComposerInner({
     if (!jsonSupported && channel === "json") setChannel("terminal");
   }, [jsonSupported, channel]);
 
+  // Mode-follow: when the user hasn't explicitly chosen a channel, default it
+  // to the selected mode's CLI's server-reported effective default (B2 — read
+  // `defaultChannel`, never a CLI-id literal like `selectedCli === "agy"`).
+  // Must NOT set `channelExplicit` — following the default is not a user choice.
+  // Yields to the hard capability override below: a CLI that can't do Rich Chat
+  // owns the choice via `jsonSupported`, so this effect never fights it (4.5/4.8).
+  useEffect(() => {
+    if (channelTouchedRef.current) return;
+    if (!jsonSupported) return;
+    const cli = clis.find((c) => c.id === selectedCli);
+    const defaultChannel = cli?.defaultChannel ?? "json";
+    setChannel(defaultChannel === "tmux" ? "terminal" : "json");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCli, clis, jsonSupported]);
+
   // ── Build the current DraftConfig. ────────────────────────────────────────
   const currentConfig = useMemo<DraftConfig>(() => {
     const base: DraftConfig = {
       entryPoint,
       modeId,
       channel: isJson ? "json" : useTmux ? "tmux" : "pty",
+      channelExplicit: channelTouchedRef.current,
     };
     if (entryPoint === "worktree") {
       base.worktreeChoice = worktreeChoice;
@@ -1059,7 +1080,10 @@ function DraftComposerInner({
                   name="draft-channel"
                   checked={channel === "json"}
                   disabled={!jsonSupported}
-                  onChange={() => setChannel("json")}
+                  onChange={() => {
+                    channelTouchedRef.current = true;
+                    setChannel("json");
+                  }}
                 />
                 💬 Rich Chat (json based)
               </label>
@@ -1068,7 +1092,10 @@ function DraftComposerInner({
                   type="radio"
                   name="draft-channel"
                   checked={channel === "terminal"}
-                  onChange={() => setChannel("terminal")}
+                  onChange={() => {
+                    channelTouchedRef.current = true;
+                    setChannel("terminal");
+                  }}
                 />
                 ⌨ Terminal
               </label>

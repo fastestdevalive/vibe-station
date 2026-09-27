@@ -31,7 +31,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
   const tabLayoutId = useId();
 
   const sections: Section[] = [
-    { id: "modes", label: "Modes", content: <ModesSetting api={api} /> },
+    { id: "modes", label: "Agents & modes", content: <ModesSetting api={api} /> },
     { id: "appearance", label: "Appearance", content: <AppearanceSetting /> },
     { id: "markdown", label: "Markdown", content: <MarkdownStyleSetting /> },
     { id: "projects", label: "Projects", content: <ProjectsSetting api={api} /> },

@@ -204,6 +204,10 @@ export interface DraftConfig {
   entryPoint: "worktree" | "direct" | "tab" | "global";
   modeId?: string;
   channel?: "tmux" | "pty" | "json";
+  /** True when `channel` reflects an explicit user choice (not a scaffold or
+   *  autosave echo) — the mode-follow effect only overrides the channel when
+   *  this is absent (plan Decision 5/B1). */
+  channelExplicit?: boolean;
   // worktree / global-with-worktree
   worktreeChoice?: "new" | "existing";
   existingWorktreeId?: string;
@@ -490,6 +494,14 @@ export interface SupportedCli {
    * bundle).
    */
   usingFallbackOnly: boolean;
+  /** This CLI's effective default channel (override-aware; plan Decision 5/B2). */
+  defaultChannel: Channel;
+  /**
+   * True when `defaultChannel` reflects a user override (not the plugin's
+   * hardwired default) — lets the Settings UI label the plugin-default option
+   * distinctly from an explicit override (round-2 m3).
+   */
+  defaultChannelOverridden: boolean;
 }
 
 /** Response from GET /api/oobe/state. */
