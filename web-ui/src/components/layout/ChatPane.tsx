@@ -219,6 +219,19 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     return { map, ids };
   }, [events]);
 
+  // Live queued/held turn text+attachments from the daemon's meta, normalized
+  // to the SAME {text, attachments?} shape as userEvents.map at construction
+  // time (Decision 4) so it can be merged into the same `??` lookup chain.
+  // Sourced from the daemon's live queue + edit-hold map — covers a turn that
+  // hasn't run yet (no transcript user event) for a REMOTE tab or after reload.
+  const queuedTurnsMeta = useMemo(() => {
+    const map = new Map<string, { text: string; attachments?: Attachment[] }>();
+    for (const qt of meta?.queuedTurns ?? []) {
+      map.set(qt.turnId, { text: qt.message, ...(qt.attachments ? { attachments: qt.attachments } : {}) });
+    }
+    return map;
+  }, [meta?.queuedTurns]);
+
   // Queued + editing turns are shown in the tray, not the inline log.
   const hiddenTurnIds = useMemo(() => {
     const s = new Set<string>([...queuedTurnIds, ...editingTurnIds]);
@@ -232,7 +245,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     const seen = new Set<string>();
     for (const turnId of queuedTurnIds) {
       if (seen.has(turnId)) continue;
-      const info = userEvents.map.get(turnId);
+      const info = queuedTurnsMeta.get(turnId) ?? userEvents.map.get(turnId);
       const fallback = pending.find((p) => p.turnId === turnId);
       const attachments = info?.attachments ?? fallback?.attachments;
       rows.push({
@@ -245,7 +258,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     }
     for (const turnId of editingTurnIds) {
       if (seen.has(turnId)) continue;
-      const info = userEvents.map.get(turnId);
+      const info = queuedTurnsMeta.get(turnId) ?? userEvents.map.get(turnId);
       const draft = editingDrafts[turnId];
       rows.push({
         turnId,
@@ -267,7 +280,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
       seen.add(p.turnId);
     }
     return rows;
-  }, [queuedTurnIds, editingTurnIds, editingDrafts, pending, userEvents]);
+  }, [queuedTurnIds, editingTurnIds, editingDrafts, pending, userEvents, queuedTurnsMeta]);
 
   // Only optimistic turns that AREN'T queued belong in the inline log; queued
   // optimistic bubbles are folded into the tray above.

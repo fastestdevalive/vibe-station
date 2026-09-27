@@ -110,6 +110,51 @@ describe("ChatPane (4.T2)", () => {
     expect(within(screen.getByRole("log")).queryByText("queued msg")).toBeNull();
   });
 
+  it("3.T3 — a queued turn present ONLY in meta.queuedTurns renders its text in the tray", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("js-qt3")} visible />);
+    // No transcript user event pushed, no local pending echo (the reload /
+    // remote-tab case): the only source of the turn's text is meta.queuedTurns.
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-qt3",
+        meta: meta("js-qt3", {
+          turnState: "thinking",
+          queueDepth: 1,
+          queuedTurnIds: ["q-qt3"],
+          queuedTurns: [{ turnId: "q-qt3", message: "queued from meta" }],
+        }),
+      });
+    });
+
+    const tray = await screen.findByRole("list", { name: "Queued messages" });
+    expect(within(tray).getByText("queued from meta")).toBeTruthy();
+    expect(within(tray).getByLabelText("Send now")).toBeTruthy();
+  });
+
+  it("3.T4 — an editing turn with a meta.queuedTurns entry but no local draft renders its text + editing badge", async () => {
+    const api = createMockApi();
+    render(<ChatPane api={api} session={jsonSession("js-qt4")} visible />);
+    // editingTurnIds set with a queuedTurns entry but NO local editingDrafts
+    // entry (a DIFFERENT tab than the one editing) — proves Decision 3's
+    // s.holds coverage: the row shows the held turn's text, not blank.
+    act(() => {
+      api.__test.emit({
+        type: "session:meta",
+        sessionId: "js-qt4",
+        meta: meta("js-qt4", {
+          editingTurnIds: ["e-qt4"],
+          queuedTurns: [{ turnId: "e-qt4", message: "held original text" }],
+        }),
+      });
+    });
+
+    const tray = await screen.findByRole("list", { name: "Queued messages" });
+    expect(within(tray).getByText("held original text")).toBeTruthy();
+    expect(within(tray).getByText("editing…")).toBeTruthy();
+  });
+
   it("3.T2 — an archived session's composer renders disabled with the exact expected copy", async () => {
     const api = createMockApi();
     const archived: Session = { ...jsonSession("js-archived"), archivedAt: new Date().toISOString() };
