@@ -335,10 +335,16 @@ async fn test_git_init_initializes_and_persists() {
     assert_eq!(persisted.default_branch.as_deref(), Some("main"));
 
     // Fix 4: a ProjectUpdated broadcast goes out to other connected clients.
-    let ev = rx.recv().await.expect("expected a ProjectUpdated broadcast");
+    let ev = rx
+        .recv()
+        .await
+        .expect("expected a ProjectUpdated broadcast");
     match ev {
         ServerEvent::ProjectUpdated { project } => {
-            assert_eq!(project.get("id").and_then(|v| v.as_str()), Some("not-yet-git"));
+            assert_eq!(
+                project.get("id").and_then(|v| v.as_str()),
+                Some("not-yet-git")
+            );
             assert_eq!(project.get("isGit").and_then(|v| v.as_bool()), Some(true));
         }
         other => panic!("expected ProjectUpdated, got {other:?}"),
@@ -393,13 +399,7 @@ async fn test_git_init_makes_project_usable_for_worktree_creation() {
     assert_eq!(res.default_branch.as_deref(), Some("main"));
 
     // Now a worktree CAN be created against the recovered project.
-    let mut wt_routes = WorktreeRoutes::new(
-        store.clone(),
-        broadcaster,
-        json_registry,
-        tmux,
-        4000,
-    );
+    let mut wt_routes = WorktreeRoutes::new(store.clone(), broadcaster, json_registry, tmux, 4000);
     wt_routes.paths = Paths::with_home(dir.path().join(".vst-wt"));
 
     let created = wt_routes
@@ -1114,11 +1114,7 @@ async fn test_tree_file_list_and_get_file() {
 // ── Phase 2: project git-status routes (changed-paths / gutter / diff / commits) ──
 
 /// Register a git repo (already initialized via `init_git_repo`) as a project.
-async fn register_git_project(
-    store: &StoreHandle,
-    id: &str,
-    proj_dir: &Path,
-) {
+async fn register_git_project(store: &StoreHandle, id: &str, proj_dir: &Path) {
     let p = ProjectRecord {
         id: id.into(),
         absolute_path: proj_dir.to_string_lossy().into(),
@@ -1289,7 +1285,10 @@ async fn test_diff_project_scope() {
     std::fs::write(&file_path, "modified\n").unwrap();
 
     // 2.T5 — local diff matches `git diff HEAD -- file.rs`.
-    let diff_res = routes.diff("diff-proj", "file.rs", None, None).await.unwrap();
+    let diff_res = routes
+        .diff("diff-proj", "file.rs", None, None)
+        .await
+        .unwrap();
     let expected = Command::new("git")
         .args(["diff", "HEAD", "--", "file.rs"])
         .current_dir(&proj_dir)
@@ -1452,12 +1451,16 @@ async fn test_project_in_git_subdir_paths_project_relative() {
     //    proving the project-relative path resolution works end-to-end.
     let gutter = routes.gutter("subproj", "inside.rs").await.unwrap();
     assert_eq!(
-        gutter.modified, vec![1],
+        gutter.modified,
+        vec![1],
         "gutter must resolve project-relative path to real lines"
     );
 
     // 3) diff — real content (not empty, not a doubled `subproj/subproj/...` path).
-    let diff_res = routes.diff("subproj", "inside.rs", None, None).await.unwrap();
+    let diff_res = routes
+        .diff("subproj", "inside.rs", None, None)
+        .await
+        .unwrap();
     assert!(
         diff_res.content.contains("changed line"),
         "diff must resolve project-relative path and return real content, got {:?}",

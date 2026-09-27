@@ -400,4 +400,3 @@ pub struct StopTurnResult {
     pub ok: bool,
     pub stopped: bool,
 }
-

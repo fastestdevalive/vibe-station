@@ -55,14 +55,8 @@ async fn test_lsp_root_matches_get_file_exactly() {
     );
     worktree_routes.paths = paths.clone();
 
-    let project_routes = ProjectRoutes::new(
-        store.clone(),
-        broadcaster,
-        json_registry,
-        tmux,
-        4000,
-    )
-    .with_paths(paths.clone());
+    let project_routes = ProjectRoutes::new(store.clone(), broadcaster, json_registry, tmux, 4000)
+        .with_paths(paths.clone());
 
     let lsp_manager = LspManager::new(paths.vst_home().clone());
     let lsp_routes = LspRoutes::new(store.clone(), paths.clone(), lsp_manager);
@@ -79,7 +73,11 @@ async fn test_lsp_root_matches_get_file_exactly() {
     std::fs::create_dir_all(&wt_path).unwrap();
     init_git_repo(&wt_path);
     let lib_rs_path = wt_path.join("lib.rs");
-    std::fs::write(&lib_rs_path, "pub fn hello() -> &'static str { \"worktree\" }").unwrap();
+    std::fs::write(
+        &lib_rs_path,
+        "pub fn hello() -> &'static str { \"worktree\" }",
+    )
+    .unwrap();
 
     let worktree_record = WorktreeRecord {
         id: wt_id.to_string(),
@@ -186,7 +184,10 @@ async fn test_lsp_root_matches_get_file_exactly() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(def_err, vst_routes::lsp::LspRouteError::Unsupported(_)));
+    assert!(matches!(
+        def_err,
+        vst_routes::lsp::LspRouteError::Unsupported(_)
+    ));
 }
 
 #[tokio::test]
@@ -212,11 +213,18 @@ async fn test_4_t1_token_minting() {
     let canon_ext = ext_file.canonicalize().unwrap();
 
     // Mint token twice for canonical external path
-    let token1 = lsp_manager.get_or_mint_external_token(&ws, &canon_ext).await;
+    let token1 = lsp_manager
+        .get_or_mint_external_token(&ws, &canon_ext)
+        .await;
     assert!(!token1.is_empty(), "Token must not be empty");
 
-    let token2 = lsp_manager.get_or_mint_external_token(&ws, &canon_ext).await;
-    assert_eq!(token1, token2, "Re-resolving the same canonical external path twice must reuse the same token");
+    let token2 = lsp_manager
+        .get_or_mint_external_token(&ws, &canon_ext)
+        .await;
+    assert_eq!(
+        token1, token2,
+        "Re-resolving the same canonical external path twice must reuse the same token"
+    );
 
     // Resolving token gives back the canonical path
     let resolved = lsp_manager.resolve_external_token(&ws, &token1).await;
@@ -270,14 +278,18 @@ async fn test_4_t1_token_minting() {
     let handle = vst_lsp::ServerHandle {
         client,
         child: Arc::new(tokio::sync::Mutex::new(None)),
-        status: Arc::new(tokio::sync::RwLock::new(vst_types::rest::lsp::LspStatus::Ready)),
+        status: Arc::new(tokio::sync::RwLock::new(
+            vst_types::rest::lsp::LspStatus::Ready,
+        )),
         last_request: Arc::new(tokio::sync::RwLock::new(std::time::Instant::now())),
         open_files: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
     };
-    lsp_manager.insert_server_handle(ws.clone(), "rust".to_string(), handle).await;
+    lsp_manager
+        .insert_server_handle(ws.clone(), "rust".to_string(), handle)
+        .await;
 
     let canon_ext_clone = canon_ext.clone();
     let internal_file_clone = internal_file.clone();
@@ -288,9 +300,13 @@ async fn test_4_t1_token_minting() {
             let mut content_length = 0;
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).await.unwrap() == 0 { return; }
+                if reader.read_line(&mut line).await.unwrap() == 0 {
+                    return;
+                }
                 let trimmed = line.trim();
-                if trimmed.is_empty() { break; }
+                if trimmed.is_empty() {
+                    break;
+                }
                 if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
                     content_length = rest.trim().parse().unwrap();
                 }
@@ -325,7 +341,14 @@ async fn test_4_t1_token_minting() {
     });
 
     let def_resp = lsp_routes
-        .definition(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 4)
+        .definition(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            4,
+        )
         .await
         .expect("definition succeeds");
 
@@ -343,7 +366,10 @@ async fn test_4_t1_token_minting() {
     assert!(loc_external.external);
     assert_eq!(loc_external.path, None);
     assert_eq!(loc_external.token, Some(token1.clone()));
-    assert_eq!(loc_external.display_path, Some(canon_ext.to_string_lossy().to_string()));
+    assert_eq!(
+        loc_external.display_path,
+        Some(canon_ext.to_string_lossy().to_string())
+    );
     assert_eq!(loc_internal.confidence, "lsp");
     assert_eq!(loc_external.confidence, "lsp");
 }
@@ -409,12 +435,20 @@ async fn test_4_t2_external_file_serving_and_bogus_token() {
     std::fs::write(&ext_file, content).unwrap();
     let canon_ext = ext_file.canonicalize().unwrap();
 
-    let token = lsp_manager.get_or_mint_external_token(&ws, &canon_ext).await;
+    let token = lsp_manager
+        .get_or_mint_external_token(&ws, &canon_ext)
+        .await;
 
     // 1. Valid token returns FileResponse::Text with matching content and etag
-    let resp = lsp_routes.external_file(ws.clone(), &token).await.expect("valid token succeeds");
+    let resp = lsp_routes
+        .external_file(ws.clone(), &token)
+        .await
+        .expect("valid token succeeds");
     match resp {
-        vst_routes::file_serving::FileResponse::Text { etag, content: text_content } => {
+        vst_routes::file_serving::FileResponse::Text {
+            etag,
+            content: text_content,
+        } => {
             assert_eq!(text_content, content);
             assert!(!etag.is_empty());
         }
@@ -422,7 +456,10 @@ async fn test_4_t2_external_file_serving_and_bogus_token() {
     }
 
     // 2. Bogus token returns 404 LSP_EXTERNAL_TOKEN_EXPIRED
-    let err = lsp_routes.external_file(ws.clone(), "bogus-token-does-not-exist").await.unwrap_err();
+    let err = lsp_routes
+        .external_file(ws.clone(), "bogus-token-does-not-exist")
+        .await
+        .unwrap_err();
     let (status, body) = vst_routes::lsp::lsp_err_to_response(err);
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
     assert_eq!(body.0["code"], "LSP_EXTERNAL_TOKEN_EXPIRED");
@@ -482,13 +519,19 @@ async fn test_4_t3_security_percent_encoded_path_traversal_is_opaque_token() {
     store.add_project(project_record).await.unwrap();
 
     // Call external_file with percent-encoded path traversal token
-    let err = lsp_routes.external_file(ws.clone(), "%2E%2E%2Fetc%2Fpasswd").await.unwrap_err();
+    let err = lsp_routes
+        .external_file(ws.clone(), "%2E%2E%2Fetc%2Fpasswd")
+        .await
+        .unwrap_err();
     let (status, body) = vst_routes::lsp::lsp_err_to_response(err);
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
     assert_eq!(body.0["code"], "LSP_EXTERNAL_TOKEN_EXPIRED");
 
     // Also test with raw percent-decoded segment
-    let err2 = lsp_routes.external_file(ws, "..%2Fetc%2Fpasswd").await.unwrap_err();
+    let err2 = lsp_routes
+        .external_file(ws, "..%2Fetc%2Fpasswd")
+        .await
+        .unwrap_err();
     let (status2, body2) = vst_routes::lsp::lsp_err_to_response(err2);
     assert_eq!(status2, axum::http::StatusCode::NOT_FOUND);
     assert_eq!(body2.0["code"], "LSP_EXTERNAL_TOKEN_EXPIRED");
@@ -559,8 +602,13 @@ async fn test_4_t4_security_symlink_to_deny_listed_prefix_rejected() {
         std::os::unix::fs::symlink(target, &symlink_path).unwrap();
 
         // 1. Verify symlink target IS a regular file (would pass is_file() on its own!)
-        let canon = symlink_path.canonicalize().expect("symlink canonicalizes to target");
-        assert!(canon.is_file(), "Canonicalized target /etc/passwd IS a regular file!");
+        let canon = symlink_path
+            .canonicalize()
+            .expect("symlink canonicalizes to target");
+        assert!(
+            canon.is_file(),
+            "Canonicalized target /etc/passwd IS a regular file!"
+        );
 
         // 2. But is_sensitive_path specifically flags it
         assert!(
@@ -569,8 +617,13 @@ async fn test_4_t4_security_symlink_to_deny_listed_prefix_rejected() {
         );
 
         // 3. Even if inserted into token map, external_file rejects it
-        lsp_manager.insert_external_token(ws.clone(), "symlink-token".to_string(), symlink_path).await;
-        let err = lsp_routes.external_file(ws, "symlink-token").await.unwrap_err();
+        lsp_manager
+            .insert_external_token(ws.clone(), "symlink-token".to_string(), symlink_path)
+            .await;
+        let err = lsp_routes
+            .external_file(ws, "symlink-token")
+            .await
+            .unwrap_err();
         let (status, body) = vst_routes::lsp::lsp_err_to_response(err);
         assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
         assert_eq!(body.0["code"], "LSP_EXTERNAL_TOKEN_EXPIRED");
@@ -645,14 +698,18 @@ async fn test_5_t1_references_pagination() {
     let handle = vst_lsp::ServerHandle {
         client,
         child: Arc::new(tokio::sync::Mutex::new(None)),
-        status: Arc::new(tokio::sync::RwLock::new(vst_types::rest::lsp::LspStatus::Ready)),
+        status: Arc::new(tokio::sync::RwLock::new(
+            vst_types::rest::lsp::LspStatus::Ready,
+        )),
         last_request: Arc::new(tokio::sync::RwLock::new(std::time::Instant::now())),
         open_files: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
     };
-    lsp_manager.insert_server_handle(ws.clone(), "rust".to_string(), handle).await;
+    lsp_manager
+        .insert_server_handle(ws.clone(), "rust".to_string(), handle)
+        .await;
 
     let lib_rs_canon = lib_rs.canonicalize().unwrap();
     tokio::spawn(async move {
@@ -662,9 +719,13 @@ async fn test_5_t1_references_pagination() {
             let mut content_length = 0;
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).await.unwrap() == 0 { return; }
+                if reader.read_line(&mut line).await.unwrap() == 0 {
+                    return;
+                }
                 let trimmed = line.trim();
-                if trimmed.is_empty() { break; }
+                if trimmed.is_empty() {
+                    break;
+                }
                 if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
                     content_length = rest.trim().parse().unwrap();
                 }
@@ -700,7 +761,15 @@ async fn test_5_t1_references_pagination() {
 
     // Page 1 (offset 0): 50 entries
     let res1 = lsp_routes
-        .references(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 4, None)
+        .references(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            4,
+            None,
+        )
         .await
         .expect("page 1 succeeds");
     let total_entries1: usize = res1.references.iter().map(|g| g.entries.len()).sum();
@@ -711,7 +780,15 @@ async fn test_5_t1_references_pagination() {
 
     // Page 2 (offset 50): 50 entries
     let res2 = lsp_routes
-        .references(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 4, res1.cursor)
+        .references(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            4,
+            res1.cursor,
+        )
         .await
         .expect("page 2 succeeds");
     let total_entries2: usize = res2.references.iter().map(|g| g.entries.len()).sum();
@@ -721,7 +798,15 @@ async fn test_5_t1_references_pagination() {
 
     // Page 3 (offset 100): 20 entries
     let res3 = lsp_routes
-        .references(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 4, res2.cursor)
+        .references(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            4,
+            res2.cursor,
+        )
         .await
         .expect("page 3 succeeds");
     let total_entries3: usize = res3.references.iter().map(|g| g.entries.len()).sum();
@@ -791,14 +876,18 @@ async fn test_5_hover_signature_and_doc() {
     let handle = vst_lsp::ServerHandle {
         client,
         child: Arc::new(tokio::sync::Mutex::new(None)),
-        status: Arc::new(tokio::sync::RwLock::new(vst_types::rest::lsp::LspStatus::Ready)),
+        status: Arc::new(tokio::sync::RwLock::new(
+            vst_types::rest::lsp::LspStatus::Ready,
+        )),
         last_request: Arc::new(tokio::sync::RwLock::new(std::time::Instant::now())),
         open_files: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
         file_versions: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
     };
-    lsp_manager.insert_server_handle(ws.clone(), "rust".to_string(), handle).await;
+    lsp_manager
+        .insert_server_handle(ws.clone(), "rust".to_string(), handle)
+        .await;
 
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -807,9 +896,13 @@ async fn test_5_hover_signature_and_doc() {
             let mut content_length = 0;
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).await.unwrap() == 0 { return; }
+                if reader.read_line(&mut line).await.unwrap() == 0 {
+                    return;
+                }
                 let trimmed = line.trim();
-                if trimmed.is_empty() { break; }
+                if trimmed.is_empty() {
+                    break;
+                }
                 if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
                     content_length = rest.trim().parse().unwrap();
                 }
@@ -839,7 +932,14 @@ async fn test_5_hover_signature_and_doc() {
     });
 
     let hover_res = lsp_routes
-        .hover(ws, LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 7)
+        .hover(
+            ws,
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            7,
+        )
         .await
         .expect("hover succeeds");
 
@@ -896,7 +996,9 @@ async fn test_outline_unsupported_file() {
 
     let res = lsp_routes
         .outline(
-            WorkspaceKey::Project { project_id: "p1".to_string() },
+            WorkspaceKey::Project {
+                project_id: "p1".to_string(),
+            },
             "workspace:test.unsupported_ext".to_string(),
         )
         .await
@@ -1017,8 +1119,11 @@ fn test_parse_outline_response_sorts_out_of_order_symbols_by_position() {
             let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
             assert_eq!(names, vec!["MyClass", "early_var", "late_func"]);
 
-            let child_names: Vec<&str> =
-                symbols[0].children.iter().map(|s| s.name.as_str()).collect();
+            let child_names: Vec<&str> = symbols[0]
+                .children
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect();
             assert_eq!(child_names, vec!["first_method", "second_method"]);
         }
         _ => panic!("Expected symbols variant"),
@@ -1080,7 +1185,10 @@ async fn test_lsp_disabled_worktree_status_and_definition() {
 
     // 1. GET status for lib.rs returns status: disabled, language: rust
     let status_resp = lsp_routes.status(ws.clone(), "lib.rs").await.unwrap();
-    assert_eq!(status_resp.status, vst_types::rest::lsp::LspStatus::Disabled);
+    assert_eq!(
+        status_resp.status,
+        vst_types::rest::lsp::LspStatus::Disabled
+    );
     assert_eq!(status_resp.language.as_deref(), Some("rust"));
 
     // 2. Definition request returns Err(LspRouteError::Disabled)
@@ -1164,7 +1272,9 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
     let (server_read, client_write) = tokio::io::duplex(64 * 1024);
     let (client, _rx) = vst_lsp::LspClient::new(client_read, client_write);
 
-    let status_arc = Arc::new(tokio::sync::RwLock::new(vst_types::rest::lsp::LspStatus::Starting));
+    let status_arc = Arc::new(tokio::sync::RwLock::new(
+        vst_types::rest::lsp::LspStatus::Starting,
+    ));
     let handle = vst_lsp::ServerHandle {
         client,
         child: Arc::new(tokio::sync::Mutex::new(None)),
@@ -1175,7 +1285,9 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
     };
-    lsp_manager.insert_server_handle(ws.clone(), "rust".to_string(), handle).await;
+    lsp_manager
+        .insert_server_handle(ws.clone(), "rust".to_string(), handle)
+        .await;
 
     let internal_file_clone = internal_file.clone();
     tokio::spawn(async move {
@@ -1185,9 +1297,13 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
             let mut content_length = 0;
             loop {
                 let mut line = String::new();
-                if reader.read_line(&mut line).await.unwrap() == 0 { return; }
+                if reader.read_line(&mut line).await.unwrap() == 0 {
+                    return;
+                }
                 let trimmed = line.trim();
-                if trimmed.is_empty() { break; }
+                if trimmed.is_empty() {
+                    break;
+                }
                 if let Some(rest) = trimmed.strip_prefix("Content-Length:") {
                     content_length = rest.trim().parse().unwrap();
                 }
@@ -1217,7 +1333,14 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
 
     // 1. First call while Starting -> returns fallback text match
     let resp1 = lsp_routes
-        .definition(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 7)
+        .definition(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            7,
+        )
         .await
         .expect("fallback definition succeeds");
     assert_eq!(resp1.locations.len(), 1);
@@ -1232,7 +1355,14 @@ async fn test_3_t3_definition_fallback_while_starting_then_lsp_when_ready() {
 
     // 3. Second call after Ready -> returns LSP match
     let resp2 = lsp_routes
-        .definition(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 7)
+        .definition(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            7,
+        )
         .await
         .expect("lsp definition succeeds");
     assert_eq!(resp2.locations.len(), 1);
@@ -1295,7 +1425,14 @@ async fn test_3_t4_definition_fallback_when_disabled() {
 
     // Definition on symbol "internal" (col 7) returns fallback text match
     let resp = lsp_routes
-        .definition(ws.clone(), LspFileRef::Workspace { path: "lib.rs".to_string() }, 0, 7)
+        .definition(
+            ws.clone(),
+            LspFileRef::Workspace {
+                path: "lib.rs".to_string(),
+            },
+            0,
+            7,
+        )
         .await
         .expect("fallback definition succeeds when disabled");
     assert_eq!(resp.locations.len(), 1);
@@ -1368,7 +1505,10 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
     };
 
     // No source files in the tree yet: statuses is naturally empty, no error.
-    let empty = lsp_routes.statuses(ws.clone()).await.expect("statuses succeeds with no files");
+    let empty = lsp_routes
+        .statuses(ws.clone())
+        .await
+        .expect("statuses succeeds with no files");
     assert!(empty.is_empty());
 
     // Real files so the file-tree scan actually detects rust + typescript.
@@ -1433,7 +1573,10 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
         simplified,
         vec![
             ("rust".to_string(), vst_types::rest::lsp::LspStatus::Ready),
-            ("typescript".to_string(), vst_types::rest::lsp::LspStatus::Starting),
+            (
+                "typescript".to_string(),
+                vst_types::rest::lsp::LspStatus::Starting
+            ),
         ]
     );
 
@@ -1445,6 +1588,3 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
     let err = lsp_routes.statuses(unknown_ws).await.unwrap_err();
     assert!(matches!(err, vst_routes::lsp::LspRouteError::NotFound(_)));
 }
-
-
-

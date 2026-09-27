@@ -34,7 +34,8 @@ pub const AUTH_EXPIRED_CLOSE_REASON: &str = "Session expired or revoked";
 /// periodic expiry sweep so both emit the exact code the client maps to its
 /// login screen, without duplicating the close logic.
 pub fn close_auth_expired(conn: &WsConnection) {
-    conn.sink().close(AUTH_EXPIRED_CLOSE_CODE, AUTH_EXPIRED_CLOSE_REASON);
+    conn.sink()
+        .close(AUTH_EXPIRED_CLOSE_CODE, AUTH_EXPIRED_CLOSE_REASON);
 }
 
 /// The connection registry (broadcaster receiver side).
@@ -114,9 +115,7 @@ impl WsHub {
             if conn.closed().is_some() {
                 continue;
             }
-            let expired = conn
-                .token_expires_at()
-                .map_or(false, |exp| exp <= now_ms);
+            let expired = conn.token_expires_at().map_or(false, |exp| exp <= now_ms);
             if expired {
                 close_auth_expired(conn);
                 closed += 1;
@@ -314,8 +313,11 @@ mod tests {
 
     use crate::connection::{WsConnection, WsSinkHandle};
 
-    use super::{close_auth_expired, AUTH_EXPIRED_CLOSE_CODE, WsHub};
+    use super::{close_auth_expired, WsHub, AUTH_EXPIRED_CLOSE_CODE};
 
+    // Test-only helper; the nested Option<(u16, String)> is just "the close
+    // frame the mock sink captured, if any" and isn't worth a named type here.
+    #[allow(clippy::type_complexity)]
     fn conn_with_expiry(exp: Option<i64>) -> (WsConnection, Arc<Mutex<Option<(u16, String)>>>) {
         let closed = Arc::new(Mutex::new(None));
         let sink = WsSinkHandle::from_parts(
@@ -349,7 +351,10 @@ mod tests {
 
         assert_eq!(
             *expired_closed.lock().unwrap(),
-            Some((AUTH_EXPIRED_CLOSE_CODE, "Session expired or revoked".to_string()))
+            Some((
+                AUTH_EXPIRED_CLOSE_CODE,
+                "Session expired or revoked".to_string()
+            ))
         );
         assert_eq!(*valid_closed.lock().unwrap(), None);
         assert_eq!(*no_expiry_closed.lock().unwrap(), None);
@@ -379,7 +384,10 @@ mod tests {
         assert_eq!(closed, 0, "already-closed sockets should not be re-closed");
         assert_eq!(
             *expired_closed.lock().unwrap(),
-            Some((AUTH_EXPIRED_CLOSE_CODE, "Session expired or revoked".to_string())),
+            Some((
+                AUTH_EXPIRED_CLOSE_CODE,
+                "Session expired or revoked".to_string()
+            )),
             "close code/reason from the original close must be preserved"
         );
     }

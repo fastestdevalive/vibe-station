@@ -421,7 +421,10 @@ async fn stop_no_agent_409() {
 async fn stop_turn_scoped_missing_404() {
     let (_d, store) = store();
     let r = routes(store.clone());
-    let err = r.stop_active_turn("nope", Some("turn-1")).await.unwrap_err();
+    let err = r
+        .stop_active_turn("nope", Some("turn-1"))
+        .await
+        .unwrap_err();
     assert!(not_found(&err));
 }
 
@@ -465,7 +468,10 @@ async fn stop_turn_scoped_stale_turn_returns_stopped_false() {
     );
     r.json_registry.set("s1".to_string(), Arc::new(session));
 
-    let res = r.stop_active_turn("s1", Some("stale-turn-id")).await.unwrap();
+    let res = r
+        .stop_active_turn("s1", Some("stale-turn-id"))
+        .await
+        .unwrap();
     assert!(res.ok);
     assert!(!res.stopped);
 }

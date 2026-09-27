@@ -41,7 +41,11 @@ impl<T> DaemonResult<T> {
 /// convention can't drift out of sync again.
 fn api_path(path: &str) -> String {
     const ROOT_PATHS: &[&str] = &["/health", "/mobile-auth", "/ws"];
-    if path.starts_with("/api/") || ROOT_PATHS.iter().any(|p| path == *p || path.starts_with(&format!("{p}?"))) {
+    if path.starts_with("/api/")
+        || ROOT_PATHS
+            .iter()
+            .any(|p| path == *p || path.starts_with(&format!("{p}?")))
+    {
         path.to_string()
     } else if let Some(rest) = path.strip_prefix('/') {
         format!("/api/{rest}")
@@ -103,7 +107,11 @@ pub async fn daemon_request_with_base<T: DeserializeOwned, B: Serialize>(
         let text = response.text().await.unwrap_or_default();
         // A 2xx with an empty body (e.g. 204 No Content) has no JSON to parse
         // at all — treat it the same as an explicit `null`, same as before.
-        let parse_target: &str = if text.trim().is_empty() { "null" } else { &text };
+        let parse_target: &str = if text.trim().is_empty() {
+            "null"
+        } else {
+            &text
+        };
         let data: T = serde_json::from_str(parse_target).map_err(|err| {
             let snippet: String = text.chars().take(200).collect();
             anyhow::anyhow!(
@@ -184,7 +192,10 @@ mod tests {
     #[test]
     fn prefixes_rest_paths_with_api() {
         assert_eq!(api_path("/sessions"), "/api/sessions");
-        assert_eq!(api_path("/worktrees?project=p1"), "/api/worktrees?project=p1");
+        assert_eq!(
+            api_path("/worktrees?project=p1"),
+            "/api/worktrees?project=p1"
+        );
         assert_eq!(api_path("/sessions/abc/rename"), "/api/sessions/abc/rename");
         assert_eq!(api_path("/open"), "/api/open");
     }

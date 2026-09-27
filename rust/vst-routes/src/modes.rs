@@ -1120,7 +1120,12 @@ mod tests {
         a.unwrap().expect("mode a should be created");
         b.unwrap().expect("mode b should be created");
 
-        let names: Vec<String> = routes.load_modes().await.into_iter().map(|m| m.name).collect();
+        let names: Vec<String> = routes
+            .load_modes()
+            .await
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
         assert!(names.contains(&"concurrent-a".to_string()));
         assert!(names.contains(&"concurrent-b".to_string()));
     }

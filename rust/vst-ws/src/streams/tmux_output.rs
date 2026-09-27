@@ -404,9 +404,10 @@ impl SessionStream for TmuxOutputStream {
                                         // next read.
                                         None => {
                                             if valid_up_to > 0 {
-                                                let s = std::str::from_utf8(&pending[..valid_up_to])
-                                                    .expect("validated prefix")
-                                                    .to_owned();
+                                                let s =
+                                                    std::str::from_utf8(&pending[..valid_up_to])
+                                                        .expect("validated prefix")
+                                                        .to_owned();
                                                 let _ = chunk_tx.send(s);
                                             }
                                             pending.drain(..valid_up_to);

@@ -210,15 +210,21 @@ fn get_configs() -> &'static [LanguageServerConfig] {
 pub fn lookup(ext: &str) -> Option<&'static LanguageServerConfig> {
     let clean_ext = ext.trim_start_matches('.');
     get_configs().iter().find(|cfg| {
-        cfg.extensions.iter().any(|&e| e.eq_ignore_ascii_case(clean_ext))
+        cfg.extensions
+            .iter()
+            .any(|&e| e.eq_ignore_ascii_case(clean_ext))
     })
 }
 
 pub fn lookup_by_language(lang: &str) -> Option<&'static LanguageServerConfig> {
     get_configs().iter().find(|cfg| {
         cfg.language.eq_ignore_ascii_case(lang)
-            || (cfg.language == "cpp" && (lang.eq_ignore_ascii_case("c") || lang.eq_ignore_ascii_case("c++") || lang.eq_ignore_ascii_case("c/c++")))
-            || (cfg.language == "csharp" && (lang.eq_ignore_ascii_case("cs") || lang.eq_ignore_ascii_case("c#")))
+            || (cfg.language == "cpp"
+                && (lang.eq_ignore_ascii_case("c")
+                    || lang.eq_ignore_ascii_case("c++")
+                    || lang.eq_ignore_ascii_case("c/c++")))
+            || (cfg.language == "csharp"
+                && (lang.eq_ignore_ascii_case("cs") || lang.eq_ignore_ascii_case("c#")))
             || (cfg.language == "latex" && lang.eq_ignore_ascii_case("tex"))
     })
 }
@@ -264,16 +270,28 @@ mod tests {
 
         let mut langs = std::collections::HashSet::new();
         for entry in entries {
-            assert!(!entry.display_name.is_empty(), "empty display_name for {}", entry.language);
+            assert!(
+                !entry.display_name.is_empty(),
+                "empty display_name for {}",
+                entry.language
+            );
             assert!(
                 entry.install_command.is_some() || entry.install_note.is_some(),
                 "{} has neither install_command nor install_note",
                 entry.language
             );
-            let resolved = lookup_by_language(entry.language)
-                .unwrap_or_else(|| panic!("language {} does not resolve via lookup_by_language", entry.language));
+            let resolved = lookup_by_language(entry.language).unwrap_or_else(|| {
+                panic!(
+                    "language {} does not resolve via lookup_by_language",
+                    entry.language
+                )
+            });
             assert_eq!(resolved.command, entry.command);
-            assert!(langs.insert(entry.language), "duplicate language {}", entry.language);
+            assert!(
+                langs.insert(entry.language),
+                "duplicate language {}",
+                entry.language
+            );
         }
         assert_eq!(langs.len(), 16);
     }

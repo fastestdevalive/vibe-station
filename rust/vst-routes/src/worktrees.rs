@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-
 use tokio::process::Command;
 
 use vst_agents::json_agent_chat::{start_json_create_turn, StartJsonCreateTurnOpts};
@@ -65,15 +64,17 @@ use vst_types::rest::worktrees::{
     DiskUsage, FileListResult, FileSearchResult, GutterResult, OpenFileBody, OpenFilesBody,
     OpenFilesResult, PatchWorktreeResult, PatchWorktreeToggleBody, PendingFileOpens, PrInfo,
     PrInfoState, PrLookupResult, RenameWorktreeBody, RenameWorktreeResult, ReorderWorktreeBody,
-    ReorderWorktreeResult, SearchResult, SubmoduleInfo,
-    SubmoduleStatus, SubmodulesResult, WorktreeDoneResult, WorktreeUsage,
+    ReorderWorktreeResult, SearchResult, SubmoduleInfo, SubmoduleStatus, SubmodulesResult,
+    WorktreeDoneResult, WorktreeUsage,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::file_search::FileSearchIndex;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 
-use crate::modes::{find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode};
+use crate::modes::{
+    find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode,
+};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::settings::load_default_channel_overrides;
 
@@ -542,7 +543,9 @@ impl WorktreeRoutes {
         let overrides = load_default_channel_overrides();
         let channel = body.channel.unwrap_or_else(|| match body.use_tmux {
             Some(use_tmux) => resolve_channel(resolve_use_tmux(Some(use_tmux)), false),
-            None => resolve_effective_default_channel(&overrides, mode.cli, &*resolve_plugin(mode.cli)),
+            None => {
+                resolve_effective_default_channel(&overrides, mode.cli, &*resolve_plugin(mode.cli))
+            }
         });
         let is_json = channel == Channel::Json;
         let use_tmux = channel == Channel::Tmux;
@@ -1376,6 +1379,10 @@ impl WorktreeRoutes {
     }
 
     // --- 11b. GET /worktrees/:id/search ---
+    // Each parameter is a distinct query flag mirrored from the REST query
+    // string; bundling them into a struct would just move the same fields
+    // one level down without clarifying the call site.
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         wt_id: &str,
@@ -1394,18 +1401,13 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let limit = limit.unwrap_or(2000);
 
-        let raw_matches = crate::search_util::rg_search(
-            &wt_path,
-            q,
-            re,
-            case,
-            word,
-            glob,
-            limit,
-        )
-        .await?;
+        let raw_matches =
+            crate::search_util::rg_search(&wt_path, q, re, case, word, glob, limit).await?;
 
-        Ok(crate::search_util::shape_search_matches(&raw_matches, limit))
+        Ok(crate::search_util::shape_search_matches(
+            &raw_matches,
+            limit,
+        ))
     }
 
     // --- 11c. GET /worktrees/:id/file-search ---
@@ -1418,10 +1420,7 @@ impl WorktreeRoutes {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let limit = limit.unwrap_or(50);
-        Ok(self
-            .file_search
-            .search(wt_id, &wt_path, q, limit)
-            .await)
+        Ok(self.file_search.search(wt_id, &wt_path, q, limit).await)
     }
 
     // --- 12. GET /worktrees/:id/files/* ---
@@ -1935,7 +1934,10 @@ impl WorktreeRoutes {
     }
 
     // --- 22. GET /worktrees/:id/open-files (durable open-file set) ---
-    pub async fn list_open_files(&self, wt_id: &str) -> Result<OpenFilesResult, WorktreeRouteError> {
+    pub async fn list_open_files(
+        &self,
+        wt_id: &str,
+    ) -> Result<OpenFilesResult, WorktreeRouteError> {
         let project = self.find_project_for_worktree(wt_id).await?;
         let wt = project
             .worktrees
@@ -2101,9 +2103,7 @@ impl WorktreeRoutes {
             .map_err(|e| WorktreeRouteError::Internal(format!("Failed to run git diff: {e}")))?;
 
         if !diff_output.status.success() && diff_output.status.code() != Some(1) {
-            return Err(WorktreeRouteError::Internal(
-                "git diff failed".to_string(),
-            ));
+            return Err(WorktreeRouteError::Internal("git diff failed".to_string()));
         }
 
         let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
@@ -2209,7 +2209,14 @@ pub fn parse_diff_hunk(diff_stdout: &str) -> GutterResult {
     for line in diff_stdout.lines() {
         if line.starts_with("@@") {
             // Flush accumulated changes at hunk boundary
-            flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+            flush_block(
+                &mut dels,
+                &mut adds,
+                &mut modified,
+                &mut added,
+                &mut deleted,
+                block_start,
+            );
             in_hunk = true;
             new_line = parse_new_start(line);
         } else if !in_hunk || line.starts_with('\\') {
@@ -2229,13 +2236,27 @@ pub fn parse_diff_hunk(diff_stdout: &str) -> GutterResult {
             // new_line is NOT advanced for a deletion
         } else {
             // Context line or other
-            flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+            flush_block(
+                &mut dels,
+                &mut adds,
+                &mut modified,
+                &mut added,
+                &mut deleted,
+                block_start,
+            );
             new_line += 1;
         }
     }
 
     // Final flush in case diff ends mid-block
-    flush_block(&mut dels, &mut adds, &mut modified, &mut added, &mut deleted, block_start);
+    flush_block(
+        &mut dels,
+        &mut adds,
+        &mut modified,
+        &mut added,
+        &mut deleted,
+        block_start,
+    );
 
     GutterResult {
         added,
@@ -2282,8 +2303,6 @@ pub fn parse_new_start(hunk_line: &str) -> u32 {
     }
     1 // Default to 1 on parse failure
 }
-
-
 
 #[derive(Debug)]
 pub struct DiffResponse {

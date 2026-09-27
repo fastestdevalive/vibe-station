@@ -67,7 +67,9 @@ impl FileSearchIndex {
     /// whole subtree — the directory-deletion case.
     pub async fn merge_subtree(&self, worktree_id: &str, prefix: &str, files: Vec<String>) {
         let mut idx = self.index.write().await;
-        let Some(set) = idx.get_mut(worktree_id) else { return };
+        let Some(set) = idx.get_mut(worktree_id) else {
+            return;
+        };
         set.retain(|p| p != prefix && !p.starts_with(&format!("{prefix}/")));
         set.extend(files);
     }

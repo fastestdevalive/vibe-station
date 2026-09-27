@@ -67,7 +67,9 @@ pub fn resolve_parent(child_id: &str, deps: &dyn NotifyDeps) -> Option<String> {
     let mut parent_id = child.parent_session_id?;
     let mut seen = std::collections::HashSet::new();
     while seen.insert(parent_id.clone()) {
-        let Some(p) = deps.lookup(&parent_id) else { break };
+        let Some(p) = deps.lookup(&parent_id) else {
+            break;
+        };
         let Some(next) = p.superseded_by else { break };
         parent_id = next;
     }
@@ -199,16 +201,24 @@ impl SubagentNotifyHandle {
         let (deps, children, at_cap) = {
             let mut inner = arc.lock().expect("poisoned");
             inner.flush_handles.remove(parent_id);
-            let Some(deps) = inner.deps.clone() else { return };
-            let Some(state) = inner.parents.get_mut(parent_id) else { return };
+            let Some(deps) = inner.deps.clone() else {
+                return;
+            };
+            let Some(state) = inner.parents.get_mut(parent_id) else {
+                return;
+            };
             let children: Vec<(String, PillPayload)> = state.pending.drain().collect();
-            if children.is_empty() { return };
+            if children.is_empty() {
+                return;
+            };
             let at_cap = state.budget >= MAX_NOTICES_PER_PARENT;
             (deps, children, at_cap)
         };
 
         // Re-check parent validity
-        let Some(parent) = deps.lookup(parent_id) else { return };
+        let Some(parent) = deps.lookup(parent_id) else {
+            return;
+        };
         if parent.archived_at.is_some()
             || parent.lifecycle_state == Some(LifecycleState::Done)
             || parent.channel != Channel::Json

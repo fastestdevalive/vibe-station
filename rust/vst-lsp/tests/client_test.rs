@@ -26,7 +26,10 @@ async fn read_framed_msg<R: tokio::io::AsyncRead + Unpin>(reader: &mut BufReader
 async fn write_framed_msg<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, val: &Value) {
     let s = val.to_string();
     let frame = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
-    writer.write_all(frame.as_bytes()).await.expect("write frame");
+    writer
+        .write_all(frame.as_bytes())
+        .await
+        .expect("write frame");
     writer.flush().await.expect("flush frame");
 }
 

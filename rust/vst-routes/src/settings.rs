@@ -17,9 +17,7 @@ use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_types::domain::{Channel, CliId};
 use vst_types::events::{Broadcaster, ServerEvent};
-use vst_types::rest::settings::{
-    MarkdownStyle, PatchSettingsBody, PatchSettingsResult, Settings,
-};
+use vst_types::rest::settings::{MarkdownStyle, PatchSettingsBody, PatchSettingsResult, Settings};
 
 /// Errors returned by `PATCH /settings`.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -110,8 +108,8 @@ pub fn load_default_channel_overrides() -> BTreeMap<CliId, Channel> {
         .map(|obj| {
             obj.iter()
                 .filter_map(|(k, v)| {
-                    let cli =
-                        serde_json::from_value::<CliId>(serde_json::Value::String(k.clone())).ok()?;
+                    let cli = serde_json::from_value::<CliId>(serde_json::Value::String(k.clone()))
+                        .ok()?;
                     let ch = serde_json::from_value::<Channel>(v.clone()).ok()?;
                     Some((cli, ch))
                 })
@@ -239,7 +237,10 @@ impl SettingsRoutes {
             .get("searchCaseSensitive")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let search_regex = raw.get("searchRegex").and_then(|v| v.as_bool()).unwrap_or(false);
+        let search_regex = raw
+            .get("searchRegex")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let search_whole_word = raw
             .get("searchWholeWord")
             .and_then(|v| v.as_bool())
@@ -365,7 +366,8 @@ impl SettingsRoutes {
                     .and_then(|v| serde_json::from_value::<MarkdownStyle>(v.clone()).ok())
             };
 
-        let result_markdown_style: Option<MarkdownStyle> = if let Some(style) = body.markdown_style {
+        let result_markdown_style: Option<MarkdownStyle> = if let Some(style) = body.markdown_style
+        {
             raw["markdownStyle"] = serde_json::to_value(style.clone()).unwrap();
             Some(style)
         } else {
@@ -456,24 +458,20 @@ impl SettingsRoutes {
 /// `italic.style` one of `italic`/`oblique`); nothing is checked against any
 /// theme or font registry.
 fn validate_markdown_style(style: &MarkdownStyle) -> Result<(), SettingsRouteError> {
-    for heading in [
-        &style.h1,
-        &style.h2,
-        &style.h3,
-        &style.h4,
-        &style.h5,
-        &style.h6,
-    ] {
-        if let Some(h) = heading {
-            if let Some(ref size) = h.size {
-                if !is_css_length(size) {
-                    return Err(SettingsRouteError::InvalidMarkdownStyle);
-                }
+    for h in [
+        &style.h1, &style.h2, &style.h3, &style.h4, &style.h5, &style.h6,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(ref size) = h.size {
+            if !is_css_length(size) {
+                return Err(SettingsRouteError::InvalidMarkdownStyle);
             }
-            if let Some(ref color) = h.color {
-                if !is_css_color(color) {
-                    return Err(SettingsRouteError::InvalidMarkdownStyle);
-                }
+        }
+        if let Some(ref color) = h.color {
+            if !is_css_color(color) {
+                return Err(SettingsRouteError::InvalidMarkdownStyle);
             }
         }
     }
@@ -577,8 +575,20 @@ fn is_css_length(s: &str) -> bool {
             }
             matches!(
                 unit,
-                "em" | "rem" | "px" | "pt" | "pc" | "cm" | "mm" | "in" | "%" | "ch" | "ex"
-                    | "vh" | "vw" | "vmin" | "vmax"
+                "em" | "rem"
+                    | "px"
+                    | "pt"
+                    | "pc"
+                    | "cm"
+                    | "mm"
+                    | "in"
+                    | "%"
+                    | "ch"
+                    | "ex"
+                    | "vh"
+                    | "vw"
+                    | "vmin"
+                    | "vmax"
             )
         }
         None => s.parse::<f64>().is_ok(),
@@ -591,8 +601,7 @@ fn is_css_color(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
-    if s.starts_with('#') {
-        let hex = &s[1..];
+    if let Some(hex) = s.strip_prefix('#') {
         return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|c| c.is_ascii_hexdigit());
     }
     if s.starts_with("rgb") || s.starts_with("hsl") {
@@ -600,9 +609,31 @@ fn is_css_color(s: &str) -> bool {
     }
     // Named CSS color (subset).
     let named = [
-        "black", "white", "red", "green", "blue", "yellow", "cyan", "magenta", "gray", "grey",
-        "orange", "purple", "brown", "pink", "gold", "silver", "navy", "teal", "maroon", "olive",
-        "lime", "aqua", "fuchsia", "transparent", "currentColor",
+        "black",
+        "white",
+        "red",
+        "green",
+        "blue",
+        "yellow",
+        "cyan",
+        "magenta",
+        "gray",
+        "grey",
+        "orange",
+        "purple",
+        "brown",
+        "pink",
+        "gold",
+        "silver",
+        "navy",
+        "teal",
+        "maroon",
+        "olive",
+        "lime",
+        "aqua",
+        "fuchsia",
+        "transparent",
+        "currentColor",
     ];
     named.contains(&s.to_ascii_lowercase().as_str())
 }

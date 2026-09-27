@@ -542,11 +542,10 @@ pub fn spawn_child(opts: SpawnChildOptions) -> Result<PtyHandle, ProcError> {
                                         Some(bad_len) => {
                                             let end = valid_up_to + bad_len;
                                             if let Some(inner) = weak.upgrade() {
-                                                let mut s = std::str::from_utf8(
-                                                    &pending[..valid_up_to],
-                                                )
-                                                .expect("validated prefix")
-                                                .to_owned();
+                                                let mut s =
+                                                    std::str::from_utf8(&pending[..valid_up_to])
+                                                        .expect("validated prefix")
+                                                        .to_owned();
                                                 s.push('\u{FFFD}');
                                                 inner.handle_chunk(&s);
                                             }

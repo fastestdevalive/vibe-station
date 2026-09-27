@@ -28,8 +28,8 @@ use vst_agents::session_runtime::{release_session_runtime, ReleaseOpts};
 use vst_git::branch_validator::validate_branch;
 use vst_git::direct_pty::PtyKill;
 use vst_git::git::{
-    detect_default_branch, is_git_available, is_git_repo, list_branches, list_commits, rev_parse,
-    resolve_parent_sha, worktree_add, worktree_remove,
+    detect_default_branch, is_git_available, is_git_repo, list_branches, list_commits,
+    resolve_parent_sha, rev_parse, worktree_add, worktree_remove,
 };
 use vst_git::naming::slugify_prompt;
 use vst_git::paths::Paths;
@@ -47,9 +47,8 @@ use vst_types::domain::{
 };
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::projects::{
-    BranchesResult, CreateNewProjectBody, CreateNewProjectResult, CreateProjectBody,
-    GitInitResult, OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult,
-    TreeEntry, TreeEntryType,
+    BranchesResult, CreateNewProjectBody, CreateNewProjectResult, CreateProjectBody, GitInitResult,
+    OpenFilesBody, OpenFilesResult, PatchProjectBody, PatchProjectResult, TreeEntry, TreeEntryType,
 };
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
@@ -58,12 +57,10 @@ use vst_types::rest::worktrees::{
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 
-use crate::modes::{
-    find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
-};
-use crate::settings::load_default_channel_overrides;
-use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::file_serving::{read_file_response, FileServingError};
+use crate::modes::{find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id};
+use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
+use crate::settings::load_default_channel_overrides;
 use crate::worktrees::{
     compute_etag, is_valid_commit_sha, merge_numstat, parse_branch_name_status, parse_porcelain_z,
     run_numstat_cmd, serialize_worktree, untracked_numstat_cmd, DiffResponse, FileResponse,
@@ -247,11 +244,9 @@ impl ProjectRoutes {
 
     // ── 2b. POST /projects/:id/git-init ───────────────────────────────────
     pub async fn git_init(&self, project_id: &str) -> Result<GitInitResult, ProjectRouteError> {
-        let project = self
-            .store
-            .get_project(project_id)
-            .await
-            .ok_or_else(|| ProjectRouteError::NotFound(format!("Project '{project_id}' not found")))?;
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
 
         // Full project setup — not the bare `git init` — so the repo gets an
         // initial commit and a `main` branch. A bare `git init` leaves the repo
@@ -305,13 +300,9 @@ impl ProjectRoutes {
         &self,
         project_id: &str,
     ) -> Result<OpenFilesResult, ProjectRouteError> {
-        let project = self
-            .store
-            .get_project(project_id)
-            .await
-            .ok_or_else(|| {
-                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
-            })?;
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
         Ok(OpenFilesResult {
             paths: project.open_files.clone(),
         })
@@ -327,20 +318,14 @@ impl ProjectRoutes {
             return Err(ProjectRouteError::validation("path required"));
         }
 
-        let project = self
-            .store
-            .get_project(project_id)
-            .await
-            .ok_or_else(|| {
-                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
-            })?;
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
         let root = Path::new(&project.absolute_path);
         let abs = resolve_inside_dir(root, path_str)?;
         let rel = abs
             .strip_prefix(root)
-            .map_err(|_| {
-                ProjectRouteError::unprocessable("path outside project root", None)
-            })?
+            .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
             .to_string_lossy()
             .to_string();
 
@@ -382,13 +367,9 @@ impl ProjectRoutes {
             return Err(ProjectRouteError::validation("path required"));
         }
 
-        let project = self
-            .store
-            .get_project(project_id)
-            .await
-            .ok_or_else(|| {
-                ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
-            })?;
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
         let root = Path::new(&project.absolute_path);
         let abs = resolve_inside_dir(root, path_str)?;
         let rel = abs
@@ -1545,6 +1526,10 @@ impl ProjectRoutes {
     }
 
     // ── 8b. GET /projects/:projectId/search ──────────────────────────────
+    // Each parameter is a distinct query flag mirrored from the REST query
+    // string; bundling them into a struct would just move the same fields
+    // one level down without clarifying the call site.
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         project_id: &str,
@@ -1566,18 +1551,13 @@ impl ProjectRoutes {
         let root = PathBuf::from(&project.absolute_path);
         let limit = limit.unwrap_or(2000);
 
-        let raw_matches = crate::search_util::rg_search(
-            &root,
-            q,
-            re,
-            case,
-            word,
-            glob,
-            limit,
-        )
-        .await?;
+        let raw_matches =
+            crate::search_util::rg_search(&root, q, re, case, word, glob, limit).await?;
 
-        Ok(crate::search_util::shape_search_matches(&raw_matches, limit))
+        Ok(crate::search_util::shape_search_matches(
+            &raw_matches,
+            limit,
+        ))
     }
 
     // ── 9. GET /projects/:projectId/files/* ───────────────────────────────
@@ -1687,7 +1667,8 @@ impl ProjectRoutes {
             }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let entries = parse_branch_name_status(&stdout);
-            let numstat_args = numstat_args(is_subdir, &[parent_sha.as_str(), resolved_sha.as_str()]);
+            let numstat_args =
+                numstat_args(is_subdir, &[parent_sha.as_str(), resolved_sha.as_str()]);
             let numstat = run_numstat_cmd(&root, &numstat_args).await;
             return Ok(merge_numstat(entries, numstat));
         }
@@ -1707,9 +1688,7 @@ impl ProjectRoutes {
             .await
             .map_err(|e| ProjectRouteError::Internal(format!("git status failed: {e}")))?;
         if !output.status.success() {
-            return Err(ProjectRouteError::Internal(
-                "git status failed".to_string(),
-            ));
+            return Err(ProjectRouteError::Internal("git status failed".to_string()));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut entries = parse_porcelain_z(&stdout);
@@ -1768,9 +1747,7 @@ impl ProjectRoutes {
         // Compute relative path for git commands
         let rel_path = abs_path
             .strip_prefix(&root)
-            .map_err(|_| {
-                ProjectRouteError::unprocessable("path outside project root", None)
-            })?
+            .map_err(|_| ProjectRouteError::unprocessable("path outside project root", None))?
             .to_string_lossy()
             .to_string();
 
@@ -1840,7 +1817,9 @@ impl ProjectRoutes {
             return Ok(GutterResult::default());
         }
 
-        Ok(crate::worktrees::parse_diff_hunk(&stdout_for_ambiguity_check))
+        Ok(crate::worktrees::parse_diff_hunk(
+            &stdout_for_ambiguity_check,
+        ))
     }
 
     // ── 12. GET /projects/:projectId/diff/*path ───────────────────────────
@@ -1895,11 +1874,12 @@ impl ProjectRoutes {
                     .map_err(|_| {
                         ProjectRouteError::unprocessable("Could not resolve commit sha", None)
                     })?;
-                let parent_sha = resolve_parent_sha(&root_str, &resolved_sha)
-                    .await
-                    .map_err(|_| {
-                        ProjectRouteError::unprocessable("Could not resolve commit sha", None)
-                    })?;
+                let parent_sha =
+                    resolve_parent_sha(&root_str, &resolved_sha)
+                        .await
+                        .map_err(|_| {
+                            ProjectRouteError::unprocessable("Could not resolve commit sha", None)
+                        })?;
                 cmd.arg(parent_sha)
                     .arg(resolved_sha)
                     .arg("--")

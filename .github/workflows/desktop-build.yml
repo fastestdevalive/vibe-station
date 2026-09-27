@@ -20,7 +20,9 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+          # macos-13 (the previous Intel image) has been retired by GitHub;
+          # macos-15-large is the current Intel (x86_64) hosted image.
+          - os: macos-15-large
             target: x86_64-apple-darwin
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -74,28 +76,17 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev
 
-      # ── Build the daemon binary ───────────────────────────────────────────
-      - name: Build TypeScript (daemon)
-        run: pnpm --filter cli build
-
-      - name: Build daemon binary
-        run: bash scripts/build-daemon-binary.sh --target ${{ matrix.target }}
-
-      - name: Copy daemon binary into Tauri externals dir
-        run: |
-          mkdir -p desktop/src-tauri/binaries
-          cp dist/vst-daemon-${{ matrix.target }} \
-             desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
-          chmod +x desktop/src-tauri/binaries/vst-daemon-${{ matrix.target }}
-
-      # ── Download cloudflared ──────────────────────────────────────────────
-      - name: Download cloudflared binary
-        run: bash scripts/download-cloudflared.sh --target ${{ matrix.target }}
-
       # ── Bun (vendored claude-agent-acp install) ───────────────────────────
       # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh,
-      # whose last step runs scripts/install-claude-acp-vendor.sh (`bun
-      # install`) — a bundle.resources input, so the build fails without bun.
+      # which builds the Rust vst-daemon + vst-cli release binaries, downloads
+      # cloudflared, installs the vendored claude-agent-acp adapter (`bun
+      # install` — a bundle.resources input, so the build fails without bun),
+      # and builds the agy-acp adapter — everything the now-removed
+      # "Build TypeScript (daemon)" / "Build daemon binary" / "Copy daemon
+      # binary" / "Download cloudflared binary" steps used to do by hand, back
+      # when the daemon was still the Node/TS build under cli/. That tree was
+      # hard-removed (7bfa386c); prep-sidecar.sh is the current single source
+      # of truth for staging every sidecar binary before Tauri bundles them.
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 

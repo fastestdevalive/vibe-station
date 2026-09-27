@@ -140,7 +140,10 @@ async fn phase6_t1_parallel_walk_respects_nested_gitignore_and_node_modules() {
     // Verify output is sorted
     let mut sorted = result.files.clone();
     sorted.sort();
-    assert_eq!(result.files, sorted, "Output must be sorted for determinism");
+    assert_eq!(
+        result.files, sorted,
+        "Output must be sorted for determinism"
+    );
 }
 
 #[tokio::test]
@@ -167,12 +170,18 @@ async fn phase6_t2_parallel_walk_respects_max_entries_cap() {
     assert_eq!(result.source, "node");
     assert!(result.truncated, "Should be truncated when exceeding cap");
     assert!(result.files.len() <= 15, "File count must not exceed cap");
-    assert!(!result.files.is_empty(), "Should have collected some files before truncating");
+    assert!(
+        !result.files.is_empty(),
+        "Should have collected some files before truncating"
+    );
 
     // Verify output is still sorted even when truncated
     let mut sorted = result.files.clone();
     sorted.sort();
-    assert_eq!(result.files, sorted, "Output must remain sorted even when truncated");
+    assert_eq!(
+        result.files, sorted,
+        "Output must remain sorted even when truncated"
+    );
 }
 
 #[tokio::test]
@@ -202,7 +211,10 @@ async fn phase6_t3_parallel_walk_benchmark_large_tree() {
     let result = fl.list_files(tmp.path().to_path_buf()).await;
     let elapsed = start.elapsed();
 
-    println!("Phase 6 benchmark: parallel walk of ~{} files took {:?}", num_files, elapsed);
+    println!(
+        "Phase 6 benchmark: parallel walk of ~{} files took {:?}",
+        num_files, elapsed
+    );
 
     assert_eq!(result.source, "node");
     assert!(!result.files.is_empty(), "Should have collected files");

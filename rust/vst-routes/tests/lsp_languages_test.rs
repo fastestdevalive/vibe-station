@@ -31,7 +31,9 @@ async fn test_language_survey_returns_16_camelcase_entries() {
 
     for entry in &response.languages {
         let value = serde_json::to_value(entry).expect("entry must serialize");
-        let obj = value.as_object().expect("entry must serialize to an object");
+        let obj = value
+            .as_object()
+            .expect("entry must serialize to an object");
         let keys: std::collections::BTreeSet<&str> = obj.keys().map(|k| k.as_str()).collect();
         let expected: std::collections::BTreeSet<&str> = [
             "language",

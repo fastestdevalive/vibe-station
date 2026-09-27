@@ -1,9 +1,7 @@
 use std::collections::VecDeque;
 
-use vst_agents::json_agent_session::{
-    read_transcript_from_data_dir, JsonAgentSession, QueuedTurn,
-};
 use vst_agents::json_agent_session::queue::ForkResult;
+use vst_agents::json_agent_session::{read_transcript_from_data_dir, JsonAgentSession, QueuedTurn};
 use vst_agents::paths::Paths;
 
 fn make_turn(id: &str, order: u64) -> QueuedTurn {
@@ -128,7 +126,11 @@ impl AgentPlugin for MockTurnPlugin {
 
 /// A live `MockTurnPlugin` session rooted in a temp home. Returns the temp
 /// home guard (kept alive for the test's duration) plus the session.
-fn make_mock_session() -> (tempfile::TempDir, vst_agents::home::HomeGuard, JsonAgentSession) {
+fn make_mock_session() -> (
+    tempfile::TempDir,
+    vst_agents::home::HomeGuard,
+    JsonAgentSession,
+) {
     let dir = tempfile::tempdir().unwrap();
     let home = vst_agents::home::with_home(dir.path().to_path_buf());
     let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
@@ -202,7 +204,10 @@ async fn test_stop_active_turn_then_enqueue_runs_turn_and_sets_log_seq() {
         loop {
             session.settled().await;
             let meta = session.get_meta();
-            if meta.queue_depth == 0 && meta.turn_state != TurnState::Thinking && meta.turn_state != TurnState::Responding {
+            if meta.queue_depth == 0
+                && meta.turn_state != TurnState::Thinking
+                && meta.turn_state != TurnState::Responding
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -216,9 +221,9 @@ async fn test_stop_active_turn_then_enqueue_runs_turn_and_sets_log_seq() {
 
     // 5. Verify turn 2's user event was persisted with log_seq
     let events = emitted_events.lock().unwrap().clone();
-    let turn2_user_ev = events
-        .iter()
-        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res2.turn_id));
+    let turn2_user_ev = events.iter().find(|e| {
+        e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res2.turn_id)
+    });
     assert!(turn2_user_ev.is_some(), "Turn 2 user event must be emitted");
     assert!(
         turn2_user_ev.unwrap().log_seq.is_some(),
@@ -411,7 +416,10 @@ async fn test_queue_a_and_b_stale_stop_does_not_stop_b() {
 
     // Stop A again (stale stop click) -> must return false
     let stopped_again = session.stop_active_turn(Some(&res_a.turn_id));
-    assert!(!stopped_again, "Stopping A when B is active must return false");
+    assert!(
+        !stopped_again,
+        "Stopping A when B is active must return false"
+    );
 
     // B must still be running
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -464,7 +472,9 @@ async fn test_stop_none_stops_whatever_is_running() {
     .expect("turn should settle after stop");
 
     let events = emitted.lock().unwrap().clone();
-    assert!(events.iter().any(|e| e.text.as_deref() == Some("Turn stopped")));
+    assert!(events
+        .iter()
+        .any(|e| e.text.as_deref() == Some("Turn stopped")));
 }
 
 #[tokio::test]
@@ -489,7 +499,10 @@ async fn test_stop_unknown_id_or_idle_returns_false() {
     .expect("turn should become active");
 
     assert!(!session.stop_active_turn(Some("nonexistent-turn-id")));
-    assert_eq!(session.get_meta().active_turn_id.as_deref(), Some(res.turn_id.as_str()));
+    assert_eq!(
+        session.get_meta().active_turn_id.as_deref(),
+        Some(res.turn_id.as_str())
+    );
 
     // Cleanup
     session.stop_active_turn(None);
@@ -521,7 +534,10 @@ async fn test_promote_stops_active_and_runs_promoted_to_completion() {
         loop {
             session.settled().await;
             let meta = session.get_meta();
-            if meta.queue_depth == 0 && meta.active_turn_id.is_none() && meta.turn_state == TurnState::Idle {
+            if meta.queue_depth == 0
+                && meta.active_turn_id.is_none()
+                && meta.turn_state == TurnState::Idle
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -536,9 +552,7 @@ async fn test_promote_stops_active_and_runs_promoted_to_completion() {
     });
     assert!(a_stopped, "A should have been stopped");
 
-    let x_result = events.iter().any(|e| {
-        e.kind == NormalizedEventKind::Result
-    });
+    let x_result = events.iter().any(|e| e.kind == NormalizedEventKind::Result);
     assert!(x_result, "X should run to completion and emit Result");
 }
 
@@ -620,7 +634,10 @@ async fn test_active_turn_id_lifecycle_and_notice_turn() {
     let notice_user_ev = events.iter().find(|e| {
         e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&observed_notice_id)
     });
-    assert!(notice_user_ev.is_some(), "Notice turn user event must match active_turn_id");
+    assert!(
+        notice_user_ev.is_some(),
+        "Notice turn user event must match active_turn_id"
+    );
 }
 
 /// Wait (with a bounded timeout) until the session is fully idle: no active
@@ -632,7 +649,10 @@ async fn wait_idle(session: &JsonAgentSession) {
         loop {
             session.settled().await;
             let meta = session.get_meta();
-            if meta.queue_depth == 0 && meta.active_turn_id.is_none() && meta.turn_state == TurnState::Idle {
+            if meta.queue_depth == 0
+                && meta.active_turn_id.is_none()
+                && meta.turn_state == TurnState::Idle
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -655,7 +675,9 @@ async fn enqueue_then_drain_persists_user_event_after_running_turn() {
     let events = session.read_transcript();
     let user_events: Vec<&NormalizedEvent> = events
         .iter()
-        .filter(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id))
+        .filter(|e| {
+            e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id)
+        })
         .collect();
     assert_eq!(
         user_events.len(),
@@ -664,7 +686,11 @@ async fn enqueue_then_drain_persists_user_event_after_running_turn() {
         user_events.len()
     );
     let ev = user_events[0];
-    assert_eq!(ev.text.as_deref(), Some("hello world"), "user event text matches");
+    assert_eq!(
+        ev.text.as_deref(),
+        Some("hello world"),
+        "user event text matches"
+    );
     assert_eq!(ev.edited, None, "not an edit");
     assert_eq!(ev.cancelled, None, "not cancelled");
     assert_eq!(ev.silent, None, "not silent");
@@ -698,7 +724,9 @@ async fn queued_turn_logseq_trails_active_turns_output() {
     let events = emitted.lock().unwrap().clone();
     let b_user = events
         .iter()
-        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id))
+        .find(|e| {
+            e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id)
+        })
         .expect("B must have a user event");
     let b_seq = b_user.log_seq.expect("B user event must have a log_seq");
 
@@ -741,13 +769,19 @@ async fn queued_turn_logseq_trails_completed_turn_result() {
     let events = session.read_transcript();
     let a_result = events
         .iter()
-        .find(|e| e.kind == NormalizedEventKind::Result && e.turn_id.as_deref() == Some(&res_a.turn_id))
+        .find(|e| {
+            e.kind == NormalizedEventKind::Result && e.turn_id.as_deref() == Some(&res_a.turn_id)
+        })
         .expect("A must emit a Result event");
     let b_user = events
         .iter()
-        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id))
+        .find(|e| {
+            e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id)
+        })
         .expect("B must emit a user event");
-    let a_seq = a_result.log_seq.expect("A Result event must have a log_seq");
+    let a_seq = a_result
+        .log_seq
+        .expect("A Result event must have a log_seq");
     let b_seq = b_user.log_seq.expect("B user event must have a log_seq");
     assert!(
         b_seq > a_seq,
@@ -781,7 +815,10 @@ async fn promoted_turn_logseq_trails_stopped_active_turn() {
         loop {
             session.settled().await;
             let meta = session.get_meta();
-            if meta.queue_depth == 0 && meta.active_turn_id.is_none() && meta.turn_state == TurnState::Idle {
+            if meta.queue_depth == 0
+                && meta.active_turn_id.is_none()
+                && meta.turn_state == TurnState::Idle
+            {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -799,11 +836,15 @@ async fn promoted_turn_logseq_trails_stopped_active_turn() {
                 && e.turn_id.as_deref() == Some(&res_a.turn_id)
         })
         .expect("A must have a 'Turn stopped' event");
-    let a_seq = a_stopped.log_seq.expect("A stopped event must have a log_seq");
+    let a_seq = a_stopped
+        .log_seq
+        .expect("A stopped event must have a log_seq");
 
     let x_user = events
         .iter()
-        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_x.turn_id))
+        .find(|e| {
+            e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_x.turn_id)
+        })
         .expect("X must have a user event");
     let x_seq = x_user.log_seq.expect("X user event must have a log_seq");
     assert!(
@@ -821,7 +862,9 @@ async fn fork_turn_inherits_deferred_persistence() {
 
     wait_idle(&session).await;
 
-    let ForkResult::Ok { turn_id: fork_id, .. } = session.fork_turn(&res.turn_id, "forked msg".into(), vec![])
+    let ForkResult::Ok {
+        turn_id: fork_id, ..
+    } = session.fork_turn(&res.turn_id, "forked msg".into(), vec![])
     else {
         panic!("fork_turn should succeed on a completed turn");
     };
@@ -899,7 +942,11 @@ async fn release_persists_cancelled_for_dropped_queue_and_holds() {
             .iter()
             .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(turn_id))
             .unwrap_or_else(|| panic!("turn {text} should have a persisted user event"));
-        assert_eq!(ev.text.as_deref(), Some(text), "text must survive for {text}");
+        assert_eq!(
+            ev.text.as_deref(),
+            Some(text),
+            "text must survive for {text}"
+        );
         assert_eq!(ev.cancelled, Some(true), "{text} must be cancelled");
         assert!(ev.log_seq.is_some(), "{text} must have a log_seq");
     }

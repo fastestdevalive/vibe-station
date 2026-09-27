@@ -826,7 +826,8 @@ async fn start_worktree_new_on_nongit_project_returns_notgit() {
     p.absolute_path = dir.path().to_string_lossy().to_string();
     p.is_git = false;
     p.default_branch = None;
-    p.direct_sessions.push(drafting_session("s-draft", "p1", None));
+    p.direct_sessions
+        .push(drafting_session("s-draft", "p1", None));
     add_project(&store, p).await;
 
     let r = routes(store.clone());

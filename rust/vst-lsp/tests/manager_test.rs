@@ -39,7 +39,10 @@ async fn read_framed_msg<R: tokio::io::AsyncRead + Unpin>(reader: &mut BufReader
 async fn write_framed_msg<W: tokio::io::AsyncWrite + Unpin>(writer: &mut W, val: &Value) {
     let s = val.to_string();
     let frame = format!("Content-Length: {}\r\n\r\n{}", s.len(), s);
-    writer.write_all(frame.as_bytes()).await.expect("write frame");
+    writer
+        .write_all(frame.as_bytes())
+        .await
+        .expect("write frame");
     writer.flush().await.expect("flush frame");
 }
 
@@ -288,7 +291,9 @@ async fn test_manager_document_sync_via_owned_watcher() {
         // 3. Expect textDocument/didChange after watcher on_changed fires
         let change_msg = read_framed_msg(&mut server_reader).await;
         assert_eq!(change_msg["method"], "textDocument/didChange");
-        let text = change_msg["params"]["contentChanges"][0]["text"].as_str().unwrap();
+        let text = change_msg["params"]["contentChanges"][0]["text"]
+            .as_str()
+            .unwrap();
         assert_eq!(text, "updated content after edit");
     });
 
@@ -354,12 +359,16 @@ async fn test_manager_document_sync_via_owned_watcher() {
         on_error: Arc::new(|_| {}),
     };
     let watcher = Arc::new(FileWatcher::new(callbacks, temp_root.path().to_path_buf()));
-    manager.insert_watcher(ws_key.clone(), watcher.clone()).await;
+    manager
+        .insert_watcher(ws_key.clone(), watcher.clone())
+        .await;
 
     // Fire on_changed directly to verify document sync
     on_changed(file_path.to_string_lossy().into_owned());
 
-    server_task.await.expect("server task completed successfully");
+    server_task
+        .await
+        .expect("server task completed successfully");
 
     // Second assertion: confirm zero WsConnection / browser subscribers present
     // The manager's watcher was constructed directly with callbacks, with no WatcherRegistry / WsConnection subscriber.
@@ -367,6 +376,7 @@ async fn test_manager_document_sync_via_owned_watcher() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK guards process-global env vars, not an async resource
 async fn test_java_spawn_data_dir() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -456,7 +466,12 @@ async fn test_java_spawn_data_dir() {
     }
 
     let lines: Vec<&str> = content.lines().collect();
-    assert_eq!(lines.len(), 2, "Expected 2 invocations of fake jdtls, got: {:?}", lines);
+    assert_eq!(
+        lines.len(),
+        2,
+        "Expected 2 invocations of fake jdtls, got: {:?}",
+        lines
+    );
 
     // Extract -data argument from each invocation line
     fn extract_data_path(cmd_line: &str) -> String {
@@ -768,6 +783,7 @@ async fn test_request_blocks_until_initialize_handshake() {
 /// must settle to `Ready` (the guarded settle branch fires) and stay responsive,
 /// not busy-spin. Uses the stay-alive fake LSP.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK guards process-global env vars, not an async resource
 async fn test_server_settles_to_ready_without_progress() {
     let _env_guard = ENV_LOCK.lock().unwrap();
 
@@ -856,6 +872,7 @@ async fn test_server_settles_to_ready_without_progress() {
 /// a subsequent request for the same (workspace, lang) spawns a genuinely NEW
 /// handle rather than reusing/hanging on the dead one.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK guards process-global env vars, not an async resource
 async fn test_dead_server_becomes_error_and_respawns() {
     let _env_guard = ENV_LOCK.lock().unwrap();
 
@@ -1006,5 +1023,3 @@ async fn test_workspace_path_confinement() {
         .unwrap_err();
     assert!(matches!(err2, LspError::NotFound));
 }
-
-

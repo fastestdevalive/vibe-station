@@ -12,6 +12,7 @@ pub mod doctor;
 pub mod doctor_hints;
 pub mod fs;
 pub mod health;
+pub mod lsp;
 pub mod mobile_auth;
 pub mod modes;
 pub mod oobe;
@@ -23,7 +24,6 @@ pub mod settings;
 pub mod skills;
 pub mod tailscale;
 pub mod worktrees;
-pub mod lsp;
 
 pub mod shared;
 

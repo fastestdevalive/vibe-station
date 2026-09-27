@@ -212,10 +212,6 @@ pub struct OutlineSymbol {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LspOutlineResponse {
-    Symbols {
-        symbols: Vec<OutlineSymbol>,
-    },
-    Unsupported {
-        unsupported: bool,
-    },
+    Symbols { symbols: Vec<OutlineSymbol> },
+    Unsupported { unsupported: bool },
 }

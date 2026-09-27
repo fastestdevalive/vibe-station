@@ -105,21 +105,12 @@ pub async fn get_status(port: u16) -> TailscaleResult<TailscaleStatus> {
     let our_proxy = format!(":{port}");
     if let Some(web_obj) = serve_json.get("Web").and_then(|w| w.as_object()) {
         for (vhost_key, vhost_val) in web_obj {
-            if let Some(handlers) = vhost_val
-                .get("Handlers")
-                .and_then(|h| h.as_object())
-            {
+            if let Some(handlers) = vhost_val.get("Handlers").and_then(|h| h.as_object()) {
                 for (_, handler) in handlers {
-                    let proxy = handler
-                        .get("Proxy")
-                        .and_then(|p| p.as_str())
-                        .unwrap_or("");
+                    let proxy = handler.get("Proxy").and_then(|p| p.as_str()).unwrap_or("");
                     if proxy.contains(&our_proxy) {
                         // vhost_key is e.g. "machine.tailnet.ts.net:443" — strip the :port
-                        let domain = vhost_key
-                            .split(':')
-                            .next()
-                            .unwrap_or(vhost_key.as_str());
+                        let domain = vhost_key.split(':').next().unwrap_or(vhost_key.as_str());
                         let url = format!("https://{domain}");
                         return Ok(TailscaleStatus::ServeActive { url });
                     }

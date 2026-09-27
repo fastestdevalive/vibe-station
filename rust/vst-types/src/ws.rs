@@ -497,8 +497,9 @@ mod tests {
 
     #[test]
     fn file_watch_missing_scope_defaults_to_worktree() {
-        let msg: ClientMessage = serde_json::from_str(r#"{"type":"file:watch","worktreeId":"w","path":"p"}"#)
-            .expect("old client message with no scope key must still parse");
+        let msg: ClientMessage =
+            serde_json::from_str(r#"{"type":"file:watch","worktreeId":"w","path":"p"}"#)
+                .expect("old client message with no scope key must still parse");
         match msg {
             ClientMessage::FileWatch {
                 worktree_id,
@@ -533,9 +534,10 @@ mod tests {
 
     #[test]
     fn watch_messages_with_explicit_project_scope_parse() {
-        let msg: ClientMessage =
-            serde_json::from_str(r#"{"type":"file:watch","worktreeId":"w","path":"p","scope":"project"}"#)
-                .expect("message with explicit project scope must parse");
+        let msg: ClientMessage = serde_json::from_str(
+            r#"{"type":"file:watch","worktreeId":"w","path":"p","scope":"project"}"#,
+        )
+        .expect("message with explicit project scope must parse");
         match msg {
             ClientMessage::FileWatch { scope, .. } => {
                 assert_eq!(scope, WatchScope::Project);

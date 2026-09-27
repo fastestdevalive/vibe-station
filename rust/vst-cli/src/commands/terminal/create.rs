@@ -6,21 +6,11 @@ use crate::env::get_vst_session;
 use crate::output::warn;
 use crate::preflight::preflight;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TerminalCreateOptions {
     pub worktree_id: String,
     pub parent: Option<String>,
     pub no_parent: bool,
-}
-
-impl Default for TerminalCreateOptions {
-    fn default() -> Self {
-        Self {
-            worktree_id: String::new(),
-            parent: None,
-            no_parent: false,
-        }
-    }
 }
 
 pub fn parse_terminal_create_options(args: &[String]) -> Result<TerminalCreateOptions, String> {

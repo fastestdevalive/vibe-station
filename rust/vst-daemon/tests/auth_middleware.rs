@@ -181,7 +181,9 @@ async fn deep_link_get_with_missing_token_serves_spa_not_401() {
     let resp = router.oneshot(remote_get("/worktree/abc")).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("index"));
 }
 
@@ -206,7 +208,9 @@ async fn deep_link_get_with_invalid_token_serves_spa_not_401() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("index"));
 }
 
@@ -267,7 +271,9 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
         Some(dist.clone()),
     ));
     let ws_resp = ws_router.oneshot(remote_get("/ws")).await.unwrap();
-    let body = axum::body::to_bytes(ws_resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(ws_resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert!(!String::from_utf8_lossy(&body).contains("index"));
 
     // /mobile-auth must reach its handler, not the SPA fallback.
@@ -278,7 +284,9 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
         Some(dist),
     ));
     let ma_resp = ma_router.oneshot(remote_get("/mobile-auth")).await.unwrap();
-    let body = axum::body::to_bytes(ma_resp.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(ma_resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert!(!String::from_utf8_lossy(&body).contains("index"));
 }
 

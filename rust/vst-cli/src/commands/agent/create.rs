@@ -7,7 +7,7 @@ use crate::output::warn;
 use crate::preflight::preflight;
 use crate::text_source::resolve_file_or_inline;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AgentCreateOptions {
     pub worktree_id: String,
     pub project_id: Option<String>,
@@ -17,21 +17,6 @@ pub struct AgentCreateOptions {
     pub channel: Option<String>,
     pub parent: Option<String>,
     pub no_parent: bool,
-}
-
-impl Default for AgentCreateOptions {
-    fn default() -> Self {
-        Self {
-            worktree_id: String::new(),
-            project_id: None,
-            mode: None,
-            prompt: None,
-            prompt_file: None,
-            channel: None,
-            parent: None,
-            no_parent: false,
-        }
-    }
 }
 
 pub fn parse_agent_create_options(args: &[String]) -> Result<AgentCreateOptions, String> {

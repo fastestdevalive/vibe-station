@@ -372,7 +372,11 @@ impl AcpTransport for AcpConnection {
         rx.await.unwrap_or(SteerOutcome::Unsupported)
     }
 
-    async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpTransportError> {
+    async fn set_config_option(
+        &self,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), AcpTransportError> {
         if self.0.shared.disposed.load(Ordering::Relaxed) {
             return Err(AcpTransportError::RequestFailed(
                 "ACP connection is disposed; cannot set config option".to_string(),

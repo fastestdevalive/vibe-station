@@ -35,8 +35,8 @@ use vst_types::rest::sessions::{
     HandoffResult, ResetBody, ResetResult, SessionOrDraft, StartDraftBody, StartDraftResult,
 };
 use vst_types::{
-    Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, ProjectRecord,
-    SessionLifecycle, SessionNameSource, SessionRecord, SessionType, WorktreeRecord,
+    Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, ProjectRecord, SessionLifecycle,
+    SessionNameSource, SessionRecord, SessionType, WorktreeRecord,
 };
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
@@ -180,7 +180,9 @@ fn home_with_mode() -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
 /// `load_modes` resolves them, returning the home + guard (kept alive for the
 /// test's duration). Used by the Phase 2 channel-defaulting tests, which need
 /// claude/cursor/agy modes (and, in one case, a mode deliberately absent).
-fn home_with_modes(modes: &[(&str, &str, &str)]) -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
+fn home_with_modes(
+    modes: &[(&str, &str, &str)],
+) -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
     let home = tempdir().unwrap();
     let modes_dir = home.path().join(".vibe-station");
     std::fs::create_dir_all(&modes_dir).unwrap();
@@ -197,7 +199,11 @@ fn home_with_modes(modes: &[(&str, &str, &str)]) -> (tempfile::TempDir, vst_agen
             })
         })
         .collect();
-    std::fs::write(modes_dir.join("modes.json"), serde_json::to_string(&arr).unwrap()).unwrap();
+    std::fs::write(
+        modes_dir.join("modes.json"),
+        serde_json::to_string(&arr).unwrap(),
+    )
+    .unwrap();
     let guard = with_home(home.path().to_path_buf());
     (home, guard)
 }
@@ -213,7 +219,11 @@ fn channel_modes() -> Vec<(&'static str, &'static str, &'static str)> {
 
 /// Create a direct agent session for `mode_id` and return the serialized
 /// `Session` (asserting it came back as a session, not a draft).
-async fn create_direct_agent(r: &SessionRoutes, project_id: &str, mode_id: &str) -> vst_types::rest::shared::Session {
+async fn create_direct_agent(
+    r: &SessionRoutes,
+    project_id: &str,
+    mode_id: &str,
+) -> vst_types::rest::shared::Session {
     let body = serde_json::json!({
         "target": "direct",
         "type": "agent",
@@ -771,8 +781,12 @@ async fn create_terminal_defaults_to_tmux() {
 /// Build a routes with a claude/Json parent `parent-1` in project `p1`'s
 /// direct sessions, ready for the inheritance tests. Returns home + guard
 /// (both kept alive for the test's duration) alongside the store + routes.
-async fn project_with_claude_json_parent(
-) -> (tempfile::TempDir, vst_agents::home::HomeGuard, StoreHandle, SessionRoutes) {
+async fn project_with_claude_json_parent() -> (
+    tempfile::TempDir,
+    vst_agents::home::HomeGuard,
+    StoreHandle,
+    SessionRoutes,
+) {
     let (home, guard) = home_with_modes(&channel_modes());
     let (_d, store) = store();
     let mut p = make_project("p1");

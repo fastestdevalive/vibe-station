@@ -95,9 +95,7 @@ use vst_ws::handlers::session_open::DirectStreamRegistry;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 use vst_ws::streams::pty_stream::PtySessionStream;
 
-use crate::modes::{
-    find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
-};
+use crate::modes::{find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id};
 use crate::settings::load_default_channel_overrides;
 use crate::worktrees::{ensure_git_project, GitGateError};
 
@@ -667,7 +665,8 @@ impl SessionRoutes {
                                 .as_deref()
                                 .and_then(resolve_mode)
                                 .map(|m| m.cli);
-                            let child_cli = mode_id.as_deref().and_then(resolve_mode).map(|m| m.cli);
+                            let child_cli =
+                                mode_id.as_deref().and_then(resolve_mode).map(|m| m.cli);
                             if child_cli.is_some() && child_cli == parent_cli {
                                 inherited_channel = session.channel;
                             }
@@ -711,7 +710,11 @@ impl SessionRoutes {
                     .as_deref()
                     .and_then(resolve_mode)
                     .map(|m| {
-                        resolve_effective_default_channel(&overrides, m.cli, &*resolve_plugin(m.cli))
+                        resolve_effective_default_channel(
+                            &overrides,
+                            m.cli,
+                            &*resolve_plugin(m.cli),
+                        )
                     })
                     .unwrap_or(Channel::Json)
             })
