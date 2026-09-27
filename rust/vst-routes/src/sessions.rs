@@ -95,7 +95,10 @@ use vst_ws::handlers::session_open::DirectStreamRegistry;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 use vst_ws::streams::pty_stream::PtySessionStream;
 
-use crate::modes::{find_mode, resolve_mode_id};
+use crate::modes::{
+    find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+};
+use crate::settings::load_default_channel_overrides;
 use crate::worktrees::{ensure_git_project, GitGateError};
 
 pub use vst_types::rest::sessions::SessionOrDraft;
@@ -225,6 +228,9 @@ pub fn serialize_global_draft(row: &GlobalDraftRow) -> GlobalDraft {
             .and_then(|s| serde_json::from_str::<SessionNameSource>(&format!("\"{s}\"")).ok()),
         tmux_name: format!("__draft__-{}", row.id),
         use_tmux: false,
+        // Placeholder for a drafting-state record's view — NOT a resolved
+        // default; the real channel is resolved at draft-start time (see
+        // `start_new_worktree`/`start_direct`). Leave as-is.
         channel: Channel::Json,
         state: LifecycleState::Drafting,
         lifecycle_state: LifecycleState::Drafting,
@@ -635,7 +641,7 @@ impl SessionRoutes {
         let prompt = data.prompt.clone();
         let mut mode_id = data.mode_id.clone();
 
-        // Decision 2: subagent inherits parent mode + channel.
+        // Decision 2/6: subagent inherits parent mode + channel (same-CLI only).
         let mut inherited_channel: Option<Channel> = None;
         if let Some(source_agent_id) = &data.source_agent_id {
             if let Some(source) = find_session_context(&self.store, source_agent_id).await {
@@ -646,11 +652,47 @@ impl SessionRoutes {
                             mode_id = session.mode_id.clone();
                         }
                         if data.channel.is_none() {
-                            inherited_channel = session.channel;
+                            // Decision 6: inherit only when the child's mode
+                            // resolves to the SAME CLI as the parent's (always
+                            // true when --mode is omitted, since it inherits the
+                            // parent's mode outright). An explicit --mode naming
+                            // a different CLI falls through to that CLI's own
+                            // effective default, never the parent's channel. If
+                            // the parent's mode was since deleted, resolve_mode
+                            // returns None and we deliberately do NOT inherit
+                            // (fall through to the child's own default) rather
+                            // than guess.
+                            let parent_cli = session
+                                .mode_id
+                                .as_deref()
+                                .and_then(resolve_mode)
+                                .map(|m| m.cli);
+                            let child_cli = mode_id.as_deref().and_then(resolve_mode).map(|m| m.cli);
+                            if child_cli.is_some() && child_cli == parent_cli {
+                                inherited_channel = session.channel;
+                            }
                         }
                     }
                     SessionContext::Global { .. } => {}
                 }
+            }
+        }
+
+        // Decision 3: mode validation/canonicalization runs BEFORE channel
+        // defaulting, so defaulted_channel resolves off the already-canonicalized
+        // mode_id (M1: a mode given by *name* previously missed the id-only
+        // find_mode used for defaulting, silently falling back to Json).
+        if r#type == SessionType::Agent && mode_id.is_none() {
+            return Err(CreateError::Validation(
+                "'modeId' is required for agent sessions".to_string(),
+            ));
+        }
+
+        if r#type == SessionType::Agent {
+            if let Some(mid) = &mode_id {
+                let resolved = resolve_mode_id(mid)
+                    .ok_or_else(|| CreateError::Validation(format!("Mode '{mid}' not found")))?;
+                mode_id = Some(resolved);
             }
         }
 
@@ -661,7 +703,17 @@ impl SessionRoutes {
             Some(if r#type == SessionType::Terminal {
                 Channel::Tmux
             } else {
-                Channel::Json
+                // Agent: the effective default for mode.cli (override-aware) —
+                // never a hardcoded Channel::Json (Requirement 3). mode_id is
+                // guaranteed Some(canonical) here for Agent sessions.
+                let overrides = load_default_channel_overrides();
+                mode_id
+                    .as_deref()
+                    .and_then(resolve_mode)
+                    .map(|m| {
+                        resolve_effective_default_channel(&overrides, m.cli, &*resolve_plugin(m.cli))
+                    })
+                    .unwrap_or(Channel::Json)
             })
         } else {
             None
@@ -677,20 +729,6 @@ impl SessionRoutes {
             .or(resolved_channel)
             .unwrap_or_else(|| resolve_channel(use_tmux, false));
         let is_json = channel == Channel::Json;
-
-        if r#type == SessionType::Agent && mode_id.is_none() {
-            return Err(CreateError::Validation(
-                "'modeId' is required for agent sessions".to_string(),
-            ));
-        }
-
-        if r#type == SessionType::Agent {
-            if let Some(mid) = &mode_id {
-                let resolved = resolve_mode_id(mid)
-                    .ok_or_else(|| CreateError::Validation(format!("Mode '{mid}' not found")))?;
-                mode_id = Some(resolved);
-            }
-        }
 
         if is_json && r#type == SessionType::Agent {
             if let Some(mid) = &mode_id {
@@ -1878,7 +1916,17 @@ impl SessionRoutes {
         .map_err(|e| StartError::Internal(format!("Failed to create worktree: {e}")))?;
 
         let wt_id = new_worktree.id.clone();
-        let channel = draft_config.channel.unwrap_or(Channel::Json);
+        let channel = draft_config.channel.unwrap_or_else(|| {
+            // Draft-start (Requirement 3 / M3 fix): resolve the effective
+            // default off the already-resolved `mode_id` PARAMETER (not
+            // `draft_config.mode_id`, which is the pre-resolution Option).
+            resolve_mode(mode_id)
+                .map(|m| {
+                    let overrides = load_default_channel_overrides();
+                    resolve_effective_default_channel(&overrides, m.cli, &*resolve_plugin(m.cli))
+                })
+                .unwrap_or(Channel::Json)
+        });
         let use_tmux = channel == Channel::Tmux;
         let is_json = channel == Channel::Json;
         let new_tmux_name = if use_tmux {
@@ -2022,7 +2070,17 @@ impl SessionRoutes {
             }
         }
 
-        let channel = draft_config.channel.unwrap_or(Channel::Json);
+        let channel = draft_config.channel.unwrap_or_else(|| {
+            // Draft-start (Requirement 3 / M3 fix): resolve the effective
+            // default off the already-resolved `mode_id` PARAMETER (not
+            // `draft_config.mode_id`, which is the pre-resolution Option).
+            resolve_mode(mode_id)
+                .map(|m| {
+                    let overrides = load_default_channel_overrides();
+                    resolve_effective_default_channel(&overrides, m.cli, &*resolve_plugin(m.cli))
+                })
+                .unwrap_or(Channel::Json)
+        });
         let use_tmux = channel == Channel::Tmux;
         let is_json = channel == Channel::Json;
         let new_tmux_name = if use_tmux {
@@ -4613,6 +4671,8 @@ fn draft_session_record(
         name_source: None,
         tmux_name: format!("__draft__-{session_id}"),
         use_tmux: false,
+        // Placeholder for a drafting-state record — NOT a resolved default;
+        // the real channel is resolved at draft-start time. Leave as-is.
         channel: Some(Channel::Json),
         lifecycle: SessionLifecycle {
             state: LifecycleState::Drafting,

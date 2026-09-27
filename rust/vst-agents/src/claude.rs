@@ -13,7 +13,7 @@ use agent_client_protocol::schema::v1::{ContentBlock, TextContent};
 use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
+use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -255,6 +255,10 @@ impl AgentPlugin for ClaudePlugin {
             post_launch_input: None,
             ..Default::default()
         }
+    }
+
+    fn default_channel(&self) -> Channel {
+        Channel::Json
     }
 
     fn setup_workspace_hooks(&self, workspace_path: &str) -> AsyncResult<()> {
@@ -658,5 +662,10 @@ mod tests {
     fn binary_name_defaults_to_claude() {
         let plugin = ClaudePlugin;
         assert_eq!(plugin.binary_name(), "claude");
+    }
+
+    #[test]
+    fn default_channel_is_json() {
+        assert_eq!(ClaudePlugin.default_channel(), Channel::Json);
     }
 }

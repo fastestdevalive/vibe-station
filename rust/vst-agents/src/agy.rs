@@ -21,7 +21,8 @@ use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult, UsageInfo,
+    Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult,
+    UsageInfo,
 };
 
 use crate::acp_connection::AcpLaunchSpec;
@@ -421,6 +422,10 @@ impl AgentPlugin for AgyPlugin {
         ComposePromptResult::default()
     }
 
+    fn default_channel(&self) -> Channel {
+        Channel::Tmux
+    }
+
     fn capture_chat_id(&self, args: CaptureArgs<'_>) -> AsyncResult<Option<String>> {
         let path = agy_log_path(&args.session.id);
         Box::pin(async move { poll_log_for_conversation_id(&path, None, None).await })
@@ -652,3 +657,13 @@ fn resolve_agy_binary() -> String {
 /// local unescaped `'{s}'` here once broke any task prompt containing an
 /// apostrophe (`sh -lc` syntax error → pane dies instantly → `exited`).
 use vst_proc::sq;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_channel_is_tmux() {
+        assert_eq!(AgyPlugin.default_channel(), Channel::Tmux);
+    }
+}

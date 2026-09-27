@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
 
-use crate::domain::CliId;
+use crate::domain::{Channel, CliId};
 
 /// One element of `GET /supported-clis`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -17,6 +17,12 @@ pub struct SupportedCli {
     pub detected: bool,
     pub starter_bundle_names: Vec<String>,
     pub using_fallback_only: bool,
+    /// The CLI's effective default channel (override-aware; plan Decision 5/B2).
+    pub default_channel: Channel,
+    /// True when `default_channel` reflects a user override (not the plugin's
+    /// hardwired default) — lets the Settings UI label the plugin-default
+    /// option distinctly from an explicit override (round-2 m3).
+    pub default_channel_overridden: bool,
 }
 
 /// `GET /cli-models` response.

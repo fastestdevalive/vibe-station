@@ -1,7 +1,11 @@
 //! `GET /settings`, `PATCH /settings` — `routes/settings.ts`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_with::skip_serializing_none;
+
+use crate::domain::{Channel, CliId};
 
 /// The full config shape returned by `GET /settings`: `MainConfig` +
 /// `UserSettings` + a runtime `homeDir`.
@@ -26,6 +30,12 @@ pub struct Settings {
     pub search_case_sensitive: Option<bool>,
     pub search_regex: Option<bool>,
     pub search_whole_word: Option<bool>,
+    /// Per-CLI default-channel overrides (read side). `None` when no overrides
+    /// are persisted. The daemon resolves the effective default via
+    /// `load_default_channel_overrides()` + the shared effective-default
+    /// helper (plan Requirement 11/12); the write side is
+    /// `PatchSettingsBody::default_channel_by_cli` (Phase 6).
+    pub default_channel_by_cli: Option<BTreeMap<CliId, Channel>>,
 }
 
 /// `PATCH /settings` request body (all optional).
@@ -43,6 +53,12 @@ pub struct PatchSettingsBody {
     pub search_case_sensitive: Option<bool>,
     pub search_regex: Option<bool>,
     pub search_whole_word: Option<bool>,
+    /// Write-side per-CLI default-channel overrides. Per-key merge on write:
+    /// `Some(ch)` sets that CLI's override, `None`/`null` clears it (other
+    /// keys untouched — never a whole-map replace). Valid values are
+    /// `{Tmux, Json}` — `Pty` is rejected; a `Json` override for a CLI that
+    /// can't run Rich Chat is also rejected (Decision 7/8).
+    pub default_channel_by_cli: Option<BTreeMap<CliId, Option<Channel>>>,
 }
 
 /// User-configurable Markdown overrides layered on top of the active theme's

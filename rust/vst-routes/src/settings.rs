@@ -7,11 +7,15 @@
 //! Manages user-configurable settings stored in `~/.vibe-station/config.json`.
 //! Preserves transient main config fields on update.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vst_agents::home::home_dir;
+use vst_agents::plugin::AgentPlugin;
+use vst_agents::resolve_plugin;
 use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
+use vst_types::domain::{Channel, CliId};
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::settings::{
     MarkdownStyle, PatchSettingsBody, PatchSettingsResult, Settings,
@@ -26,6 +30,8 @@ pub enum SettingsRouteError {
     SkillPathsNotAbsolute,
     #[error("validation_error: invalid markdown_style value")]
     InvalidMarkdownStyle,
+    #[error("validation_error: invalid defaultChannelByCli: {0}")]
+    InvalidDefaultChannel(String),
     #[error("internal_error: {0}")]
     Internal(String),
 }
@@ -35,7 +41,8 @@ impl SettingsRouteError {
         match self {
             Self::DefaultProjectsDirNotAbsolute
             | Self::SkillPathsNotAbsolute
-            | Self::InvalidMarkdownStyle => "validation_error",
+            | Self::InvalidMarkdownStyle
+            | Self::InvalidDefaultChannel(_) => "validation_error",
             Self::Internal(_) => "internal_error",
         }
     }
@@ -77,6 +84,69 @@ pub fn effective_skill_paths(configured: &[String], vst_home: &Path) -> Vec<Stri
 /// Default projects dir (`~/projects`).
 pub fn default_projects_dir() -> String {
     home_dir().join("projects").to_string_lossy().to_string()
+}
+
+/// Load persisted per-CLI default-channel overrides from `config.json`
+/// (the same `~/.vibe-station` root `modes::load_modes()` reads `modes.json`
+/// from, honouring `with_home()` in tests). A free function — not struct-field
+/// DI — so every default-channel consumer shares one read path. Per-entry
+/// parsing: one unrecognized `CliId`/`Channel` entry (hand-edit typo, or a
+/// config written by a newer daemon) is skipped without dropping the other
+/// overrides.
+///
+/// Reads via `home_dir()` rather than `SettingsRoutes`'s own `Paths` (which
+/// `patch_settings` writes through) — identical in production (both resolve
+/// `$HOME`), and this mirrors the same `home_dir()` vs. `Paths` split
+/// `load_modes()`/`ModeRoutes` already have (round-3 n5). Only a latent
+/// divergence if `Paths` is ever rooted somewhere other than `$HOME`.
+pub fn load_default_channel_overrides() -> BTreeMap<CliId, Channel> {
+    let path = home_dir().join(".vibe-station").join("config.json");
+    let raw: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    raw.get("defaultChannelByCli")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    let cli =
+                        serde_json::from_value::<CliId>(serde_json::Value::String(k.clone())).ok()?;
+                    let ch = serde_json::from_value::<Channel>(v.clone()).ok()?;
+                    Some((cli, ch))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Validate a set of per-CLI default-channel overrides before persisting them.
+/// Pure and independently unit-testable (round-2 M4): the `resolver` is passed
+/// in so a test can inject a stub plugin whose `supports_json()` is `false` —
+/// no production `CliId` has that property, so the real `resolve_plugin` alone
+/// can't exercise the rejection branch. Rejects:
+/// - `Channel::Pty` unconditionally (the override's valid range is `{Tmux, Json}`)
+/// - `Channel::Json` for any CLI whose plugin doesn't `supports_json()`
+pub(crate) fn validate_default_channel_overrides(
+    entries: &BTreeMap<CliId, Channel>,
+    resolver: fn(CliId) -> Box<dyn AgentPlugin>,
+) -> Result<(), SettingsRouteError> {
+    for (cli, ch) in entries {
+        match ch {
+            Channel::Pty => {
+                return Err(SettingsRouteError::InvalidDefaultChannel(format!(
+                    "{cli:?} may only override to 'tmux' or 'json', not 'pty'"
+                )));
+            }
+            Channel::Json if !resolver(*cli).supports_json() => {
+                return Err(SettingsRouteError::InvalidDefaultChannel(format!(
+                    "{cli:?} does not support Rich Chat; cannot override its default to 'json'"
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Default theme id.
@@ -190,6 +260,14 @@ impl SettingsRoutes {
             search_case_sensitive: Some(search_case_sensitive),
             search_regex: Some(search_regex),
             search_whole_word: Some(search_whole_word),
+            default_channel_by_cli: {
+                let overrides = load_default_channel_overrides();
+                if overrides.is_empty() {
+                    None
+                } else {
+                    Some(overrides)
+                }
+            },
         }
     }
 
@@ -220,6 +298,14 @@ impl SettingsRoutes {
 
         if let Some(ref style) = body.markdown_style {
             validate_markdown_style(style)?;
+        }
+
+        if let Some(overrides) = &body.default_channel_by_cli {
+            let to_validate: BTreeMap<CliId, Channel> = overrides
+                .iter()
+                .filter_map(|(cli, ch)| ch.map(|c| (*cli, c)))
+                .collect();
+            validate_default_channel_overrides(&to_validate, resolve_plugin)?;
         }
 
         // Hold the write lock across the whole read-modify-write cycle (see
@@ -294,6 +380,39 @@ impl SettingsRoutes {
         }
         if let Some(v) = body.search_whole_word {
             raw["searchWholeWord"] = serde_json::Value::Bool(v);
+        }
+
+        // Per-key merge for defaultChannelByCli — NOT a whole-map replace
+        // (round-2 B2): two Settings rows toggling different CLIs concurrently
+        // must not clobber each other, so we mutate one key at a time.
+        // `Some(ch)` sets that CLI's override; `None`/`null` clears it.
+        if let Some(overrides) = &body.default_channel_by_cli {
+            if raw
+                .get("defaultChannelByCli")
+                .map(|v| v.is_null())
+                .unwrap_or(true)
+            {
+                raw["defaultChannelByCli"] = serde_json::json!({});
+            }
+            if let Some(map) = raw
+                .get_mut("defaultChannelByCli")
+                .and_then(|v| v.as_object_mut())
+            {
+                for (cli, ch) in overrides {
+                    let key = match serde_json::to_value(*cli) {
+                        Ok(serde_json::Value::String(s)) => s,
+                        _ => format!("{cli:?}"),
+                    };
+                    match ch {
+                        Some(ch) => {
+                            map.insert(key, serde_json::to_value(ch).unwrap());
+                        }
+                        None => {
+                            map.remove(&key);
+                        }
+                    }
+                }
+            }
         }
 
         let vst_home = self.paths.vst_home();
@@ -486,4 +605,80 @@ fn is_css_color(s: &str) -> bool {
         "lime", "aqua", "fuchsia", "transparent", "currentColor",
     ];
     named.contains(&s.to_ascii_lowercase().as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vst_agents::plugin::{
+        AsyncResult, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
+        PromptDelivery, ReadySignal,
+    };
+
+    /// A stub plugin that does NOT support json — round-2 M4: no production
+    /// `CliId` has `supports_json() == false`, so only a stub can exercise the
+    /// Json-rejection branch of `validate_default_channel_overrides`.
+    struct NoJsonStub;
+    impl AgentPlugin for NoJsonStub {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn default_model(&self) -> &str {
+            "m"
+        }
+        fn default_mode_icon(&self, _m: Option<&str>) -> &'static str {
+            "stub"
+        }
+        fn prompt_delivery(&self) -> PromptDelivery {
+            PromptDelivery::Inline
+        }
+        fn get_launch_command(&self, _c: &LaunchConfig) -> Vec<String> {
+            vec![]
+        }
+        fn get_environment(&self, _c: &LaunchConfig) -> BTreeMap<String, String> {
+            BTreeMap::new()
+        }
+        fn get_ready_signal(&self) -> ReadySignal {
+            ReadySignal {
+                sentinel: None,
+                fallback_ms: 0,
+            }
+        }
+        fn compose_launch_prompt(&self, _i: ComposePromptInput) -> ComposePromptResult {
+            ComposePromptResult::default()
+        }
+        fn default_channel(&self) -> Channel {
+            Channel::Tmux
+        }
+        fn list_models(&self) -> AsyncResult<ListModelsResult> {
+            Box::pin(async { ListModelsResult::default() })
+        }
+    }
+
+    fn stub_resolver(_cli: CliId) -> Box<dyn AgentPlugin> {
+        Box::new(NoJsonStub)
+    }
+
+    #[test]
+    fn validate_rejects_json_for_a_non_json_cli() {
+        let mut entries = BTreeMap::new();
+        entries.insert(CliId::Claude, Channel::Json);
+        let err = validate_default_channel_overrides(&entries, stub_resolver).unwrap_err();
+        assert!(matches!(err, SettingsRouteError::InvalidDefaultChannel(_)));
+    }
+
+    #[test]
+    fn validate_accepts_tmux_for_a_non_json_cli() {
+        let mut entries = BTreeMap::new();
+        entries.insert(CliId::Claude, Channel::Tmux);
+        assert!(validate_default_channel_overrides(&entries, stub_resolver).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_pty_unconditionally() {
+        let mut entries = BTreeMap::new();
+        entries.insert(CliId::Claude, Channel::Pty);
+        let err = validate_default_channel_overrides(&entries, stub_resolver).unwrap_err();
+        assert!(matches!(err, SettingsRouteError::InvalidDefaultChannel(_)));
+    }
 }

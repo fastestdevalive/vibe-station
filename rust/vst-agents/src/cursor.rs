@@ -14,7 +14,8 @@ use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{
-    NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult, UsageInfo,
+    Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult,
+    UsageInfo,
 };
 
 use crate::acp_connection::AcpLaunchSpec;
@@ -398,6 +399,10 @@ impl AgentPlugin for CursorPlugin {
         }
     }
 
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+
     fn setup_workspace_hooks(&self, workspace_path: &str) -> AsyncResult<()> {
         let root = PathBuf::from(workspace_path);
         Box::pin(async move {
@@ -565,5 +570,10 @@ mod tests {
         assert_eq!(plugin.name(), "cursor");
         assert_eq!(plugin.binary_name(), "cursor-agent");
         assert_ne!(plugin.binary_name(), plugin.name());
+    }
+
+    #[test]
+    fn default_channel_is_json() {
+        assert_eq!(CursorPlugin.default_channel(), Channel::Json);
     }
 }

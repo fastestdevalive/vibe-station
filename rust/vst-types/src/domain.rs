@@ -38,7 +38,7 @@ macro_rules! id_newtype {
 }
 
 /// A CLI harness identifier (`agent-plugins/registry.ts` `CliId`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CliId {
     Claude,
@@ -492,6 +492,10 @@ pub struct DraftConfig {
     pub entry_point: DraftEntryPoint,
     pub mode_id: Option<String>,
     pub channel: Option<Channel>,
+    /// Whether `channel` was set by an explicit user choice (rather than a
+    /// scaffold/autosave echo) — the web-ui reads this to decide whether the
+    /// mode-follow effect may override the channel (plan Decision 5/B1).
+    pub channel_explicit: Option<bool>,
     // worktree / global-with-worktree
     pub worktree_choice: Option<WorktreeChoice>,
     pub existing_worktree_id: Option<String>,

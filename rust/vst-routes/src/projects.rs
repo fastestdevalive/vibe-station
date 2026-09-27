@@ -39,7 +39,6 @@ use vst_git::session_id::{generate_session_id, reserve_next_worktree_num, tmux_n
 use vst_git::slugify::{is_safe_project_id, slugify};
 use vst_git::DirectPtyRegistry;
 use vst_proc::pty::PtyHandle;
-use vst_proc::resolve_use_tmux::resolve_use_tmux;
 use vst_proc::tmux::Tmux;
 use vst_store::{StoreError, StoreHandle};
 use vst_types::domain::{
@@ -59,7 +58,10 @@ use vst_types::rest::worktrees::{
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 
-use crate::modes::{find_mode, resolve_mode_id};
+use crate::modes::{
+    find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+};
+use crate::settings::load_default_channel_overrides;
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::file_serving::{read_file_response, FileServingError};
 use crate::worktrees::{
@@ -829,7 +831,26 @@ impl ProjectRoutes {
                     let wt_path_buf = self.paths.worktree_path(&id, &wt_id);
                     let wt_path = wt_path_buf.to_string_lossy().to_string();
 
-                    let use_tmux = resolve_use_tmux(None);
+                    // startAgent (round-2 M2): resolve the effective default
+                    // channel for mode.cli (override-aware) instead of the
+                    // previously-hardcoded Channel::Tmux; derive use_tmux from it.
+                    // `resolve_mode` returning `None` here is unreachable in
+                    // practice (the mode was already validated just above) —
+                    // the `Tmux` fallback matches this route's own pre-existing
+                    // default (round-3 n4; sessions.rs's equivalent fallback is
+                    // `Json`, for its own pre-existing default — neither branch
+                    // is ever actually taken).
+                    let effective_channel = resolve_mode(&resolved_mode_id)
+                        .map(|m| {
+                            let overrides = load_default_channel_overrides();
+                            resolve_effective_default_channel(
+                                &overrides,
+                                m.cli,
+                                &*resolve_plugin(m.cli),
+                            )
+                        })
+                        .unwrap_or(Channel::Tmux);
+                    let use_tmux = effective_channel == Channel::Tmux;
                     let base_sha = rev_parse(&project_path, &default_branch)
                         .await
                         .unwrap_or_default();
@@ -869,7 +890,7 @@ impl ProjectRoutes {
                                 .map(|_| vst_types::domain::SessionNameSource::Auto),
                             tmux_name: main_tmux_name,
                             use_tmux,
-                            channel: Some(Channel::Tmux),
+                            channel: Some(effective_channel),
                             transcript_ref: None,
                             lifecycle: SessionLifecycle {
                                 state: LifecycleState::NotStarted,
@@ -966,7 +987,21 @@ impl ProjectRoutes {
             } else {
                 // Direct session
                 let fresh_project = self.store.get_project(&id).await.unwrap_or(record.clone());
-                let use_tmux = resolve_use_tmux(None);
+                // startAgent (round-2 M2): effective default channel for
+                // mode.cli (override-aware) instead of hardcoded Tmux.
+                // `None` (round-3 n4) is unreachable — see the worktree-arm
+                // comment above for why `Tmux` is the fallback here.
+                let effective_channel = resolve_mode(&resolved_mode_id)
+                    .map(|m| {
+                        let overrides = load_default_channel_overrides();
+                        resolve_effective_default_channel(
+                            &overrides,
+                            m.cli,
+                            &*resolve_plugin(m.cli),
+                        )
+                    })
+                    .unwrap_or(Channel::Tmux);
+                let use_tmux = effective_channel == Channel::Tmux;
                 let session_id = generate_session_id(&id, SessionType::Agent);
                 let tmux_name = if use_tmux {
                     tmux_name_for_session(&session_id)
@@ -1001,7 +1036,7 @@ impl ProjectRoutes {
                         .map(|_| vst_types::domain::SessionNameSource::Auto),
                     tmux_name,
                     use_tmux,
-                    channel: Some(Channel::Tmux),
+                    channel: Some(effective_channel),
                     transcript_ref: None,
                     lifecycle: SessionLifecycle {
                         state: LifecycleState::NotStarted,
