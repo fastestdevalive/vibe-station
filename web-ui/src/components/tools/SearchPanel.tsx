@@ -6,6 +6,7 @@ import type { FileScope, SearchResult } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useRovingListNav, type RovingRow } from "@/hooks/useRovingListNav";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 
 interface SearchPanelProps {
   api: ApiInstance;
@@ -76,6 +77,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[worktreeId ?? ""] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
+  const outerInset = useTopRightInset();
 
   const [query, setQuery] = useState("");
   const [caseCheck, setCaseCheck] = useState(false);
@@ -436,11 +438,9 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
       <div
         className="search-panel__controls"
         style={{
-          height: "32px",
-          minHeight: "32px",
-          maxHeight: "32px",
+          minHeight: masterDetailVertical ? "35px" : "32px",
           boxSizing: "border-box",
-          paddingRight: masterDetailVertical ? "68px" : undefined,
+          paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
         }}
       >
         <div className="search-panel__input-wrap">

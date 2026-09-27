@@ -3,9 +3,16 @@ import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from
 import { useLayout } from "@/hooks/useLayout";
 import { PaneFullscreenChrome, type PaneFullscreenPlacement } from "@/components/layout/PaneFullscreenChrome";
 import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } from "@/hooks/useStore";
+import { TopRightInsetProvider, type TopRightInsetContextValue } from "@/context/TopRightInsetContext";
+
+const ZERO_INSET: TopRightInsetContextValue = { width: 0, height: 0 };
 
 interface LayoutProps {
-  topBar: ReactNode;
+  topBar?: ReactNode;
+  /** Floating top-right widget for classic layout */
+  floatingTopBar?: ReactNode;
+  /** Whether this is classic per-worktree layout (no shared full-width top bar) */
+  isClassicLayout?: boolean;
   /** Bottom region — global status bar. Passed as a node (not rendered here)
    *  so the generic Layout stays unaware of api/projects/worktrees. */
   globalStatusBar?: ReactNode;
@@ -39,6 +46,8 @@ interface LayoutProps {
 
 export function Layout({
   topBar,
+  floatingTopBar,
+  isClassicLayout = false,
   globalStatusBar,
   leftSidebar,
   dashboardPane,
@@ -165,6 +174,43 @@ export function Layout({
     }
   }, [dockInSplit]);
 
+  const [floatingInset, setFloatingInset] = useState<TopRightInsetContextValue>({
+    width: 140,
+    height: 35,
+  });
+  const floatingRef = useRef<HTMLDivElement>(null);
+  // On mobile, always render the explicit top bar (classic = false) so the left
+  // sidebar drawer toggle is accessible in all cases and panes don't overlap.
+  const classic = isClassicLayout && !isMobile;
+
+  useEffect(() => {
+    if (!classic) return;
+    const el = floatingRef.current;
+    if (!el) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const w = Math.round(rect.width);
+        const h = Math.round(rect.height);
+        setFloatingInset((prev) => (prev.width !== w || prev.height !== h ? { width: w, height: h } : prev));
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [classic]);
+
+  const isCanvasUnderTopRight = !paneFullscreen && classic && paneLayoutMode === "workspace";
+  const isToolsUnderTopRight =
+    !paneFullscreen && paneLayoutMode !== "workspace" && showToolPanel;
+  const isAgentUnderTopRight =
+    !paneFullscreen && paneLayoutMode !== "workspace" && !showToolPanel;
+
+  const agentInset = classic && isAgentUnderTopRight ? floatingInset : ZERO_INSET;
+  const toolsInset = classic && isToolsUnderTopRight ? floatingInset : ZERO_INSET;
+  const canvasInset = isCanvasUnderTopRight ? floatingInset : ZERO_INSET;
+
   const sidebarInner = (
     <div
       className="pane-left-inner"
@@ -283,8 +329,20 @@ export function Layout({
   const agentFullscreen = paneFullscreen === "agent";
   const terminalFullscreen = paneFullscreen === "terminal";
 
-  const agentWrapper = () => regionWrapper(agentPane, agentFullscreen);
+  const agentWrapper = () => (
+    <TopRightInsetProvider value={agentInset}>
+      {regionWrapper(agentPane, agentFullscreen)}
+    </TopRightInsetProvider>
+  );
   const dockWrapper = () => regionWrapper(terminalDock, terminalFullscreen);
+
+  function wrapTools(placement: PaneFullscreenPlacement = "panel") {
+    return (
+      <TopRightInsetProvider value={toolsInset}>
+        {wrap(toolPanel, placement)}
+      </TopRightInsetProvider>
+    );
+  }
 
   // Agent pane ↔ tool panel split: horizontal (side by side) or vertical
   // (stacked). In vertical orientation, the tool panel goes on top of the agent pane.
@@ -308,15 +366,15 @@ export function Layout({
             ref={toolsPanelRef}
             collapsible
             collapsedSize={0}
-            defaultSize={42}
-            minSize={18}
+            defaultSize={60}
+            minSize={20}
             key="tools"
             order={1}
           >
-            {toolsInSplit ? wrap(toolPanel) : null}
+            {toolsInSplit ? wrapTools("panel") : null}
           </Panel>
         ) : (
-          <Panel defaultSize={58} minSize={25} key="agent" order={1}>
+          <Panel defaultSize={40} minSize={20} key="agent" order={1}>
             {agentWrapper()}
           </Panel>
         ),
@@ -326,7 +384,7 @@ export function Layout({
           style={toolsInSplit ? undefined : { display: "none" }}
         />,
         vertical ? (
-          <Panel defaultSize={58} minSize={25} key="agent" order={2}>
+          <Panel defaultSize={40} minSize={20} key="agent" order={2}>
             {agentWrapper()}
           </Panel>
         ) : (
@@ -334,12 +392,12 @@ export function Layout({
             ref={toolsPanelRef}
             collapsible
             collapsedSize={0}
-            defaultSize={42}
-            minSize={18}
+            defaultSize={60}
+            minSize={20}
             key="tools"
             order={2}
           >
-            {toolsInSplit ? wrap(toolPanel) : null}
+            {toolsInSplit ? wrapTools("panel") : null}
           </Panel>
         ),
       ]}
@@ -397,14 +455,43 @@ export function Layout({
   );
 
   const mainColumnInner =
-    paneLayoutMode === "workspace" && workspaceCanvas != null ? workspaceCanvas : classicMainColumnInner;
+    paneLayoutMode === "workspace" && workspaceCanvas != null ? (
+      <TopRightInsetProvider value={canvasInset}>
+        {workspaceCanvas}
+      </TopRightInsetProvider>
+    ) : (
+      classicMainColumnInner
+    );
 
   const mainColumn = (
     <div
       ref={mainContentRef}
-      style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        position: "relative",
+      }}
     >
       {mainColumnInner}
+      {classic && floatingTopBar ? (
+        <div
+          ref={floatingRef}
+          className="top-bar-floating-actions-container"
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            zIndex: 50,
+            pointerEvents: "auto",
+          }}
+        >
+          {floatingTopBar}
+        </div>
+      ) : null}
     </div>
   );
 
@@ -418,13 +505,13 @@ export function Layout({
   const fullscreenOverlay =
     !(paneLayoutMode === "workspace" && workspaceCanvas != null) && paneFullscreen === "tools" && hasToolPanel ? (
       <div className="pane-viewport-fullscreen" key="viewport-fs-tools">
-        {wrap(toolPanel, "viewport")}
+        {wrapTools("viewport")}
       </div>
     ) : null;
 
   return (
     <div className="app-shell">
-      {topBar}
+      {!classic ? topBar : null}
       <div
         id="workspace-layout"
         className="layout-main"

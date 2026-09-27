@@ -371,7 +371,7 @@ describe("WorkspaceCanvas - saveAsWorkspace detachment", () => {
         </PaneOutletProvider>
       </MemoryRouter>,
     );
-    await user.click(screen.getByText("Save as workspace"));
+    await user.click(screen.getByTitle("Save this arrangement as a named workspace"));
     await user.type(screen.getByLabelText("Workspace name"), "My Workspace");
     await user.click(screen.getByLabelText("Confirm save workspace"));
 

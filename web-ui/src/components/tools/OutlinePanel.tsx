@@ -10,6 +10,7 @@ import {
   type OutlineSymbol,
 } from "@/lib/lspApi";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
@@ -223,6 +224,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
+  const outerInset = useTopRightInset();
 
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId ?? "__none__"] ?? "tree");
   const pushJump = useWorkspaceStore((s) => s.pushJump);
@@ -538,7 +540,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
           minHeight: "32px",
           maxHeight: "32px",
           boxSizing: "border-box",
-          paddingRight: masterDetailVertical ? "68px" : undefined,
+          paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
         }}
       >
         <div className="outline-panel__filter-box">

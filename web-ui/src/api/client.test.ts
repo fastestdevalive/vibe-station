@@ -350,7 +350,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
 
     api.startConnection();
     sockets[0]!.readyState = 1;
-    sockets[0]!.onopen!();
+    await sockets[0]!.onopen!();
     sent.splice(0);
 
     await api.send({ type: "file:watch", worktreeId: "proj1", path: "a.rs", scope: "project" });
@@ -360,7 +360,7 @@ describe("file:watch / tree:watch reconnect-replay refcounting", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(sockets.length).toBe(2);
     sockets[1]!.readyState = 1;
-    sockets[1]!.onopen!();
+    await sockets[1]!.onopen!();
 
     const replayed = fileWatchMsgs(sent).filter((m) => m.worktreeId === "proj1" && m.path === "a.rs");
     expect(replayed).toHaveLength(1);

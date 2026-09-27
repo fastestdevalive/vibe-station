@@ -8,6 +8,7 @@ import {
   type LspFileRef,
 } from "@/lib/lspApi";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore, type PendingReferencesQuery } from "@/hooks/useStore";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { languageForFilePath } from "../preview/codeHighlight";
@@ -48,6 +49,7 @@ export function ReferencesPanel({
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
+  const outerInset = useTopRightInset();
 
   const [activeQuery, setActiveQuery] = useState<PendingReferencesQuery | null>(
     null
@@ -260,7 +262,7 @@ export function ReferencesPanel({
           minHeight: "32px",
           maxHeight: "32px",
           boxSizing: "border-box",
-          paddingRight: masterDetailVertical ? "68px" : undefined,
+          paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
         }}
       >
         {loading && groups.length === 0 ? (

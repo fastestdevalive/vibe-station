@@ -1,7 +1,8 @@
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import { useMemo, useRef, useState } from "react";
-import { useClaimedPaneKeys, usePaneOutletElement } from "./paneOutlets";
+import { useClaimedPaneKeys, usePaneOutletElement, usePaneOutletInset } from "./paneOutlets";
+import { TopRightInsetProvider } from "@/context/TopRightInsetContext";
 
 /**
  * agent:<sessionId> | terminal:<sessionId> | tools:<worktreeId>
@@ -129,6 +130,7 @@ export function PaneHostLayer({ paneKeys, renderPane }: PaneHostLayerProps) {
 
 function PaneHostSlot({ paneKey, children }: { paneKey: PaneKey; children: ReactNode }) {
   const outlet = usePaneOutletElement(paneKey);
+  const inset = usePaneOutletInset(paneKey);
   // `holder` is null for the very first render; the callback ref fires during
   // commit and React batches the state update, so children appear before paint.
   const [holder, setHolder] = useState<HTMLDivElement | null>(null);
@@ -160,7 +162,12 @@ function PaneHostSlot({ paneKey, children }: { paneKey: PaneKey; children: React
       {/* Offscreen holder: portal target when no outlet claims this pane.
           Always hidden (display:none via the CSS class) so it never affects layout. */}
       <div className="pane-holder--offscreen" ref={setHolder} />
-      {holder && createPortal(children, outlet ?? holder)}
+      {holder && createPortal(
+        <TopRightInsetProvider value={inset}>
+          {children}
+        </TopRightInsetProvider>,
+        outlet ?? holder
+      )}
     </>
   );
 }

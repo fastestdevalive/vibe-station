@@ -2,6 +2,7 @@ import { GitCompare } from "lucide-react";
 import type { DiffScope } from "@/api/types";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 
 interface FileTreeHeaderProps {
   /** Browsing context id (worktree id, or project id for direct sessions) —
@@ -93,15 +94,17 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
     }
   }
 
+  const outerInset = useTopRightInset();
+
   return (
     <div
       className="pane-header pane-header--compact file-tree-sidebar-header"
       style={{
-        height: "32px",
-        minHeight: "32px",
-        maxHeight: "32px",
+        height: "35px",
+        minHeight: "35px",
+        maxHeight: "35px",
         boxSizing: "border-box",
-        paddingRight: masterDetailVertical ? "68px" : undefined,
+        paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
       }}
     >
       <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>

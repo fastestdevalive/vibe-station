@@ -66,9 +66,6 @@ interface TopBarProps {
   worktrees: Worktree[];
   /** Viewed WorkspaceDoc's name for breadcrumb (when layoutMode === "workspace-view") */
   viewedWorkspaceName?: string;
-  /** Active direct-agent tab's label, for the project-workspace breadcrumb's
-   *  second (highlighted) crumb when an agent tab — not the Project tab — is active. */
-  projectActiveSessionName?: string;
   isMobile: boolean;
   onToggleLeftSidebar: () => void;
   leftSidebarCollapsed: boolean;
@@ -82,6 +79,13 @@ interface TopBarProps {
   shortcutsOpen?: boolean;
   onOpenShortcuts?: () => void;
   onCloseShortcuts?: () => void;
+  /**
+   * Presentation variant:
+   * - "bar" (default): full-width top bar across the entire shell
+   * - "sidebar-header": sidebar toggle + breadcrumb folded into LeftSidebar's header
+   * - "floating": floating top-right widget overlapping the underlying pane
+   */
+  variant?: "bar" | "floating" | "sidebar-header";
 }
 
 export function TopBar({
@@ -89,7 +93,6 @@ export function TopBar({
   projects,
   worktrees,
   viewedWorkspaceName,
-  projectActiveSessionName,
   isMobile,
   onToggleLeftSidebar,
   leftSidebarCollapsed,
@@ -100,6 +103,7 @@ export function TopBar({
   shortcutsOpen = false,
   onOpenShortcuts,
   onCloseShortcuts,
+  variant = "bar",
 }: TopBarProps) {
   const navigate = useNavigate();
   const {
@@ -128,7 +132,6 @@ export function TopBar({
   const effectiveSplitOrientation =
     !toolSplitOrientationUserSet && isMobile ? "vertical" : toolSplitOrientation;
   const project = projects.find((p) => p.id === activeProjectId);
-  const wt = worktrees.find((w) => w.id === activeWorktreeId);
 
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowMenuRef = useRef<HTMLDivElement | null>(null);
@@ -167,18 +170,10 @@ export function TopBar({
     if (settingsSectionLabel) crumbParts.push({ label: settingsSectionLabel, highlight: true });
   } else if (layoutMode === "workspace-view") {
     crumbParts.push({ label: viewedWorkspaceName ?? "Workspace", highlight: true });
-  } else if (layoutMode === "project-workspace") {
-    // Project workspace: the project's name, plus (when an agent tab is active,
-    // not the pinned Project tab) that session's label as the highlighted crumb.
-    if (project) crumbParts.push({ label: project.name });
-    if (projectActiveSessionName) crumbParts.push({ label: projectActiveSessionName, highlight: true });
   } else {
-    // Project > Worktree is enough — the active agent tab is already visible
-    // in the agent pane's own TabsStrip; naming it again in the breadcrumb
-    // was redundant, and crowded the crumb once the workspace-canvas toolbar
-    // moved into this same bar.
+    // Project name only — the branch/worktree name is already shown in the
+    // global bottom bar, so repeating it here would be redundant.
     if (project) crumbParts.push({ label: project.name });
-    if (wt) crumbParts.push({ label: wt.branch, highlight: true });
   }
 
   const crumbTitle = crumbParts.map((p) => p.label).join(" › ") || undefined;
@@ -190,22 +185,19 @@ export function TopBar({
         ? (settingsSectionLabel ?? "Settings")
         : layoutMode === "workspace-view"
           ? (viewedWorkspaceName ?? "Workspace")
-          : layoutMode === "project-workspace"
-            ? [project?.name, projectActiveSessionName ?? null].filter(Boolean).join(" · ") || undefined
-            : [project?.name, wt ? `${wt.id} ${wt.branch}` : null].filter(Boolean).join(" · ") || undefined;
+          : project?.name;
 
-  const crumbNode = crumbParts.length === 0 ? (
-    <span className="top-bar__crumb-seg">—</span>
-  ) : (
-    crumbParts.map((part, i) => (
-      <span key={i} style={{ display: "contents" }}>
-        {i > 0 && <span className="top-bar__crumb-sep">›</span>}
-        <span className={`top-bar__crumb-seg${part.highlight ? " top-bar__crumb-seg--highlight" : ""}`}>
-          {part.label}
+  const crumbNode =
+    crumbParts.length === 0 ? null : (
+      crumbParts.map((part, i) => (
+        <span key={i} style={{ display: "contents" }}>
+          {i > 0 && <span className="top-bar__crumb-sep">›</span>}
+          <span className={`top-bar__crumb-seg${part.highlight ? " top-bar__crumb-seg--highlight" : ""}`}>
+            {part.label}
+          </span>
         </span>
-      </span>
-    ))
-  );
+      ))
+    );
 
   // Login mode — minimal header, no sidebar or workspace controls
   if (layoutMode === "login") {
@@ -236,21 +228,172 @@ export function TopBar({
   // is portaled up into THIS bar in exactly ONE case: the detached
   // /workspaces/:id page, where there's plenty of room top-right (no
   // per-worktree pane-toggle icons compete for space there).
-  //
-  // The classic per-worktree canvas mode deliberately does NOT portal: that
-  // toolbar renders as WorkspaceCanvas's own dedicated full-height row
-  // directly above the canvas body, disclosed/hidden by the chevron in the
-  // canvas chip below (`toggleCanvasToolbar` → `canvasToolbarVisible`, which
-  // WorkspaceCanvas reads as a prop). Squeezing it into this bar's
-  // single-line height budget made it read as "just more top bar" instead of
-  // a canvas toolbar.
   const isWorkspaceViewToolbar = layoutMode === "workspace-view";
-  // The canvas chip (mode toggle + disclosure chevron) exists only for a
-  // worktree in the classic per-worktree flow; the chevron inside it is
-  // disabled — not unmounted — when that worktree isn't currently in canvas
-  // mode, so the pair never appears/disappears independently of each other.
   const canvasChipWorktreeId = layoutMode === "workspace" ? activeWorktreeId : null;
   const inCanvasMode = paneLayoutMode === "workspace";
+
+  if (variant === "sidebar-header") {
+    return (
+      <div
+        className={`sidebar-header${leftSidebarCollapsed ? " sidebar-header--collapsed" : ""}`}
+        data-tauri-drag-region
+      >
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label={sidebarExpanded ? "Hide projects sidebar" : "Show projects sidebar"}
+          aria-expanded={isMobile ? mobileSidebarOpen : undefined}
+          title="Toggle projects sidebar"
+          onClick={onToggleLeftSidebar}
+        >
+          <PanelLeft size={18} />
+        </button>
+        {!leftSidebarCollapsed && crumbParts.length > 0 ? (
+          <div className="top-bar__crumb" title={crumbTitle}>
+            {crumbNode}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (variant === "floating") {
+    return (
+      <div className="top-bar-floating-actions" data-tauri-drag-region>
+        <ConnectionStatus />
+        {layoutMode === "workspace" || layoutMode === "project-workspace" ? (
+          <>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Search files"
+              title={`Search files (${hints.quickOpen})`}
+              onClick={onOpenQuickOpen}
+            >
+              <Search size={18} />
+            </button>
+            <div className="top-bar__overflow-wrapper">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="More options"
+                title="More options"
+                aria-expanded={overflowOpen}
+                aria-haspopup="true"
+                onClick={() => setOverflowOpen((o) => !o)}
+              >
+                <MoreHorizontal size={18} />
+              </button>
+              {overflowOpen ? (
+                <div className="top-bar__overflow-menu" role="menu" ref={overflowMenuRef}>
+                  {canvasChipWorktreeId ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`top-bar__overflow-item${inCanvasMode ? " top-bar__overflow-item--active" : ""}`}
+                        role="menuitemcheckbox"
+                        aria-checked={inCanvasMode}
+                        onClick={() => {
+                          setLayoutMode(canvasChipWorktreeId, inCanvasMode ? "classic" : "workspace");
+                          setOverflowOpen(false);
+                        }}
+                      >
+                        <LayoutGrid size={14} />
+                        <span>{inCanvasMode ? "Canvas layout (on)" : "Canvas layout"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="top-bar__overflow-item"
+                        role="menuitem"
+                        disabled={!inCanvasMode}
+                        title={
+                          !inCanvasMode
+                            ? "Switch to canvas mode first"
+                            : canvasToolbarVisible
+                              ? "Hide canvas toolbar"
+                              : "Show canvas toolbar"
+                        }
+                        onClick={() => {
+                          toggleCanvasToolbar();
+                          setOverflowOpen(false);
+                        }}
+                      >
+                        {canvasToolbarVisible ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        <span>{canvasToolbarVisible ? "Hide toolbar" : "Show toolbar"}</span>
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="top-bar__overflow-item"
+                    role="menuitemcheckbox"
+                    aria-checked={effectiveSplitOrientation === "vertical"}
+                    disabled={paneLayoutMode === "workspace"}
+                    onClick={() => {
+                      toggleToolSplitOrientation(effectiveSplitOrientation);
+                      setOverflowOpen(false);
+                    }}
+                  >
+                    {effectiveSplitOrientation === "horizontal" ? <Columns2 size={14} /> : <Rows2 size={14} />}
+                    <span>
+                      {effectiveSplitOrientation === "horizontal"
+                        ? "Split: horizontal"
+                        : "Split: vertical"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`top-bar__overflow-item${terminalDockVisible ? " top-bar__overflow-item--active" : ""}`}
+                    role="menuitemcheckbox"
+                    aria-checked={terminalDockVisible}
+                    disabled={paneLayoutMode === "workspace"}
+                    onClick={() => {
+                      toggleTerminalDock();
+                      setOverflowOpen(false);
+                    }}
+                  >
+                    <SquareTerminal size={14} />
+                    <span>Terminal</span>
+                    {paneLayoutMode !== "workspace" ? <span className="top-bar__overflow-kbd">{hints.terminal}</span> : null}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className={`top-bar__pane-btn ${
+                (paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible)
+                  ? "top-bar__pane-btn--on"
+                  : ""
+              }`}
+              aria-pressed={paneLayoutMode === "workspace" ? hasWorktreeToolsTile : toolPanelVisible}
+              aria-label={
+                paneLayoutMode === "workspace"
+                  ? hasWorktreeToolsTile
+                    ? "Remove Tools tile from canvas"
+                    : "Add Tools tile to canvas"
+                  : "Toggle tool panel"
+              }
+              title={
+                paneLayoutMode === "workspace"
+                  ? hasWorktreeToolsTile
+                    ? "Remove Tools tile from canvas"
+                    : "Add Tools tile to canvas"
+                  : `Toggle tool panel (${hints.toolPane})`
+              }
+              onClick={paneLayoutMode === "workspace" ? toggleWorktreeToolsTile : toggleToolPanel}
+            >
+              {effectiveSplitOrientation === "vertical" ? <PanelTop size={17} /> : <PanelRight size={17} />}
+            </button>
+          </>
+        ) : null}
+        <KeyboardShortcutsDialog
+          open={shortcutsOpen}
+          onClose={() => onCloseShortcuts?.()}
+        />
+      </div>
+    );
+  }
 
   return (
     <header className={`top-bar${!isMobile ? " top-bar--desktop" : ""}`} data-tauri-drag-region>
@@ -277,9 +420,11 @@ export function TopBar({
         </button>
       )}
       {!isMobile ? (
-        <div className="top-bar__crumb" title={crumbTitle}>
-          {crumbNode}
-        </div>
+        crumbParts.length > 0 ? (
+          <div className="top-bar__crumb" title={crumbTitle}>
+            {crumbNode}
+          </div>
+        ) : null
       ) : (
         <div className="top-bar__crumb top-bar__crumb--mobile-stack" title={mobileTitle}>
           {layoutMode === "dashboard" ? (

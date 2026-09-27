@@ -73,18 +73,22 @@ describe("TopBar - canvas mode pane toggles", () => {
     });
   }
 
-  it("disables the split-orientation and terminal-dock buttons in canvas mode", () => {
+  it("disables the split-orientation and terminal-dock buttons in canvas mode", async () => {
+    const user = userEvent.setup();
     setCanvasMode();
     renderTopBar();
-    expect(screen.getByLabelText("Toggle agent/tools split orientation")).toBeDisabled();
-    expect(screen.getByLabelText("Toggle terminal dock")).toBeDisabled();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByText(/Split:/).closest("button")).toBeDisabled();
+    expect(screen.getByText("Terminal").closest("button")).toBeDisabled();
   });
 
-  it("leaves the split-orientation and terminal-dock buttons enabled in classic mode", () => {
+  it("leaves the split-orientation and terminal-dock buttons enabled in classic mode", async () => {
+    const user = userEvent.setup();
     setClassicMode();
     renderTopBar();
-    expect(screen.getByLabelText("Toggle agent/tools split orientation")).toBeEnabled();
-    expect(screen.getByLabelText("Toggle terminal dock")).toBeEnabled();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByText(/Split:/).closest("button")).toBeEnabled();
+    expect(screen.getByText("Terminal").closest("button")).toBeEnabled();
   });
 
   it("Tools button adds/removes a canvas tile (not content visibility) in canvas mode", async () => {
@@ -115,41 +119,49 @@ describe("TopBar - canvas mode pane toggles", () => {
   // row above the canvas body), not in TopBar — TopBar only owns the chip
   // that drives `canvasToolbarVisible`. See WorkspaceCanvas.test.tsx for the
   // "does the row actually show/hide" half of this behavior.
-  it("keeps the canvas chip (mode toggle + chevron) mounted in both pane layout modes", () => {
+  it("keeps the canvas chip (mode toggle + chevron) mounted in both pane layout modes", async () => {
+    const user = userEvent.setup();
     setClassicMode();
     const { unmount } = renderTopBar();
-    expect(screen.getByLabelText("Toggle workspace canvas layout")).toBeInTheDocument();
-    expect(screen.getByLabelText("Show canvas toolbar")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByText(/Canvas layout/).closest("button")).toBeInTheDocument();
+    expect(screen.getByTitle("Switch to canvas mode first")).toBeInTheDocument();
     unmount();
 
     setCanvasMode();
     renderTopBar();
-    expect(screen.getByLabelText("Toggle workspace canvas layout")).toBeInTheDocument();
-    expect(screen.getByLabelText("Hide canvas toolbar")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByText(/Canvas layout/).closest("button")).toBeInTheDocument();
+    expect(screen.getByTitle("Hide canvas toolbar")).toBeInTheDocument();
   });
 
-  it("disables the chevron outside canvas mode and enables it inside", () => {
+  it("disables the chevron outside canvas mode and enables it inside", async () => {
+    const user = userEvent.setup();
     setClassicMode();
     const { unmount } = renderTopBar();
-    expect(screen.getByLabelText("Show canvas toolbar")).toBeDisabled();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByTitle("Switch to canvas mode first")).toBeDisabled();
     unmount();
 
     setCanvasMode();
     renderTopBar();
-    expect(screen.getByLabelText("Hide canvas toolbar")).toBeEnabled();
+    await user.click(screen.getByLabelText("More options"));
+    expect(screen.getByTitle("Hide canvas toolbar")).toBeEnabled();
   });
 
   it("chevron toggles canvasToolbarVisible (the flag WorkspaceCanvas's own toolbar row reads)", async () => {
     const user = userEvent.setup();
     setCanvasMode();
     renderTopBar();
+    await user.click(screen.getByLabelText("More options"));
     // Default visible (canvasToolbarVisible defaults true).
-    const hideBtn = screen.getByLabelText("Hide canvas toolbar");
-    expect(hideBtn).toHaveAttribute("aria-expanded", "true");
+    const hideBtn = screen.getByTitle("Hide canvas toolbar");
     await user.click(hideBtn);
     expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.canvasToolbarVisible).toBe(false);
-    const showBtn = screen.getByLabelText("Show canvas toolbar");
-    expect(showBtn).toHaveAttribute("aria-expanded", "false");
+
+    // Reopen menu to toggle back on
+    await user.click(screen.getByLabelText("More options"));
+    const showBtn = screen.getByTitle("Show canvas toolbar");
     await user.click(showBtn);
     expect(useWorkspaceStore.getState().layoutByWorktree[W1]!.canvasToolbarVisible).toBe(true);
   });
@@ -168,7 +180,7 @@ describe("TopBar - project workspace", () => {
     });
   });
 
-  it("4.T9 — layoutMode 'project-workspace' renders the project-name breadcrumb and the pane-toggle buttons", () => {
+  it("4.T9 — layoutMode 'project-workspace' renders project breadcrumb on desktop and renders action buttons", () => {
     render(
       <MemoryRouter>
         <PaneOutletProvider>
@@ -186,17 +198,16 @@ describe("TopBar - project workspace", () => {
       </MemoryRouter>,
     );
 
-    // R3: the breadcrumb shows the project's name (not "Dashboard").
+    // On desktop, project name is rendered in the top bar
     expect(screen.getByText("Proj A")).toBeInTheDocument();
     expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
 
-    // Decision 10: the pane-toggle buttons (Files search) are present in
-    // project-workspace mode, not hidden like dashboard.
+    // The pane-toggle buttons (Files search, More options) are present
     expect(screen.getByLabelText("Search files")).toBeInTheDocument();
     expect(screen.getByLabelText("More options")).toBeInTheDocument();
   });
 
-  it("4.T9 — an active agent tab adds its label as the highlighted second crumb", () => {
+  it("4.T9 — on mobile, layoutMode 'project-workspace' preserves project name", () => {
     render(
       <MemoryRouter>
         <PaneOutletProvider>
@@ -204,8 +215,7 @@ describe("TopBar - project workspace", () => {
             layoutMode="project-workspace"
             projects={projects}
             worktrees={worktrees}
-            projectActiveSessionName="Some Agent"
-            isMobile={false}
+            isMobile={true}
             onToggleLeftSidebar={() => {}}
             leftSidebarCollapsed={false}
             mobileSidebarOpen={false}
@@ -216,8 +226,5 @@ describe("TopBar - project workspace", () => {
     );
 
     expect(screen.getByText("Proj A")).toBeInTheDocument();
-    const agentCrumb = screen.getByText("Some Agent");
-    expect(agentCrumb).toBeInTheDocument();
-    expect(agentCrumb.className).toContain("highlight");
   });
 });

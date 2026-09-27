@@ -20,6 +20,9 @@ import {
  * that key re-render when its outlet element changes.
  */
 
+import type { TopRightInsetContextValue } from "@/context/TopRightInsetContext";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
+
 type Listener = () => void;
 
 /**
@@ -39,13 +42,15 @@ export type OutletToken = { readonly id: number };
 interface Registration {
   token: OutletToken;
   el: HTMLElement;
+  inset?: TopRightInsetContextValue;
 }
 
 interface RegistryValue {
   createToken: () => OutletToken;
-  register: (key: string, token: OutletToken, el: HTMLElement | null) => void;
+  register: (key: string, token: OutletToken, el: HTMLElement | null, inset?: TopRightInsetContextValue) => void;
   unregister: (key: string, token: OutletToken) => void;
   getOutlet: (key: string) => HTMLElement | null;
+  getOutletInset: (key: string) => TopRightInsetContextValue | null;
   subscribe: (key: string, listener: Listener) => () => void;
   /**
    * Every paneKey that currently has at least one live `<PaneOutlet>`, i.e.
@@ -104,10 +109,10 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(
-    (key: string, token: OutletToken, el: HTMLElement | null) => {
+    (key: string, token: OutletToken, el: HTMLElement | null, inset?: TopRightInsetContextValue) => {
       const list = outletsRef.current.get(key) ?? [];
       const next = list.filter((r) => r.token !== token);
-      if (el) next.push({ token, el });
+      if (el) next.push({ token, el, inset });
       if (next.length > 0) outletsRef.current.set(key, next);
       else outletsRef.current.delete(key);
       refreshClaimedKeys();
@@ -138,6 +143,12 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
     return list[list.length - 1]?.el ?? null;
   }, []);
 
+  const getOutletInset = useCallback((key: string) => {
+    const list = outletsRef.current.get(key);
+    if (!list || list.length === 0) return null;
+    return list[list.length - 1]?.inset ?? null;
+  }, []);
+
   const subscribe = useCallback((key: string, listener: Listener) => {
     let listeners = listenersRef.current.get(key);
     if (!listeners) {
@@ -157,6 +168,7 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
       register,
       unregister,
       getOutlet,
+      getOutletInset,
       subscribe,
       getClaimedKeys,
       subscribeClaimedKeys,
@@ -166,6 +178,7 @@ export function PaneOutletProvider({ children }: { children: ReactNode }) {
       register,
       unregister,
       getOutlet,
+      getOutletInset,
       subscribe,
       getClaimedKeys,
       subscribeClaimedKeys,
@@ -188,6 +201,28 @@ function useRegistry(): RegistryValue {
 }
 
 /**
+ * Returns the TopRightInsetContextValue associated with the outlet that currently claims
+ * this paneKey (e.g. toolsInset if claimed by the classic tools split pane).
+ */
+export function usePaneOutletInset(paneKey: string): TopRightInsetContextValue {
+  const { getOutletInset, subscribe } = useRegistry();
+  const [inset, setInset] = useState<TopRightInsetContextValue>(
+    () => getOutletInset(paneKey) ?? { width: 0, height: 0 },
+  );
+
+  useEffect(() => {
+    const update = () => {
+      const cur = getOutletInset(paneKey) ?? { width: 0, height: 0 };
+      setInset((prev) => (prev.width !== cur.width || prev.height !== cur.height ? cur : prev));
+    };
+    update();
+    return subscribe(paneKey, update);
+  }, [paneKey, getOutletInset, subscribe]);
+
+  return inset;
+}
+
+/**
  * Renders the DOM node other components portal into for `paneKey`. Mount
  * exactly one of these wherever a pane should currently be visible (e.g.
  * inside a workspace tile); unmount it (e.g. tile closes/layout changes) and
@@ -199,14 +234,23 @@ export function PaneOutlet({ paneKey }: { paneKey: string }) {
   const tokenRef = useRef<OutletToken | null>(null);
   if (tokenRef.current === null) tokenRef.current = createToken();
   const token = tokenRef.current;
+  const currentElRef = useRef<HTMLDivElement | null>(null);
+  const inset = useTopRightInset();
 
   const refCallback = useCallback(
     (el: HTMLDivElement | null) => {
-      if (el) register(paneKey, token, el);
+      currentElRef.current = el;
+      if (el) register(paneKey, token, el, inset);
       else unregister(paneKey, token);
     },
-    [paneKey, token, register, unregister],
+    [paneKey, token, register, unregister, inset],
   );
+
+  useEffect(() => {
+    if (currentElRef.current) {
+      register(paneKey, token, currentElRef.current, inset);
+    }
+  }, [paneKey, token, register, inset]);
 
   // MUST be a flex column container, not a plain block. Every pane root that
   // gets portaled in here (`.agent-pane-slot`, `.terminal-pane-root`,

@@ -12,6 +12,7 @@ import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
 import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 
 interface ToolPanelProps {
   api: ApiInstance;
@@ -157,59 +158,62 @@ export function ToolPanel({
     return () => el.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const outerInset = useTopRightInset();
+
   return (
     <ToolsInsetProvider value={insetContextValue}>
       <div
-        ref={escPaneRef}
-        className="tool-panel pane-stack"
-        style={
-          {
-            position: "relative",
-            isolation: "isolate",
-            height: "100%",
-            display: "flex",
-            flexDirection: "column",
-            "--tools-rail-w": `${RAIL_WIDTH}px`,
-            "--tools-rail-panel-w": `${activePanelWidth}px`,
-            "--tools-rail-panel-h": `${activePanelHeight}px`,
-            "--tools-left-inset": `${leftInset}px`,
-          } as React.CSSProperties
-        }
-      >
-        {/* Rail as vertical overlay on the left edge (R1, R4). The wrapper is a
-            flex container (not just position:absolute) so the rail stretches to
-            the pane's full height instead of only its icon content — otherwise
-            the rail background/border stops partway down and preview content
-            shows through the column below the last icon. */}
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            width: `${RAIL_WIDTH}px`,
-            zIndex: 10,
-            display: "flex",
-            flexDirection: "column",
-          }}
+          ref={escPaneRef}
+          className="tool-panel pane-stack"
+          style={
+            {
+              position: "relative",
+              isolation: "isolate",
+              height: "100%",
+              display: "flex",
+              flexDirection: "column",
+              "--tools-rail-w": `${RAIL_WIDTH}px`,
+              "--tools-rail-panel-w": `${activePanelWidth}px`,
+              "--tools-rail-panel-h": `${activePanelHeight}px`,
+              "--tools-left-inset": `${leftInset}px`,
+              "--tools-top-right-inset": `${outerInset.width}px`,
+            } as React.CSSProperties
+          }
         >
-          <FilesLeftRail worktreeId={filesWt} />
-        </div>
+          {/* Rail as vertical overlay on the left edge (R1, R4). The wrapper is a
+              flex container (not just position:absolute) so the rail stretches to
+              the pane's full height instead of only its icon content — otherwise
+              the rail background/border stops partway down and preview content
+              shows through the column below the last icon. */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: 0,
+              width: `${RAIL_WIDTH}px`,
+              zIndex: 10,
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <FilesLeftRail worktreeId={filesWt} />
+          </div>
 
-        {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
-        <div
-          className="tool-panel__top-actions"
-          style={{
-            position: "absolute",
-            top: 0,
-            right: "var(--space-2)",
-            height: "32px",
-            display: "flex",
-            alignItems: "center",
-            gap: "2px",
-            zIndex: 30,
-          }}
-        >
+          {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
+          <div
+            className="tool-panel__top-actions"
+            style={{
+              position: "absolute",
+              top: 0,
+              right: `calc(var(--space-2) + ${outerInset.width}px)`,
+              height: "35px",
+              display: "flex",
+              alignItems: "center",
+              gap: "2px",
+              zIndex: 30,
+            }}
+          >
           {effectiveTab === "files" ? (
             <button
               type="button"
