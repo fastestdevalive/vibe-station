@@ -291,8 +291,7 @@ body {
 }
 
 ::selection {
-  background-color: var(--bg-active);
-  color: var(--fg-primary);
+  background-color: color-mix(in srgb, var(--fg-primary) 35%, transparent);
 }
 
 ::-webkit-scrollbar {

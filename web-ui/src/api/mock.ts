@@ -15,12 +15,14 @@ import type {
   NormalizedEvent,
   PrInfo,
   CreateDirectSessionBody,
+  OobeState,
   CreateDraftSessionBody,
   CreateModeBody,
   CreateProjectBody,
   CreateProjectResponse,
   CreateSessionBody,
   CreateWorktreeBody,
+  DetectAndBundleResult,
   DiffStat,
   DiskUsageResponse,
   DraftConfig,
@@ -40,6 +42,7 @@ import type {
   SessionMeta,
   Settings,
   SkillsResponse,
+  StarterBundleResult,
   SubmoduleInfo,
   SupportedCli,
   TranscriptResponse,
@@ -83,6 +86,15 @@ export function createMockApi() {
   const mockSettings: { themeId?: string; markdownStyle?: MarkdownStyle } = {};
   let connState: ConnectionState = "online";
   const connListeners = new Set<(s: ConnectionState) => void>();
+
+  /** In-memory OOBE onboarding state (Phase 3) — mirrored within a single mock
+   *  instance so `getOobeState` reflects prior `confirmOobeStep1`/`completeOobe`. */
+  const oobeState: OobeState = {
+    completed: false,
+    currentStep: 1,
+    defaultProjectsDir: "/mock/projects",
+    vstHome: "/mock/home/.vibe-station",
+  };
 
   const projects: Project[] = [
     {
@@ -340,6 +352,12 @@ export function createMockApi() {
         const list = chatTranscripts.get(sessionId) ?? [];
         list.push(event);
         chatTranscripts.set(sessionId, list);
+      },
+      /** Replace the mock's mode list wholesale (test hook — lets tests seed the
+       *  exact bundle-mode state CliDetectionPanel derives its missing-count
+       *  from). Mirrors the server-recomputed mode list after a bundle call. */
+      seedModes(next: Mode[]) {
+        modes.splice(0, modes.length, ...next);
       },
     },
 
@@ -1231,10 +1249,46 @@ export function createMockApi() {
 
     async getSupportedClis(): Promise<SupportedCli[]> {
       return [
-        { id: "claude", defaultModel: "sonnet", supportsJson: true, importsNativeHistory: true, supportsJsonToTerminalResume: true },
-        { id: "cursor", defaultModel: "auto", supportsJson: true, importsNativeHistory: false, supportsJsonToTerminalResume: false },
-        { id: "opencode", defaultModel: "opencode/big-pickle", supportsJson: true, importsNativeHistory: true, supportsJsonToTerminalResume: true },
-        { id: "agy", defaultModel: "Gemini 3.1 Pro (High)", supportsJson: true, importsNativeHistory: false, supportsJsonToTerminalResume: true },
+        {
+          id: "claude",
+          defaultModel: "sonnet",
+          supportsJson: true,
+          importsNativeHistory: true,
+          supportsJsonToTerminalResume: true,
+          detected: true,
+          starterBundleNames: ["Bugfix", "Plan", "Architect"],
+          usingFallbackOnly: false,
+        },
+        {
+          id: "cursor",
+          defaultModel: "auto",
+          supportsJson: true,
+          importsNativeHistory: false,
+          supportsJsonToTerminalResume: false,
+          detected: true,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: false,
+        },
+        {
+          id: "opencode",
+          defaultModel: "opencode/big-pickle",
+          supportsJson: true,
+          importsNativeHistory: true,
+          supportsJsonToTerminalResume: true,
+          detected: false,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: false,
+        },
+        {
+          id: "agy",
+          defaultModel: "Gemini 3.1 Pro (High)",
+          supportsJson: true,
+          importsNativeHistory: false,
+          supportsJsonToTerminalResume: true,
+          detected: false,
+          starterBundleNames: ["Generic"],
+          usingFallbackOnly: true,
+        },
       ];
     },
 
@@ -1314,6 +1368,44 @@ export function createMockApi() {
       modes.splice(idx, 1);
       emit({ type: "mode:deleted", modeId: id });
       return { ok: true, affectedSessions: 0 };
+    },
+
+    // ── OOBE onboarding ─────────────────────────────────────────────────────────
+
+    async getOobeState(): Promise<OobeState> {
+      return { ...oobeState };
+    },
+
+    async confirmOobeStep1(defaultProjectsDir: string): Promise<{ ok: true; defaultProjectsDir: string }> {
+      if (!defaultProjectsDir.startsWith("/")) {
+        throw new ApiError("path must be absolute", 400);
+      }
+      oobeState.defaultProjectsDir = defaultProjectsDir;
+      oobeState.currentStep = 2;
+      return { ok: true, defaultProjectsDir };
+    },
+
+    async detectAndBundleOobe(): Promise<DetectAndBundleResult> {
+      return {
+        supportedClis: await this.getSupportedClis(),
+        created: [],
+      };
+    },
+
+    async createStarterBundle(_cli: CliId): Promise<StarterBundleResult> {
+      return {
+        created: [],
+        alreadyPresent: [],
+        skipped: [],
+        usedFallback: false,
+        alreadyComplete: true,
+      };
+    },
+
+    async completeOobe(): Promise<{ ok: true; completed: true }> {
+      oobeState.completed = true;
+      emit({ type: "oobe:state-updated", completed: true });
+      return { ok: true, completed: true };
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

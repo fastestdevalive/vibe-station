@@ -1,24 +1,79 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { createMockApi, type MockApi } from "@/api/mock";
 import { App, resolveNavigateAction } from "./App";
+
+// Workspace mounts the full app shell (Layout, TopBar, LeftSidebar, terminal
+// panes, ...). Stub the libraries that need real DOM/canvas layout (which
+// jsdom can't provide) so the OOBE-gate assertions below can focus on what
+// this file actually changes.
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    buffer = { active: { viewportY: 0, length: 0 } };
+    open() {}
+    focus() {}
+    write() {}
+    reset() {}
+    refresh() {}
+    loadAddon() {}
+    dispose() {}
+    onData() {
+      return { dispose: () => {} };
+    }
+    onResize() {
+      return { dispose: () => {} };
+    }
+    onScroll() {
+      return { dispose: () => {} };
+    }
+    attachCustomKeyEventHandler() {}
+    clearTextureAtlas = () => {};
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit() {}
+    dispose() {}
+  },
+}));
+vi.mock("@xterm/addon-web-links", () => ({
+  WebLinksAddon: class {},
+}));
+vi.mock("react-resizable-panels", () => ({
+  PanelGroup: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Panel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PanelResizeHandle: () => <div />,
+}));
+
+// Control useAuth's authed/loading per test (App calls useOobeGate with
+// enabled: authed, and its loading/!authed early returns drive the minimal shell).
+let authMock: { authed: boolean; loading: boolean; onLoginSuccess: () => void };
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => authMock,
+}));
+
+// The daemon-side `api` singleton is replaced with the in-memory mock so tests
+// can spy on getOobeState. Read via a getter so a fresh mock per test is used.
+let testApi: MockApi;
+vi.mock("@/api", () => ({
+  get api() {
+    return testApi;
+  },
+  createMockApi,
+}));
+
+beforeEach(() => {
+  testApi = createMockApi();
+  authMock = { authed: false, loading: false, onLoginSuccess: () => {} };
+});
 
 describe("App routing", () => {
   it("visiting /workspace redirects to /worktree", () => {
-    // Test verifies that /workspace route redirects to /worktree with query preserved.
-    // Implementation: App.tsx has route:
-    //   <Route path="/workspace" element={<Navigate to="/worktree" replace />} />
-    // This ensures old /workspace URLs are client-side redirected to /worktree.
-    // Actual navigation behavior is tested via router integration tests;
-    // here we verify the route configuration exists.
     expect(App).toBeTruthy();
   });
 
   it("canonical route is /worktree", () => {
-    // Test verifies that /worktree is the canonical route and renders Workspace.
-    // Implementation: App.tsx has routes:
-    //   <Route path="/worktree" element={<Workspace />} />
-    //   <Route path="/worktree/:wtId" element={<Workspace />} />
-    //   <Route path="/worktree/:wtId/:sessionId" element={<Workspace />} />
-    // This allows /worktree (bare), /worktree/vs-7 (with wtId), or /worktree/vs-7/s-abc (with sessionId).
     expect(App).toBeTruthy();
   });
 });
@@ -64,5 +119,65 @@ describe("resolveNavigateAction - navigate WS decision", () => {
     expect(
       resolveNavigateAction({ projectId: "p1", newWindow: true, isTauri: true, label: undefined }),
     ).toBe("none");
+  });
+});
+
+describe("App OOBE gate", () => {
+  it("4.T4 — authed + OOBE completed renders the normal Routes tree, never OobeFlow", async () => {
+    authMock = { authed: true, loading: false, onLoginSuccess: () => {} };
+    vi.spyOn(testApi, "getOobeState").mockResolvedValue({
+      completed: true,
+      currentStep: 1,
+      defaultProjectsDir: "/x",
+      vstHome: "/x/.vibe-station",
+    });
+
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    // The full workspace shell renders (LeftSidebar's distinctive New project
+    // control), not the OOBE flow.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "New project" })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("oobe-step1")).toBeNull();
+    expect(screen.queryByTestId("oobe-step2")).toBeNull();
+  });
+
+  it("4.T4 — loading:true from useAuth renders the minimal shell and never calls getOobeState", async () => {
+    authMock = { authed: false, loading: true, onLoginSuccess: () => {} };
+    const spy = vi.spyOn(testApi, "getOobeState");
+
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    // The minimal TopBar-only loading shell renders (never the OOBE flow nor
+    // the workspace tree)…
+    expect(screen.getByText(/not signed in/)).toBeInTheDocument();
+    expect(screen.queryByTestId("oobe-step1")).toBeNull();
+    expect(screen.queryByTestId("oobe-step2")).toBeNull();
+    // …and useOobeGate (enabled:false) never fetched OOBE state.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("4.T4 — !authed renders the login shell and never calls getOobeState", async () => {
+    authMock = { authed: false, loading: false, onLoginSuccess: () => {} };
+    const spy = vi.spyOn(testApi, "getOobeState");
+
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText(/not signed in/)).toBeInTheDocument();
+    expect(screen.queryByTestId("oobe-step1")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
   });
 });

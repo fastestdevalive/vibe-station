@@ -7,6 +7,7 @@ import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 import { EditModeDialog } from "@/components/dialogs/EditModeDialog";
 import { SectionHeader } from "./SectionHeader";
 import { ModeIcon } from "@/components/agent/ModeIcon";
+import { CliDetectionPanel } from "@/components/agent/CliDetectionPanel";
 
 interface ModesSettingProps {
   api: ApiInstance;
@@ -87,6 +88,8 @@ export function ModesSetting({ api }: ModesSettingProps) {
       <SectionHeader
         description="Orchestrator modes define the CLI, system prompt, and model used when starting a new agent session."
       />
+
+      <CliDetectionPanel api={api} variant="settings" />
 
       <div
         style={{

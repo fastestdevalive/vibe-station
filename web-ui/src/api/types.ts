@@ -471,6 +471,46 @@ export interface SupportedCli {
    * the CLI's ACP session state lives somewhere its own `--resume` can't reach.
    */
   supportsJsonToTerminalResume: boolean;
+  /** True when the CLI executable was found on PATH (OOBE detection). */
+  detected: boolean;
+  /**
+   * The mode names a bundle-creation call for this CLI would use. Lets the
+   * client compute how many bundle modes are missing by comparing against the
+   * current mode list.
+   */
+  starterBundleNames: string[];
+  /**
+   * True when this CLI's only existing bundle mode is its generic fallback —
+   * drives a warning banner (model discovery didn't succeed for the named
+   * bundle).
+   */
+  usingFallbackOnly: boolean;
+}
+
+/** Response from GET /api/oobe/state. */
+export interface OobeState {
+  completed: boolean;
+  currentStep: 1 | 2;
+  defaultProjectsDir: string;
+  /** Resolved `~/.vibe-station` path — where the daemon's own config/data
+   *  lives, and where any project's worktrees actually get created,
+   *  independent of the chosen projects directory. */
+  vstHome: string;
+}
+
+/** Response from POST /api/modes/:cli/starter-bundle. */
+export interface StarterBundleResult {
+  created: Mode[];
+  alreadyPresent: Mode[];
+  skipped: string[];
+  usedFallback: boolean;
+  alreadyComplete: boolean;
+}
+
+/** Response from POST /api/oobe/detect-and-bundle. */
+export interface DetectAndBundleResult {
+  supportedClis: SupportedCli[];
+  created: Mode[];
 }
 
 export interface Mode {
@@ -726,6 +766,11 @@ export type WSEvent =
       type: "settings:updated";
       themeId?: string;
       markdownStyle?: MarkdownStyle;
+    }
+  | {
+      /** Broadcast after `POST /api/oobe/complete` succeeds. */
+      type: "oobe:state-updated";
+      completed: boolean;
     }
   | {
       type: "pong";

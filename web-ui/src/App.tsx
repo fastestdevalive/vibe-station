@@ -8,6 +8,8 @@ import { DevStatePanel } from "./components/dev/DevStatePanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { api } from "./api";
 import { useOpenFilesChanged } from "./hooks/usePendingFileOpens";
+import { useOobeGate } from "./hooks/useOobeGate";
+import { OobeFlow } from "./components/oobe/OobeFlow";
 
 /**
  * Pure decision for the `navigate` WS handler — extracted so the cold-start
@@ -39,6 +41,7 @@ export function resolveNavigateAction(opts: {
 
 function AppShell() {
   const { authed, loading, onLoginSuccess } = useAuth();
+  const oobe = useOobeGate(api, { enabled: authed });
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -154,6 +157,38 @@ function AppShell() {
         />
         <LoginScreen onSuccess={onLoginSuccess} />
       </div>
+    );
+  }
+
+  if (oobe.loading) {
+    // Minimal loading shell while useOobeGate's own getOobeState() effect is in
+    // flight — never calls getOobeState() a second time, just renders.
+    return (
+      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
+        <TopBar
+          layoutMode="login"
+          projects={[]}
+          worktrees={[]}
+          isMobile={false}
+          onToggleLeftSidebar={() => {}}
+          leftSidebarCollapsed={false}
+          mobileSidebarOpen={false}
+          onOpenQuickOpen={() => {}}
+        />
+      </div>
+    );
+  }
+
+  if (!oobe.completed) {
+    return (
+      <OobeFlow
+        api={api}
+        currentStep={oobe.currentStep}
+        defaultProjectsDir={oobe.defaultProjectsDir}
+        vstHome={oobe.vstHome}
+        onStep1Confirmed={oobe.markStep1Confirmed}
+        onCompleted={oobe.markCompleted}
+      />
     );
   }
 
