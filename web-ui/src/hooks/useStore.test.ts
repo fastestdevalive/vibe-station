@@ -949,6 +949,31 @@ describe("useWorkspaceStore - peekFile slice", () => {
     expect(useWorkspaceStore.getState().peekFile).toBeNull();
   });
 
+  it("1.T3 — clearWorkspaceSelection leaves activeFileTabIdxByWorktree untouched; setActiveWorktree after it restores the previously active file", () => {
+    const W1 = "wt-test-restore";
+    const P1 = "p-test-restore";
+    useWorkspaceStore.setState({
+      activeProjectId: P1,
+      activeWorktreeId: W1,
+      openFileTabsByWorktree: { [W1]: ["/src/index.ts", "/src/app.tsx"] },
+      activeFileTabIdxByWorktree: { [W1]: 1 },
+      activeFilePath: "/src/app.tsx",
+    });
+
+    useWorkspaceStore.getState().clearWorkspaceSelection();
+
+    const afterClear = useWorkspaceStore.getState();
+    expect(afterClear.activeWorktreeId).toBeNull();
+    expect(afterClear.activeFilePath).toBeNull();
+    expect(afterClear.activeFileTabIdxByWorktree[W1]).toBe(1);
+
+    afterClear.setActiveWorktree(P1, W1, []);
+
+    const afterRestore = useWorkspaceStore.getState();
+    expect(afterRestore.activeWorktreeId).toBe(W1);
+    expect(afterRestore.activeFilePath).toBe("/src/app.tsx");
+  });
+
   it("peekFile is NOT persisted (excluded from partialize)", () => {
     seedPeek();
     // Trigger a persist pass and confirm peekFile isn't in the persisted payload.

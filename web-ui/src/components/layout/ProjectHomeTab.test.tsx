@@ -109,7 +109,7 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
   });
 
   it("2.T3 — git init success flips the header and enables New worktree", async () => {
-    const { api, rerender, rerenderProjectFromStore } = renderTab({ project: makeProject({ isGit: false, defaultBranch: undefined }) });
+    const { api, rerenderProjectFromStore } = renderTab({ project: makeProject({ isGit: false, defaultBranch: undefined }) });
     const spy = vi.spyOn(api, "gitInitProject").mockResolvedValue({ ok: true, isGit: true, defaultBranch: "main" });
 
     await userEvent.click(screen.getByRole("button", { name: "Run git init" }));
@@ -171,7 +171,7 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
   });
 
   it("2.T4 — git-init rejection shows inline error, retry still works", async () => {
-    const { api, rerender, rerenderProjectFromStore } = renderTab({ project: makeProject({ isGit: false, defaultBranch: undefined }) });
+    const { api, rerenderProjectFromStore } = renderTab({ project: makeProject({ isGit: false, defaultBranch: undefined }) });
     const spy = vi
       .spyOn(api, "gitInitProject")
       .mockRejectedValueOnce(new Error("boom"))
@@ -361,7 +361,39 @@ describe("ProjectHomeTab — Phase 3 (bucketed sections + Direct agents list)", 
 
     const prSection = screen.getByText("pr created").closest("section");
     expect(prSection).not.toBeNull();
-    expect(within(prSection!).getByText("PR Agent")).toBeInTheDocument();
+    expect(within(prSection!).getByText("wt-1")).toBeInTheDocument();
+  });
+
+  it("3.T1 — a worktree with 2 sessions both in the pr bucket shows exactly 1 card in pr created", () => {
+    const wt = makeWorktree({ id: "wt-1", branch: "feature-pr" });
+    const pr: PrStatus = { state: "open", checkedAt: new Date(0).toISOString(), prBranch: "feature-pr" };
+    const s1 = makeSession({
+      id: "s1",
+      name: "Agent 1",
+      worktreeId: "wt-1",
+      isMain: true,
+      state: "idle",
+      lifecycleState: "idle",
+      pr,
+    });
+    const s2 = makeSession({
+      id: "s2",
+      name: "Agent 2",
+      worktreeId: "wt-1",
+      isMain: false,
+      state: "idle",
+      lifecycleState: "idle",
+      pr,
+    });
+    seedServer({ sessions: [s1, s2], worktrees: [wt] });
+
+    renderTab({ sessions: [], worktrees: [wt] });
+
+    const prSection = screen.getByText("pr created").closest("section");
+    expect(prSection).not.toBeNull();
+    const chips = within(prSection!).getAllByRole("button");
+    expect(chips.length).toBe(1);
+    expect(within(prSection!).getByText("feature-pr")).toBeInTheDocument();
   });
 
   it("3.4 — hides the Direct agents header entirely when there are no direct agents", () => {

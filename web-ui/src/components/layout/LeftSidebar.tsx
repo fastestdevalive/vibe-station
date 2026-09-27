@@ -1,6 +1,7 @@
-import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Settings, Trash2, Type } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
+import { fuzzyScore } from "@/lib/fuzzyMatch";
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -711,7 +712,36 @@ export function LeftSidebar({
     } catch { /* ignore */ }
     return true;
   });
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const preSearchSnapshotRef = useRef<{ openProj: Set<string>; workspacesOpen: boolean } | null>(null);
+
+  function handleSearchChange(nextVal: string) {
+    // Compare TRIMMED values for the expand/restore transition — a
+    // whitespace-only query is not a real query (`trimmedQuery` below treats
+    // it as empty too), so typing only spaces must not force-expand
+    // everything with nothing actually filtered (found in review).
+    const prev = searchQuery.trim();
+    const next = nextVal.trim();
+    if (!prev && next) {
+      preSearchSnapshotRef.current = {
+        openProj: new Set(openProj),
+        workspacesOpen,
+      };
+      setOpenProj(new Set(projects.map((p) => p.id)));
+      setWorkspacesOpen(true);
+    } else if (prev && !next) {
+      if (preSearchSnapshotRef.current) {
+        setOpenProj(preSearchSnapshotRef.current.openProj);
+        setWorkspacesOpen(preSearchSnapshotRef.current.workspacesOpen);
+        preSearchSnapshotRef.current = null;
+      }
+    }
+    setSearchQuery(nextVal);
+  }
+
   useEffect(() => {
+    if (preSearchSnapshotRef.current != null) return;
     try {
       localStorage.setItem("sidebar:workspacesOpen", workspacesOpen ? "1" : "0");
     } catch { /* ignore */ }
@@ -967,6 +997,7 @@ export function LeftSidebar({
   }
 
   useEffect(() => {
+    if (preSearchSnapshotRef.current != null) return;
     try {
       localStorage.setItem("sidebar:openProj", JSON.stringify([...openProj]));
     } catch { /* ignore */ }
@@ -974,6 +1005,9 @@ export function LeftSidebar({
 
   useEffect(() => {
     if (!activeProjectId) return;
+    if (preSearchSnapshotRef.current) {
+      preSearchSnapshotRef.current.openProj.add(activeProjectId);
+    }
     setOpenProj((prev) => {
       if (prev.has(activeProjectId)) return prev;
       const next = new Set(prev);
@@ -1198,6 +1232,118 @@ export function LeftSidebar({
       : `/draft/${sess.id}`;
   }
 
+  const trimmedQuery = searchQuery.trim();
+
+  // Reorder handlers (`handleReorder`, `reorderWorkspace`, `handleServerReorderMixed`)
+  // all build their next-order payload from the currently RENDERED (filtered) list —
+  // while a search is active that list excludes non-matching rows, so completing a
+  // drag would silently push every hidden row to the end of the real order (found in
+  // review). Simplest safe fix: no sensors means `useSortable`'s listeners never
+  // activate, so a drag can't start at all while a query is active.
+  const activeDndSensors = trimmedQuery ? [] : dndSensors;
+
+  const matchText = useCallback(
+    (text: string | null | undefined): boolean => {
+      if (!text || !trimmedQuery) return false;
+      return fuzzyScore(trimmedQuery, text) !== null;
+    },
+    [trimmedQuery],
+  );
+
+  const sessionMatchesQuery = useCallback(
+    (s: Session): boolean => {
+      if (!trimmedQuery) return true;
+      // Deliberately NOT matching `s.id`/`s.modeId` — both are opaque hex-ish
+      // strings, so a short query like "add" or "cafe" fuzzy-subsequence-matches
+      // almost every row and floods the results (found in review).
+      return matchText(sessionLabel(s)) || matchText(s.name);
+    },
+    [trimmedQuery, matchText],
+  );
+
+  const worktreeMatchesQuery = useCallback(
+    (w: Worktree): boolean => {
+      if (!trimmedQuery) return true;
+      // `w.id` deliberately excluded — same id-flooding reasoning as `sessionMatchesQuery`.
+      if (matchText(worktreeLabel(w)) || matchText(w.branch)) {
+        return true;
+      }
+      const wtSessions = sessionMap[w.id] ?? [];
+      return wtSessions.some(sessionMatchesQuery);
+    },
+    [trimmedQuery, matchText, sessionMap, sessionMatchesQuery],
+  );
+
+  const filteredPinnedItems = useMemo(() => {
+    if (!trimmedQuery) return orderedPinnedItems;
+    return orderedPinnedItems.filter((item) => {
+      if (item.kind === "session") {
+        const sess = item.data;
+        const proj = sess.projectId != null ? projectById[sess.projectId] : undefined;
+        return (
+          sessionMatchesQuery(sess) ||
+          matchText(proj?.name)
+        );
+      } else {
+        const w = item.data;
+        const proj = projectById[w.projectId];
+        return (
+          worktreeMatchesQuery(w) ||
+          matchText(proj?.name)
+        );
+      }
+    });
+  }, [orderedPinnedItems, trimmedQuery, sessionMatchesQuery, worktreeMatchesQuery, matchText, projectById]);
+
+  const showPinned = !collapsed && (trimmedQuery ? filteredPinnedItems.length > 0 : hasPinned);
+
+  const filteredWorkspaces = useMemo(() => {
+    if (!trimmedQuery) return orderedWorkspaces;
+    return orderedWorkspaces.filter((ws) => matchText(ws.name));
+  }, [orderedWorkspaces, trimmedQuery, matchText]);
+
+  const projectDirectlyMatches = useCallback(
+    (p: Project) => {
+      if (!trimmedQuery) return true;
+      return matchText(p.name); // `p.id` excluded — same id-flooding reasoning as above
+    },
+    [trimmedQuery, matchText],
+  );
+
+  const projectHasMatchingChild = useCallback(
+    (p: Project) => {
+      const directSessions = directSessionMap[p.id] ?? [];
+      if (directSessions.some(sessionMatchesQuery)) return true;
+      const directDrafts = draftsByProject[p.id]?.direct ?? [];
+      if (directDrafts.some((d) => matchText(d.name) || matchText(draftLabel(d.draftPrompt)))) return true;
+      const wtList = worktreeMap[p.id] ?? [];
+      if (wtList.some(worktreeMatchesQuery)) return true;
+      const wtDrafts = draftsByProject[p.id]?.worktree ?? [];
+      if (wtDrafts.some((d) => matchText(d.name) || matchText(draftLabel(d.draftPrompt)))) return true;
+      return false;
+    },
+    [directSessionMap, sessionMatchesQuery, draftsByProject, matchText, worktreeMap, worktreeMatchesQuery],
+  );
+
+  const projectMatchesQuery = useCallback(
+    (p: Project) => {
+      if (!trimmedQuery) return true;
+      return projectDirectlyMatches(p) || projectHasMatchingChild(p);
+    },
+    [trimmedQuery, projectDirectlyMatches, projectHasMatchingChild],
+  );
+
+  const filteredTopLevelItems = useMemo(() => {
+    if (!trimmedQuery) return orderedTopLevelItems;
+    return orderedTopLevelItems.filter((item) => {
+      if (item.kind === "global_draft") {
+        const s = item.data;
+        return matchText(s.name) || matchText(draftLabel(s.draftPrompt));
+      }
+      return projectMatchesQuery(item.data);
+    });
+  }, [orderedTopLevelItems, trimmedQuery, matchText, projectMatchesQuery]);
+
   return (
     <div
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
@@ -1256,7 +1402,38 @@ export function LeftSidebar({
           </button>
         </div>
         {!collapsed ? <div className="sidebar-section-divider" aria-hidden style={{ marginTop: "var(--space-6)", marginBottom: "var(--space-2)" }} /> : null}
-        {!collapsed && hasPinned ? (
+        {!collapsed ? (
+          <div className="sidebar-search">
+            <span className="sidebar-search__icon" aria-hidden>
+              <Search size={14} />
+            </span>
+            <input
+              type="text"
+              className="sidebar-search__input"
+              placeholder="Search sessions, worktrees..."
+              aria-label="Search sidebar"
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  handleSearchChange("");
+                }
+              }}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                className="sidebar-search__clear"
+                aria-label="Clear search"
+                onClick={() => handleSearchChange("")}
+              >
+                <X size={12} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {!collapsed && showPinned ? (
           <section className="pinned-section" aria-label="Pinned">
             <div className="sidebar-projects-heading pinned-section__heading">
               <span className="sidebar-projects-heading__gutter" aria-hidden />
@@ -1266,23 +1443,23 @@ export function LeftSidebar({
               <span className="sidebar-projects-heading__title">Pinned</span>
             </div>
             <DndContext
-              sensors={dndSensors}
+              sensors={activeDndSensors}
               collisionDetection={closestCenter}
               onDragStart={markDrag}
               onDragCancel={markDrag}
               onDragEnd={(e) =>
                 handleReorder(
                   "pinned-all",
-                  orderedPinnedItems.map((x) => x.id),
+                  filteredPinnedItems.map((x) => x.id),
                   e,
                 )
               }
             >
               <SortableContext
-                items={orderedPinnedItems.map((x) => x.id)}
+                items={filteredPinnedItems.map((x) => x.id)}
                 strategy={verticalListSortingStrategy}
               >
-                {orderedPinnedItems.map((item) => {
+                {filteredPinnedItems.map((item) => {
                   if (item.kind === "session") {
                     const sess = item.data;
                     const proj = sess.projectId != null ? projectById[sess.projectId] : undefined;
@@ -1505,7 +1682,7 @@ export function LeftSidebar({
             </DndContext>
           </section>
         ) : null}
-        {!collapsed && hasPinned ? <div className="sidebar-section-divider" aria-hidden /> : null}
+        {!collapsed && showPinned ? <div className="sidebar-section-divider" aria-hidden /> : null}
         {/* Saved workspace layouts (tiled/free-form pane arrangements) — GLOBAL,
             listed regardless of which worktree (or none) is currently active;
             a saved workspace is detached from its creating worktree (Phase 3,
@@ -1530,32 +1707,32 @@ export function LeftSidebar({
               </button>
             </div>
             {workspacesOpen ? (
-              orderedWorkspaces.length === 0 ? (
+              filteredWorkspaces.length === 0 ? (
                 <div
                   className="empty-state"
                   style={{ padding: "var(--space-2) var(--space-3)", opacity: 0.6 }}
                 >
-                  No workspaces yet
+                  {trimmedQuery ? "No matching workspaces" : "No workspaces yet"}
                 </div>
               ) : (
                 <DndContext
-                  sensors={dndSensors}
+                  sensors={activeDndSensors}
                   collisionDetection={closestCenter}
                   onDragStart={markDrag}
                   onDragCancel={markDrag}
                   onDragEnd={(e) =>
                     handleWorkspaceReorder(
                       workspacesScopeKey,
-                      orderedWorkspaces.map((d) => d.id),
+                      filteredWorkspaces.map((d) => d.id),
                       e,
                     )
                   }
                 >
                   <SortableContext
-                    items={orderedWorkspaces.map((d) => d.id)}
+                    items={filteredWorkspaces.map((d) => d.id)}
                     strategy={verticalListSortingStrategy}
                   >
-                    {orderedWorkspaces.map((ws) => {
+                    {filteredWorkspaces.map((ws) => {
                       const isActive = activeDetachedWorkspaceId === ws.id;
                       return (
                         <SortableRow key={ws.id} id={ws.id}>
@@ -1694,7 +1871,7 @@ export function LeftSidebar({
         ) : null}
         {/* Tier 2 draft row (global new — no project chosen yet) — a top-level
             sibling to projects, rendered while a global draft is in the store. */}
-        {!collapsed && globalDraft ? (
+        {!collapsed && globalDraft && (!trimmedQuery || matchText(draftLabel(globalDraft.draftPrompt)) || matchText(globalDraft.draftPrompt)) ? (
           <div
             className="tree-row tree-row--project draft-row"
             data-active={location.pathname === "/draft/new"}
@@ -1733,19 +1910,23 @@ export function LeftSidebar({
               "No projects yet."
             )}
           </div>
+        ) : trimmedQuery && filteredTopLevelItems.length === 0 ? (
+          <div className="empty-state" style={{ padding: "var(--space-4)" }}>
+            No matching projects or sessions
+          </div>
         ) : null}
         <DndContext
-          sensors={dndSensors}
+          sensors={activeDndSensors}
           collisionDetection={closestCenter}
           onDragStart={markDrag}
           onDragCancel={markDrag}
           onDragEnd={handleTopLevelReorder}
         >
         <SortableContext
-          items={orderedTopLevelItems.map((x) => x.id)}
+          items={filteredTopLevelItems.map((x) => x.id)}
           strategy={verticalListSortingStrategy}
         >
-        {orderedTopLevelItems.map((item) => {
+        {filteredTopLevelItems.map((item) => {
           if (item.kind === "global_draft") {
             const s = item.data;
             return (
@@ -1910,7 +2091,13 @@ export function LeftSidebar({
                   const directItems = [
                     ...(directSessionMap[p.id] ?? []),
                     ...(draftsByProject[p.id]?.direct ?? []),
-                  ];
+                  ].filter((s) => {
+                    if (!trimmedQuery || projectDirectlyMatches(p)) return true;
+                    if (s.state === "drafting") {
+                      return matchText(s.name) || matchText(draftLabel(s.draftPrompt));
+                    }
+                    return sessionMatchesQuery(s);
+                  });
                   if (directItems.length === 0) return null;
                   const orderedDirect = directItems.slice().sort((a, b) => {
                     const ao = a.sortOrder ?? 0;
@@ -1922,7 +2109,7 @@ export function LeftSidebar({
                   return (
                     <div className="direct-sessions-group">
                       <DndContext
-                        sensors={dndSensors}
+                        sensors={activeDndSensors}
                         collisionDetection={closestCenter}
                         onDragStart={markDrag}
                         onDragCancel={markDrag}
@@ -2107,11 +2294,18 @@ export function LeftSidebar({
             {openProj.has(p.id)
               ? (() => {
                   const wtList = (worktreeMap[p.id] ?? []).filter((w) => {
-                    if (!hideInactiveWorktrees) return true;
-                    const ss = sessionMap[w.id] ?? [];
-                    return !worktreeIsInactive(ss, sessionStates);
+                    if (hideInactiveWorktrees) {
+                      const ss = sessionMap[w.id] ?? [];
+                      if (worktreeIsInactive(ss, sessionStates)) return false;
+                    }
+                    if (!trimmedQuery || projectDirectlyMatches(p)) return true;
+                    return worktreeMatchesQuery(w);
                   });
-                  const wtDrafts = draftsByProject[p.id]?.worktree ?? [];
+                  const wtDrafts = (draftsByProject[p.id]?.worktree ?? []).filter((s) => {
+                    if (!trimmedQuery || projectDirectlyMatches(p)) return true;
+                    return matchText(s.name) || matchText(draftLabel(s.draftPrompt));
+                  });
+                  if (wtList.length === 0 && wtDrafts.length === 0) return null;
                   // Real server `sortOrder` (Part 03 Decision 1) — no more
                   // local drag-order array for this (non-pinned) scope. Sort
                   // worktrees and worktree drafts together.
@@ -2131,7 +2325,7 @@ export function LeftSidebar({
                     .map((x) => x.data);
                   return (
                     <DndContext
-                      sensors={dndSensors}
+                      sensors={activeDndSensors}
                       collisionDetection={closestCenter}
                       onDragStart={markDrag}
                       onDragCancel={markDrag}
