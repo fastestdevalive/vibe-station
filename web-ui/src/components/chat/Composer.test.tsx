@@ -163,14 +163,19 @@ describe("Composer Send/Stop branching (Decision 9, canSend not raw busy)", () =
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("busy=true, text ready → Send (queue variant) renders instead of Stop, and clicking it calls onSend", async () => {
+  it("busy=true, text ready → Stop AND Send (queue variant) both render, so typing never hides Stop", async () => {
     const api = createMockApi();
     const onSend = vi.fn<(m: string, ids: string[]) => Promise<void>>(() => Promise.resolve());
-    render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={vi.fn()} initialText="follow-up" />);
-    expect(screen.queryByRole("button", { name: "Stop turn" })).toBeNull();
-    const button = screen.getByLabelText("Send message (queues after current turn)");
-    expect(button.className).toContain("chat-composer__send--queue");
-    fireEvent.click(button);
+    const onStop = vi.fn();
+    render(<Composer api={api} sessionId="s-busy-text" onSend={onSend} busy onStop={onStop} initialText="follow-up" />);
+    const stopBtn = screen.getByRole("button", { name: "Stop turn" });
+    const sendBtn = screen.getByLabelText("Send message (queues after current turn)");
+    expect(sendBtn.className).toContain("chat-composer__send--queue");
+    // Clicking Stop must only stop the turn — it must never submit/clear the typed text.
+    fireEvent.click(stopBtn);
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.click(sendBtn);
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("follow-up", []));
   });
 

@@ -217,7 +217,7 @@ export function Composer({
           >
             📎
           </button>
-          {busy && nothingTyped && !justSent ? (
+          {busy && !justSent ? (
             <button
               type="button"
               className="chat-composer__stop"
@@ -227,7 +227,11 @@ export function Composer({
             >
               Stop
             </button>
-          ) : (
+          ) : null}
+          {/* Hidden only in the "busy + empty box" case, where Stop alone
+           *  occupies this slot — typed text must never make Stop disappear,
+           *  or a user aiming for Stop lands on Send/queue instead. */}
+          {busy && nothingTyped && !justSent ? null : (
             <button
               type="button"
               className={`chat-composer__send${busy && !canSteer ? " chat-composer__send--queue" : ""}`}
