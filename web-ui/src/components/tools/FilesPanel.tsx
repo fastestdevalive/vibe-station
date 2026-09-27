@@ -220,6 +220,7 @@ export function FilesPanel({
   // Handle to FilesLeftPane's active-mode tabbable row
   const leftPaneFocusHandle = useRef<FilesLeftPaneHandle | null>(null);
   const isFirstRender = useRef(true);
+  const fileTabsScrollRef = useRef<HTMLDivElement | null>(null);
 
   const refocusLeftPane = useCallback(() => {
     if (leftPaneFocusHandle.current) {
@@ -238,9 +239,27 @@ export function FilesPanel({
 
   usePendingFileOpens(api, worktreeId);
 
+  // Mirror TabsStrip's wheel-to-horizontal-scroll behavior for the file tabs strip.
+  useEffect(() => {
+    const el = fileTabsScrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   const rightPaneTopbar = (
     <>
-      <div className="files-topbar__tabs" role="tablist" aria-label="Open files">
+      <div
+        className="files-topbar__tabs"
+        role="tablist"
+        aria-label="Open files"
+        ref={fileTabsScrollRef}
+      >
         {openTabs.length === 0 && !peekActive && (
           <span className="files-topbar__empty">No file open</span>
         )}

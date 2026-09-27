@@ -7486,21 +7486,18 @@ button.dashboard-card {
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-default) transparent;
+  /* Same treatment as .tabs-strip__scroll (agent tabs): hide the scrollbar
+   * entirely rather than reserving/showing it. A visible scrollbar (even a
+   * thin one) eats into this row's content-box height, which re-centers the
+   * vertically-centered tab content and makes file names visibly shift up
+   * the moment enough tabs overflow to produce a scrollbar. Wheel-scrolling
+   * is restored via a JS handler (see FilesPanel.tsx) since the native
+   * scrollbar not rendering doesn't remove the underlying scroll container. */
+  scrollbar-width: none;
 }
 
 .files-topbar__tabs::-webkit-scrollbar {
-  height: 3px;
-}
-
-.files-topbar__tabs::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.files-topbar__tabs::-webkit-scrollbar-thumb {
-  background: var(--border-default);
-  border-radius: 2px;
+  display: none;
 }
 
 .files-topbar__tab {
