@@ -127,41 +127,75 @@ case "$CMD" in
     fi
 
     echo "Starting sandbox '$WORKTREE' on http://localhost:${PORT} (volumes: ${VST_SANDBOX_DATA_VOLUME}, ${VST_SANDBOX_PROJECTS_VOLUME}, seed: ${SEED_MODE})"
-    # The dev sandbox mounts host Rust binaries (vst-daemon, vst).
-    # Prefer pre-built container-matching binaries (target-docker), then host release or debug:
+    # The dev sandbox mounts host Rust binaries (vst-daemon, vst) read-only into
+    # dev.Dockerfile's node:24-slim (Debian bookworm, glibc 2.36) container.
+    #
+    # IMPORTANT — do NOT add a fallback to `./rust/target/{release,debug}/...`
+    # (a plain host `cargo build` output) here. That used to be the fallback,
+    # and it silently produces a binary linked against the HOST's glibc, which
+    # is newer than bookworm's on any host that isn't itself Debian
+    # bookworm-based (e.g. Ubuntu 24.04 ships glibc 2.39) — the daemon then
+    # fails at container boot with `GLIBC_2.39 not found`, invisible until
+    # someone actually starts the sandbox (see BLOCKED.md's writeup / the
+    # "dev-sandbox-glibc" project memory note for the multi-hour debugging
+    # history this caused). `./rust/target-docker/` exists specifically to
+    # never be a host-glibc binary — every binary that lands there is built
+    # INSIDE a container matching bookworm's glibc, below.
     if [ -n "${VST_RUST_DAEMON_BIN:-}" ] && [ -x "$VST_RUST_DAEMON_BIN" ]; then
       RUST_DAEMON_BIN="$VST_RUST_DAEMON_BIN"
-    elif [ -x "./rust/target-docker/debug/vst-daemon" ]; then
-      RUST_DAEMON_BIN="./rust/target-docker/debug/vst-daemon"
     elif [ -x "./rust/target-docker/release/vst-daemon" ]; then
       RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
-    elif [ -x "./rust/target/release/vst-daemon" ]; then
-      RUST_DAEMON_BIN="./rust/target/release/vst-daemon"
-    elif [ -x "./rust/target/debug/vst-daemon" ]; then
-      RUST_DAEMON_BIN="./rust/target/debug/vst-daemon"
+    elif [ -x "./rust/target-docker/debug/vst-daemon" ]; then
+      RUST_DAEMON_BIN="./rust/target-docker/debug/vst-daemon"
     else
       RUST_DAEMON_BIN=""
     fi
 
     if [ -n "${VST_RUST_CLI_BIN:-}" ] && [ -x "$VST_RUST_CLI_BIN" ]; then
       RUST_CLI_BIN="$VST_RUST_CLI_BIN"
-    elif [ -x "./rust/target-docker/debug/vst" ]; then
-      RUST_CLI_BIN="./rust/target-docker/debug/vst"
     elif [ -x "./rust/target-docker/release/vst" ]; then
       RUST_CLI_BIN="./rust/target-docker/release/vst"
-    elif [ -x "./rust/target/release/vst" ]; then
-      RUST_CLI_BIN="./rust/target/release/vst"
-    elif [ -x "./rust/target/debug/vst" ]; then
-      RUST_CLI_BIN="./rust/target/debug/vst"
+    elif [ -x "./rust/target-docker/debug/vst" ]; then
+      RUST_CLI_BIN="./rust/target-docker/debug/vst"
     else
       RUST_CLI_BIN=""
     fi
 
+    # No usable target-docker binary → build ONE fresh, inside a container
+    # pinned to the exact toolchain (rust/rust-toolchain.toml) on a bookworm
+    # base (matching dev.Dockerfile's node:24-slim), never on the host. The
+    # cargo registry cache volume is intentionally NOT per-worktree (unlike
+    # the sandbox's own data/projects volumes) — it only caches downloaded
+    # crate sources, which are safe and desirable to share across worktrees.
     if [ -z "$RUST_DAEMON_BIN" ] || [ -z "$RUST_CLI_BIN" ]; then
-      echo "Host Rust binaries not found. Building debug binaries ('cargo build -p vst-daemon -p vst-cli')..."
-      cargo build --manifest-path rust/Cargo.toml -p vst-daemon -p vst-cli
-      RUST_DAEMON_BIN="./rust/target/debug/vst-daemon"
-      RUST_CLI_BIN="./rust/target/debug/vst"
+      RUST_TOOLCHAIN_CHANNEL="$(sed -nE 's/^channel = "([^"]+)".*/\1/p' rust/rust-toolchain.toml | head -1)"
+      if [ -z "$RUST_TOOLCHAIN_CHANNEL" ]; then
+        echo "error: could not read [toolchain].channel from rust/rust-toolchain.toml" >&2
+        exit 1
+      fi
+      echo "No target-docker Rust binaries found. Building them inside rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm"
+      echo "(matches dev.Dockerfile's glibc — this is the ONLY supported build path, see the"
+      echo "comment above) ... this build is cached (target-docker/build + the registry volume),"
+      echo "so this cost is paid once per host, not on every 'up' — but it does NOT auto-invalidate"
+      echo "when the Rust workspace changes; delete rust/target-docker/ to force a rebuild."
+      # CARGO_TARGET_DIR points OUTSIDE the bind-mounted rust/ tree's default
+      # `target/` (into target-docker/build instead) — the container runs as
+      # root, so writing into ./rust/target/ would leave root-owned files
+      # there that a later HOST `cargo build`/`cargo clean` in this checkout
+      # can't remove without sudo. The trailing `chown` hands the whole
+      # target-docker/ tree back to the host UID/GID before the container
+      # exits, so the copied binaries (and the build cache for next time)
+      # are normal user-owned files.
+      docker run --rm \
+        -v "$(pwd)/rust:/work" -w /work \
+        -e CARGO_TARGET_DIR=/work/target-docker/build \
+        -v vst-dev-sandbox-cargo-registry:/usr/local/cargo/registry \
+        "rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm" \
+        sh -c "cargo build --release -p vst-daemon -p vst-cli && chown -R $(id -u):$(id -g) /work/target-docker"
+      mkdir -p ./rust/target-docker/release
+      cp ./rust/target-docker/build/release/vst-daemon ./rust/target-docker/build/release/vst ./rust/target-docker/release/
+      RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
+      RUST_CLI_BIN="./rust/target-docker/release/vst"
     fi
 
     if [ ! -x "$RUST_DAEMON_BIN" ] || [ ! -x "$RUST_CLI_BIN" ]; then
