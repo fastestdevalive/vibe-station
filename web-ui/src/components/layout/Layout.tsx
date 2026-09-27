@@ -6,6 +6,9 @@ import { useWorkspaceStore, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH } fro
 
 interface LayoutProps {
   topBar: ReactNode;
+  /** Bottom region — global status bar. Passed as a node (not rendered here)
+   *  so the generic Layout stays unaware of api/projects/worktrees. */
+  globalStatusBar?: ReactNode;
   leftSidebar: ReactNode;
   /** When set, main area is this single pane (dashboard) instead of the IDE regions. */
   dashboardPane?: ReactNode;
@@ -36,6 +39,7 @@ interface LayoutProps {
 
 export function Layout({
   topBar,
+  globalStatusBar,
   leftSidebar,
   dashboardPane,
   agentPane,
@@ -240,6 +244,7 @@ export function Layout({
           </div>
         </div>
         {paneHostLayer}
+        {globalStatusBar}
       </div>
     );
   }
@@ -431,6 +436,7 @@ export function Layout({
       </div>
       {fullscreenOverlay}
       {paneHostLayer}
+      {globalStatusBar}
     </div>
   );
 }

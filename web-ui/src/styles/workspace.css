@@ -5834,6 +5834,62 @@ button.dashboard-card {
   min-height: 0;
 }
 
+/* Global status bar — a real bottom bar spanning the whole app UI (VS Code
+ * status-bar style). Mounted as the last flex child of `.app-shell`, so it
+ * sits below `.layout-main` (which holds the terminal dock) without needing
+ * position:fixed or fighting `overflow: hidden` containers. */
+.global-status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-top: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  z-index: 10;
+}
+
+.global-status-bar__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.global-status-bar__crumb-seg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.global-status-bar__crumb-seg--highlight {
+  color: var(--fg-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.global-status-bar__crumb-sep {
+  color: var(--fg-faint);
+}
+
+.global-status-bar__spacer {
+  flex: 1;
+}
+
+/* The LSP row rendered inside the global bar keeps its own look but should
+ * sit flush at the right edge of the bar (the bar already provides the
+ * background/border/padding, so drop the LSP row's own border + padding). */
+.global-status-bar .lsp-status-row {
+  border-top: none;
+  background: transparent;
+  padding: 0;
+  flex-shrink: 0;
+}
+
 /* Global LSP status row — VS Code status-bar style. Sibling of
  * `.tool-panel__body`, not a child of it, so `.tool-panel__body > *`'s
  * `flex: 1` rule doesn't apply to it and it stays a fixed-height strip
