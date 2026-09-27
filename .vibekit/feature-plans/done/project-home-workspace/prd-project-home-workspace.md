@@ -68,7 +68,7 @@ RULES — read before writing or implementing:
 | R13 | All tabs — Project home and every direct agent — share the SAME tools-pane instance (Files/Search/VCS), scoped to the project. |
 | R14 | Opening/closing a file from any direct-agent tab is reflected in the shared tools pane immediately (already-shipped durable open-file sync applies here unchanged). |
 | R15 | Clicking a direct agent in the left sidebar activates its tab in the project workspace (creating the tab if not already open), never opens a separate page. |
-| R16 | Closing a direct-agent tab ends that tab's view only — it does not terminate the agent session (same convention as worktree agent tabs). |
+| R16 | ~~Closing a direct-agent tab ends that tab's view only — it does not terminate the agent session (same convention as worktree agent tabs).~~ **Superseded** — the parenthetical was factually wrong: worktree agent tabs DO terminate on close. Closing a direct-agent tab now shows the same terminate-confirmation dialog as a worktree agent tab and, on confirm, terminates the session, matching the sidebar and preventing sidebar/tabs desync. See the direct-tab-ui branch fix. |
 
 ---
 

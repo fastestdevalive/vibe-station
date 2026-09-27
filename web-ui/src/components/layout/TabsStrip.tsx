@@ -920,32 +920,23 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                       {closeable ? (
                         <span
                           role="button"
-                          aria-label={isAgent && isProject ? `Close ${label}` : `Terminate ${label}`}
+                          aria-label={`Terminate ${label}`}
                           className="tab__close"
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (isAgent && isProject) {
-                              // Decision 5 (4.3) — closing a direct-agent tab only
-                              // hides that tab's view; it does NOT terminate the
-                              // session (R16). No confirm dialog.
-                              if (worktreeId) {
-                                useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, s.id);
-                              }
-                            } else {
-                              setTerminateTarget(s);
-                            }
+                            // Closing a direct-agent tab must go through the same
+                            // terminate confirmation as a worktree tab — otherwise
+                            // the sidebar (which lists the still-running session)
+                            // and the tabs strip (which just hid it) desync. See
+                            // ConfirmDialog's onConfirm below for the direct-agent
+                            // tab-close side effect after a successful terminate.
+                            setTerminateTarget(s);
                           }}
                           onPointerDown={(e) => e.stopPropagation()}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") {
                               e.stopPropagation();
-                              if (isAgent && isProject) {
-                                if (worktreeId) {
-                                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, s.id);
-                                }
-                              } else {
-                                setTerminateTarget(s);
-                              }
+                              setTerminateTarget(s);
                             }
                           }}
                           tabIndex={-1}
@@ -1077,9 +1068,20 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
         onCancel={() => setTerminateTarget(null)}
         onConfirm={() => {
           if (terminateTarget) {
+            const targetId = terminateTarget.id;
             void api
-              .terminateSession(terminateTarget.id)
-              .then(() => void refreshTabs())
+              .terminateSession(targetId)
+              .then(() => {
+                // Direct-agent (project-scope) tabs are also tracked in the
+                // client-only open-tab set; prune the id there too, but only
+                // after the terminate call actually succeeds, so a failed
+                // terminate leaves the tab in place and in sync with the
+                // sidebar (which still shows the session on failure).
+                if (isAgent && isProject && worktreeId) {
+                  useWorkspaceStore.getState().closeProjectAgentTab(worktreeId, targetId);
+                }
+                void refreshTabs();
+              })
               .catch((err: unknown) => {
                 // No existing toast/error-banner mechanism was found anywhere
                 // in web-ui (grepped LeftSidebar.tsx, WorkspaceCanvas.tsx,
