@@ -18,7 +18,11 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
   border-bottom: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
 }
@@ -312,6 +316,10 @@
      able to climb above sibling chrome like `.workspace-canvas__picker`
      (z-index: 20), which lives outside this element. */
   isolation: isolate;
+}
+
+.workspace-canvas__body--has-fullscreen {
+  isolation: auto;
 }
 
 .workspace-canvas__empty {

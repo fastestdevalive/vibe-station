@@ -31,6 +31,7 @@ import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { PaneTools } from "@/components/layout/PaneTools";
 import { createProjectDirectDraft } from "@/lib/projectDraft";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 
 type TabKind = "agent" | "terminal";
 
@@ -736,8 +737,15 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       </button>
     ) : null;
 
+  const outerInset = useTopRightInset();
+
   return (
-    <div className="tabs-strip" role="tablist" aria-label={ariaLabel}>
+    <div
+      className="tabs-strip"
+      role="tablist"
+      aria-label={ariaLabel}
+      style={outerInset.width > 0 ? { paddingRight: `${outerInset.width}px` } : undefined}
+    >
       <div className="tabs-strip__scroll" ref={scrollRef}>
         {sessions.length === 0 && !isAgent ? (
           <span className="tabs-strip__empty">No terminals — open one with +</span>

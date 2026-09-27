@@ -208,6 +208,8 @@ interface LeftSidebarProps {
   /** Opens the keyboard-shortcuts reference dialog (owned by Workspace/TopBar) — the
    *  footer's Keyboard button triggers it since TopBar no longer has its own trigger. */
   onOpenShortcuts?: () => void;
+  /** Optional top header slot (absorbs top-bar-left in classic per-worktree layout) */
+  header?: ReactNode;
 }
 
 export function LeftSidebar({
@@ -216,6 +218,7 @@ export function LeftSidebar({
   isMobile = false,
   onWorktreeSelected,
   onOpenShortcuts,
+  header,
 }: LeftSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1349,6 +1352,7 @@ export function LeftSidebar({
       className={`left-sidebar ${collapsed ? "left-sidebar--collapsed" : ""}`}
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
+      {header}
       <div
         ref={scrollRef}
         className="left-sidebar__scroll"

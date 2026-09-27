@@ -25,6 +25,7 @@ import {
   type TileSpec,
 } from "@/hooks/useStore";
 import { PaneOutlet, usePaneOutletElement, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
+import { TopRightInsetProvider, useTopRightInset } from "@/context/TopRightInsetContext";
 import { StatusDot } from "@/components/layout/StatusDot";
 import { sessionStatus, worktreeRolledUpStatus } from "@/lib/worktreeStatus";
 import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
@@ -32,6 +33,8 @@ import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
+
+const ZERO_INSET = { width: 0, height: 0 };
 
 interface WorkspaceCanvasProps {
   /**
@@ -125,6 +128,33 @@ interface DropTarget {
   rect: { left: number; top: number; width: number; height: number };
 }
 
+function findTopRightTiledLeafId(node: LayoutNode | null): string | null {
+  if (!node) return null;
+  let cur: LayoutNode = node;
+  while (cur.type === "split") {
+    if (cur.children.length === 0) return null;
+    cur = cur.axis === "row" ? cur.children[cur.children.length - 1]! : cur.children[0]!;
+  }
+  return cur.tileId;
+}
+
+function findTopRightFreeTileId(tiles: TileSpec[], freeRects: Record<string, FreeRect>): string | null {
+  let bestId: string | null = null;
+  let bestZ = -Infinity;
+  for (const t of tiles) {
+    const r = freeRects[t.id];
+    if (!r) continue;
+    if (r.y <= 1 && r.x + r.w >= 99) {
+      const z = r.z ?? 0;
+      if (z > bestZ) {
+        bestZ = z;
+        bestId = t.id;
+      }
+    }
+  }
+  return bestId;
+}
+
 /**
  * Tiled/free-form canvas for workspace-mode.
  *
@@ -164,6 +194,7 @@ export function WorkspaceCanvas({
    *  list — reused here so the picker's project order matches the sidebar's. */
   const sortOrders = useWorkspaceStore((s) => s.sortOrders);
   const navigate = useNavigate();
+  const outerInset = useTopRightInset();
 
   const startDraftForWorktree = (targetWorktreeId: string) => {
     void api
@@ -359,6 +390,13 @@ export function WorkspaceCanvas({
   // other route has an outlet registered.
   const toolbarOutletEl = usePaneOutletElement(WORKSPACE_CANVAS_TOOLBAR_KEY);
   const toolbarPortalEl = isDetachedView ? toolbarOutletEl : null;
+  const toolbarOccupiesTop = canvasToolbarVisible && !toolbarPortalEl;
+  const topRightTileId =
+    toolbarOccupiesTop || fullscreenTileId !== null || !canvas
+      ? null
+      : canvas.mode === "tiled"
+        ? findTopRightTiledLeafId(canvas.tree)
+        : findTopRightFreeTileId(canvas.tiles, canvas.freeRects);
 
   // Reconcile a dangling `fullscreenTileId` against whatever tile set is
   // CURRENTLY live — every non-fullscreen tile hides via `display:none`
@@ -994,6 +1032,8 @@ export function WorkspaceCanvas({
     // see paneOutlets.tsx) so only the fullscreen one is visible/interactive.
     const isFullscreen = fullscreenTileId === tile.id;
     const isHiddenForFullscreen = fullscreenTileId !== null && !isFullscreen;
+    const isUnderFloatingWidget = !toolbarOccupiesTop && !fullscreenTileId && tile.id === topRightTileId;
+    const tileInset = isUnderFloatingWidget ? outerInset : ZERO_INSET;
     const tileStyle: CSSProperties = isFullscreen
       ? { position: "fixed", inset: 0 }
       : isHiddenForFullscreen
@@ -1021,6 +1061,11 @@ export function WorkspaceCanvas({
               : cv.mode === "free"
                 ? "Click to fullscreen · drag to move"
                 : "Click to fullscreen · drag to rearrange"
+          }
+          style={
+            isUnderFloatingWidget && outerInset.width > 0
+              ? { paddingRight: `calc(var(--space-2) + ${outerInset.width}px)` }
+              : undefined
           }
           onPointerDown={
             cv.mode === "free"
@@ -1085,7 +1130,9 @@ export function WorkspaceCanvas({
         </div>
         <div className="workspace-canvas__tile-body">
           {outletVisible ? (
-            <PaneOutlet paneKey={paneKey} />
+            <TopRightInsetProvider value={tileInset}>
+              <PaneOutlet paneKey={paneKey} />
+            </TopRightInsetProvider>
           ) : (
             <div className="workspace-canvas__tile-hidden">Hidden — toggle it on in the top bar</div>
           )}
@@ -1148,6 +1195,7 @@ export function WorkspaceCanvas({
         className={`workspace-canvas__toolbar${toolbarPortalEl ? " workspace-canvas__toolbar--portaled" : ""}`}
         role="toolbar"
         aria-label="Workspace canvas"
+        style={outerInset.width > 0 && !toolbarPortalEl ? { paddingRight: `calc(var(--space-3) + ${outerInset.width}px)` } : undefined}
       >
         <div className="workspace-canvas__toolbar-left">
           <div className="workspace-canvas__mode-toggle" role="group" aria-label="Canvas mode">
@@ -1608,7 +1656,10 @@ export function WorkspaceCanvas({
           }
         }}
       />
-      <div className="workspace-canvas__body" ref={canvasBodyRef}>
+      <div
+        className={`workspace-canvas__body${fullscreenTileId !== null ? " workspace-canvas__body--has-fullscreen" : ""}`}
+        ref={canvasBodyRef}
+      >
         {cv.tiles.length === 0 ? (
           <div className="workspace-canvas__empty">
             No tiles — add one to get started

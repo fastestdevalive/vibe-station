@@ -1753,7 +1753,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 2px var(--space-3);
   min-width: 0;
 }
 
@@ -1817,8 +1817,24 @@
   flex-shrink: 0;
 }
 
+.top-bar--desktop {
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
+  box-sizing: border-box;
+}
+
 .top-bar--desktop .top-bar__row {
-  padding: 2px var(--space-3);
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+}
+
+.top-bar--desktop .icon-btn,
+.sidebar-header .icon-btn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
 }
 
 .top-bar--desktop .top-bar__brand {
@@ -1826,7 +1842,7 @@
 }
 
 .top-bar--desktop .top-bar__pane-btn {
-  width: 30px;
+  width: 28px;
   height: 28px;
 }
 
@@ -2046,6 +2062,55 @@
   user-select: none;
 }
 
+/* Sidebar header — absorbs top-bar-left (sidebar toggle + breadcrumb) in classic layout */
+.sidebar-header {
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  gap: var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sidebar-header--collapsed {
+  justify-content: center;
+  padding: 0;
+}
+
+/* Floating top-right controls widget in classic per-worktree layout */
+.top-bar-floating-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 35px;
+  padding: 0 var(--space-2);
+  flex-shrink: 0;
+  pointer-events: auto;
+  background: var(--bg-elevated);
+  border-bottom: var(--border-width) solid var(--border-default);
+  border-left: var(--border-width) solid var(--border-default);
+  border-bottom-left-radius: var(--radius-md);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  box-sizing: border-box;
+}
+
+.top-bar-floating-actions .icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.top-bar-floating-actions .top-bar__pane-btn {
+  width: 28px;
+  height: 28px;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -2233,13 +2298,15 @@
 .tabs-strip {
   display: flex;
   align-items: stretch;
+  height: 35px;
+  min-height: 35px;
+  box-sizing: border-box;
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
   flex-grow: 0;
   min-width: 0;
   max-width: 100%;
-  min-height: 0;
   overflow: hidden;
 }
 
@@ -5146,8 +5213,6 @@ textarea.input {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding-bottom: var(--space-6);
-  border-bottom: var(--border-width) solid var(--border-default);
 }
 
 .dashboard-header__actions {
@@ -6265,9 +6330,9 @@ button.dashboard-card {
 .search-panel__controls {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
   flex-shrink: 0;
-  padding-right: 28px;
+  flex-wrap: wrap;
 }
 
 .search-panel__input,
@@ -6297,8 +6362,8 @@ button.dashboard-card {
  * button can be absolutely positioned over its right edge. */
 .search-panel__input-wrap {
   position: relative;
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 110px;
+  min-width: min(110px, 100%);
 }
 
 .search-panel__input-wrap .search-panel__input {
@@ -6332,6 +6397,7 @@ button.dashboard-card {
 .search-panel__toggles {
   display: flex;
   flex-shrink: 0;
+  margin-left: auto;
   gap: 1px;
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-sm);
@@ -6533,15 +6599,15 @@ button.dashboard-card {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  height: 32px;
-  min-height: 32px;
-  max-height: 32px;
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
   box-sizing: border-box;
   padding: 0 var(--space-3);
   /* Right inset so the bar's content never sits under the floating top-right
-     fullscreen/orientation buttons (ToolPanel's `.tool-panel__top-actions`),
-     matching the `.files-topbar` fix from revision 3. */
-  padding-right: 68px;
+     fullscreen/orientation buttons (ToolPanel's `.tool-panel__top-actions`)
+     plus the outer floating actions widget inset. */
+  padding-right: calc(68px + var(--tools-top-right-inset, 0px));
   border-bottom: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
 }
@@ -7398,15 +7464,15 @@ button.dashboard-card {
   overflow: hidden;
 }
 
-/* VCS commit view's topbar (Revision 4) — same 32px + right inset as the
-   Files topbar so the back-arrow breadcrumb never sits under the floating
-   top-right fullscreen/orientation buttons. */
+/* VCS commit view's topbar (Revision 4) — same 35px + right inset as the
+   Files topbar and VCS bar so the back-arrow breadcrumb never sits under the
+   floating top-right fullscreen/orientation buttons plus outer inset. */
 .vcs-topbar {
-  height: 32px;
-  min-height: 32px;
-  max-height: 32px;
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
   box-sizing: border-box;
-  padding-right: 68px;
+  padding-right: calc(68px + var(--tools-top-right-inset, 0px));
 }
 
 /* Item 9 — "Commits › commit #x" breadcrumb, `VcsCommitView`'s `topbarExtra`. */

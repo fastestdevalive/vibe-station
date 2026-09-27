@@ -7,6 +7,7 @@ import { FilePreviewPane } from "@/components/layout/FilePreviewPane";
 import { FilesLeftPane, type FilesLeftPaneHandle } from "@/components/layout/FilesLeftPane";
 import { usePendingFileOpens } from "@/hooks/usePendingFileOpens";
 import { useToolsInset } from "@/context/ToolsInsetContext";
+import { useTopRightInset } from "@/context/TopRightInsetContext";
 import {
   FILES_LEFT_PANE_DEFAULT_WIDTH,
   FILES_LEFT_PANE_MIN_WIDTH,
@@ -336,6 +337,8 @@ export function FilesPanel({
     </>
   );
 
+  const outerInset = useTopRightInset();
+
   return (
     <div
       ref={paneRef}
@@ -434,19 +437,19 @@ export function FilesPanel({
               : "padding-left 0.15s ease",
         }}
       >
-        {/* Topbar: open file tabs, height matching desktop TopBar (32px), padded right to clear ToolFullscreenButton + orientation toggle.
+        {/* Topbar: open file tabs, height matching desktop TopBar (35px), padded right to clear ToolFullscreenButton + orientation toggle + floating controls.
             Padded left by rail width only when panel is closed or stacked so tabs avoid the rail icons (§4b). */}
         <div
           className="files-topbar"
           style={{
-            height: "32px",
-            minHeight: "32px",
-            maxHeight: "32px",
+            height: "35px",
+            minHeight: "35px",
+            maxHeight: "35px",
             boxSizing: "border-box",
             display: "flex",
             alignItems: "stretch",
             paddingLeft: (!isPanelOpen || masterDetailVertical) ? "var(--tools-rail-w, 36px)" : "0px",
-            paddingRight: "68px",
+            paddingRight: outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px",
           }}
         >
           {rightPaneTopbar}

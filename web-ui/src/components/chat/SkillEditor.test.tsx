@@ -22,6 +22,15 @@ import type { SkillEditorHandle } from "./SkillEditor";
  * microtask, not synchronously with `fireEvent`.
  */
 
+if (typeof Range !== "undefined" && !Range.prototype.getBoundingClientRect) {
+  Range.prototype.getBoundingClientRect = () =>
+    ({ x: 0, y: 0, bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, toJSON: () => {} }) as DOMRect;
+}
+if (typeof Text !== "undefined" && !(Text.prototype as any).getBoundingClientRect) {
+  (Text.prototype as any).getBoundingClientRect = () =>
+    ({ x: 0, y: 0, bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0, toJSON: () => {} }) as DOMRect;
+}
+
 const COMMANDS = [
   { name: "code-review", description: "Review the diff", argumentHint: "[severity]" },
   { name: "simplify", description: "Simplify" },

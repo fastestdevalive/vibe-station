@@ -861,6 +861,8 @@ export function Workspace() {
           ? "workspace-view"
           : "workspace";
 
+  const isClassicLayout = !isMobile && (layoutMode === "workspace" || layoutMode === "project-workspace");
+
   return (
     <PaneOutletProvider>
     <div className="workspace-route">
@@ -879,34 +881,51 @@ export function Workspace() {
         )
       ) : null}
       <Layout
+        isClassicLayout={isClassicLayout}
+        floatingTopBar={
+          isClassicLayout ? (
+            <TopBar
+              variant="floating"
+              layoutMode={layoutMode}
+              projects={projects}
+              worktrees={worktrees}
+              viewedWorkspaceName={viewedWorkspace?.name}
+              isMobile={isMobile}
+              onToggleLeftSidebar={() => {
+                if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
+                else toggleLeftSidebarCollapsed();
+              }}
+              leftSidebarCollapsed={leftSidebarCollapsed}
+              mobileSidebarOpen={mobileSidebarOpen}
+              onOpenQuickOpen={() => setQuickOpen(true)}
+              shortcutsOpen={shortcutsOpen}
+              onOpenShortcuts={() => setShortcutsOpen(true)}
+              onCloseShortcuts={() => setShortcutsOpen(false)}
+            />
+          ) : undefined
+        }
         topBar={
-          <TopBar
-            layoutMode={layoutMode}
-            projects={projects}
-            worktrees={worktrees}
-            viewedWorkspaceName={viewedWorkspace?.name}
-            projectActiveSessionName={
-              isProjectView && activeSessionId && activeSession
-                ? sessionLabel(activeSession)
-                : undefined
-            }
-            isMobile={isMobile}
-            onToggleLeftSidebar={() => {
-              if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
-              else toggleLeftSidebarCollapsed();
-            }}
-            leftSidebarCollapsed={leftSidebarCollapsed}
-            mobileSidebarOpen={mobileSidebarOpen}
-            onOpenQuickOpen={() => setQuickOpen(true)}
-            shortcutsOpen={shortcutsOpen}
-            onOpenShortcuts={() => setShortcutsOpen(true)}
-            onCloseShortcuts={() => setShortcutsOpen(false)}
-            settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
-            // replace, not push: a plain push would leave the section entry in
-            // history, so the phone's Back gesture right after tapping Back
-            // would drop straight back into the section you just left.
-            onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
-          />
+          !isClassicLayout ? (
+            <TopBar
+              layoutMode={layoutMode}
+              projects={projects}
+              worktrees={worktrees}
+              viewedWorkspaceName={viewedWorkspace?.name}
+              isMobile={isMobile}
+              onToggleLeftSidebar={() => {
+                if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
+                else toggleLeftSidebarCollapsed();
+              }}
+              leftSidebarCollapsed={leftSidebarCollapsed}
+              mobileSidebarOpen={mobileSidebarOpen}
+              onOpenQuickOpen={() => setQuickOpen(true)}
+              shortcutsOpen={shortcutsOpen}
+              onOpenShortcuts={() => setShortcutsOpen(true)}
+              onCloseShortcuts={() => setShortcutsOpen(false)}
+              settingsSectionLabel={isMobile ? settingsSectionLabel : undefined}
+              onSettingsBack={isMobile && settingsSectionId ? () => navigate("/settings", { replace: true }) : undefined}
+            />
+          ) : undefined
         }
         globalStatusBar={<GlobalStatusBar api={api} projects={projects} worktrees={worktrees} />}
         leftSidebar={
@@ -914,6 +933,25 @@ export function Workspace() {
             api={api}
             collapsed={!isMobile && leftSidebarCollapsed}
             isMobile={isMobile}
+            header={
+              isClassicLayout ? (
+                <TopBar
+                  variant="sidebar-header"
+                  layoutMode={layoutMode}
+                  projects={projects}
+                  worktrees={worktrees}
+                  viewedWorkspaceName={viewedWorkspace?.name}
+                  isMobile={isMobile}
+                  onToggleLeftSidebar={() => {
+                    if (isMobile) setMobileSidebarOpen(!mobileSidebarOpen);
+                    else toggleLeftSidebarCollapsed();
+                  }}
+                  leftSidebarCollapsed={leftSidebarCollapsed}
+                  mobileSidebarOpen={mobileSidebarOpen}
+                  onOpenQuickOpen={() => setQuickOpen(true)}
+                />
+              ) : undefined
+            }
             onWorktreeSelected={(wtId) => {
               if (isMobile) setMobileSidebarOpen(false);
               if (isDashboard || isSettings || isDirectSession || isWorkspaceView || isDraft || isProjectView) navigate(`/worktree/${wtId}`);
