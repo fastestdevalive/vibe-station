@@ -1,6 +1,10 @@
 use std::collections::VecDeque;
 
-use vst_agents::json_agent_session::{JsonAgentSession, QueuedTurn};
+use vst_agents::json_agent_session::{
+    read_transcript_from_data_dir, JsonAgentSession, QueuedTurn,
+};
+use vst_agents::json_agent_session::queue::ForkResult;
+use vst_agents::paths::Paths;
 
 fn make_turn(id: &str, order: u64) -> QueuedTurn {
     QueuedTurn {
@@ -117,6 +121,33 @@ impl AgentPlugin for MockTurnPlugin {
         });
         rx
     }
+}
+
+/// A live `MockTurnPlugin` session rooted in a temp home. Returns the temp
+/// home guard (kept alive for the test's duration) plus the session.
+fn make_mock_session() -> (tempfile::TempDir, vst_agents::home::HomeGuard, JsonAgentSession) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    let session_rec = common::make_session("s1");
+    let project_rec = common::make_project("p1");
+
+    let session = JsonAgentSession::new(JsonAgentSessionOptions {
+        project: project_rec,
+        worktree: None,
+        session: session_rec,
+        plugin: Arc::new(MockTurnPlugin),
+        daemon_port: 0,
+        cli: vst_types::NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: None,
+        mode_name: None,
+        store_handle,
+        broadcaster: vst_types::Broadcaster(tx),
+    });
+    (dir, home, session)
 }
 
 #[tokio::test]
@@ -584,4 +615,314 @@ async fn test_active_turn_id_lifecycle_and_notice_turn() {
         e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&observed_notice_id)
     });
     assert!(notice_user_ev.is_some(), "Notice turn user event must match active_turn_id");
+}
+
+/// Wait (with a bounded timeout) until the session is fully idle: no active
+/// turn, empty queue, and turn state Idle. Mirrors the poll-loop pattern the
+/// existing tests in this file use — a bare `settled()` can return before the
+/// drain has actually flushed all its events, so callers must poll.
+async fn wait_idle(session: &JsonAgentSession) {
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            session.settled().await;
+            let meta = session.get_meta();
+            if meta.queue_depth == 0 && meta.active_turn_id.is_none() && meta.turn_state == TurnState::Idle {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("session should settle");
+}
+
+/// 1.T2 — enqueue one turn, let it drain, and assert the transcript has exactly
+/// one `user` event for that turn, with the right text, no edited/cancelled/
+/// silent flags, and a real log_seq.
+#[tokio::test]
+async fn enqueue_then_drain_persists_user_event_after_running_turn() {
+    let (_dir, _home, session) = make_mock_session();
+    let res = session.enqueue("hello world".into(), vec![], None, None);
+
+    wait_idle(&session).await;
+
+    let events = session.read_transcript();
+    let user_events: Vec<&NormalizedEvent> = events
+        .iter()
+        .filter(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res.turn_id))
+        .collect();
+    assert_eq!(
+        user_events.len(),
+        1,
+        "exactly one user event for the turn, got {}",
+        user_events.len()
+    );
+    let ev = user_events[0];
+    assert_eq!(ev.text.as_deref(), Some("hello world"), "user event text matches");
+    assert_eq!(ev.edited, None, "not an edit");
+    assert_eq!(ev.cancelled, None, "not cancelled");
+    assert_eq!(ev.silent, None, "not silent");
+    assert!(ev.log_seq.is_some(), "user event must have a log_seq");
+}
+
+/// 1.T3 — a queued turn's user event log_seq must trail EVERY event of the turn
+/// it queued behind (including that turn's "Turn stopped" row).
+#[tokio::test]
+async fn queued_turn_logseq_trails_active_turns_output() {
+    let (_dir, _home, session, emitted) = make_hanging_session();
+    let res_a = session.enqueue("complete A".into(), vec![], None, None);
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if session.get_meta().active_turn_id.as_deref() == Some(&res_a.turn_id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("turn A should become active");
+
+    let res_b = session.enqueue("complete B".into(), vec![], None, None);
+    let stopped = session.stop_active_turn(None);
+    assert!(stopped, "stop(None) should stop the active turn A");
+
+    wait_idle(&session).await;
+
+    let events = emitted.lock().unwrap().clone();
+    let b_user = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id))
+        .expect("B must have a user event");
+    let b_seq = b_user.log_seq.expect("B user event must have a log_seq");
+
+    let a_events: Vec<&NormalizedEvent> = events
+        .iter()
+        .filter(|e| e.turn_id.as_deref() == Some(&res_a.turn_id))
+        .collect();
+    assert!(!a_events.is_empty(), "A must have emitted events");
+    for e in &a_events {
+        let seq = e.log_seq.expect("every A event must have a log_seq");
+        assert!(
+            b_seq > seq,
+            "B's user log_seq ({b_seq}) must trail every A event's log_seq ({seq})"
+        );
+    }
+}
+
+/// 1.T3b — plain drain-on-idle path (no stop): B's user log_seq must be greater
+/// than A's `Result` event log_seq.
+#[tokio::test]
+async fn queued_turn_logseq_trails_completed_turn_result() {
+    let (_dir, _home, session) = make_mock_session();
+    let res_a = session.enqueue("complete A".into(), vec![], None, None);
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if session.get_meta().active_turn_id.as_deref() == Some(&res_a.turn_id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("turn A should become active");
+
+    let res_b = session.enqueue("complete B".into(), vec![], None, None);
+
+    wait_idle(&session).await;
+
+    let events = session.read_transcript();
+    let a_result = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::Result && e.turn_id.as_deref() == Some(&res_a.turn_id))
+        .expect("A must emit a Result event");
+    let b_user = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_b.turn_id))
+        .expect("B must emit a user event");
+    let a_seq = a_result.log_seq.expect("A Result event must have a log_seq");
+    let b_seq = b_user.log_seq.expect("B user event must have a log_seq");
+    assert!(
+        b_seq > a_seq,
+        "B's user log_seq ({b_seq}) must be greater than A's Result log_seq ({a_seq})"
+    );
+}
+
+/// 1.T4 — a promoted turn's user log_seq must be greater than the stopped turn's
+/// "Turn stopped" row log_seq.
+#[tokio::test]
+async fn promoted_turn_logseq_trails_stopped_active_turn() {
+    let (_dir, _home, session, emitted) = make_hanging_session();
+    let res_a = session.enqueue("hanging A".into(), vec![], None, None);
+    let res_x = session.enqueue("complete X".into(), vec![], None, None);
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if session.get_meta().active_turn_id.as_deref() == Some(&res_a.turn_id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("turn A should become active");
+
+    let promoted = session.promote_queued_turn(&res_x.turn_id);
+    assert!(promoted, "promote should succeed");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            session.settled().await;
+            let meta = session.get_meta();
+            if meta.queue_depth == 0 && meta.active_turn_id.is_none() && meta.turn_state == TurnState::Idle {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("session should settle after promotion");
+
+    let events = emitted.lock().unwrap().clone();
+    let a_stopped = events
+        .iter()
+        .find(|e| {
+            e.kind == NormalizedEventKind::Status
+                && e.text.as_deref() == Some("Turn stopped")
+                && e.turn_id.as_deref() == Some(&res_a.turn_id)
+        })
+        .expect("A must have a 'Turn stopped' event");
+    let a_seq = a_stopped.log_seq.expect("A stopped event must have a log_seq");
+
+    let x_user = events
+        .iter()
+        .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&res_x.turn_id))
+        .expect("X must have a user event");
+    let x_seq = x_user.log_seq.expect("X user event must have a log_seq");
+    assert!(
+        x_seq > a_seq,
+        "X's user log_seq ({x_seq}) must be greater than A's 'Turn stopped' log_seq ({a_seq})"
+    );
+}
+
+/// 1.T8 — forking a completed turn defers the forked turn's persistence until it
+/// runs, like a normal queued turn.
+#[tokio::test]
+async fn fork_turn_inherits_deferred_persistence() {
+    let (_dir, _home, session) = make_mock_session();
+    let res = session.enqueue("turn 1".into(), vec![], None, None);
+
+    wait_idle(&session).await;
+
+    let ForkResult::Ok { turn_id: fork_id, .. } = session.fork_turn(&res.turn_id, "forked msg".into(), vec![])
+    else {
+        panic!("fork_turn should succeed on a completed turn");
+    };
+
+    let before = session.read_transcript();
+    assert!(
+        !before
+            .iter()
+            .any(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&fork_id)),
+        "forked turn must not be persisted immediately after fork_turn returns"
+    );
+
+    wait_idle(&session).await;
+
+    let after = session.read_transcript();
+    assert!(
+        after
+            .iter()
+            .any(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(&fork_id)),
+        "forked turn must be persisted once it runs"
+    );
+}
+
+/// 1.T9 — release() persists a `cancelled` user event (with original text and a
+/// real log_seq) for every still-queued/held turn BEFORE the released latch goes
+/// up. Goes through the real `release()` path so a latch-ordering regression
+/// would be caught.
+#[tokio::test]
+async fn release_persists_cancelled_for_dropped_queue_and_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let _home = vst_agents::home::with_home(dir.path().to_path_buf());
+    let store_handle = vst_store::StoreHandle::open(dir.path().join("test.db")).unwrap();
+    let (tx, _rx) = tokio::sync::broadcast::channel(64);
+
+    let session_rec = common::make_session("s1");
+    let project_rec = common::make_project("p1");
+    let data_dir = Paths::default().direct_session_data_dir("p1", "s1");
+
+    let session = JsonAgentSession::new(JsonAgentSessionOptions {
+        project: project_rec,
+        worktree: None,
+        session: session_rec,
+        plugin: Arc::new(MockTurnPlugin),
+        daemon_port: 0,
+        cli: vst_types::NormalizedEventProvider::Claude,
+        model: None,
+        mode_id: None,
+        mode_name: None,
+        store_handle,
+        broadcaster: vst_types::Broadcaster(tx),
+    });
+
+    // Enqueue A and B with nothing running and no `.await` between the two calls,
+    // so both land in `s.queue` before the drain task ever gets scheduled.
+    let res_a = session.enqueue("msg A".into(), vec![], None, None);
+    let res_b = session.enqueue("msg B".into(), vec![], None, None);
+
+    assert!(
+        session.get_meta().queued_turn_ids.contains(&res_a.turn_id),
+        "A must be queued"
+    );
+    assert!(
+        session.get_meta().queued_turn_ids.contains(&res_b.turn_id),
+        "B must be queued"
+    );
+
+    // Move B into the edit hold.
+    session.begin_edit_queued_turn(&res_b.turn_id);
+
+    session.release().await;
+
+    let events = read_transcript_from_data_dir(&data_dir, "s1");
+    for (turn_id, text) in [(&res_a.turn_id, "msg A"), (&res_b.turn_id, "msg B")] {
+        let ev = events
+            .iter()
+            .find(|e| e.kind == NormalizedEventKind::User && e.turn_id.as_deref() == Some(turn_id))
+            .unwrap_or_else(|| panic!("turn {text} should have a persisted user event"));
+        assert_eq!(ev.text.as_deref(), Some(text), "text must survive for {text}");
+        assert_eq!(ev.cancelled, Some(true), "{text} must be cancelled");
+        assert!(ev.log_seq.is_some(), "{text} must have a log_seq");
+    }
+}
+
+/// 1.T10 — forking a completed turn must NOT drop an unrun turn that's parked in
+/// the edit hold.
+#[tokio::test]
+async fn fork_while_held_turn_survives() {
+    let (_dir, _home, session) = make_mock_session();
+    let first = session.enqueue("first".into(), vec![], None, None);
+
+    wait_idle(&session).await;
+
+    // Enqueue a second turn and immediately (no `.await`) park it in the hold.
+    let held = session.enqueue("held".into(), vec![], None, None);
+    session.begin_edit_queued_turn(&held.turn_id);
+
+    assert!(
+        session.get_meta().editing_turn_ids.contains(&held.turn_id),
+        "held turn must be in the edit hold before forking"
+    );
+
+    let ForkResult::Ok { .. } = session.fork_turn(&first.turn_id, "forked".into(), vec![]) else {
+        panic!("fork_turn should succeed on the completed first turn");
+    };
+
+    assert!(
+        session.get_meta().editing_turn_ids.contains(&held.turn_id),
+        "held turn must survive the fork (a fork must not drop an unrun held turn)"
+    );
 }

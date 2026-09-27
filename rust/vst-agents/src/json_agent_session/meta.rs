@@ -83,6 +83,7 @@ pub fn assemble_meta(opts: &MetaOptions, found: &TranscriptMeta) -> SessionMeta 
         queue_depth: 0,
         queued_turn_ids: Vec::new(),
         editing_turn_ids: Vec::new(),
+        queued_turns: Vec::new(),
         usage: found.usage.clone(),
         cwd: opts.cwd.clone(),
         can_steer: None,

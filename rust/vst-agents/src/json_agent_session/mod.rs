@@ -441,6 +441,20 @@ impl JsonAgentSession {
             queue_depth: s.queue.len() as i64,
             queued_turn_ids: s.queue.iter().map(|t| t.turn_id.clone()).collect(),
             editing_turn_ids: s.holds.keys().cloned().collect(),
+            queued_turns: s
+                .queue
+                .iter()
+                .chain(s.holds.values().map(|h| &h.turn))
+                .map(|t| vst_types::QueuedTurnMeta {
+                    turn_id: t.turn_id.clone(),
+                    message: t.raw_message.clone(),
+                    attachments: if t.attachments.is_empty() {
+                        None
+                    } else {
+                        Some(t.attachments.clone())
+                    },
+                })
+                .collect(),
             usage: s.usage.clone(),
             cwd: Some(self.0.cwd.display().to_string()),
             can_steer: Some(
@@ -625,6 +639,11 @@ impl JsonAgentSession {
     /// Full teardown: latch released, abort + queue clear, wait for drain to
     /// unwind (bounded), tear down ACP connection, close the SQLite handle.
     pub async fn release(&self) {
+        // Persist a `cancelled` marker for every still-queued/held turn BEFORE
+        // the `released` latch goes up (Decision 5) — `persist_event` no-ops
+        // once the latch is set, and `release()` is not teardown-only: it's
+        // also the ordinary Rich Chat -> terminal channel toggle.
+        self.cancel_all_pending_turns();
         // Latch WHILE HOLDING THE STORE LOCK. `persist_event` checks the latch
         // and appends under that same lock, so this keeps "is released, then
         // append" atomic across the state/store lock split: an in-flight
@@ -1215,5 +1234,149 @@ mod tests {
             "not-running enqueue behind queued work must set Queued"
         );
         assert_eq!(meta.queue_depth, 2, "both queued items must be counted");
+    }
+
+    /// 1.T1 — enqueue() must NOT persist a `user` transcript event. The drain
+    /// task is `tokio::spawn`'d by `kick_drain`, so in a current-thread
+    /// `#[tokio::test]` it provably hasn't run yet when we read synchronously.
+    #[tokio::test]
+    async fn enqueue_does_not_persist_user_event() {
+        let s = session();
+        let res = s.enqueue("hello".into(), vec![], None, None);
+        let events = s.read_transcript();
+        assert!(
+            events
+                .iter()
+                .all(|e| e.turn_id.as_deref() != Some(res.turn_id.as_str())),
+            "no transcript event may exist for a queued-but-not-yet-run turn"
+        );
+    }
+
+    /// 1.T5 — resubmit with `edited: true` mutates the stashed draft but emits
+    /// NOTHING (Decision 2): no superseding `user` event, no persisted row.
+    #[tokio::test]
+    async fn resubmit_edited_does_not_emit() {
+        let s = session();
+        let res = s.enqueue("original".into(), vec![], None, None);
+        let held = s.begin_edit_queued_turn(&res.turn_id);
+        assert!(held.is_some(), "turn should be withdrawable into the hold");
+
+        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], true);
+        assert!(ok, "resubmit should succeed");
+
+        let events = s.read_transcript();
+        assert!(
+            events
+                .iter()
+                .all(|e| e.turn_id.as_deref() != Some(res.turn_id.as_str())),
+            "editing a queued turn must not persist any transcript event"
+        );
+
+        let requeued = {
+            let st = s.0.state.lock().unwrap();
+            st.queue
+                .iter()
+                .find(|t| t.turn_id == res.turn_id)
+                .map(|t| t.raw_message.clone())
+        };
+        assert_eq!(
+            requeued.as_deref(),
+            Some("edited text"),
+            "requeued turn must carry the edited raw_message"
+        );
+    }
+
+    /// 1.T6 — resubmit with `edited: false` does NOT mutate the draft and does
+    /// NOT emit (regression): raw_message is unchanged, nothing persisted.
+    #[tokio::test]
+    async fn resubmit_unedited_does_not_mutate_or_emit() {
+        let s = session();
+        let res = s.enqueue("original".into(), vec![], None, None);
+        let held = s.begin_edit_queued_turn(&res.turn_id);
+        assert!(held.is_some(), "turn should be withdrawable into the hold");
+
+        let ok = s.resubmit_queued_turn(&res.turn_id, "edited text".into(), vec![], false);
+        assert!(ok, "resubmit should succeed");
+
+        let events = s.read_transcript();
+        assert!(
+            events
+                .iter()
+                .all(|e| e.turn_id.as_deref() != Some(res.turn_id.as_str())),
+            "unedited resubmit must not persist any transcript event"
+        );
+
+        let requeued = {
+            let st = s.0.state.lock().unwrap();
+            st.queue
+                .iter()
+                .find(|t| t.turn_id == res.turn_id)
+                .map(|t| t.raw_message.clone())
+        };
+        assert_eq!(
+            requeued.as_deref(),
+            Some("original"),
+            "unedited resubmit must leave raw_message untouched"
+        );
+    }
+
+    /// 1.T7 — cancel_queued_turn persists EXACTLY ONE event for that turn
+    /// (Decision 7): the `cancelled: true` row is now the only row, not the
+    /// second of two.
+    #[tokio::test]
+    async fn cancel_queued_turn_still_persists_cancelled_event() {
+        let s = session();
+        let res = s.enqueue("hello".into(), vec![], None, None);
+
+        let cancelled = s.cancel_queued_turn(&res.turn_id);
+        assert!(cancelled, "cancel of a queued turn should succeed");
+
+        let events: Vec<_> = s
+            .read_transcript()
+            .into_iter()
+            .filter(|e| e.turn_id.as_deref() == Some(res.turn_id.as_str()))
+            .collect();
+        assert_eq!(events.len(), 1, "exactly one row for a cancelled turn");
+        assert_eq!(
+            events[0].cancelled,
+            Some(true),
+            "the single row must carry cancelled: true"
+        );
+    }
+
+    /// 2.T1 — get_meta() reports queued_turns for every turn still in the live
+    /// queue (Decision 3). No `.await` in between, so the spawned drain task
+    /// provably hasn't run yet and both turns are still in `s.queue`.
+    #[tokio::test]
+    async fn get_meta_reports_queued_turns_from_queue() {
+        let s = session();
+        let a = s.enqueue("first".into(), vec![], None, None);
+        let b = s.enqueue("second".into(), vec![], None, None);
+
+        let queued = s.get_meta().queued_turns;
+        assert_eq!(queued.len(), 2, "both queued turns must be reported");
+
+        let by_id: std::collections::HashMap<String, String> = queued
+            .iter()
+            .map(|qt| (qt.turn_id.clone(), qt.message.clone()))
+            .collect();
+        assert_eq!(by_id.get(&a.turn_id).map(|s| s.as_str()), Some("first"));
+        assert_eq!(by_id.get(&b.turn_id).map(|s| s.as_str()), Some("second"));
+    }
+
+    /// 2.T2 — get_meta() reports queued_turns for a turn withdrawn into the
+    /// editing hold (Decision 3) — a held turn has no persisted transcript
+    /// event post-fix, so its text must still be surfaced from `s.holds`.
+    #[tokio::test]
+    async fn get_meta_reports_queued_turns_from_holds() {
+        let s = session();
+        let res = s.enqueue("original".into(), vec![], None, None);
+        let held = s.begin_edit_queued_turn(&res.turn_id);
+        assert!(held.is_some(), "turn should be withdrawable into the hold");
+
+        let queued = s.get_meta().queued_turns;
+        assert_eq!(queued.len(), 1, "the held turn must still be reported");
+        assert_eq!(queued[0].turn_id, res.turn_id);
+        assert_eq!(queued[0].message, "original");
     }
 }

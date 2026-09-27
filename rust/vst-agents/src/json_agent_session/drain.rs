@@ -9,7 +9,7 @@
 use tokio_util::sync::CancellationToken;
 use vst_types::{LifecycleState, NormalizedEvent, NormalizedEventKind, TurnState};
 
-use super::{JsonAgentSession, QueuedTurn};
+use super::{events::EmitUserEventOpts, JsonAgentSession, QueuedTurn};
 use crate::{
     plugin::{TurnContext, TurnInput},
     skill_resolution::{get_merged_skill_catalog, inject_attachments, resolve_skill_invocations},
@@ -68,6 +68,17 @@ impl JsonAgentSession {
                     s.queue.pop_front()
                 };
                 let Some(turn) = turn else { break };
+                // Persist the human turn's `user` event at POP time (Decision 1),
+                // so its `logSeq` ordering key is minted now — after every event
+                // already persisted — not at enqueue time. Must NOT live inside
+                // `run_one_turn`: the notice-slot path calls that directly and
+                // already emits its own (silent) user event before it.
+                self.emit_user_event(
+                    &turn.turn_id,
+                    &turn.raw_message,
+                    &turn.attachments,
+                    EmitUserEventOpts::default(),
+                );
                 self.run_one_turn(turn).await;
             }
 

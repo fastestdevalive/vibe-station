@@ -181,6 +181,7 @@ fn session_meta_roundtrips_notice_slot_shape() {
         queue_depth: 0,
         queued_turn_ids: vec![],
         editing_turn_ids: vec![],
+        queued_turns: vec![],
         usage: None,
         cwd: None,
         can_steer: None,
@@ -210,6 +211,7 @@ fn session_meta_omits_active_turn_id_when_none() {
         queue_depth: 0,
         queued_turn_ids: vec![],
         editing_turn_ids: vec![],
+        queued_turns: vec![],
         usage: None,
         cwd: None,
         can_steer: None,
@@ -226,4 +228,23 @@ fn session_meta_omits_active_turn_id_when_none() {
     };
     let json_with_turn = serde_json::to_string(&with_turn).unwrap();
     assert!(json_with_turn.contains("\"activeTurnId\":\"turn-123\""));
+}
+
+/// 2.T3 — the no-live-session meta paths (both `build_meta_from_store_meta`
+/// and `build_meta_from_transcript`) must set `queued_turns` to an empty vec —
+/// they have no live queue/holds to report from. Catches a forgotten field on
+/// either no-live-session entry point.
+#[test]
+fn assemble_meta_no_live_session_has_empty_queued_turns() {
+    let bare = TranscriptMeta {
+        model: None,
+        usage: None,
+        commands: None,
+    };
+
+    let from_store = build_meta_from_store_meta(&base_opts(), &bare);
+    assert_eq!(from_store.queued_turns, vec![]);
+
+    let from_transcript = build_meta_from_transcript(&base_opts(), &[]);
+    assert_eq!(from_transcript.queued_turns, vec![]);
 }

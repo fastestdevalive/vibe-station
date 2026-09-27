@@ -39,8 +39,10 @@ pub enum ForkResult {
 }
 
 impl JsonAgentSession {
-    /// Enqueue a human turn and kick the drain loop. Synthesizes the daemon-owned
-    /// `user` event immediately (Decision 12) before pushing to the queue.
+    /// Enqueue a human turn and kick the drain loop. Does NOT persist a `user`
+    /// event here — the turn's transcript row is emitted at run time, when the
+    /// drain loop pops it (Decision 1, `drain_loop`), so its `logSeq` ordering
+    /// key always trails the output of any turn it queued behind.
     ///
     /// If `system_prompt` is provided, writes it to the session's system-prompt
     /// file before the turn runs (it is applied at run time, not here — A1).
@@ -62,14 +64,6 @@ impl JsonAgentSession {
             let s = self.0.state.lock().unwrap();
             s.queue.len() + if s.running { 1 } else { 0 }
         };
-
-        // Decision 12 — daemon-owned user event (raw text, attachments as chips).
-        self.emit_user_event(
-            &turn_id,
-            &message,
-            &attachments,
-            EmitUserEventOpts::default(),
-        );
 
         {
             let mut s = self.0.state.lock().unwrap();
@@ -219,8 +213,10 @@ impl JsonAgentSession {
         true
     }
 
-    /// Cancel ONE not-yet-started turn by id (queued OR held). Emits a
-    /// superseding `user` event with `cancelled: true`.
+    /// Cancel ONE not-yet-started turn by id (queued OR held). Emits the
+    /// `cancelled: true` user event for that turn — post-fix it is the ONLY
+    /// persisted row for this turnId (there is no enqueue-time row to supersede;
+    /// see Decision 7).
     pub fn cancel_queued_turn(&self, turn_id: &str) -> bool {
         // Capture the turn before removal so we can re-emit.
         let removed = {
@@ -253,6 +249,33 @@ impl JsonAgentSession {
             true
         } else {
             false
+        }
+    }
+
+    /// Persist a `cancelled` event for every turn currently queued or held,
+    /// WITHOUT touching `s.queue`/`s.holds` — `abort_and_drain` (called right
+    /// after this, from `release()`) does the actual clearing. Must run BEFORE
+    /// the `released` latch goes up, or `persist_event` silently no-ops every
+    /// emit here (mod.rs) and the text is lost with no error.
+    pub fn cancel_all_pending_turns(&self) {
+        let dropped: Vec<QueuedTurn> = {
+            let s = self.0.state.lock().unwrap();
+            s.queue
+                .iter()
+                .cloned()
+                .chain(s.holds.values().map(|h| h.turn.clone()))
+                .collect()
+        };
+        for t in &dropped {
+            self.emit_user_event(
+                &t.turn_id,
+                &t.raw_message,
+                &t.attachments,
+                EmitUserEventOpts {
+                    cancelled: true,
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -308,25 +331,12 @@ impl JsonAgentSession {
         if edited {
             turn.raw_message = message.clone();
             turn.attachments = attachments.clone();
-            // Emit the superseding user event outside the lock (below).
         }
 
         let insert_at = Self::insert_position_after_ahead_ids(&s.queue, &held.ahead_ids);
         s.queue.insert(insert_at, turn);
         Self::sync_idle_state_inner(&mut s);
         drop(s);
-
-        if edited {
-            self.emit_user_event(
-                turn_id,
-                &message,
-                &attachments,
-                EmitUserEventOpts {
-                    edited: true,
-                    ..Default::default()
-                },
-            );
-        }
 
         self.emit_meta();
         self.kick_drain();

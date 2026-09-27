@@ -1,0 +1,43 @@
+feature: queued-msg-ordering
+
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-185
+
+created: 2026-09-26T00:00:00Z
+
+master:
+  prd: skipped
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: "3.T6"
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/wip/queued-msg-ordering/plan-queued-msg-ordering.md
+    impl_turn: null
+    phase_chain: [plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    # Plan reviewed 2x (max_iterations reached): round 1 = 5 BLOCKING, round 2 = 3 new
+    # BLOCKING (N1-N3) + verified round-1 fixes. Both rounds' findings incorporated and
+    # independently re-verified against source (grep-confirmed) before proceeding --
+    # "continue anyway" per PHASES.md's reviewer-exhaustion escalation, not a silent skip.
+    #
+    # turn-implement complete: all 3 Implementation Phases verified by the orchestrator
+    # (not trusted implementer self-reports) and auto-committed one phase at a time:
+    #   Phase 1 (backend logSeq fix)      -> 61bf68f0 -- 27/27 rust tests pass
+    #   Phase 2 (SessionMeta.queued_turns) -> 2b527e43 -- 72/72 rust tests pass (cumulative)
+    #   Phase 3 (frontend tray)            -> 189fe6b7 -- tsc clean, 22/22 ChatPane tests,
+    #                                         full frontend suite 1350/1358 passing (the 7
+    #                                         failing are pre-existing/unrelated -- confirmed
+    #                                         identical failures with this diff stashed out)
+    # Chain [plan, turn-implement] has run to its end -- stopping here per PHASES.md
+    # (chain end always stops for human, regardless of gate). No `verify`/`review` token was
+    # in this chain, so the plan's own per-phase verify blocks ARE the verification for this
+    # invocation; a full-feature `verify`/`review` pass, if wanted, is a follow-up /sdlc call.
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: 189fe6b7
