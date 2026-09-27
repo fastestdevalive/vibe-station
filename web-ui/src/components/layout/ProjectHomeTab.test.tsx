@@ -7,13 +7,15 @@ import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { useModesStore } from "@/store/modesStore";
 import { ProjectHomeTab, type ProjectHomeTabProps } from "./ProjectHomeTab";
-import { resolveDefaultModeId } from "@/lib/defaultMode";
 
-vi.mock("@/lib/defaultMode", () => ({
-  resolveDefaultModeId: vi.fn(),
-}));
-
-const mockResolveDefaultModeId = resolveDefaultModeId as unknown as ReturnType<typeof vi.fn>;
+// ProjectHomeTab navigates to `/draft/:id` after creating a worktree draft.
+// Mock useNavigate so the component renders without a Router ancestor and
+// tests can assert on the navigation target.
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
@@ -87,15 +89,14 @@ function renderTab(props: Partial<ProjectHomeTabProps> = {}) {
   return { api, onOpenAgent, rerender, rerenderProjectFromStore };
 }
 
-const NEW_WORKTREE = "New worktree";
+const NEW_WORKTREE = "New agent in worktree";
 const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git status, quick actions, empty state)", () => {
   beforeEach(() => {
     // Seed the store's project so applyProjectUpdated (git-init) has a record to
     // update — Workspace re-derives `project` from this store.
     useServerStore.setState({ projects: [makeProject()], worktrees: [], sessions: [], loaded: false });
     useModesStore.getState()._reset();
-    mockResolveDefaultModeId.mockReset();
-    mockResolveDefaultModeId.mockResolvedValue("mode-1");
+    mockNavigate.mockReset();
   });
 
   it("2.T2 — non-git project renders warning, enabled git init, disabled New worktree", () => {
@@ -220,29 +221,11 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
     openTabSpy.mockRestore();
   });
 
-  it("2.T6 (revised) — resolveDefaultModeId null disables New worktree only; New direct agent is unaffected (DraftComposer resolves its own mode)", async () => {
-    mockResolveDefaultModeId.mockResolvedValue(null);
-    const { api, onOpenAgent } = renderTab();
-
-    await userEvent.click(screen.getByRole("button", { name: NEW_WORKTREE }));
-
-    await waitFor(() => {
-      const newWorktree = screen.getByRole("button", { name: NEW_WORKTREE });
-      expect((newWorktree as HTMLButtonElement).disabled).toBe(true);
-      expect(newWorktree.getAttribute("title")).toBe("No agent modes configured");
-    });
-    expect(onOpenAgent).not.toHaveBeenCalled();
-
-    // New direct agent no longer checks resolveDefaultModeId at all — it
-    // stays enabled and opens a draft regardless of the modes store state.
-    const direct = screen.getByRole("button", { name: NEW_DIRECT });
-    expect((direct as HTMLButtonElement).disabled).toBe(false);
-    const draftSpy = vi.spyOn(api, "createDraftSession").mockResolvedValue(
-      makeSession({ id: "sess-new", state: "drafting", draftConfig: { entryPoint: "tab", channel: "json" } }),
-    );
-    await userEvent.click(direct);
-    await waitFor(() => expect(draftSpy).toHaveBeenCalled());
-    draftSpy.mockRestore();
+  it("2.T6 (revised) — both quick actions are enabled without a mode check (DraftComposer resolves its own mode)", () => {
+    renderTab();
+    expect((screen.getByRole("button", { name: NEW_WORKTREE }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: NEW_WORKTREE }).getAttribute("title")).toBeNull();
+    expect((screen.getByRole("button", { name: NEW_DIRECT }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("2.T7 — empty project renders the two quick actions and guidance text, no bucket sections", () => {
@@ -252,22 +235,66 @@ const NEW_DIRECT = "New direct agent";describe("ProjectHomeTab — Phase 2 (git 
     expect(screen.getByText(/no worktrees or direct agents yet/i)).toBeTruthy();
   });
 
-  it("2.T8 — New worktree applies the worktree to the store THEN calls onOpenAgent", async () => {
+  it("2.T8 — New agent in worktree creates a worktree DRAFT, applies it to the store, THEN navigates to its composer", async () => {
     const { api, onOpenAgent } = renderTab();
-    const wt = makeWorktree({ id: "wt-new", mainSessionId: "wt-new-m" });
-    const createSpy = vi.spyOn(api, "createWorktree").mockResolvedValue(wt);
-    const applySpy = vi.spyOn(useServerStore.getState(), "applyWorktreeCreated");
+    const draft = makeSession({
+      id: "draft-wt",
+      state: "drafting",
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new", channel: "json" },
+    });
+    const draftSpy = vi.spyOn(api, "createDraftSession").mockResolvedValue(draft);
+    const createWtSpy = vi.spyOn(api, "createWorktree");
+    const applySpy = vi.spyOn(useServerStore.getState(), "applySessionCreated");
 
     await userEvent.click(screen.getByRole("button", { name: NEW_WORKTREE }));
 
-    await waitFor(() => expect(onOpenAgent).toHaveBeenCalled());
-    expect(applySpy).toHaveBeenCalledWith(wt);
-    // applyWorktreeCreated must run before onOpenAgent is invoked.
-    expect(applySpy.mock.invocationCallOrder[0]!).toBeLessThan(onOpenAgent.mock.invocationCallOrder[0]!);
-    expect(onOpenAgent).toHaveBeenCalledWith({ worktreeId: "wt-new", sessionId: "wt-new-m" });
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/draft/draft-wt"));
+    expect(draftSpy).toHaveBeenCalledWith({
+      target: "direct",
+      projectId: "p1",
+      type: "agent",
+      draftConfig: { entryPoint: "worktree", worktreeChoice: "new", channel: "json" },
+    });
+    // No worktree is created until the draft is started.
+    expect(createWtSpy).not.toHaveBeenCalled();
+    expect(onOpenAgent).not.toHaveBeenCalled();
+    expect(applySpy).toHaveBeenCalledWith(draft);
+    // applySessionCreated must run before navigating, so DraftComposer sees draftConfig.
+    expect(applySpy.mock.invocationCallOrder[0]!).toBeLessThan(mockNavigate.mock.invocationCallOrder[0]!);
 
-    createSpy.mockRestore();
+    draftSpy.mockRestore();
+    createWtSpy.mockRestore();
     applySpy.mockRestore();
+  });
+
+  it("2.T9 — New agent in worktree is disabled while the draft request is in flight (no double-create)", async () => {
+    const { api } = renderTab();
+    let resolve!: (s: Session) => void;
+    const draftSpy = vi
+      .spyOn(api, "createDraftSession")
+      .mockReturnValue(new Promise<Session>((r) => { resolve = r; }));
+
+    const btn = screen.getByRole("button", { name: NEW_WORKTREE }) as HTMLButtonElement;
+    await userEvent.click(btn);
+    await waitFor(() => expect(btn.disabled).toBe(true));
+    await userEvent.click(btn);
+    expect(draftSpy).toHaveBeenCalledTimes(1);
+
+    resolve(makeSession({ id: "draft-wt", state: "drafting" }));
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    draftSpy.mockRestore();
+  });
+
+  it("2.T10 — draft creation failure shows an inline error and re-enables the button", async () => {
+    const { api } = renderTab();
+    const draftSpy = vi.spyOn(api, "createDraftSession").mockRejectedValue(new Error("boom"));
+
+    await userEvent.click(screen.getByRole("button", { name: NEW_WORKTREE }));
+
+    await waitFor(() => expect(screen.getByText(/Could not start a new draft/)).toBeTruthy());
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: NEW_WORKTREE }) as HTMLButtonElement).disabled).toBe(false);
+    draftSpy.mockRestore();
   });
 });
 
@@ -276,8 +303,7 @@ describe("ProjectHomeTab — Phase 3 (bucketed sections + Direct agents list)", 
     useServerStore.setState({ projects: [], worktrees: [], sessions: [], loaded: false });
     useWorkspaceStore.setState({ sessionStates: {} });
     useModesStore.getState()._reset();
-    mockResolveDefaultModeId.mockReset();
-    mockResolveDefaultModeId.mockResolvedValue("mode-1");
+    mockNavigate.mockReset();
   });
 
   // ProjectHomeTab's bucket sections read from the central stores (via the

@@ -37,3 +37,26 @@ export async function createProjectDirectDraft(api: ApiInstance, projectId: stri
   useServerStore.getState().applySessionCreated(s);
   return s;
 }
+
+/**
+ * Create a "new agent in a new worktree" DRAFT for a project — the shared
+ * path for the sidebar's project "+" → "Agent in worktree" item and
+ * ProjectHomeTab's "New agent in worktree" button. No worktree exists yet:
+ * the draft hangs off the project (`target: "direct"`), and the daemon
+ * creates the worktree only when the draft is started
+ * (`worktreeChoice: "new"`), so an abandoned draft leaves no orphan worktree.
+ *
+ * Like `createProjectDirectDraft`, registers the full HTTP response with the
+ * store before returning, and does NOT navigate — callers route to
+ * `/draft/:id` themselves.
+ */
+export async function createProjectWorktreeDraft(api: ApiInstance, projectId: string): Promise<Session> {
+  const s = await api.createDraftSession({
+    target: "direct",
+    projectId,
+    type: "agent",
+    draftConfig: { entryPoint: "worktree", worktreeChoice: "new", channel: "json" },
+  });
+  useServerStore.getState().applySessionCreated(s);
+  return s;
+}
