@@ -212,6 +212,18 @@ pub struct Attachment {
     pub mime: String,
 }
 
+/// Live text/attachments for a queued or held (editing) turn — the daemon's
+/// source of truth while the turn hasn't run yet (its transcript event doesn't
+/// exist until it does). Surfaced on `SessionMeta.queued_turns`.
+#[skip_serializing_none]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedTurnMeta {
+    pub turn_id: String,
+    pub message: String,
+    pub attachments: Option<Vec<Attachment>>,
+}
+
 /// Normalized non-text content block (acp-normalize-superset, Gap 1).
 #[skip_serializing_none]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -449,6 +461,8 @@ pub struct SessionMeta {
     pub queued_turn_ids: Vec<String>,
     /// turnIds withdrawn into the editing hold.
     pub editing_turn_ids: Vec<String>,
+    /// Live text/attachments for each queued or held turn (turnId -> text lookup).
+    pub queued_turns: Vec<QueuedTurnMeta>,
     pub usage: Option<UsageInfo>,
     /// Absolute working directory for the session.
     pub cwd: Option<String>,
