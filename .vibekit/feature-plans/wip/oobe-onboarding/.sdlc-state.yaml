@@ -1,0 +1,13 @@
+feature: oobe-onboarding
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-178
+master: {prd: complete, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: "5.T2"
+    phase_chain: [plan, turn-implement]
+    impl_turn: {phase: 5, of: 5}
+    awaiting_phase: implement
+    awaiting_artifact: ".vibekit/feature-plans/wip/oobe-onboarding/plan-oobe-onboarding.md"

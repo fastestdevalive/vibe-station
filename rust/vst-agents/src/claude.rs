@@ -21,7 +21,7 @@ use crate::native_chat_id::find_latest_claude_chat_uuid;
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult,
     LaunchConfig, ListModelsResult, PromptDelivery, ReadySignal, RestoreArgs, SkillInvocation,
-    TurnContext, TurnInput,
+    StarterBundleEntry, TurnContext, TurnInput,
 };
 
 /// Shell-quote a string (escapes embedded `'`) — see [`vst_proc::sq`]. A
@@ -353,6 +353,32 @@ impl AgentPlugin for ClaudePlugin {
         })
     }
 
+    fn starter_bundle(&self) -> Vec<StarterBundleEntry> {
+        vec![
+            StarterBundleEntry {
+                name: "sonnet-implementer".to_string(),
+                model_name: Some("sonnet".to_string()),
+                context:
+                    "You are an implementation-focused coding agent. Write and modify code directly, favoring working increments over long upfront design."
+                        .to_string(),
+            },
+            StarterBundleEntry {
+                name: "opus-planner".to_string(),
+                model_name: Some("opus".to_string()),
+                context:
+                    "You are a planning-focused coding agent. Investigate the codebase and produce a clear implementation plan before writing code."
+                        .to_string(),
+            },
+            StarterBundleEntry {
+                name: "fable-security-reviewer".to_string(),
+                model_name: Some("fable".to_string()),
+                context:
+                    "You are a security-focused code reviewer. Review diffs for vulnerabilities, unsafe patterns, and missing input validation."
+                        .to_string(),
+            },
+        ]
+    }
+
     fn get_fork_command(&self) -> Option<Vec<String>> {
         Some(vec!["--fork-session".to_string()])
     }
@@ -603,5 +629,34 @@ async fn write_mode_755(path: &PathBuf, content: &str) {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starter_bundle_returns_three_curated_modes() {
+        let plugin = ClaudePlugin;
+        let bundle = plugin.starter_bundle();
+        assert_eq!(bundle.len(), 3);
+        let names: Vec<&str> = bundle.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "sonnet-implementer",
+                "opus-planner",
+                "fable-security-reviewer"
+            ]
+        );
+        let models: Vec<Option<&str>> = bundle.iter().map(|e| e.model_name.as_deref()).collect();
+        assert_eq!(models, vec![Some("sonnet"), Some("opus"), Some("fable")]);
+    }
+
+    #[test]
+    fn binary_name_defaults_to_claude() {
+        let plugin = ClaudePlugin;
+        assert_eq!(plugin.binary_name(), "claude");
     }
 }

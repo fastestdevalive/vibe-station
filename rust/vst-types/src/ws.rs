@@ -235,6 +235,8 @@ pub enum ServerMessage {
         theme_id: Option<String>,
         markdown_style: Option<MarkdownStyle>,
     },
+    #[serde(rename = "oobe:state-updated", rename_all = "camelCase")]
+    OobeStateUpdated { completed: bool },
     #[serde(rename = "chat:replay", rename_all = "camelCase")]
     ChatReplay {
         session_id: String,

@@ -13,6 +13,7 @@ pub mod fs;
 pub mod health;
 pub mod mobile_auth;
 pub mod modes;
+pub mod oobe;
 pub mod open;
 pub mod ordered_lists;
 pub mod projects;

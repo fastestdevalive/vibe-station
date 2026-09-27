@@ -56,7 +56,7 @@ mod resolution {
         );
         assert_eq!(
             resolve_plugin(CliId::Agy).default_model(),
-            "Gemini 3.1 Pro (High)"
+            "Gemini 3.8 Flash (Medium)"
         );
     }
 

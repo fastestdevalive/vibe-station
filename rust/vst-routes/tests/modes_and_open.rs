@@ -108,7 +108,7 @@ async fn test_modes_supported_clis_and_models() {
     let broadcaster = Broadcaster::new(16);
     let routes = ModeRoutes::new(store, broadcaster);
 
-    let supported = routes.list_supported_clis();
+    let supported = routes.list_supported_clis().await;
     assert_eq!(supported.len(), 4);
 
     let claude = supported.iter().find(|s| s.id == CliId::Claude).unwrap();

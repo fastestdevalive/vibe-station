@@ -39,6 +39,7 @@ use vst_routes::fs::FsRoutes;
 use vst_routes::health::HealthRoutes;
 use vst_routes::mobile_auth::{MobileAuthRouteError, MobileAuthRoutes, OneTimeCodeStore};
 use vst_routes::modes::{json_unsupported_cli, ModeRouteError, ModeRoutes};
+use vst_routes::oobe::{OobeRouteError, OobeRoutes};
 use vst_routes::open::{OpenRouteError, OpenRoutes};
 use vst_routes::ordered_lists::OrderedListsRoutes;
 use vst_routes::projects::{ProjectRouteError, ProjectRoutes};
@@ -65,6 +66,10 @@ use vst_types::rest::lsp::{
 };
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
+};
+use vst_types::rest::oobe::{
+    CompleteOobeResult, ConfirmStep1Body, ConfirmStep1Result, DetectAndBundleResult,
+    OobeStateResponse, StarterBundleResult,
 };
 use vst_types::rest::open::{OpenBody, OpenResult};
 use vst_types::rest::ordered_lists::{OrderedList, PutOrderedListBody, PutOrderedListResult};
@@ -145,6 +150,7 @@ pub struct AppState {
     pub attachment_routes: AttachmentRoutes,
     pub mode_routes: ModeRoutes,
     pub settings_routes: SettingsRoutes,
+    pub oobe_routes: OobeRoutes,
     pub skills_routes: SkillsRoutes,
     pub ordered_lists_routes: OrderedListsRoutes,
     pub fs_routes: FsRoutes,
@@ -415,6 +421,12 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
     let mode_routes = ModeRoutes::new(opts.store.clone(), opts.broadcaster.clone())
         .with_paths(opts.paths.clone());
     let settings_routes = SettingsRoutes::new(opts.paths.clone(), opts.broadcaster.clone());
+    let oobe_routes = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes.clone(),
+        opts.broadcaster.clone(),
+        opts.paths.clone(),
+    );
     // Reads the shared skill catalog singleton (seeded from user settings at
     // startup, see `main.rs`'s "Skill catalog" block) — no path config here.
     let skills_routes = SkillsRoutes::new();
@@ -507,6 +519,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         attachment_routes,
         mode_routes,
         settings_routes,
+        oobe_routes,
         skills_routes,
         ordered_lists_routes,
         fs_routes,
@@ -723,6 +736,15 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             "/modes/:id",
             put(handle_update_mode).delete(handle_delete_mode),
         )
+        .route("/modes/:cli/starter-bundle", post(handle_starter_bundle))
+        // OOBE
+        .route("/oobe/state", get(handle_oobe_state))
+        .route("/oobe/step1", post(handle_oobe_step1))
+        .route(
+            "/oobe/detect-and-bundle",
+            post(handle_oobe_detect_and_bundle),
+        )
+        .route("/oobe/complete", post(handle_oobe_complete))
         // Settings
         .route(
             "/settings",
@@ -3326,7 +3348,7 @@ async fn handle_delete_attachment(
 // ── Modes ─────────────────────────────────────────────────────────────────
 
 async fn handle_supported_clis(State(state): State<AppState>) -> Json<Vec<SupportedCli>> {
-    Json(state.mode_routes.list_supported_clis())
+    Json(state.mode_routes.list_supported_clis().await)
 }
 
 #[derive(Deserialize)]
@@ -3409,6 +3431,81 @@ fn mode_err_to_response(err: ModeRouteError) -> (StatusCode, Json<serde_json::Va
         ModeRouteError::Internal(m) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
+        ),
+    }
+}
+
+async fn handle_starter_bundle(
+    State(state): State<AppState>,
+    axum::extract::Path(cli): axum::extract::Path<String>,
+) -> Result<Json<StarterBundleResult>, (StatusCode, Json<serde_json::Value>)> {
+    let cli_id = match cli.as_str() {
+        "claude" => vst_types::CliId::Claude,
+        "cursor" => vst_types::CliId::Cursor,
+        "opencode" => vst_types::CliId::Opencode,
+        "agy" => vst_types::CliId::Agy,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "unknown_cli" })),
+            ))
+        }
+    };
+    let outcome = state.mode_routes.ensure_starter_bundle(cli_id).await;
+    let already_complete = outcome.created.is_empty() && outcome.skipped.is_empty();
+    Ok(Json(StarterBundleResult {
+        created: outcome.created,
+        already_present: outcome.already_present,
+        skipped: outcome.skipped,
+        used_fallback: outcome.used_fallback,
+        already_complete,
+    }))
+}
+
+// ── OOBE ──────────────────────────────────────────────────────────────────
+
+async fn handle_oobe_state(State(state): State<AppState>) -> Json<OobeStateResponse> {
+    Json(state.oobe_routes.get_state().await)
+}
+
+async fn handle_oobe_step1(
+    State(state): State<AppState>,
+    Json(body): Json<ConfirmStep1Body>,
+) -> Result<Json<ConfirmStep1Result>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .oobe_routes
+        .confirm_step1(body.default_projects_dir)
+        .await
+        .map(Json)
+        .map_err(oobe_err_to_response)
+}
+
+async fn handle_oobe_detect_and_bundle(
+    State(state): State<AppState>,
+) -> Json<DetectAndBundleResult> {
+    Json(state.oobe_routes.detect_and_bundle().await)
+}
+
+async fn handle_oobe_complete(
+    State(state): State<AppState>,
+) -> Result<Json<CompleteOobeResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .oobe_routes
+        .complete()
+        .await
+        .map(Json)
+        .map_err(oobe_err_to_response)
+}
+
+fn oobe_err_to_response(err: OobeRouteError) -> (StatusCode, Json<serde_json::Value>) {
+    match err {
+        OobeRouteError::ValidationError(m) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": m })),
+        ),
+        OobeRouteError::NoModeForDetectedCli => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "no_mode_for_detected_cli" })),
         ),
     }
 }

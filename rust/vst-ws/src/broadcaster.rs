@@ -264,6 +264,9 @@ pub fn server_event_to_message(e: ServerEvent) -> ServerMessage {
             theme_id,
             markdown_style,
         },
+        ServerEvent::OobeStateUpdated { completed } => {
+            ServerMessage::OobeStateUpdated { completed }
+        }
     }
 }
 

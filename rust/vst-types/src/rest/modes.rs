@@ -14,6 +14,9 @@ pub struct SupportedCli {
     pub supports_json: bool,
     pub imports_native_history: bool,
     pub supports_json_to_terminal_resume: bool,
+    pub detected: bool,
+    pub starter_bundle_names: Vec<String>,
+    pub using_fallback_only: bool,
 }
 
 /// `GET /cli-models` response.
