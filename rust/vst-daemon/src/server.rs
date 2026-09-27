@@ -3528,7 +3528,8 @@ async fn handle_patch_settings(
         .map_err(|e| match e {
             SettingsRouteError::DefaultProjectsDirNotAbsolute
             | SettingsRouteError::SkillPathsNotAbsolute
-            | SettingsRouteError::InvalidMarkdownStyle => (
+            | SettingsRouteError::InvalidMarkdownStyle
+            | SettingsRouteError::InvalidDefaultChannel(_) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": e.to_string() })),
             ),

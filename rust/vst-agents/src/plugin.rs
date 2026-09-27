@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{NormalizedEvent, ProjectRecord, SessionRecord, WorktreeRecord};
+use vst_types::{Channel, NormalizedEvent, ProjectRecord, SessionRecord, WorktreeRecord};
 
 use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_transport::AcpTransportError;
@@ -256,6 +256,12 @@ pub trait AgentPlugin: Send + Sync {
     fn get_environment(&self, cfg: &LaunchConfig) -> BTreeMap<String, String>;
     fn get_ready_signal(&self) -> ReadySignal;
     fn compose_launch_prompt(&self, input: ComposePromptInput) -> ComposePromptResult;
+
+    /// This CLI's hardwired base default execution channel, used when no
+    /// explicit/inherited channel and no user override resolves otherwise.
+    /// Required — every plugin must pick a channel. Invariant: a plugin whose
+    /// `default_channel()` is `Channel::Json` must also `supports_json()`.
+    fn default_channel(&self) -> Channel;
 
     /// One-time-per-worktree setup of CLI-specific workspace files (hook
     /// scripts, settings, plugin files). Idempotent — safe to re-run.

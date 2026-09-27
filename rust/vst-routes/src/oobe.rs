@@ -183,6 +183,7 @@ impl OobeRoutes {
                 search_case_sensitive: None,
                 search_regex: None,
                 search_whole_word: None,
+                default_channel_by_cli: None,
             })
             .await
             .map_err(|_| OobeRouteError::ValidationError("path is not writable".into()))?;

@@ -787,6 +787,44 @@ async fn test_create_new_project_with_start_agent_direct() {
 }
 
 #[tokio::test]
+async fn create_new_project_start_agent_claude_defaults_to_json() {
+    // 2.T14 — round-2 M2: startAgent with a claude mode, no override -> the
+    // created agent session's channel is Json (not the previously-hardcoded
+    // Channel::Tmux), via the effective-default helper.
+    let (dir, store, _broadcaster, routes) = test_env();
+    let home = dir.path().join("fake-home");
+    std::fs::create_dir_all(&home).unwrap();
+    setup_temp_mode(&home, "claude-mode", CliId::Claude);
+
+    let parent_dir = dir.path().join("repos");
+    std::fs::create_dir_all(&parent_dir).unwrap();
+
+    let _guard = with_home(home);
+
+    let result = routes
+        .create_new_project(CreateNewProjectBody {
+            name: "App Claude Direct".into(),
+            dir: Some(parent_dir.to_string_lossy().into()),
+            start_agent: Some(StartAgent {
+                mode_id: "claude-mode".into(),
+                prompt: Some("direct fix".into()),
+                use_worktree: Some(false),
+                branch: None,
+            }),
+        })
+        .await
+        .unwrap();
+
+    let sess = result.session.expect("expected direct session");
+    assert_eq!(sess.channel, Channel::Json);
+
+    // Persisted direct session also carries the Json channel.
+    let persisted = store.get_project(&result.project.id).await.unwrap();
+    assert_eq!(persisted.direct_sessions.len(), 1);
+    assert_eq!(persisted.direct_sessions[0].channel, Some(Channel::Json));
+}
+
+#[tokio::test]
 async fn test_patch_project_hidden() {
     let (dir, store, broadcaster, routes) = test_env();
     let mut rx = broadcaster.subscribe();

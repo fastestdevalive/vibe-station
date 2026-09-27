@@ -42,6 +42,7 @@ pub fn resolve_plugin(cli: CliId) -> Box<dyn AgentPlugin> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vst_types::domain::Channel;
 
     #[test]
     fn check_binary_finds_present_binary() {
@@ -52,5 +53,20 @@ mod tests {
     #[test]
     fn check_binary_rejects_absent_binary() {
         assert!(!check_binary("definitely-not-a-real-binary-xyz"));
+    }
+
+    /// Invariant (plan Decision 7 / M4): a plugin that defaults to the JSON
+    /// channel MUST also `supports_json()`, or every default-path create would
+    /// 400 for it. Iterates every registry-known CLI so a future 5th plugin
+    /// that violates this fails here at compile-adjacent test time.
+    #[test]
+    fn json_default_plugins_support_json() {
+        for cli in SUPPORTED_CLIS {
+            let plugin = resolve_plugin(cli);
+            assert!(
+                !(plugin.default_channel() == Channel::Json) || plugin.supports_json(),
+                "{cli:?} defaults to Json but does not supports_json()"
+            );
+        }
     }
 }

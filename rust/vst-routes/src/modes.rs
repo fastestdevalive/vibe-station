@@ -13,7 +13,7 @@
 //! Plus the existing read/resolve helpers: `load_modes`, `resolve_mode_id`,
 //! `json_unsupported_cli`, and `find_mode`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -25,13 +25,15 @@ use vst_agents::plugin::AgentPlugin;
 use vst_agents::registry::{check_binary, resolve_plugin, SUPPORTED_CLIS};
 use vst_git::paths::Paths;
 use vst_store::StoreHandle;
-use vst_types::domain::LifecycleState;
+use vst_types::domain::{Channel, LifecycleState};
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
 };
 use vst_types::rest::shared::Mode;
 use vst_types::CliId;
+
+use crate::settings::load_default_channel_overrides;
 
 pub const MAX_MODES: usize = 20;
 pub const MAX_CONTEXT_LEN: usize = 10_000;
@@ -98,6 +100,43 @@ pub fn resolve_mode_id(input: &str) -> Option<String> {
         return Some(m.id.clone());
     }
     None
+}
+
+/// Resolve a `modeId`/`modeName` to the full canonicalized `Mode` in a single
+/// `load_modes()` call — replaces the separate `resolve_mode_id` + `find_mode`
+/// two-call sequence wherever a caller needs both the canonical id AND the
+/// resolved `Mode` (e.g. computing a channel default off `mode.cli`).
+/// TWO-PASS (id over the whole list, then name), matching `resolve_mode_id`'s
+/// exact semantics — a mode whose *name* collides with another mode's *id*
+/// resolves identically here and in `resolve_mode_id`.
+pub fn resolve_mode(input: &str) -> Option<Mode> {
+    let modes = load_modes();
+    modes
+        .iter()
+        .find(|m| m.id == input)
+        .or_else(|| modes.iter().find(|m| m.name == input))
+        .cloned()
+}
+
+/// Resolve a CLI's **effective** default channel: a persisted user override
+/// (if present and still valid) else the plugin's own hardwired
+/// `default_channel()`. Pure and TOTAL — never returns a worse result than
+/// "no override": a persisted `Json` override for a CLI whose plugin doesn't
+/// (or no longer) `supports_json()`, or a stray `Pty`, silently falls back to
+/// the plugin default instead of 400ing every default-path create. Every
+/// default-channel consumer (session/worktree create, draft-start, inheritance
+/// fallback, `list_supported_clis`) calls into this — none re-derives the
+/// override-vs-plugin fallback.
+pub fn resolve_effective_default_channel(
+    overrides: &BTreeMap<CliId, Channel>,
+    cli: CliId,
+    plugin: &dyn AgentPlugin,
+) -> Channel {
+    match overrides.get(&cli).copied() {
+        Some(Channel::Json) if !plugin.supports_json() => plugin.default_channel(),
+        Some(ch @ (Channel::Tmux | Channel::Json)) => ch,
+        _ => plugin.default_channel(), // None, or a stray Pty
+    }
 }
 
 /// Create-time JSON-capability gate: given a resolved `modeId`, return the
@@ -303,6 +342,9 @@ impl ModeRoutes {
     // ── 1. GET /supported-clis ─────────────────────────────────────────────
     pub async fn list_supported_clis(&self) -> Vec<SupportedCli> {
         let modes = self.load_modes().await;
+        // Hoisted out of the per-CLI map (round-3 n3): a single config.json
+        // read/parse for all 4 CLIs, not one per CLI.
+        let overrides = load_default_channel_overrides();
         SUPPORTED_CLIS
             .iter()
             .map(|&cli| {
@@ -317,6 +359,15 @@ impl ModeRoutes {
                 };
                 let imports_native_history = has_native_history_importer(cli_name);
                 let supports_json_to_terminal_resume = plugin.supports_json_to_terminal_resume();
+                let default_channel = resolve_effective_default_channel(&overrides, cli, &*plugin);
+                // round-3 M1: "overridden" means the EFFECTIVE value differs from
+                // the plugin's own default — not merely "a key exists for this
+                // CLI". A redundant override (set to the same value the plugin
+                // already defaults to) or a stale override the resolver had to
+                // drop (e.g. Json on a plugin that no longer supports_json())
+                // must both report `false`, or the UI mislabels which option is
+                // "(default)" and a user's channel pick can silently bounce back.
+                let default_channel_overridden = default_channel != plugin.default_channel();
 
                 let detected = (self.binary_checker)(plugin.binary_name());
                 let starter_bundle_names: Vec<String> = plugin
@@ -338,6 +389,8 @@ impl ModeRoutes {
                     detected,
                     starter_bundle_names,
                     using_fallback_only,
+                    default_channel,
+                    default_channel_overridden,
                 }
             })
             .collect()
@@ -846,6 +899,9 @@ mod tests {
             fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
                 ComposePromptResult::default()
             }
+            fn default_channel(&self) -> vst_types::domain::Channel {
+                vst_types::domain::Channel::Json
+            }
         };
     }
 
@@ -1067,5 +1123,82 @@ mod tests {
         let names: Vec<String> = routes.load_modes().await.into_iter().map(|m| m.name).collect();
         assert!(names.contains(&"concurrent-a".to_string()));
         assert!(names.contains(&"concurrent-b".to_string()));
+    }
+
+    /// A plugin that defaults to `Tmux` and does NOT `supports_json()` — only
+    /// this 2.T11 test stub has that combination (no real `CliId` does), which
+    /// is exactly why the stub is needed to exercise the total-ness branch.
+    struct TmuxNoJsonStub;
+    impl AgentPlugin for TmuxNoJsonStub {
+        fn name(&self) -> &str {
+            "stub"
+        }
+        fn default_model(&self) -> &str {
+            "m"
+        }
+        fn default_mode_icon(&self, _m: Option<&str>) -> &'static str {
+            "stub"
+        }
+        fn prompt_delivery(&self) -> PromptDelivery {
+            PromptDelivery::Inline
+        }
+        fn get_launch_command(&self, _c: &LaunchConfig) -> Vec<String> {
+            vec![]
+        }
+        fn get_environment(&self, _c: &LaunchConfig) -> BTreeMap<String, String> {
+            BTreeMap::new()
+        }
+        fn get_ready_signal(&self) -> ReadySignal {
+            ReadySignal {
+                sentinel: None,
+                fallback_ms: 0,
+            }
+        }
+        fn compose_launch_prompt(&self, _i: ComposePromptInput) -> ComposePromptResult {
+            ComposePromptResult::default()
+        }
+        fn default_channel(&self) -> Channel {
+            Channel::Tmux
+        }
+        fn list_models(&self) -> AsyncResult<ListModelsResult> {
+            Box::pin(async { ListModelsResult::default() })
+        }
+    }
+
+    #[test]
+    fn resolve_effective_default_channel_falls_back_and_honors_overrides() {
+        let empty: BTreeMap<CliId, Channel> = BTreeMap::new();
+        let claude = resolve_plugin(CliId::Claude); // default Json, supports_json
+        let cursor = resolve_plugin(CliId::Cursor); // default Json, supports_json
+
+        // 1. Empty overrides -> the plugin's own default.
+        assert_eq!(
+            resolve_effective_default_channel(&empty, CliId::Claude, &*claude),
+            Channel::Json
+        );
+
+        // 2. Override present for the queried cli wins over the plugin.
+        let mut ov = BTreeMap::new();
+        ov.insert(CliId::Claude, Channel::Tmux);
+        assert_eq!(
+            resolve_effective_default_channel(&ov, CliId::Claude, &*claude),
+            Channel::Tmux
+        );
+
+        // 3. Override for a DIFFERENT cli doesn't affect the queried one.
+        assert_eq!(
+            resolve_effective_default_channel(&ov, CliId::Cursor, &*cursor),
+            Channel::Json
+        );
+
+        // 4. A persisted Json override for a !supports_json plugin falls back
+        //    to that plugin's own default (total-ness — round-2 M4), not Json.
+        let mut ov_json = BTreeMap::new();
+        ov_json.insert(CliId::Claude, Channel::Json);
+        let stub = TmuxNoJsonStub;
+        assert_eq!(
+            resolve_effective_default_channel(&ov_json, CliId::Claude, &stub),
+            Channel::Tmux
+        );
     }
 }

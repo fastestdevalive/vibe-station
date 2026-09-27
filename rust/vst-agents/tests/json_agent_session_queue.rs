@@ -61,7 +61,7 @@ use vst_agents::plugin::{
     AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
     PromptDelivery, ReadySignal, TurnContext, TurnInput,
 };
-use vst_types::{NormalizedEvent, NormalizedEventKind, TurnState};
+use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, TurnState};
 
 struct MockTurnPlugin;
 
@@ -92,6 +92,9 @@ impl AgentPlugin for MockTurnPlugin {
     }
     fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
         ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
     }
     fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
         Box::pin(async { ListModelsResult::default() })
@@ -252,6 +255,9 @@ impl AgentPlugin for HangingTurnPlugin {
     }
     fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
         ComposePromptResult::default()
+    }
+    fn default_channel(&self) -> Channel {
+        Channel::Json
     }
     fn list_models(&self) -> vst_agents::plugin::AsyncResult<ListModelsResult> {
         Box::pin(async { ListModelsResult::default() })

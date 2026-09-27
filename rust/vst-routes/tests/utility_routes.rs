@@ -4,11 +4,13 @@
 //! Every test contains explicit, assert!()-wrapped checks.
 //! No bare `matches!(` calls without `assert!(`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use tempfile::tempdir;
+use vst_agents::home::with_home;
 use vst_agents::skill_resolution;
 use vst_git::paths::Paths;
 use vst_routes::attachments::{
@@ -17,6 +19,7 @@ use vst_routes::attachments::{
 };
 use vst_routes::fs::{expand_tilde, FsRouteError, FsRoutes};
 use vst_routes::health::HealthRoutes;
+use vst_routes::modes::ModeRoutes;
 use vst_routes::ordered_lists::{OrderedListsRouteError, OrderedListsRoutes};
 use vst_routes::settings::{
     default_projects_dir, default_skill_paths, SettingsRouteError, SettingsRoutes,
@@ -24,7 +27,7 @@ use vst_routes::settings::{
 use vst_routes::skills::SkillsRoutes;
 use vst_store::StoreHandle;
 use vst_types::domain::{
-    Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
+    Channel, CliId, LifecycleState, ProjectRecord, SessionLifecycle, SessionRecord, SessionType,
     WorktreeRecord,
 };
 use vst_types::events::{Broadcaster, ServerEvent};
@@ -176,6 +179,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap_err();
@@ -196,6 +200,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap_err();
@@ -236,6 +241,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: Some(true),
             search_regex: Some(true),
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap();
@@ -309,6 +315,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap_err();
@@ -363,6 +370,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap();
@@ -397,6 +405,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap();
@@ -436,12 +445,155 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            default_channel_by_cli: None,
         })
         .await
         .unwrap();
     assert!(both_res.ok);
     let after_both = routes.get_settings().await;
     assert_eq!(after_both.markdown_style, Some(re_set));
+}
+
+/// A `PatchSettingsBody` with every non-channel field `None`, so the
+/// default-channel tests can focus on just that field.
+fn baseline_patch() -> PatchSettingsBody {
+    PatchSettingsBody {
+        default_projects_dir: None,
+        skill_paths: None,
+        theme_id: None,
+        markdown_style: None,
+        reset_markdown_style: None,
+        search_case_sensitive: None,
+        search_regex: None,
+        search_whole_word: None,
+        default_channel_by_cli: None,
+    }
+}
+
+#[tokio::test]
+async fn test_settings_default_channel_by_cli_merge_is_per_key() {
+    // 6.T1 — per-key merge: PATCH {cursor: json} then PATCH {agy: json} must
+    // leave cursor's override intact (not a whole-map replace).
+    let tmp = tempdir().unwrap();
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let broadcaster = Broadcaster::new(32);
+    let routes = SettingsRoutes::new(paths.clone(), broadcaster);
+
+    routes
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Cursor, Some(Channel::Json))])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+    routes
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+
+    let raw = std::fs::read_to_string(paths.vst_home().join("config.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(v["defaultChannelByCli"]["cursor"], "json");
+    assert_eq!(v["defaultChannelByCli"]["agy"], "json");
+}
+
+#[tokio::test]
+async fn test_settings_default_channel_by_cli_null_clears_one_key() {
+    // 6.T5 — sending null for a CLI's key clears that override, leaving others.
+    let tmp = tempdir().unwrap();
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let broadcaster = Broadcaster::new(32);
+    let routes = SettingsRoutes::new(paths.clone(), broadcaster);
+
+    routes
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([
+                (CliId::Cursor, Some(Channel::Json)),
+                (CliId::Agy, Some(Channel::Json)),
+            ])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+    // Clear agy with null.
+    routes
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, None)])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+
+    let raw = std::fs::read_to_string(paths.vst_home().join("config.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(v["defaultChannelByCli"]["cursor"], "json"); // untouched
+    assert!(v["defaultChannelByCli"].get("agy").is_none()); // cleared
+}
+
+#[tokio::test]
+async fn test_supported_clis_reflects_default_channel_override() {
+    // 6.T3 — a just-set override is reflected by GET /supported-clis immediately
+    // (no caching lag), via the actual PATCH -> GET round trip.
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let settings = SettingsRoutes::new(paths.clone(), Broadcaster::new(32));
+    let store = StoreHandle::open(tmp.path().join("db.sqlite")).unwrap();
+    let modes = ModeRoutes::new(store, Broadcaster::new(32)).with_paths(paths.clone());
+
+    // No override yet -> agy defaults to tmux, not overridden.
+    let clis = modes.list_supported_clis().await;
+    let agy = clis.iter().find(|c| c.id == CliId::Agy).unwrap();
+    assert_eq!(agy.default_channel, Channel::Tmux);
+    assert!(!agy.default_channel_overridden);
+
+    // PATCH agy -> json.
+    settings
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+
+    // GET reflects the override immediately.
+    let clis = modes.list_supported_clis().await;
+    let agy = clis.iter().find(|c| c.id == CliId::Agy).unwrap();
+    assert_eq!(agy.default_channel, Channel::Json);
+    assert!(agy.default_channel_overridden);
+}
+
+#[tokio::test]
+async fn test_supported_clis_redundant_override_is_not_reported_as_overridden() {
+    // round-3 M1: `default_channel_overridden` must mean "the effective value
+    // differs from the plugin's own default", not merely "a key exists" — a
+    // PATCH that sets a CLI's override to the value the plugin already
+    // defaults to (a no-op in effect) must report `false`, or the settings UI
+    // mislabels which option is "(built-in)" and a subsequent user pick can
+    // silently bounce back to the value they just chose away from.
+    let tmp = tempdir().unwrap();
+    let _guard = with_home(tmp.path().to_path_buf());
+    let paths = Paths::with_home(tmp.path().join(".vibe-station"));
+    let settings = SettingsRoutes::new(paths.clone(), Broadcaster::new(32));
+    let store = StoreHandle::open(tmp.path().join("db.sqlite")).unwrap();
+    let modes = ModeRoutes::new(store, Broadcaster::new(32)).with_paths(paths.clone());
+
+    // claude's plugin default is Json — override it to Json too (redundant).
+    settings
+        .patch_settings(PatchSettingsBody {
+            default_channel_by_cli: Some(BTreeMap::from([(CliId::Claude, Some(Channel::Json))])),
+            ..baseline_patch()
+        })
+        .await
+        .unwrap();
+
+    let clis = modes.list_supported_clis().await;
+    let claude = clis.iter().find(|c| c.id == CliId::Claude).unwrap();
+    assert_eq!(claude.default_channel, Channel::Json);
+    assert!(!claude.default_channel_overridden);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

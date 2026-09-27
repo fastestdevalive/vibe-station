@@ -459,6 +459,171 @@ async fn test_create_worktree_success_and_events() {
     assert_eq!(res2.name.as_deref(), Some("Custom Worktree Name"));
 }
 
+/// A real-git `ProjectRecord` rooted at `git_repo_dir`, mirroring the one in
+/// `test_create_worktree_success_and_events`. `store` must be empty w.r.t.
+/// this id.
+fn real_git_project(git_repo_dir: &Path) -> ProjectRecord {
+    ProjectRecord {
+        id: "proj-real-git".into(),
+        absolute_path: git_repo_dir.to_string_lossy().to_string(),
+        prefix: "vs".into(),
+        is_git: true,
+        default_branch: Some("main".into()),
+        created_at: "2026-01-01T00:00:00.000Z".into(),
+        hidden: None,
+        direct_sessions: vec![],
+        direct_session_seq: Some(1),
+        worktrees: vec![],
+        next_worktree_num: Some(1),
+        lsp_enabled: None,
+        open_files: vec![],
+    }
+}
+
+#[tokio::test]
+async fn create_worktree_agy_mode_defaults_main_channel_to_tmux() {
+    // 2.T5 — worktree main session, agy mode, no channel/use_tmux -> Tmux.
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "agy-mode", CliId::Agy);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+
+    let res = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-real-git".into(),
+            mode_id: "agy-mode".into(),
+            branch: None,
+            base_branch: Some("main".into()),
+            prompt: Some("task".into()),
+            use_tmux: None,
+            channel: None,
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let p = store.get_project("proj-real-git").await.unwrap();
+    let main = &p.worktrees[0].sessions[0];
+    assert_eq!(main.channel, Some(Channel::Tmux));
+    assert_eq!(main.mode_id.as_deref(), Some("agy-mode"));
+    assert!(res.main_session_id.is_some());
+}
+
+#[tokio::test]
+async fn create_worktree_cursor_mode_defaults_main_channel_to_json() {
+    // 2.T6 — worktree main session, cursor mode, no channel/use_tmux -> Json.
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "cursor-mode", CliId::Cursor);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+
+    let res = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-real-git".into(),
+            mode_id: "cursor-mode".into(),
+            branch: None,
+            base_branch: Some("main".into()),
+            prompt: Some("task".into()),
+            use_tmux: None,
+            channel: None,
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let p = store.get_project("proj-real-git").await.unwrap();
+    let main = &p.worktrees[0].sessions[0];
+    assert_eq!(main.channel, Some(Channel::Json));
+    assert_eq!(main.mode_id.as_deref(), Some("cursor-mode"));
+    assert!(res.main_session_id.is_some());
+}
+
+#[tokio::test]
+async fn create_worktree_invalid_mode_still_returns_validation() {
+    // 2.T7 — invalid mode_id still surfaces the existing Validation error,
+    // message/shape unchanged (now before channel logic runs, per Decision 2).
+    let (_dir, store, routes) = test_env();
+    let wt_dir = tempdir().unwrap();
+    let project = make_sample_project("proj-1", "wt-1", wt_dir.path());
+    store.add_project(project).await.unwrap();
+
+    let err = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-1".into(),
+            mode_id: "does-not-exist".into(),
+            branch: None,
+            base_branch: None,
+            prompt: None,
+            use_tmux: None,
+            channel: None,
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(err, WorktreeRouteError::Validation(_)));
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not found"),
+        "expected a mode-not-found validation message, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn create_worktree_use_tmux_false_without_channel_yields_pty() {
+    // 2.T8 — legacy use_tmux:Some(false), no channel -> pty (the legacy branch
+    // the reorder touches; previously uncovered — Risk #1).
+    let temp_home = tempdir().unwrap();
+    let _guard = with_home(temp_home.path().to_path_buf());
+    setup_temp_mode(temp_home.path(), "claude-mode", CliId::Claude);
+
+    let (_dir, store, mut routes) = test_env();
+    let git_repo_dir = tempdir().unwrap();
+    init_git_repo(git_repo_dir.path());
+    let vst_data_dir = tempdir().unwrap();
+    routes.paths = vst_git::paths::Paths::with_home(vst_data_dir.path().to_path_buf());
+    store.add_project(real_git_project(git_repo_dir.path())).await.unwrap();
+
+    let res = routes
+        .create_worktree(CreateWorktreeBody {
+            project_id: "proj-real-git".into(),
+            mode_id: "claude-mode".into(),
+            branch: None,
+            base_branch: Some("main".into()),
+            prompt: Some("task".into()),
+            use_tmux: Some(false),
+            channel: None,
+            name: None,
+            source_agent_id: None,
+            skip_auto_turn: Some(true),
+        })
+        .await
+        .unwrap();
+
+    let p = store.get_project("proj-real-git").await.unwrap();
+    let main = &p.worktrees[0].sessions[0];
+    assert_eq!(main.channel, Some(Channel::Pty));
+    assert!(!main.use_tmux);
+    assert!(res.main_session_id.is_some());
+}
+
 #[tokio::test]
 async fn test_create_worktree_self_heals_is_git() {
     let temp_home = tempdir().unwrap();

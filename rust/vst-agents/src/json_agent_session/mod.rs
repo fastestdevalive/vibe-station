@@ -1094,6 +1094,9 @@ mod tests {
         fn compose_launch_prompt(&self, _input: ComposePromptInput) -> ComposePromptResult {
             ComposePromptResult::default()
         }
+        fn default_channel(&self) -> vst_types::domain::Channel {
+            vst_types::domain::Channel::Json
+        }
         fn list_models(&self) -> crate::plugin::AsyncResult<ListModelsResult> {
             Box::pin(async { ListModelsResult::default() })
         }

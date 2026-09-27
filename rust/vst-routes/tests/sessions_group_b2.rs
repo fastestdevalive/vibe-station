@@ -28,12 +28,15 @@ use vst_routes::sessions::{
     find_session_context, DoneError, DoneResult, HandoffRouteError, ResetError, ResumeError,
     SessionContext, SessionRoutes,
 };
+use vst_routes::settings::load_default_channel_overrides;
 use vst_store::StoreHandle;
 use vst_types::events::{Broadcaster, ServerEvent};
-use vst_types::rest::sessions::{HandoffResult, ResetBody, ResetResult};
+use vst_types::rest::sessions::{
+    HandoffResult, ResetBody, ResetResult, SessionOrDraft, StartDraftBody, StartDraftResult,
+};
 use vst_types::{
-    Channel, LifecycleState, ProjectRecord, SessionLifecycle, SessionNameSource, SessionRecord,
-    SessionType, WorktreeRecord,
+    Channel, CliId, DraftConfig, DraftEntryPoint, LifecycleState, ProjectRecord,
+    SessionLifecycle, SessionNameSource, SessionRecord, SessionType, WorktreeRecord,
 };
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 
@@ -173,6 +176,59 @@ fn home_with_mode() -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
     (home, guard)
 }
 
+/// Seed an arbitrary set of `(id, name, cli)` modes into a temp home so
+/// `load_modes` resolves them, returning the home + guard (kept alive for the
+/// test's duration). Used by the Phase 2 channel-defaulting tests, which need
+/// claude/cursor/agy modes (and, in one case, a mode deliberately absent).
+fn home_with_modes(modes: &[(&str, &str, &str)]) -> (tempfile::TempDir, vst_agents::home::HomeGuard) {
+    let home = tempdir().unwrap();
+    let modes_dir = home.path().join(".vibe-station");
+    std::fs::create_dir_all(&modes_dir).unwrap();
+    let arr: Vec<serde_json::Value> = modes
+        .iter()
+        .map(|(id, name, cli)| {
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "cli": cli,
+                "context": "",
+                "createdAt": "2026-01-01T00:00:00.000Z",
+                "model": null,
+            })
+        })
+        .collect();
+    std::fs::write(modes_dir.join("modes.json"), serde_json::to_string(&arr).unwrap()).unwrap();
+    let guard = with_home(home.path().to_path_buf());
+    (home, guard)
+}
+
+/// The canonical claude/cursor/agy mode set used by the Phase 2 channel tests.
+fn channel_modes() -> Vec<(&'static str, &'static str, &'static str)> {
+    vec![
+        ("claude-mode", "Claude Mode", "claude"),
+        ("cursor-mode", "Cursor Mode", "cursor"),
+        ("agy-mode", "Agy Mode", "agy"),
+    ]
+}
+
+/// Create a direct agent session for `mode_id` and return the serialized
+/// `Session` (asserting it came back as a session, not a draft).
+async fn create_direct_agent(r: &SessionRoutes, project_id: &str, mode_id: &str) -> vst_types::rest::shared::Session {
+    let body = serde_json::json!({
+        "target": "direct",
+        "type": "agent",
+        "projectId": project_id,
+        "modeId": mode_id,
+    });
+    let created = r.create_session(&body).await.unwrap();
+    match created {
+        SessionOrDraft::Session(s) => s,
+        SessionOrDraft::GlobalDraft(_) => panic!("expected a session, got a global draft"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — channel defaulting (create_normal_session / inheritance / overrides)
 // ---------------------------------------------------------------------------
 // POST /sessions/:id/done
 // ---------------------------------------------------------------------------
@@ -652,4 +708,233 @@ async fn find_session_context_still_works() {
         SessionContext::Direct { .. } => {}
         other => panic!("unexpected {:?}", std::mem::discriminant(&other)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — channel defaulting in create_normal_session (2.T1-2.T4c, 2.T12)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_agent_agy_mode_defaults_to_tmux() {
+    // 2.T1 — agy mode, by id, no channel/use_tmux -> Tmux.
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let r = routes(store.clone());
+    let s = create_direct_agent(&r, "p1", "agy-mode").await;
+    assert_eq!(s.channel, Channel::Tmux);
+}
+
+#[tokio::test]
+async fn create_agent_agy_mode_by_name_defaults_to_tmux() {
+    // 2.T1b — M1 regression: a mode given by NAME (not id) must resolve to the
+    // same CLI and default to Tmux, not fall through to Json.
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let r = routes(store.clone());
+    let s = create_direct_agent(&r, "p1", "Agy Mode").await;
+    assert_eq!(s.channel, Channel::Tmux);
+}
+
+#[tokio::test]
+async fn create_agent_claude_mode_defaults_to_json() {
+    // 2.T2 — claude mode, no channel/use_tmux -> Json.
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let r = routes(store.clone());
+    let s = create_direct_agent(&r, "p1", "claude-mode").await;
+    assert_eq!(s.channel, Channel::Json);
+}
+
+#[tokio::test]
+async fn create_terminal_defaults_to_tmux() {
+    // 2.T3 — terminal-type session (no mode at all) -> Tmux, regardless of mode context.
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let r = routes(store.clone());
+    let body = serde_json::json!({
+        "target": "direct",
+        "type": "terminal",
+        "projectId": "p1",
+    });
+    let created = r.create_session(&body).await.unwrap();
+    let s = match created {
+        SessionOrDraft::Session(s) => s,
+        SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
+    };
+    assert_eq!(s.channel, Channel::Tmux);
+}
+
+/// Build a routes with a claude/Json parent `parent-1` in project `p1`'s
+/// direct sessions, ready for the inheritance tests. Returns home + guard
+/// (both kept alive for the test's duration) alongside the store + routes.
+async fn project_with_claude_json_parent(
+) -> (tempfile::TempDir, vst_agents::home::HomeGuard, StoreHandle, SessionRoutes) {
+    let (home, guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut parent = make_session("parent-1", "p1");
+    parent.mode_id = Some("claude-mode".into());
+    parent.channel = Some(Channel::Json);
+    parent.use_tmux = false;
+    p.direct_sessions.push(parent);
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+    (home, guard, store, r)
+}
+
+#[tokio::test]
+async fn subagent_inherits_parent_channel_same_cli() {
+    // 2.T4 — child with source_agent_id, no --mode, no --channel inherits the
+    // parent's mode (claude) -> same CLI -> inherits the parent's Json channel.
+    let (_home, _guard, _store, r) = project_with_claude_json_parent().await;
+    let body = serde_json::json!({
+        "target": "direct",
+        "type": "agent",
+        "projectId": "p1",
+        "sourceAgentId": "parent-1",
+    });
+    let created = r.create_session(&body).await.unwrap();
+    let s = match created {
+        SessionOrDraft::Session(s) => s,
+        SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
+    };
+    assert_eq!(s.channel, Channel::Json);
+}
+
+#[tokio::test]
+async fn subagent_explicit_different_cli_uses_own_default() {
+    // 2.T4b — same claude/Json parent, but child passes an explicit agy mode
+    // (different CLI) and no channel -> agy's own default (Tmux), NOT the
+    // inherited Json. This is the case B3's same-CLI guard specifically protects.
+    let (_home, _guard, _store, r) = project_with_claude_json_parent().await;
+    let body = serde_json::json!({
+        "target": "direct",
+        "type": "agent",
+        "projectId": "p1",
+        "sourceAgentId": "parent-1",
+        "modeId": "agy-mode",
+    });
+    let created = r.create_session(&body).await.unwrap();
+    let s = match created {
+        SessionOrDraft::Session(s) => s,
+        SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
+    };
+    assert_eq!(s.channel, Channel::Tmux);
+}
+
+#[tokio::test]
+async fn subagent_parent_mode_deleted_does_not_inherit() {
+    // 2.T4c — the parent's mode ("ghost-mode") is absent from modes.json, so
+    // parent_cli resolves to None and we deliberately do NOT inherit the
+    // parent's channel. The child (explicit claude-mode) gets its own default.
+    let (_home, _guard) = home_with_modes(&channel_modes());
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut parent = make_session("parent-1", "p1");
+    parent.mode_id = Some("ghost-mode".into()); // deleted from modes.json
+    parent.channel = Some(Channel::Tmux);
+    parent.use_tmux = true;
+    p.direct_sessions.push(parent);
+    add_project(&store, p).await;
+    let r = routes(store.clone());
+
+    let body = serde_json::json!({
+        "target": "direct",
+        "type": "agent",
+        "projectId": "p1",
+        "sourceAgentId": "parent-1",
+        "modeId": "claude-mode",
+    });
+    let created = r.create_session(&body).await.unwrap();
+    let s = match created {
+        SessionOrDraft::Session(s) => s,
+        SessionOrDraft::GlobalDraft(_) => panic!("expected a session"),
+    };
+    // No inheritance -> child's own (claude) default = Json, NOT the parent's Tmux.
+    assert_eq!(s.channel, Channel::Json);
+}
+
+#[tokio::test]
+async fn agy_override_to_json_wins_over_plugin_default() {
+    // 2.T12 — a persisted defaultChannelByCli override {agy: json} makes an
+    // agy-mode session default to Json (override beats the plugin's Tmux).
+    let (home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
+    std::fs::write(
+        home.path().join(".vibe-station").join("config.json"),
+        r#"{"defaultChannelByCli": {"agy": "json"}}"#,
+    )
+    .unwrap();
+    let (_d, store) = store();
+    add_project(&store, make_project("p1")).await;
+    let r = routes(store.clone());
+    let s = create_direct_agent(&r, "p1", "agy-mode").await;
+    assert_eq!(s.channel, Channel::Json);
+}
+
+#[tokio::test]
+async fn load_default_channel_overrides_skips_unparseable_entries() {
+    // 2.T13 — per-entry parsing: an unknown/typo'd CliId key must be skipped
+    // without dropping the valid claude entry (round-2 M3).
+    let (home, _guard) = home_with_modes(&[]);
+    std::fs::write(
+        home.path().join(".vibe-station").join("config.json"),
+        r#"{"defaultChannelByCli": {"claude": "json", "not-a-cli": "tmux"}}"#,
+    )
+    .unwrap();
+    let overrides = load_default_channel_overrides();
+    let mut expected = std::collections::BTreeMap::new();
+    expected.insert(CliId::Claude, Channel::Json);
+    assert_eq!(overrides, expected);
+}
+
+#[tokio::test]
+async fn start_draft_agy_no_channel_defaults_to_tmux() {
+    // 2.T9 — M3 fix: POST /sessions/:id/start on a draft whose draftConfig
+    // has NO channel and an agy mode_id -> the started session's channel is
+    // Tmux (the effective default for agy), not a hardcoded Json.
+    let (_home, _guard) = home_with_modes(&[("agy-mode", "Agy Mode", "agy")]);
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s-draft", "p1");
+    s.lifecycle.state = LifecycleState::Drafting;
+    s.draft_prompt = Some("initial".into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let body = StartDraftBody {
+        draft_prompt: "do it".into(),
+        draft_config: DraftConfig {
+            entry_point: DraftEntryPoint::Direct,
+            mode_id: Some("agy-mode".into()),
+            channel: None, // no explicit channel -> effective default
+            channel_explicit: None,
+            worktree_choice: None,
+            existing_worktree_id: None,
+            branch: None,
+            base_branch: None,
+            use_tmux: None,
+            use_worktree: None,
+        },
+        skip_auto_turn: Some(true),
+    };
+    let res = r.start_session("s-draft", &body).await.unwrap();
+    assert!(res.ok);
+    assert_eq!(
+        res,
+        StartDraftResult {
+            ok: true,
+            worktree_id: None,
+            worktree: None,
+        }
+    );
+
+    let project = store.get_project("p1").await.unwrap();
+    let started = &project.direct_sessions[0];
+    assert_eq!(started.channel, Some(Channel::Tmux));
+    assert_eq!(started.mode_id.as_deref(), Some("agy-mode"));
 }

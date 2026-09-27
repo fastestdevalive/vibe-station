@@ -153,6 +153,7 @@ fn draft_config(entry: DraftEntryPoint, mode_id: &str) -> DraftConfig {
         entry_point: entry,
         mode_id: Some(mode_id.to_string()),
         channel: Some(Channel::Json),
+        channel_explicit: None,
         worktree_choice: None,
         existing_worktree_id: None,
         branch: None,

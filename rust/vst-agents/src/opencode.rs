@@ -15,7 +15,9 @@ use serde_json::Value;
 use tokio::fs;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use vst_types::{NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult};
+use vst_types::{
+    Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider, Role, ToolResult,
+};
 
 use crate::acp_connection::AcpLaunchSpec;
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
@@ -382,6 +384,10 @@ impl AgentPlugin for OpencodePlugin {
         }
     }
 
+    fn default_channel(&self) -> Channel {
+        Channel::Json
+    }
+
     fn setup_workspace_hooks(&self, workspace_path: &str) -> AsyncResult<()> {
         let root = PathBuf::from(workspace_path);
         Box::pin(async move {
@@ -692,5 +698,10 @@ mod tests {
             !VST_RECORDER.contains(r#""session.created": async"#),
             "must not use the dead top-level `\"session.created\"` hook key"
         );
+    }
+
+    #[test]
+    fn default_channel_is_json() {
+        assert_eq!(OpencodePlugin.default_channel(), Channel::Json);
     }
 }

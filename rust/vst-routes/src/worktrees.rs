@@ -73,8 +73,9 @@ use vst_ws::services::file_search::FileSearchIndex;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 use vst_ws::services::pending_file_opens::PendingFileOpens as PendingFileOpensQueue;
 
-use crate::modes::{find_mode, json_unsupported_cli, resolve_mode_id};
+use crate::modes::{find_mode, json_unsupported_cli, resolve_effective_default_channel, resolve_mode};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
+use crate::settings::load_default_channel_overrides;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PatchWorktreeLspEnabledBody {
@@ -528,16 +529,23 @@ impl WorktreeRoutes {
             .filter(|s| !s.is_empty())
             .map(str::to_string);
 
+        // Mode resolved BEFORE channel defaulting: the plugin default needs
+        // `mode.cli`, and a single `resolve_mode` (two-pass, id-or-name) avoids
+        // the id-only `find_mode` miss (M1) and the two-`load_modes()`-read
+        // TOCTOU panic risk (M2). No `.expect()` — an unresolvable mode is a
+        // Validation error, not a panic.
+        let mode = resolve_mode(mode_id_input).ok_or_else(|| {
+            WorktreeRouteError::Validation(format!("Mode '{mode_id_input}' not found"))
+        })?;
+        let mode_id = mode.id.clone();
+
+        let overrides = load_default_channel_overrides();
         let channel = body.channel.unwrap_or_else(|| match body.use_tmux {
-            None => Channel::Json,
             Some(use_tmux) => resolve_channel(resolve_use_tmux(Some(use_tmux)), false),
+            None => resolve_effective_default_channel(&overrides, mode.cli, &*resolve_plugin(mode.cli)),
         });
         let is_json = channel == Channel::Json;
         let use_tmux = channel == Channel::Tmux;
-
-        let mode_id = resolve_mode_id(mode_id_input).ok_or_else(|| {
-            WorktreeRouteError::Validation(format!("Mode '{mode_id_input}' not found"))
-        })?;
 
         if is_json {
             if let Some(cli) = json_unsupported_cli(&mode_id) {
