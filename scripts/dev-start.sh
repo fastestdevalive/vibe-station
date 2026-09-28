@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # dev-start.sh — beforeDevCommand for tauri dev.
 #
-# 1. Creates a stub sidecar binary so Tauri's build.rs resource-path check
-#    passes at compile time. The stub is never actually invoked in dev because
-#    detect_running_daemon() finds the already-running Rust daemon in config.json.
+# 1. Creates stub sidecar binaries so Tauri's build.rs resource-path check
+#    passes at compile time. The stubs are never actually invoked in dev
+#    because detect_running_daemon() finds the already-running Rust daemon in
+#    config.json.
 # 2. Builds vst-cli (debug) so the daemon can write the ~/.vibe-station/bin/vst
 #    shim. `cargo run -p vst-daemon` only compiles vst-daemon, so vst-cli would
 #    be absent on a fresh checkout or after `cargo clean`.
@@ -14,7 +15,11 @@
 #    tauri.conf.json bundle.resources entry, so build.rs's resource-path check
 #    fails without it, and the dev daemon needs it for Claude Rich Chat anyway.
 # 5. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
-#    so the daemon writes the shim on first boot.
+#    so the daemon writes the shim on first boot, and VST_TAURI_SUPERVISED=1 so
+#    the dev daemon isn't headless (a headless daemon requires a bearer token
+#    even from loopback, per the daemon-lifecycle part of cli-daemon-unification
+#    — dev via this script is Tauri-adjacent enough to skip that, and
+#    VST_DIST_PATH/local dev already runs with full trust anyway).
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
 # CWD when invoked: desktop/ (where `tauri dev` is run)
@@ -36,18 +41,14 @@ fi
 
 # Create stub binaries in desktop/src-tauri/binaries/.
 # Tauri only checks that these paths exist — the stub is never executed in dev.
+# (No vst-daemon stub anymore — externalBin dropped it once vst-cli/vst-daemon
+# merged into one `vst` binary; this script's own `cargo run -p vst-daemon`
+# below is unrelated to Tauri's sidecar resolution.)
 BINARIES_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-DAEMON_STUB="$BINARIES_DIR/vst-daemon-$TRIPLE"
 CF_STUB="$BINARIES_DIR/cloudflared-$TRIPLE"
 VST_STUB="$BINARIES_DIR/vst-$TRIPLE"
-
-if [[ ! -f "$DAEMON_STUB" ]]; then
-  printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$DAEMON_STUB"
-  chmod +x "$DAEMON_STUB"
-  echo "[dev-start] created daemon stub: $DAEMON_STUB"
-fi
 
 if [[ ! -f "$CF_STUB" ]]; then
   printf '#!/bin/sh\necho "dev stub — not for direct execution"\n' > "$CF_STUB"
@@ -97,7 +98,7 @@ CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' VST_TAURI_SUPERVISED=1 cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '
