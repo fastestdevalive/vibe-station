@@ -252,7 +252,7 @@ fn verify_pid_is_turn_process_true_for_a_real_claude_named_process() {
         .spawn()
         .expect("spawn claude script");
     let pid = child.id() as i32;
-    wait_for_proc(pid);
+    wait_for_comm(pid, "claude");
     let result = verify_pid_is_turn_process(pid);
     let _ = std::process::Command::new("kill")
         .arg("-KILL")
@@ -291,7 +291,7 @@ fn verify_pid_is_turn_process_recognizes_the_acp_adapters_comm_name() {
         .spawn()
         .expect("spawn MainThread script");
     let pid = child.id() as i32;
-    wait_for_proc(pid);
+    wait_for_comm(pid, "MainThread");
     let result = verify_pid_is_turn_process(pid);
     let _ = std::process::Command::new("kill")
         .arg("-KILL")
@@ -403,6 +403,26 @@ fn wait_for_proc(pid: i32) {
     for _ in 0..20 {
         if std::fs::metadata(format!("/proc/{pid}/stat")).is_ok() {
             return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Like `wait_for_proc`, but for tests that assert on `comm` (via
+/// `verify_pid_is_turn_process`): the `/proc/<pid>/stat` entry exists as soon
+/// as `fork()` returns, well before the child's subsequent `execve()` swaps
+/// `comm` from whatever it inherited to the exec'd binary's basename. Under
+/// CI load that gap is wide enough to lose the race — `wait_for_proc` alone
+/// observes a real `/proc` entry with the WRONG (pre-exec) `comm`, making
+/// `verify_pid_is_turn_process` read stale data and the assertion flake.
+/// Poll `comm` itself until it matches (or time out and let the caller's
+/// assertion fail loudly, which is more honest than a silent race).
+fn wait_for_comm(pid: i32, expected: &str) {
+    for _ in 0..200 {
+        if let Ok(comm) = std::fs::read_to_string(format!("/proc/{pid}/comm")) {
+            if comm.trim() == expected {
+                return;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }

@@ -43,10 +43,27 @@ fn rust_open_of_node_db_is_a_schema_noop() {
     let node_db = dir.join("node-v1.sqlite");
     assert!(node_db.exists(), "node fixture missing");
 
+    // Found in review: this used to `Connection::open` the committed fixture
+    // IN PLACE and run `ensure_schema` directly against it -- since
+    // `ensure_schema` performs a real migration (adding columns) when it
+    // finds an older schema, running this test literally mutated the
+    // checked-in fixture on disk. That mutation was accidentally committed
+    // alongside an unrelated CI-fix change, silently baking the migrated
+    // columns into what's supposed to be a pristine pre-migration Node
+    // fixture -- which made this test pass by construction from then on
+    // (the fixture was already at head, so opening it really was a no-op,
+    // but only because the bug had already "fixed" it). Copy to a tempdir
+    // first, exactly like the sibling `node_db_opens_and_can_be_written_to`
+    // test below already does, so running this test can never again mutate
+    // the committed fixture.
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("copy.sqlite");
+    std::fs::copy(&node_db, &copy).unwrap();
+
     // The committed schema dump — the ground truth for F4.
     let expected = std::fs::read_to_string(dir.join("schema-dump.sql")).unwrap();
 
-    let conn = Connection::open(&node_db).unwrap();
+    let conn = Connection::open(&copy).unwrap();
     // The migration runner's open pass must be a no-op: no error, no schema drift.
     ensure_schema(&conn).unwrap();
 

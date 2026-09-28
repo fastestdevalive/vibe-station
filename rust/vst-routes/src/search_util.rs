@@ -59,10 +59,22 @@ pub async fn rg_search(
     }
     argv.push("--".into());
     argv.push(q.to_string());
+    // Explicit search path -- WITHOUT this, ripgrep's own default (search
+    // the cwd) only kicks in when its stdin looks like a real terminal.
+    // `tokio::process::Command` inherits the parent's stdin unless told
+    // otherwise, and a `cargo test` process (or the real daemon, spawned
+    // detached) has its stdin connected to a pipe, not a tty -- ripgrep
+    // then reads (and finds nothing in) that pipe instead of walking
+    // `root`, silently returning zero matches. Confirmed by reproducing
+    // both ways locally: `rg pattern < /dev/null` still searches the cwd,
+    // but `echo | rg pattern` reads the pipe and reports no matches. An
+    // explicit "." makes the target unambiguous regardless of stdin.
+    argv.push(".".into());
 
     let mut child = Command::new("rg")
         .args(&argv)
         .current_dir(root)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         // The caller (Axum handler future) can be dropped mid-stream —
@@ -105,11 +117,15 @@ pub async fn rg_search(
             None => continue,
         };
 
-        let path = data
+        let raw_path = data
             .pointer("/path/text")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
+        // The explicit "." target path (see the comment above the spawn)
+        // makes rg prefix every reported path with "./" -- strip it here,
+        // once, so every caller of rg_search gets the same bare relative
+        // path it always has, regardless of that internal detail.
+        let path = raw_path.strip_prefix("./").unwrap_or(raw_path).to_string();
         let line_number = data
             .pointer("/line_number")
             .and_then(|v| v.as_u64())

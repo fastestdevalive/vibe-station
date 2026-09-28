@@ -1,148 +1,213 @@
-# `scripts/install.sh` — what it does, and where it's going
+# `scripts/install.sh` and the daemon lifecycle — what actually happens
 
-> **Status:** "Current script behavior" below matches the committed script as of
-> Part 04 (macOS CLI supported, release workflow publishing artifacts). Full
-> diagrams for every CUJ referenced here live in `docs/CLI-DAEMON-TAURI-CUJS.md`.
+> **Status:** matches the code as shipped (Parts 00–04 of `cli-daemon-unification`,
+> commit history on `release-ci-version`). This is the one place to read for
+> "which `vst` binary is actually running right now" — the mental model below
+> replaces the older, partly-aspirational `docs/CLI-DAEMON-TAURI-CUJS.md`.
 
 ```
 curl -fsSL https://raw.githubusercontent.com/fastestdevalive/vibe-station/main/scripts/install.sh | sh
 ```
 
-## Current script behavior
+## What curl installs, per platform
 
 | | Linux (glibc) | Linux (musl, e.g. Alpine) | macOS |
 |---|---|---|---|
-| Supported by this script? | Yes | Yes (CLI only) | Yes (CLI only) |
-| `vst` CLI installed | Yes → `~/.local/bin` | Yes → `~/.local/bin` | Yes → `~/.local/bin` |
-| Desktop app (GUI) installed | Yes → `.AppImage`, launcher + `.desktop` entry | No (needs glibc) — warns, doesn't fail | No (preserves Gatekeeper) — manual .dmg download |
+| `vst` CLI installed | Yes → `~/.local/bin/vst` | Yes → `~/.local/bin/vst` | Yes → `~/.local/bin/vst` (Apple Silicon only — Intel isn't published) |
+| Desktop app (GUI) installed | Yes, unconditionally → `.AppImage`, launcher symlink + `.desktop` entry | No (needs glibc) — warns, doesn't fail | No — curl downloads lack the quarantine flag, so installing a `.dmg` this way would bypass Gatekeeper. Manual `.dmg` download only. |
 | PATH set up | Yes, idempotent | Yes, idempotent | Yes, idempotent |
-| Instead | — | — | Download `.dmg`, install manually |
-| Why | — | AppImage can't run on musl | Curl downloads lack the quarantine flag; manual browser download preserves Gatekeeper checks |
 
-**Release workflow:** `.github/workflows/release.yml` publishes standalone
-`vst-<triple>.tar.gz` CLI assets for Linux (static-musl, verified under Alpine)
-and macOS (Intel + Apple Silicon), alongside Tauri desktop assets (`.AppImage`,
-`.dmg`, `.deb`) and their `.sha256` checksum files.
+**Release workflow** (`.github/workflows/release.yml`) publishes standalone
+`vst-<triple>.tar.gz` CLI archives (static-musl Linux x86_64+aarch64,
+Apple-Silicon macOS) and Tauri desktop assets (`.AppImage`, `.dmg`, `.deb`),
+each with a `.sha256` checksum `install.sh` verifies before installing anything.
 
 ---
 
-## Future direction — every install-path × platform combination
+## The core thing to understand: there can be TWO separate `vst` binaries, and TWO daemons that come and go
 
-**What curl actually downloads and installs, per platform** (post-merge —
-goal 3 below — so `vst-<triple>.tar.gz` contains one binary, not two):
+This is true on **both Linux and macOS** — curl already installing the Linux
+AppImage does not eliminate the risk, because the AppImage bundles **its own
+separate copy** of the `vst` binary (see "Two binaries" below), distinct from
+the one curl put on `PATH`.
+
+```mermaid
+flowchart TB
+    subgraph curl["curl install.sh"]
+        C1["~/.local/bin/vst<br/>(one download, written once, never touched again)"]
+    end
+    subgraph app["Tauri app (.dmg / .AppImage)"]
+        A1["desktop/src-tauri/binaries/vst-&lt;triple&gt;<br/>(a SEPARATE copy of the same merged binary,<br/>bundled inside the app, possibly a different build/version)"]
+    end
+    curl -.->|"you type `vst` in a terminal"| C1
+    app -.->|"Tauri spawns this as its sidecar"| A1
+```
+
+**Neither binary is "the" daemon** — each is the same merged CLI+daemon
+executable (`vst daemon run` boots it as a daemon; any other subcommand talks
+to whichever daemon is reachable). Whichever one is *actually spawned* wins
+the machine for a while — see below.
+
+### Agents don't use your terminal's `vst` — they use a separate shim
+
+Your shell's `vst` (`~/.local/bin/vst` from curl, on `PATH`) is **not** what
+spawned agent subprocesses call. Agents reach `vst` via a shim at
+**`~/.vibe-station/bin/vst`** — a tiny `#!/bin/sh; exec "<real-binary>" "$@"`
+script, also added to `PATH` (separately, by the daemon itself, see below) so
+both a human and an agent can type plain `vst` and get *something* — just not
+necessarily the same something.
 
 ```mermaid
 flowchart LR
-    curl[curl install.sh]
-
-    subgraph linux [Linux glibc]
-        direction TB
-        L1[vst-linux-musl.tar.gz<br/>one merged binary] --> L1o["~/.local/bin/vst"]
-        L2[vibe-station-linux.AppImage] --> L2o["~/.local/share/vibe-station/"]
-        L2o --> L2s["~/.local/bin/vibe-station (symlink)"]
-        L2o --> L2d[".desktop menu entry"]
-    end
-
-    subgraph mac [macOS]
-        direction TB
-        M1[vst-apple-darwin.tar.gz<br/>one merged binary] --> M1o["~/.local/bin/vst"]
-        M2[No GUI asset downloaded]
-        M2 -.-> M3[".dmg stays a separate,<br/>manual download"]
-    end
-
-    curl --> linux
-    curl --> mac
+    T["Terminal: `vst`"] --> P["PATH lookup"]
+    P --> L["~/.local/bin/vst<br/>(curl-installed, fixed forever)"]
+    Ag["Agent subprocess: `vst`"] --> P2["PATH lookup"]
+    P2 --> S["~/.vibe-station/bin/vst<br/>(shim, rewritten on every daemon boot)"]
+    S -.exec.-> Real["whichever binary the\nmost-recently-booted daemon pointed it at"]
 ```
 
-The Linux CLI archive is a *static musl* build specifically so the same
-archive works on both glibc and musl systems (Alpine) — the GUI asset is
-separate and glibc-only, which is why row 2/3 in the matrix below can install
-the CLI half of this picture while skipping the GUI half.
+### The shim is overwritten on **every daemon boot** — not once, not "first wins forever"
 
-This is the matrix version of the goals below — read this first.
+`rust/vst-daemon/src/run.rs` (around the `setup_vst_environment` call, right
+after the daemon acquires its single-instance `flock` — a losing racer never
+reaches this code) unconditionally rewrites `~/.vibe-station/bin/vst` on
+**every successful daemon start**, via `rust/vst-daemon/src/env_setup.rs`:
 
-| # | Platform | How it got installed | CLI on PATH after? | GUI installed? | Daemon auto-starts on first `vst`? | What happens | CUJ |
-|---|---|---|---|---|---|---|---|
-| 1 | Linux glibc | `curl` | Yes | Yes (unconditional) | No (not yet running) | First `vst <cmd>` launches Tauri, which starts/attaches the daemon | 1 |
-| 2 | Linux musl (Alpine/CI) | `curl` | Yes | No — can't (needs glibc) | No | First `vst <cmd>`: no prompt, straight to headless daemon | 2b |
-| 3 | Linux glibc, no display (CI/server) | `curl` | Yes | On disk, but not launchable | No | Same as #2 — binary present ≠ launchable; must check `$DISPLAY`, not just the file | 2b |
-| 4 | macOS | `curl` | Yes (new — today's script refuses macOS entirely) | No (notarization) | No | First `vst <cmd>`: prompt **Desktop app** or **Web UI** | 2a |
-| 5 | Linux glibc | `.deb`, direct (no curl) | **Depends** — `.deb` *can* self-register via `postinst`, unlike `.dmg`/`.AppImage` | Yes | No | If `postinst` registers it: same as #1. If not: same gap as #6 | 1 or 5 |
-| 6 | Linux glibc | `.AppImage`, direct (no curl) | **No** — AppImage has no install-time hook | Yes (the AppImage itself) | N/A | Terminal: `vst: command not found` until the user explicitly runs "Install CLI in PATH" from the app | 5 |
-| 7 | macOS | `.dmg`, direct (no curl) | **No** — `.dmg` has no install-time hook either | Yes | N/A | Same gap as #6 | 5 |
-| 8 | macOS | `curl`, then `.dmg` later | Yes (already, from curl) | Yes (added) | Depends | `.dmg`'s install must detect the existing PATH entry and no-op; app launch attaches to the already-running curl-daemon if one exists, else spawns its own | 3 + 6 |
-| 9 | Linux glibc | `curl`, then a manually-downloaded `.deb`/`.AppImage` later | Yes (already) | Yes (already, or idempotently re-added) | Depends | Same as #8 | 3 + 6 |
-| 10 | Any | GUI installed (any method), user never touches a terminal | N/A | Yes | N/A | No CUJ triggered at all — pure GUI usage is out of scope for this doc | — |
+- `resolve_vst_cli_bin_source()` picks the binary: `VST_CLI_BIN` env var if
+  set (Tauri's sidecar spawn sets this — see "why VST_CLI_BIN exists" below),
+  else a sibling file literally named `vst`/`vst-cli` next to
+  `current_exe()` (what a curl-launched headless daemon resolves to, since
+  it *is* that file).
+- The daemon **also** idempotently patches your shell rc files
+  (`patch_shell_configs`) so `~/.vibe-station/bin` is on `PATH` — this
+  happens on daemon boot too, guarded by a one-time sentinel file, not tied
+  to which binary won.
 
-**The asymmetry worth remembering:** `.deb` has a postinst script (can
-self-register CLI-on-PATH at install time, like most Linux system packages
-do); `.dmg` and `.AppImage` have no install-time hook at all (drag-to-folder,
-or chmod+run) — those two categorically need the explicit in-app "Install CLI
-in PATH" action (CUJ 5), `.deb` might not.
+**An *attach* to an already-running daemon never touches any of this.**
+Tauri's `detect_running_daemon()` (`desktop/src-tauri/src/main.rs`) checks
+`config.json` first; if a daemon is already up, it just uses it — no sidecar
+spawn, no shim rewrite.
 
-## All CUJs, one line each
-
-- **CUJ 1** — no daemon, Tauri present → launch it, it starts/attaches the daemon.
-- **CUJ 2a** — no daemon, no Tauri, display exists (macOS) → prompt Desktop app vs. Web UI.
-- **CUJ 2b** — no daemon, no Tauri possible/launchable (headless) → no prompt, straight to headless daemon.
-- **CUJ 3** — Tauri launches while a daemon's already running → attach, don't duplicate (version-check still TBD).
-- **CUJ 4** — browser "continue" flow → short-lived code → cookie exchange → URL scrubbed, never a durable secret in the address bar.
-- **CUJ 5** — GUI installed via `.dmg`/`.AppImage` (no install hook), CLI never separately installed → explicit "Install CLI in PATH" action, symlinks the already-bundled binary.
-- **CUJ 6** — GUI and CLI installed in either order → second install detects the first and no-ops (PATH and daemon-spawn both).
-
-Full sequence diagrams for all of these: `docs/CLI-DAEMON-TAURI-CUJS.md`.
+**So the rule is:** whichever daemon most recently went from *not running* to
+*running via an actual spawn* is the one whose binary agents get — and this
+can flip back and forth indefinitely as daemons come and go (crash, `vst
+daemon stop`, a reboot — **nothing auto-restarts a daemon**; there is no
+systemd/launchd service in this codebase, spawn is one-shot).
 
 ---
 
-## Design decisions behind the matrix
+## Walking through the scenarios
 
-1. **CLI + daemon ship together, curl installs both — macOS too, not just
-   Linux.** `vst` is useless without `vst-daemon` reachable, so one archive,
-   one install step, on every platform this script supports.
+### (a) curl-only, first run from terminal
 
-2. **Linux keeps installing the GUI unconditionally via `install.sh`**
-   (already committed, unchanged — no notarization gate there). **macOS is
-   the one platform curl doesn't install the GUI on** — see CUJ 2a/CUJ 5 for
-   what happens instead.
+```mermaid
+sequenceDiagram
+    participant U as Terminal
+    participant Shim as ~/.vibe-station/bin/vst
+    participant D as headless daemon (curl binary)
+    U->>D: vst agent ls (self-heal: no daemon found, spawn headless)
+    D->>D: setup_vst_environment() — shim → curl binary
+    D-->>Shim: written
+    Note over U,Shim: PATH's vst and the agent shim now agree — both curl
+```
 
-3. **The `vst`-CLI sidecar merges into `vst-daemon` — one binary, not two.**
-   Decided, not open: `vst daemon run` (or argv0 `vst-daemon`, for
-   compatibility) binds and serves; every other invocation is the CLI
-   against whatever daemon is running. Already low-coupling today (the CLI
-   is a pure HTTP client depending only on `vst-types`); merged is smaller
-   than today's two binaries combined (~15.5MB vs. ~19MB); real precedent is
-   `k3s` (server+agent+CLI as one binary, specifically to prevent drift on a
-   node) — `docker`/`tailscale` are *not* a counter-example, those clients
-   negotiate with a genuinely different daemon version over a network,
-   which isn't our case. Packaging fallout: `SKILL.md` moves to
-   `include_str!` (baked in, no more Tauri resource entry); `externalBin`
-   drops the separate `vst` entry (`[vst, cloudflared, agy-acp]`, down from
-   4 sidecars); agents reach `vst` via a daemon-owned symlink specific to
-   *that* daemon (fixes today's real bug: the current `~/.vibe-station/bin`
-   shim is machine-global, rewritten by whichever daemon booted last).
+### (b) curl first, Tauri `.dmg` installed and launched LATER, curl daemon still running
 
-4. **Daemon lifecycle — currently unbuilt, two separate concerns.** Headless
-   `vst daemon run` doesn't exist at all yet (today only Tauri's sidecar
-   ever starts a daemon). Needed: (a) proper process detaching
-   (`setsid`-equivalent + redirected stdio) so it survives the spawning CLI
-   process exiting and the terminal closing; (b) crash recovery is
-   currently nonexistent — it's spawn-once, nothing supervises/restarts it;
-   a real systemd/launchd user-service story is a separate, bigger decision.
+Tauri **attaches**, doesn't spawn — shim is untouched, stays on curl's binary.
+No divergence.
 
-5. **Token flow — full design and diagrams in `docs/CLI-DAEMON-TAURI-CUJS.md`.**
-   `cliToken`/`tauriToken` minting is unchanged. The browser "continue" path
-   does **not** put a long-lived token in the URL — reuses the existing
-   mobile/QR short-lived-code → cookie-exchange mechanism, then scrubs the
-   code from the URL. Merging the CLI+daemon binary (point 3) does **not**
-   remove the need for this — they're still separate OS processes, same
-   executable ≠ same running process. Headless mode needs the loopback-trust
-   bypass turned off (today, any loopback request is trusted with no token
-   check — fine for "a human is at this desktop," unsafe once a daemon can
-   start unattended on a shared/CI box). Known unrelated bug blocking this:
-   `vst-daemon`'s own startup singleton-lock checks PID liveness via
-   `/proc/<pid>`, which doesn't exist on macOS — a live daemon always looks
-   dead there, so a second one can start and clobber `config.json`.
+### (c) curl first, Tauri launched after the curl daemon died (e.g. after a reboot)
 
-6. **LAN-reachable by default — already true, not a new decision.** The
-   daemon already binds `0.0.0.0`; loopback-trust vs. remote-auth is exactly
-   what `docs/AUTH.md` already documents.
+```mermaid
+sequenceDiagram
+    participant App as Tauri app (launching)
+    participant D as (nothing running)
+    App->>D: detect_running_daemon() via config.json
+    D--xApp: nothing found
+    App->>App: spawn own bundled sidecar
+    App->>App: setup_vst_environment() — shim → Tauri's bundled binary
+    Note over App: PATH's ~/.local/bin/vst is still the OLD curl binary.<br/>The agent shim now points at a DIFFERENT binary.
+```
+
+This is the divergence case: your terminal's `vst` and what agents actually
+run are now two different physical files (possibly two different versions).
+
+### (d) Tauri `.dmg`/`.AppImage` installed and launched FIRST, curl never run
+
+No `~/.local/bin/vst` exists at all. Tauri's first boot both writes the shim
+**and** patches PATH via `patch_shell_configs` — the exact same mechanism
+curl's `install.sh` would have used. One binary on the machine, so PATH and
+the agent shim trivially agree.
+
+### (e) First run ever is from terminal, but Tauri is already installed (not yet launched)
+
+Self-heal's `launch_app()` tries `open -a vibe-station` (macOS) /
+direct-spawns known app paths (Linux) **first**, before falling back to
+headless. If that succeeds, **the app itself** boots the daemon — same
+shim-write mechanism as (c), same divergence risk against a pre-existing curl
+`PATH` entry.
+
+---
+
+## macOS: a nudge toward installing the desktop app
+
+Since macOS never gets the GUI via curl (Gatekeeper), `vst <path>`'s
+self-heal path prints a one-line suggestion right before falling back to a
+headless daemon spawn, when `vibe-station.app` isn't found:
+
+```
+(no vibe-station.app found -- for a better experience, consider installing the
+desktop app: https://github.com/fastestdevalive/vibe-station/releases)
+```
+
+See `suggest_desktop_app()` in `rust/vst-cli/src/launch.rs`. It's informational
+only — the headless daemon still spawns and works either way.
+
+---
+
+## Why `VST_CLI_BIN` exists (it is NOT a second CLI binary)
+
+Only **one** `vst` binary ships inside the Tauri app — `tauri.conf.json`'s
+`externalBin: [..., "binaries/vst", ...]` bundles a single merged
+CLI+daemon binary (`scripts/prep-sidecar.sh` builds it once). When Tauri
+spawns it as `.sidecar("vst")` with `daemon run`, that spawned process *is*
+the bundled binary — same file, not a different one.
+
+`VST_CLI_BIN` (`desktop/src-tauri/src/daemon.rs`) exists purely because of
+**how that one binary is named on disk once bundled**: Tauri's `externalBin`
+convention keeps the filename target-triple-suffixed even inside the final
+app (e.g. `vst-aarch64-apple-darwin`), and `resolve_vst_cli_bin_source()`'s
+generic fallback only looks for siblings literally named `vst`/`vst-cli`.
+Without `VST_CLI_BIN`, the Tauri-spawned daemon couldn't find its own binary
+to write into the shim and would silently skip the shim write entirely. So
+`main.rs` (the one place that actually knows the real bundle path via
+`resource_dir()`) passes it explicitly.
+
+---
+
+## Known, documented, currently-unfixed limitation
+
+The shim being one **machine-global** file, rewritten by whichever daemon
+booted most recently, is a real limitation — not a bug introduced carelessly.
+The proper fix (a daemon-owned, per-daemon symlink instead of one shared
+file) is scoped as **future work only** and is not implemented in this PR.
+Don't be surprised if an agent turns out to be running an older/newer `vst`
+build than what your own terminal resolves — that's this mechanism, working
+as currently designed, not a malfunction.
+
+---
+
+## Design decisions (background, unchanged from earlier drafts)
+
+1. **CLI + daemon ship together — one binary, not two.** `vst daemon run` (or
+   argv0 `vst-daemon`, kept for compatibility) binds and serves; every other
+   invocation is the CLI against whatever daemon is running.
+2. **Daemon lifecycle is currently spawn-once, no supervisor.** Proper
+   process detaching (`setsid` + redirected stdio, via `vst_proc::spawn_detached`)
+   is implemented; crash recovery / a real systemd/launchd service is not —
+   see "known limitation" above, which is a direct consequence of this.
+3. **Token flow is unchanged by the binary merge.** Same executable ≠ same
+   running process — the daemon still can't trust "shares my binary" as
+   authorization. Full design: `docs/AUTH.md`.
+4. **LAN-reachable by default, not new.** The daemon already binds `0.0.0.0`;
+   loopback-trust vs. remote-auth is documented in `docs/AUTH.md`.

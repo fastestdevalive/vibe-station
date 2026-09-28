@@ -66,7 +66,7 @@ RULES — read before writing or implementing:
 
 | ID | Requirement |
 |----|-------------|
-| R6 | Running the published `install.sh` on macOS installs the merged `vst` binary to `~/.local/bin`, on PATH, idempotently. |
+| R6 | Running the published `install.sh` on macOS installs the merged `vst` binary to `~/.local/bin`, on PATH, idempotently. **Scoped to Apple Silicon (post-PR-review): Intel macOS isn't published** — the only GitHub-hosted Intel runner left (`macos-15-large`) is a paid "larger runners" tier this org doesn't have enabled; `install.sh` fails with a clear message on Intel Mac rather than a bare download 404. |
 | R7 | Running it on Linux (glibc or musl) installs the merged `vst` binary the same way, unchanged from today's CLI behavior. |
 | R8 | Linux additionally gets the `.AppImage` GUI installed unconditionally, with a launcher and `.desktop` entry. |
 | R9 | macOS does not download or install any GUI asset via curl; the `.dmg` remains a separate manual download, fetched by opening the Releases page in a browser (never curl-downloaded by `vst` itself) so the file keeps its quarantine flag and Gatekeeper still runs. |

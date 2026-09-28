@@ -33,6 +33,12 @@ pub async fn acquire_lock(lock_path: &PathBuf) -> Result<File> {
     tokio::task::spawn_blocking(move || -> Result<File> {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
+            // Explicitly NOT truncating at open time — clippy's own
+            // suggested fix here (.truncate(true)) would be a real bug: we
+            // must acquire the flock FIRST and only truncate afterward (see
+            // the set_len(0) call below), so a losing racer never destroys
+            // the winner's file content before even knowing whether it won.
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .context("open lock file")?;

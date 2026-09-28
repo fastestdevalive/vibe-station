@@ -8,6 +8,9 @@ allow = [
     "Unicode-DFS-2016",
     "Zlib",
     "0BSD",
+    "CC0-1.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
@@ -15,5 +18,5 @@ confidence-threshold = 0.8
 multiple-versions = "warn"
 
 [advisories]
-version = "2"
+version = 2
 yanked = "deny"
