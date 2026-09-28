@@ -25,7 +25,7 @@ function mode(over: Partial<Mode>): Mode {
 }
 
 describe("OobeStep2Modes", () => {
-  it("4.T3 — with zero detected CLIs the Finish button is disabled", async () => {
+  it("4.T3 — with zero detected CLIs the Next button is disabled", async () => {
     const api = createMockApi() as MockApi;
     vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({
       supportedClis: [
@@ -36,8 +36,8 @@ describe("OobeStep2Modes", () => {
     } as DetectAndBundleResult);
     vi.spyOn(api, "listModes").mockResolvedValue([mode({ id: "m1", cli: "claude" })]);
 
-    const onCompleted = vi.fn();
-    render(<OobeStep2Modes api={api} onCompleted={onCompleted} />);
+    const onStep2Confirmed = vi.fn();
+    render(<OobeStep2Modes api={api} onStep2Confirmed={onStep2Confirmed} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("oobe-finish")).toBeDisabled();
@@ -46,17 +46,17 @@ describe("OobeStep2Modes", () => {
     expect(screen.getByText("Re-check")).toBeTruthy();
   });
 
-  it("4.T3 — with a detected CLI bundle and a matching mode the Finish button is enabled, and clicking completes OOBE", async () => {
+  it("4.T3 — with a detected CLI bundle and a matching mode the Next button is enabled, and clicking calls confirmOobeStep2", async () => {
     const api = createMockApi() as MockApi;
     vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({
       supportedClis: [cli({ id: "claude", detected: true })],
       created: [mode({ id: "m1", cli: "claude" })],
     } as DetectAndBundleResult);
     vi.spyOn(api, "listModes").mockResolvedValue([mode({ id: "m1", cli: "claude" })]);
-    const completeSpy = vi.spyOn(api, "completeOobe").mockResolvedValue({ ok: true, completed: true });
+    const step2Spy = vi.spyOn(api, "confirmOobeStep2").mockResolvedValue({ ok: true });
 
-    const onCompleted = vi.fn();
-    render(<OobeStep2Modes api={api} onCompleted={onCompleted} />);
+    const onStep2Confirmed = vi.fn();
+    render(<OobeStep2Modes api={api} onStep2Confirmed={onStep2Confirmed} />);
 
     await waitFor(() => {
       expect(screen.getByTestId("oobe-finish")).toBeEnabled();
@@ -65,10 +65,10 @@ describe("OobeStep2Modes", () => {
     fireEvent.click(screen.getByTestId("oobe-finish"));
 
     await waitFor(() => {
-      expect(completeSpy).toHaveBeenCalledTimes(1);
+      expect(step2Spy).toHaveBeenCalledTimes(1);
     });
     await waitFor(() => {
-      expect(onCompleted).toHaveBeenCalledTimes(1);
+      expect(onStep2Confirmed).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -79,12 +79,12 @@ describe("OobeStep2Modes", () => {
       .mockRejectedValueOnce(new Error("network error"));
     vi.spyOn(api, "listModes").mockResolvedValue([]);
 
-    const onCompleted = vi.fn();
-    render(<OobeStep2Modes api={api} onCompleted={onCompleted} />);
+    const onStep2Confirmed = vi.fn();
+    render(<OobeStep2Modes api={api} onStep2Confirmed={onStep2Confirmed} />);
 
     // Before the fix, a rejected call left supportedClis at [] forever, so
     // NEITHER the mode list NOR the zero-CLI Re-check UI rendered — nothing
-    // told the user why Finish was stuck disabled.
+    // told the user why the Next button was stuck disabled.
     await waitFor(() => {
       expect(screen.getByText(/Couldn't check installed CLIs/)).toBeInTheDocument();
     });

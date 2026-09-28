@@ -507,12 +507,35 @@ export interface SupportedCli {
 /** Response from GET /api/oobe/state. */
 export interface OobeState {
   completed: boolean;
-  currentStep: 1 | 2;
+  currentStep: 1 | 2 | 3;
   defaultProjectsDir: string;
   /** Resolved `~/.vibe-station` path — where the daemon's own config/data
    *  lives, and where any project's worktrees actually get created,
    *  independent of the chosen projects directory. */
   vstHome: string;
+}
+
+export type DoctorCheckStatus = "ok" | "warn" | "error" | "timeout";
+export type DoctorCheckGroup = "required" | "agent_cli" | "optional" | "diagnostic";
+
+export interface DoctorCheckDto {
+  name: string;
+  status: DoctorCheckStatus;
+  required: boolean;
+  group: DoctorCheckGroup;
+  message: string;
+  resolvedPath: string | null;
+  installHint: string | null;
+}
+
+/** Response from GET /api/doctor. */
+export interface DoctorReport {
+  hardOk: boolean;
+  ok: boolean;
+  hostOs: string;
+  hostname: string;
+  checkedAt: string;
+  checks: DoctorCheckDto[];
 }
 
 /** Response from POST /api/modes/:cli/starter-bundle. */

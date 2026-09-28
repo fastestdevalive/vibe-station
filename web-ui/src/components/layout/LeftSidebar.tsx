@@ -1,4 +1,4 @@
-import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Trash2, Type, X } from "lucide-react";
+import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
 import { fuzzyScore } from "@/lib/fuzzyMatch";
@@ -22,6 +22,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { ApiInstance } from "@/api";
 import type { DraftConfig, Project, Session, SessionState, Worktree } from "@/api/types";
+import { useDoctorStatus } from "@/hooks/useDoctorStatus";
 import { useGlobalDraftStore } from "@/store/globalDraftStore";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspaceDoc } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
@@ -223,6 +224,7 @@ export function LeftSidebar({
   const location = useLocation();
   const navigate = useNavigate();
   const { toggleFont } = useTheme();
+  const doctorStatus = useDoctorStatus(api);
   // Server data comes from the central store, populated and refreshed by
   // `useServerSync` (mounted once in Workspace). LeftSidebar derives the
   // by-project / by-worktree maps it needs from those flat arrays — keeping
@@ -2541,6 +2543,33 @@ export function LeftSidebar({
               onClick={onOpenShortcuts}
             >
               <Keyboard size={14} />
+            </button>
+            <button
+              type="button"
+              className="icon-btn left-sidebar__doctor-btn"
+              aria-label={
+                doctorStatus.fetchState === "unreachable"
+                  ? "Doctor — can't reach daemon"
+                  : !doctorStatus.report
+                    ? "Doctor — checking"
+                    : doctorStatus.report.ok
+                    ? "Doctor — all checks passing"
+                    : doctorStatus.report.hardOk
+                      ? "Doctor — some checks need attention"
+                      : "Doctor — required checks failing"
+              }
+              title="Doctor"
+              onClick={() => navigate("/settings/doctor")}
+              style={{ position: "relative" }}
+            >
+              <Stethoscope size={14} />
+              {doctorStatus.fetchState === "unreachable" ? (
+                <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--grey" aria-hidden="true" />
+              ) : doctorStatus.report && !doctorStatus.report.hardOk ? (
+                <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--red" aria-hidden="true" />
+              ) : doctorStatus.report && !doctorStatus.report.ok ? (
+                <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--yellow" aria-hidden="true" />
+              ) : null}
             </button>
             <button
               type="button"

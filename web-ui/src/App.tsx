@@ -187,6 +187,7 @@ function AppShell() {
         defaultProjectsDir={oobe.defaultProjectsDir}
         vstHome={oobe.vstHome}
         onStep1Confirmed={oobe.markStep1Confirmed}
+        onStep2Confirmed={oobe.markStep2Confirmed}
         onCompleted={oobe.markCompleted}
       />
     );

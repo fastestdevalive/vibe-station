@@ -10,10 +10,10 @@ import { NewModeDialog } from "@/components/dialogs/NewModeDialog";
 
 interface OobeStep2ModesProps {
   api: ApiInstance;
-  onCompleted: () => void;
+  onStep2Confirmed: () => void;
 }
 
-export function OobeStep2Modes({ api, onCompleted }: OobeStep2ModesProps) {
+export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
   const [supportedClis, setSupportedClis] = useState<SupportedCli[]>([]);
   const [modes, setModes] = useState<Mode[]>([]);
   const [editing, setEditing] = useState<Mode | null>(null);
@@ -82,8 +82,8 @@ export function OobeStep2Modes({ api, onCompleted }: OobeStep2ModesProps) {
     setFinishError(null);
     setFinishBusy(true);
     try {
-      await api.completeOobe();
-      onCompleted();
+      await api.confirmOobeStep2();
+      onStep2Confirmed();
     } catch (e) {
       setFinishError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -278,7 +278,7 @@ export function OobeStep2Modes({ api, onCompleted }: OobeStep2ModesProps) {
           onClick={() => void handleFinish()}
           className="btn btn--primary"
         >
-          Finish
+          Next
         </button>
       </div>
 

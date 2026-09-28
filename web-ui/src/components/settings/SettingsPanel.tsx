@@ -12,6 +12,7 @@ import { HiddenProjectsSetting } from "./HiddenProjectsSetting";
 import { StorageSetting } from "./StorageSetting";
 import { RemoteAccessSetting } from "./RemoteAccessSetting";
 import { LspSetting } from "./LspSetting";
+import { DoctorSetting } from "./DoctorSetting";
 import { AboutSetting } from "./AboutSetting";
 
 interface Section {
@@ -40,6 +41,7 @@ export function SettingsPanel({ api }: SettingsPanelProps) {
     { id: "storage", label: "Storage", content: <StorageSetting api={api} /> },
     { id: "remote-access", label: "Remote Access", content: <RemoteAccessSetting api={api} /> },
     { id: "lsp", label: "LSP", content: <LspSetting api={api} /> },
+    { id: "doctor", label: "Doctor", content: <DoctorSetting api={api} /> },
     { id: "about", label: "About", content: <AboutSetting api={api} /> },
   ];
 

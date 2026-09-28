@@ -4,10 +4,11 @@ import type { ApiInstance } from "@/api";
 export interface OobeGateState {
   loading: boolean;
   completed: boolean;
-  currentStep: 1 | 2;
+  currentStep: 1 | 2 | 3;
   defaultProjectsDir: string;
   vstHome: string;
   markStep1Confirmed: (dir: string) => void;
+  markStep2Confirmed: () => void;
   markCompleted: () => void;
 }
 
@@ -36,7 +37,7 @@ export function useOobeGate(api: ApiInstance, opts: UseOobeGateOptions): OobeGat
   const [state, setState] = useState<{
     fetched: boolean;
     completed: boolean;
-    currentStep: 1 | 2;
+    currentStep: 1 | 2 | 3;
     defaultProjectsDir: string;
     vstHome: string;
   }>({
@@ -94,6 +95,10 @@ export function useOobeGate(api: ApiInstance, opts: UseOobeGateOptions): OobeGat
     setState((prev) => ({ ...prev, currentStep: 2, defaultProjectsDir: dir }));
   }, []);
 
+  const markStep2Confirmed = useCallback(() => {
+    setState((prev) => ({ ...prev, currentStep: 3 }));
+  }, []);
+
   const markCompleted = useCallback(() => {
     setState((prev) => ({ ...prev, completed: true }));
   }, []);
@@ -105,6 +110,7 @@ export function useOobeGate(api: ApiInstance, opts: UseOobeGateOptions): OobeGat
     defaultProjectsDir: state.defaultProjectsDir,
     vstHome: state.vstHome,
     markStep1Confirmed,
+    markStep2Confirmed,
     markCompleted,
   };
 }
