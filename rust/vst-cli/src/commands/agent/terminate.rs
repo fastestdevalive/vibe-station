@@ -1,7 +1,8 @@
 use crate::client::{daemon_delete, DaemonResult};
 use crate::env::get_vst_session;
+use crate::launch::PreflightScope;
 use crate::output::success;
-use crate::preflight::preflight;
+use crate::preflight::preflight_scoped;
 
 pub async fn run_session_terminate(id: Option<String>) -> Result<(), (String, i32)> {
     let target_id = id.or_else(get_vst_session);
@@ -16,7 +17,7 @@ pub async fn run_session_terminate(id: Option<String>) -> Result<(), (String, i3
         }
     };
 
-    preflight().await;
+    preflight_scoped(PreflightScope::Exempt).await;
 
     let result = daemon_delete::<serde_json::Value>(&format!("/sessions/{target_id}"))
         .await

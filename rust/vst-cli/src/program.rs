@@ -28,7 +28,15 @@ pub enum Command {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DaemonCommand {
-    Status { json: bool },
+    Status {
+        json: bool,
+    },
+    /// `vst daemon run` — serve as the daemon. Normally intercepted before
+    /// `parse_args` even runs (see `dispatch::resolve_entry_mode`), so this
+    /// arm is a defensive fallback, not the primary dispatch path.
+    Run,
+    /// `vst daemon stop` — request a graceful shutdown of a running daemon.
+    Stop,
     Unknown(Vec<String>),
 }
 
@@ -151,6 +159,8 @@ where
                     }
                     Command::Daemon(DaemonCommand::Status { json })
                 }
+                Some("run") => Command::Daemon(DaemonCommand::Run),
+                Some("stop") => Command::Daemon(DaemonCommand::Stop),
                 Some(other) => {
                     let mut rest = vec![other.to_string()];
                     rest.extend(iter);

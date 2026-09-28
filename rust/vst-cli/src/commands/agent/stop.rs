@@ -1,12 +1,13 @@
 use crate::client::{daemon_post, DaemonResult};
-use crate::preflight::preflight;
+use crate::launch::PreflightScope;
+use crate::preflight::preflight_scoped;
 
 pub async fn run_session_stop(id: &str) -> Result<(), (String, i32)> {
     if id.is_empty() {
         return Err(("Session ID is required".to_string(), 1));
     }
 
-    preflight().await;
+    preflight_scoped(PreflightScope::Exempt).await;
 
     let mut encoded = String::new();
     for byte in id.bytes() {

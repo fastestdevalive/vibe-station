@@ -5,8 +5,9 @@
 use vst_types::rest::health::Health;
 
 use crate::client::{daemon_get, DaemonResult};
+use crate::launch::PreflightScope;
 use crate::output::{die, print_json, success};
-use crate::preflight::preflight;
+use crate::preflight::preflight_scoped;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DaemonStatusOptions {
@@ -32,7 +33,7 @@ pub fn parse_daemon_status_options(args: &[String]) -> Result<DaemonStatusOption
 }
 
 pub async fn run_daemon_status(opts: DaemonStatusOptions) -> Result<(), (String, i32)> {
-    preflight().await;
+    preflight_scoped(PreflightScope::Exempt).await;
 
     let result = daemon_get::<Health>("/health")
         .await

@@ -3031,6 +3031,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "vst-agy-acp",
+ "vst-daemon",
+ "vst-proc",
  "vst-types",
 ]
 

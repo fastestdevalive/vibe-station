@@ -40,6 +40,11 @@ impl<T> DaemonResult<T> {
 /// at individual call sites — it belongs here, once, so the routing
 /// convention can't drift out of sync again.
 fn api_path(path: &str) -> String {
+    // `/continue` (cli-daemon-unification Part 02) is also a root route on
+    // the daemon, but deliberately absent here: the CLI never calls it
+    // directly over HTTP — it only opens the URL in a browser (`vst`
+    // constructs the URL string, the OS shell/browser makes the actual
+    // request) — so this CLI-request-path helper has nothing to route for it.
     const ROOT_PATHS: &[&str] = &["/health", "/mobile-auth", "/ws"];
     if path.starts_with("/api/")
         || ROOT_PATHS
