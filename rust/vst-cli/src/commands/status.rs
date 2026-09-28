@@ -10,8 +10,9 @@ use vst_types::rest::sessions::SessionOrDraft;
 
 use crate::client::{daemon_get, DaemonResult};
 use crate::env::get_vst_project;
+use crate::launch::PreflightScope;
 use crate::output::{die, print_json};
-use crate::preflight::preflight;
+use crate::preflight::preflight_scoped;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct StatusOptions {
@@ -82,7 +83,7 @@ fn session_state(s: &SessionOrDraft) -> &LifecycleState {
 }
 
 pub async fn run_status(opts: StatusOptions) -> Result<(), (String, i32)> {
-    preflight().await;
+    preflight_scoped(PreflightScope::Exempt).await;
 
     let project_id = opts.project.or_else(get_vst_project);
     let query = match &project_id {

@@ -8,10 +8,22 @@ use vst_cli::program::{
 };
 #[tokio::main]
 async fn main() {
+    let raw_args: Vec<String> = std::env::args().collect();
+    if let vst_cli::dispatch::EntryMode::Daemon { headless } =
+        vst_cli::dispatch::resolve_entry_mode(&raw_args[0], &raw_args[1..])
+    {
+        vst_daemon::init_tracing();
+        if let Err(e) = vst_daemon::run_daemon(vst_daemon::DaemonOptions { headless }).await {
+            eprintln!("{e:?}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let cmd = program::parse_args(std::env::args());
     match cmd {
         Command::Version => {
-            println!("{}", program::VERSION);
+            println!("{}", vst_daemon::version::current());
         }
         Command::Help => {
             println!("{} — {}", program::NAME, program::DESCRIPTION);
@@ -478,6 +490,22 @@ async fn main() {
                         commands::daemon::status::run_daemon_status(opts).await
                     {
                         die(&err, Some(code));
+                    }
+                }
+                DaemonCommand::Stop => {
+                    if let Err((err, code)) = commands::daemon::stop::run_daemon_stop().await {
+                        die(&err, Some(code));
+                    }
+                }
+                DaemonCommand::Run => {
+                    // Defensive fallback — normal dispatch intercepts "daemon
+                    // run" before parse_args ever runs (see dispatch.rs).
+                    vst_daemon::init_tracing();
+                    if let Err(e) =
+                        vst_daemon::run_daemon(vst_daemon::DaemonOptions { headless: true }).await
+                    {
+                        eprintln!("{e:?}");
+                        std::process::exit(1);
                     }
                 }
                 DaemonCommand::Unknown(args) => {

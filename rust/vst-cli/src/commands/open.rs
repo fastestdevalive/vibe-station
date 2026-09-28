@@ -7,7 +7,6 @@
 //! `vst file open`, which is ported in `commands/file/open.rs`).
 
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
 
 use reqwest::Method;
 
@@ -16,6 +15,7 @@ use vst_types::rest::open::OpenBody;
 use crate::client::daemon_request_with_base;
 use crate::daemon_url::{get_daemon_token, get_daemon_url};
 use crate::output::{die, success};
+use crate::preflight::preflight;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OpenOptions {
@@ -152,127 +152,49 @@ pub async fn post_open_at(
     }
 }
 
-/// Launch the vibe-station desktop app in the background, detached from the
-/// CLI. Best-effort: failures are ignored (the caller polls for the daemon).
-pub fn launch_app() {
-    if cfg!(target_os = "macos") {
-        let _ = std::process::Command::new("open")
-            .args(["-a", "vibe-station"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    } else if cfg!(target_os = "linux") {
-        let candidates = [
-            "/usr/lib/vibe-station/vibe-station",
-            "/opt/vibe-station/vibe-station",
-        ];
-        for bin in candidates {
-            if std::process::Command::new(bin)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .is_ok()
-            {
-                return;
-            }
-        }
-        if let Ok(app_image) = std::env::var("APPIMAGE") {
-            let _ = std::process::Command::new(app_image)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn();
-        }
-    }
-}
-
-/// Poll `GET /health` on `base_url` until it responds OK or the timeout elapses.
-pub async fn poll_for_daemon_at(base_url: &str, timeout: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while tokio::time::Instant::now() < deadline {
-        let client = reqwest::Client::new();
-        let ok = client
-            .get(format!("{base_url}/health"))
-            .timeout(Duration::from_millis(1000))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false);
-        if ok {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    false
-}
-
-/// Poll the daemon URL derived from the environment/config.
-pub async fn poll_for_daemon(timeout: Duration) -> bool {
-    match get_daemon_url() {
-        Some(url) => poll_for_daemon_at(&url, timeout).await,
-        None => false,
-    }
-}
+// `launch_app`/`poll_for_daemon_at`/`poll_for_daemon` moved to `crate::launch`
+// (`cli-daemon-unification` Part 03) — generalized for every command's
+// self-heal, not just `vst open`'s own bespoke retry. Re-exported here for
+// backward compat with existing tests that reference them directly.
+pub use crate::launch::{launch_app, poll_for_daemon, poll_for_daemon_at, LaunchOutcome};
 
 pub async fn run_open(opts: OpenOptions) -> Result<(), (String, i32)> {
     let abs_path = resolve_path(opts.path.as_deref());
     let force_create = opts.force_create;
 
-    let base_url = get_daemon_url();
-    let token = get_daemon_token();
+    // Found in review: this used to try `post_open_at` against `get_daemon_url()`
+    // first and only fall through to self-heal on a "can't connect" result --
+    // but `post_open_at` goes through `client::daemon_request_with_base`, which
+    // hard-`die()`s on connection-refused itself (so this command could reach
+    // its own daemon) rather than returning an `Err` this function could ever
+    // observe. That meant self-heal only ever ran when `config.json` was
+    // missing entirely -- the common case of "config.json exists but points at
+    // a dead daemon" (true after any first run) always died immediately
+    // instead of self-healing. `preflight()` is the same shared self-heal
+    // entrypoint every other command already calls first; it also carries the
+    // R44 stale-`VST_DAEMON_URL` re-check that this command's old bespoke
+    // retry never had.
+    preflight().await;
 
-    if let Some(url) = &base_url {
-        match post_open_at(url, token.as_deref(), &abs_path, force_create).await {
-            Ok(project_id) => {
-                success(&format!("Opened project: {project_id}"));
-                return Ok(());
-            }
-            Err(OpenFailure::Http { message, .. }) => {
-                die(
-                    &open_failure_message(&message, &abs_path),
-                    Some(open_http_exit_code(&message)),
-                );
-            }
-            Err(_) => {
-                // NoDaemon or Connect — fall through to launch-and-retry.
-            }
-        }
-    }
-
-    success("Daemon not running — launching vibe-station...");
-    launch_app();
-
-    let ready = poll_for_daemon(Duration::from_millis(10_000)).await;
-    if !ready {
-        die(
-            "vibe-station did not start within 10 seconds. Open the app manually.",
-            Some(1),
-        );
-    }
-
-    let retry_url = match get_daemon_url() {
+    let url = match get_daemon_url() {
         Some(u) => u,
         None => die(
-            "Failed to open project after app launch: daemon unreachable.",
+            "Daemon is not running. Open the vibe-station app to start it.",
             Some(1),
         ),
     };
-    let retry_token = get_daemon_token();
-    match post_open_at(&retry_url, retry_token.as_deref(), &abs_path, force_create).await {
+    let token = get_daemon_token();
+    match post_open_at(&url, token.as_deref(), &abs_path, force_create).await {
         Ok(project_id) => {
             success(&format!("Opened project: {project_id}"));
             Ok(())
         }
-        Err(OpenFailure::Http { message, .. }) => {
-            die(
-                &format!(
-                    "Failed to open project after app launch: {}",
-                    open_failure_message(&message, &abs_path)
-                ),
-                Some(open_http_exit_code(&message)),
-            );
-        }
+        Err(OpenFailure::Http { message, .. }) => die(
+            &open_failure_message(&message, &abs_path),
+            Some(open_http_exit_code(&message)),
+        ),
         Err(_) => die(
-            "Failed to open project after app launch: daemon unreachable.",
+            "Daemon is not running. Open the vibe-station app to start it.",
             Some(1),
         ),
     }

@@ -86,6 +86,31 @@ fn test_daemon_url_env_override() {
 }
 
 #[test]
+fn test_daemon_url_self_heal_override_wins_over_stale_env_var() {
+    // SAFETY-in-tests note: SELF_HEAL_OVERRIDE is a process-global OnceLock
+    // that can only be set once for the lifetime of this test binary — this
+    // is the only test in this binary that calls set_self_heal_override, by
+    // design (R44's contract is "set once after self-heal succeeds").
+    let tmp = tempdir().expect("tempdir");
+    let vst_dir = tmp.path().join(".vibe-station");
+    fs::create_dir_all(&vst_dir).expect("mkdir");
+    // A stale port that no self-heal ever wrote.
+    fs::write(vst_dir.join("config.json"), r#"{"port": 9999}"#).expect("write");
+    std::env::set_var("VST_DAEMON_URL", "http://stale-env-value:1111");
+
+    vst_cli::daemon_url::set_self_heal_override("http://127.0.0.1:8123".to_string());
+
+    let url = vst_cli::daemon_url::get_daemon_url_from_home(Some(tmp.path()));
+    assert_eq!(
+        url,
+        Some("http://127.0.0.1:8123".to_string()),
+        "the self-heal override must win over both VST_DAEMON_URL and config.json"
+    );
+
+    std::env::remove_var("VST_DAEMON_URL");
+}
+
+#[test]
 fn test_daemon_url_missing_or_zero_port() {
     let tmp = tempdir().expect("tempdir");
     let vst_dir = tmp.path().join(".vibe-station");
