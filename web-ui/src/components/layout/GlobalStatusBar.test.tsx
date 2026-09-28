@@ -59,7 +59,16 @@ describe("GlobalStatusBar", () => {
   });
 
   it("renders the LSP status for the active worktree", async () => {
-    vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({ status: "ready", language: "rust" });
+    vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({
+      status: "ready",
+      language: "rust",
+      label: "Ready",
+      displayName: "Rust",
+      severity: "ok",
+      detail: "LSP: ready",
+      action: null,
+      actionLabel: null,
+    });
     render(<GlobalStatusBar api={{}} projects={projects} worktrees={worktrees} />);
     expect(await screen.findByText("Rust LSP: Ready")).toBeInTheDocument();
   });
@@ -67,7 +76,16 @@ describe("GlobalStatusBar", () => {
   it("scopes the LSP status to the active project for a direct session (no worktree)", async () => {
     useWorkspaceStore.setState({ activeWorktreeId: null, activeProjectId: "proj-1" });
     const statusesSpy = vi.spyOn(lspApi, "getLspStatuses").mockResolvedValue([]);
-    vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({ status: "ready", language: "rust" });
+    vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({
+      status: "ready",
+      language: "rust",
+      label: "Ready",
+      displayName: "Rust",
+      severity: "ok",
+      detail: "LSP: ready",
+      action: null,
+      actionLabel: null,
+    });
 
     render(<GlobalStatusBar api={{}} projects={projects} worktrees={[]} />);
 

@@ -45,11 +45,48 @@ impl std::fmt::Display for LspStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LspSeverity {
+    Ok,
+    Warn,
+    Error,
+    Neutral,
+}
+
+// Machine-readable, NOT derived from `action_label` text — a future copy change
+// to `action_label` must never change which client call `onClick` dispatches to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LspAction {
+    Enable,
+    Resume,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspStatusPresentation {
+    pub label: String,
+    /// Human display name for `language` (e.g. "TypeScript / JavaScript"), sourced from
+    /// `registry::lookup_by_language` — the ONLY place this is computed.
+    /// `None` when `language` itself is `None` (e.g. `unsupported` with nothing detected yet).
+    pub display_name: Option<String>,
+    pub severity: LspSeverity,
+    /// Always populated — every state gets a real sentence server-side.
+    pub detail: String,
+    pub action: Option<LspAction>,
+    /// Button text for `action` (e.g. "Enable", "Resume") — presentation only; `onClick`
+    /// dispatch must branch on `action`, never on this string.
+    pub action_label: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LspStatusResponse {
     pub status: LspStatus,
     pub language: Option<String>,
+    #[serde(flatten)]
+    pub presentation: LspStatusPresentation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +94,8 @@ pub struct LspStatusResponse {
 pub struct LspLanguageStatus {
     pub language: String,
     pub status: LspStatus,
+    #[serde(flatten)]
+    pub presentation: LspStatusPresentation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

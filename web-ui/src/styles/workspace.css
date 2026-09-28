@@ -3268,51 +3268,6 @@
 
 /* ── LSP Go-to-Definition Cues & Picker ───────────────── */
 
-.lsp-status-badge {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  color: var(--fg-muted);
-  background: var(--bg-secondary);
-  white-space: nowrap;
-  user-select: none;
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
-  margin-right: var(--space-2);
-  /* Defensive: flex items default to a min-width equal to their unwrapped
-   * content width unless `overflow` is set, which can force a shrinkable
-   * sibling (e.g. `.files-topbar__tabs`, which explicitly opts into
-   * `overflow-x: auto; min-width: 0`) down to almost nothing to make room —
-   * this is what made the open-file tab strip look "pushed away" whenever a
-   * long LSP message (e.g. "LSP: not available for Typescript — server not
-   * found on host") rendered next to it. Capping this element's own width
-   * and letting IT truncate instead keeps that from happening again if it's
-   * ever placed in another tightly-packed flex row. */
-  min-width: 0;
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.lsp-status-badge--ready {
-  color: var(--fg-success, #2da44e);
-}
-
-.lsp-status-badge--starting,
-.lsp-status-badge--indexing {
-  color: var(--fg-warning, #d29922);
-}
-
-.lsp-status-badge--clickable {
-  cursor: pointer;
-}
-
-.lsp-status-badge--disabled {
-  color: var(--fg-muted);
-}
-
 .lsp-cue-tooltip {
   position: fixed;
   z-index: 1000;
@@ -6032,11 +5987,14 @@ button.dashboard-card {
 
 .lsp-status-row__popup {
   position: absolute;
-  left: var(--space-3);
+  /* The trigger is pinned to the viewport's right edge, so anchor the popup's
+     right edge to it and let it grow leftward. Clamp both widths to the
+     viewport (minus a --space-3 gutter each side) so it never overflows. */
+  right: 0;
   bottom: calc(100% + 4px);
   z-index: 1000;
-  min-width: 240px;
-  max-width: 420px;
+  min-width: min(240px, calc(100vw - 2 * var(--space-3)));
+  max-width: min(420px, calc(100vw - 2 * var(--space-3)));
   background: var(--bg-card);
   border: var(--border-width) solid var(--border-default);
   border-radius: var(--radius-md);

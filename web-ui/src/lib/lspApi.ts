@@ -17,10 +17,32 @@ export type LspFileRef =
   | { kind: "workspace"; path: string }
   | { kind: "external"; token: string };
 
+export type LspSeverity = "ok" | "warn" | "error" | "neutral";
+
+/** Machine-readable click action — dispatch on this, never on `actionLabel`.
+ *  `null` (not clickable) is expressed at each use site as `LspAction | null`,
+ *  mirroring Rust's `Option<LspAction>` rather than folding `null` into the
+ *  action type itself. */
+export type LspAction = "enable" | "resume";
+
+/**
+ * Presentation fields computed once, server-side, in `vst_lsp::status::describe`
+ * — flattened into both `LspStatusResponse` and `LspLanguageStatus`. Frontend
+ * only renders these; it does not re-derive label/color/action from `status`.
+ */
+export type LspStatusPresentation = {
+  label: string;
+  displayName: string | null;
+  severity: LspSeverity;
+  detail: string;
+  action: LspAction | null;
+  actionLabel: string | null;
+};
+
 export type LspStatusResponse = {
   status: LspStatus;
   language: string | null;
-};
+} & LspStatusPresentation;
 
 export type Location = {
   line: number;
@@ -54,7 +76,7 @@ export async function getLspStatus(
 export type LspLanguageStatus = {
   language: string;
   status: LspStatus;
-};
+} & LspStatusPresentation;
 
 export type LspStatusesResponse = {
   statuses: LspLanguageStatus[];

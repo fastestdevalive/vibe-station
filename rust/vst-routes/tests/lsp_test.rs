@@ -1424,9 +1424,13 @@ async fn test_statuses_route_lists_only_languages_detected_in_the_file_tree() {
         .await;
 
     let mut statuses = lsp_routes.statuses(ws.clone()).await.expect("statuses succeeds");
-    statuses.sort_by(|a, b| a.0.cmp(&b.0));
+    statuses.sort_by(|a, b| a.language.cmp(&b.language));
+    let simplified: Vec<(String, vst_types::rest::lsp::LspStatus)> = statuses
+        .iter()
+        .map(|s| (s.language.clone(), s.status))
+        .collect();
     assert_eq!(
-        statuses,
+        simplified,
         vec![
             ("rust".to_string(), vst_types::rest::lsp::LspStatus::Ready),
             ("typescript".to_string(), vst_types::rest::lsp::LspStatus::Starting),

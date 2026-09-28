@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FileScope } from "@/api/types";
-import { getLspStatuses, type LspLanguageStatus, type LspStatus } from "@/lib/lspApi";
-import { displayLanguageName } from "@/lib/lspLanguage";
+import { getLspStatuses, type LspLanguageStatus, type LspSeverity } from "@/lib/lspApi";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useLspStatus } from "@/hooks/useLspStatus";
 
@@ -13,45 +12,29 @@ interface LspStatusRowProps {
   scope?: FileScope;
 }
 
-/** One-word status, VS Code status-bar style — the full sentence still lives
- *  in the popup (reused from `useLspStatus`'s `text`/`title`), this is just
- *  the always-visible label. */
-const STATUS_WORD: Record<LspStatus, string> = {
-  ready: "Ready",
-  starting: "Starting",
-  indexing: "Indexing",
-  idle: "Idle",
-  stopped: "Stopped",
-  disabled: "Disabled",
-  not_found: "Unavailable",
-  unsupported: "N/A",
-  error: "Error",
-};
-
-const STATUS_DOT_MOD: Record<LspStatus, string> = {
-  ready: "lsp-status-row__dot--green",
-  starting: "lsp-status-row__dot--yellow",
-  indexing: "lsp-status-row__dot--yellow",
-  idle: "lsp-status-row__dot--gray",
-  stopped: "lsp-status-row__dot--gray",
-  disabled: "lsp-status-row__dot--gray",
-  not_found: "lsp-status-row__dot--gray",
-  unsupported: "lsp-status-row__dot--gray",
+/** Severity -> dot color. Only 4 entries — label/displayName/detail/action text
+ *  all come from the backend now (`vst_lsp::status::describe`), so this is the
+ *  only status-shaped map left on the frontend (see the `lsp-status-fixes`
+ *  plan's Decision 4, `.vibekit/feature-plans/wip/lsp-status-fixes/`). */
+const SEVERITY_DOT_CLASS: Record<LspSeverity, string> = {
+  ok: "lsp-status-row__dot--green",
+  warn: "lsp-status-row__dot--yellow",
   error: "lsp-status-row__dot--red",
+  neutral: "lsp-status-row__dot--gray",
 };
 
 /**
  * Global, VS Code-style status-bar row for the LSP status of whatever file
- * is currently previewed — lives at the bottom of `ToolPanel`, below
- * `.tool-panel__body`, so it stays visible regardless of which tool tab
- * (Files/Devices/Artifacts/VCS) is active. Replaces the old per-file
- * `LspStatusBadge` that only showed up inside the Files tab's topbar (and,
- * per Task 1, could squeeze the open-file tab strip down to nothing when its
- * text got long — see the CSS fix on `.lsp-status-badge`).
+ * is currently previewed. Rendered at the bottom of `ToolPanel`'s
+ * `.tool-panel__body` (docked tool panel / side panel) and again by
+ * `GlobalStatusBar` (bottom bar) — same component/hook in both places, each
+ * with its own independent 5s poll, so the two converge to the same status
+ * within one poll cycle rather than being instantaneously guaranteed equal.
  */
 export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusRowProps) {
   const { path } = usePreviewedPath(worktreeId, scope);
-  const { status, language, text, isClickable, title, onClick } = useLspStatus(api, worktreeId, scope, path);
+  const { status, language, displayName, label, severity, text, action, actionLabel, onClick } =
+    useLspStatus(api, worktreeId, scope, path);
   const [open, setOpen] = useState(false);
   const [allStatuses, setAllStatuses] = useState<LspLanguageStatus[] | null>(null);
   const [statusesLoading, setStatusesLoading] = useState(false);
@@ -98,11 +81,13 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
     };
   }, [open, api, worktreeId, scope]);
 
-  if (!status || !path) return null;
+  // `text` (the detail sentence) is always populated by the backend alongside
+  // `label`/`severity` (see Decision 4) — no frontend fallback string needed.
+  if (!status || !path || !label || !severity || !text) return null;
 
-  const word = STATUS_WORD[status];
-  const detail = text ?? title ?? `LSP: ${word}`;
-  const barLabel = language ? `${displayLanguageName(language)} LSP: ${word}` : `LSP: ${word}`;
+  const detail = text;
+  const barLabel = displayName ? `${displayName} LSP: ${label}` : `LSP: ${label}`;
+  const isClickable = action != null;
 
   const handleAction = async () => {
     await onClick();
@@ -118,7 +103,7 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
         title={detail}
         onClick={() => setOpen((o) => !o)}
       >
-        <span className={`lsp-status-row__dot ${STATUS_DOT_MOD[status]}`} aria-hidden />
+        <span className={`lsp-status-row__dot ${SEVERITY_DOT_CLASS[severity]}`} aria-hidden />
         <span className="lsp-status-row__word">{barLabel}</span>
       </button>
       {open && (
@@ -127,7 +112,7 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
           {isClickable && (
             <div className="lsp-status-row__popup-actions">
               <button type="button" className="lsp-status-row__popup-action-btn" onClick={handleAction}>
-                {status === "disabled" ? "Enable" : "Resume"}
+                {actionLabel}
               </button>
             </div>
           )}
@@ -146,9 +131,9 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
                         : "lsp-status-row__popup-lang-row"
                     }
                   >
-                    <span className={`lsp-status-row__dot ${STATUS_DOT_MOD[entry.status]}`} aria-hidden />
+                    <span className={`lsp-status-row__dot ${SEVERITY_DOT_CLASS[entry.severity]}`} aria-hidden />
                     <span>
-                      {displayLanguageName(entry.language)}: {STATUS_WORD[entry.status]}
+                      {entry.displayName ?? entry.language}: {entry.label}
                     </span>
                   </div>
                 );

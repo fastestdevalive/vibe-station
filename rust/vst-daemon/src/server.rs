@@ -60,9 +60,8 @@ use vst_types::events::Broadcaster;
 use vst_types::rest::attachments::{AttachmentsResult, DeleteAttachmentResult};
 use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
 use vst_types::rest::lsp::{
-    LspDefinitionResponse, LspHoverResponse, LspLanguageStatus, LspLanguageSurveyResponse,
-    LspOutlineResponse, LspPositionRequest, LspReferencesResponse, LspStatusResponse,
-    LspStatusesResponse,
+    LspDefinitionResponse, LspHoverResponse, LspLanguageSurveyResponse, LspOutlineResponse,
+    LspPositionRequest, LspReferencesResponse, LspStatusResponse, LspStatusesResponse,
 };
 use vst_types::rest::doctor::DoctorReport;
 use vst_types::rest::modes::{
@@ -2217,14 +2216,7 @@ async fn handle_project_lsp_statuses(
         .lsp_routes
         .statuses(WorkspaceKey::Project { project_id: id })
         .await
-        .map(|pairs| {
-            Json(LspStatusesResponse {
-                statuses: pairs
-                    .into_iter()
-                    .map(|(language, status)| LspLanguageStatus { language, status })
-                    .collect(),
-            })
-        })
+        .map(|statuses| Json(LspStatusesResponse { statuses }))
         .map_err(lsp_err_to_response)
 }
 
@@ -2328,14 +2320,7 @@ async fn handle_worktree_lsp_statuses(
             worktree_id: id,
         })
         .await
-        .map(|pairs| {
-            Json(LspStatusesResponse {
-                statuses: pairs
-                    .into_iter()
-                    .map(|(language, status)| LspLanguageStatus { language, status })
-                    .collect(),
-            })
-        })
+        .map(|statuses| Json(LspStatusesResponse { statuses }))
         .map_err(lsp_err_to_response)
 }
 
