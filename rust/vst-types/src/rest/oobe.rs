@@ -11,6 +11,7 @@ use crate::rest::shared::Mode;
 #[serde(rename_all = "camelCase")]
 pub struct OobeStateResponse {
     pub completed: bool,
+    /// The onboarding step the user is currently on — `1`, `2`, or `3`.
     pub current_step: u8,
     pub default_projects_dir: String,
     /// The resolved `~/.vibe-station` path (varies by `$HOME`, e.g. a
@@ -42,6 +43,15 @@ pub struct ConfirmStep1Result {
 pub struct DetectAndBundleResult {
     pub supported_clis: Vec<SupportedCli>,
     pub created: Vec<Mode>,
+}
+
+/// `POST /oobe/step2` success — step 2 has no user-supplied fields (the
+/// mode/bundle creation it confirms already persisted via `/api/modes`),
+/// so there is no matching `ConfirmStep2Body`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmStep2Result {
+    pub ok: bool,
 }
 
 /// `POST /modes/:cli/starter-bundle` success.

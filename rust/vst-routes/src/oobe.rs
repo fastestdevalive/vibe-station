@@ -12,7 +12,8 @@ use tokio::sync::Mutex;
 use vst_git::paths::Paths;
 use vst_types::events::{Broadcaster, ServerEvent};
 use vst_types::rest::oobe::{
-    CompleteOobeResult, ConfirmStep1Result, DetectAndBundleResult, OobeStateResponse,
+    CompleteOobeResult, ConfirmStep1Result, ConfirmStep2Result, DetectAndBundleResult,
+    OobeStateResponse,
 };
 use vst_types::rest::settings::PatchSettingsBody;
 use vst_types::rest::shared::Mode;
@@ -34,9 +35,16 @@ pub enum OobeRouteError {
 
 /// The on-disk shape of `oobe.json`.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 struct PersistedOobe {
     completed: bool,
     step1_confirmed: bool,
+    /// Whether step 2 (agent mode setup) has been confirmed. `#[serde(default)]`
+    /// on the struct makes a pre-existing `oobe.json` that predates this field
+    /// (no `step2_confirmed` key) still deserialize to `false` instead of
+    /// failing and falling back to `PersistedOobe::default()` — which would
+    /// otherwise re-gate existing users by resetting `completed` to `false`.
+    step2_confirmed: bool,
     /// CLIs whose starter bundle has already been auto-created once via the
     /// automatic (non-explicit) trigger — R12a. Starts empty; never seeded
     /// from pre-existing modes (see `seed_default`).
@@ -133,7 +141,13 @@ impl OobeRoutes {
         } else {
             self.seed_default().await
         };
-        let current_step = if persisted.step1_confirmed { 2 } else { 1 };
+        let current_step = if !persisted.step1_confirmed {
+            1
+        } else if !persisted.step2_confirmed {
+            2
+        } else {
+            3
+        };
         let default_projects_dir = self
             .settings_routes
             .get_settings()
@@ -196,6 +210,17 @@ impl OobeRoutes {
             ok: true,
             default_projects_dir: resolved_str,
         })
+    }
+
+    /// `POST /oobe/step2` — confirm step 2 (agent mode setup) is done, advancing
+    /// `currentStep` to 3. No request body — step 2's own state (which modes
+    /// exist) already persisted via `/api/modes` as each mode was created.
+    pub async fn confirm_step2(&self) -> ConfirmStep2Result {
+        let _guard = self.write_lock.lock().await;
+        let mut persisted = self.read_raw().await;
+        persisted.step2_confirmed = true;
+        self.write(&persisted).await;
+        ConfirmStep2Result { ok: true }
     }
 
     /// `POST /oobe/detect-and-bundle`

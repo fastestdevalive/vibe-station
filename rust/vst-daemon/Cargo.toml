@@ -24,6 +24,7 @@ vst-lifecycle = { workspace = true }
 vst-ws = { workspace = true }
 vst-routes = { workspace = true }
 vst-lsp = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full", "signal"] }
 serde = { workspace = true }
