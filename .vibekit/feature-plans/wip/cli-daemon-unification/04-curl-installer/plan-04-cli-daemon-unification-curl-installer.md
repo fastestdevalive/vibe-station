@@ -90,7 +90,7 @@ docs/
   `"version": "0.0.0"`
   In release CI, `jq` stamps the version into `tauri.conf.json` prior to invoking `tauri-action` / Tauri bundling.
 - `.github/workflows/desktop-build.yml:19-29`:
-  Matrix covers `macos-latest` (`aarch64-apple-darwin`), `macos-15-large` (`x86_64-apple-darwin`), and `ubuntu-22.04` (`x86_64-unknown-linux-gnu`).
+  Matrix covers `macos-latest` (`aarch64-apple-darwin`) and `ubuntu-22.04` (`x86_64-unknown-linux-gnu`). Intel macOS (`x86_64-apple-darwin`, would-be `macos-15-large`) deliberately dropped post-PR-review — the only GitHub-hosted Intel runner left is a paid "larger runners" tier this org doesn't have enabled, and Intel Mac coverage wasn't worth carrying that dependency for.
 
 ---
 
@@ -192,7 +192,7 @@ flowchart TD
 
 ### Phase 3: Release CI Workflow (`.github/workflows/release.yml`)
 - [x] Define workflow triggered on tags `v*` and `workflow_dispatch`.
-- [x] Job `build-cli`: build matrix for `x86_64-unknown-linux-musl`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Build `web-ui`, compile with `--features vst-daemon/embed-ui` and `VST_VERSION`, run Alpine boot check on musl, create tar.gz and .sha256.
+- [x] Job `build-cli`: build matrix for `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin` (Intel macOS dropped, see note above). Build `web-ui`, compile with `--features vst-daemon/embed-ui` and `VST_VERSION`, run Alpine boot check on musl, create tar.gz and .sha256.
 - [x] Job `build-desktop`: build matrix for Linux AppImage/deb and macOS dmg. Stamp `tauri.conf.json` with release version, build Tauri app, generate .sha256.
 - [x] Job `publish-release`: collect all artifacts and checksums, publish to GitHub Release.
 - **Verify:** Validate YAML syntax and action parameters.

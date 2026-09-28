@@ -11,12 +11,12 @@
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 use vst_cli::launch::ensure_daemon_reachable_with_exe;
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+static ENV_LOCK: Mutex<()> = Mutex::const_new(());
 
 fn vst_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_vst"))
@@ -50,7 +50,7 @@ fn kill_daemon_for_home(home: &std::path::Path) {
 
 #[tokio::test]
 async fn ensure_daemon_reachable_spawns_a_headless_daemon_when_none_exists() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -70,7 +70,7 @@ async fn ensure_daemon_reachable_spawns_a_headless_daemon_when_none_exists() {
 
 #[tokio::test]
 async fn preflight_exempt_dies_fast_without_attempting_self_heal() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -114,7 +114,7 @@ async fn preflight_exempt_dies_fast_without_attempting_self_heal() {
 /// a real `config.json` on disk, pointing at a port nothing is listening on.
 #[tokio::test]
 async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();
@@ -166,7 +166,7 @@ async fn vst_open_self_heals_when_config_json_points_at_a_dead_daemon() {
 
 #[tokio::test]
 async fn two_concurrent_self_heals_converge_on_one_daemon() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK.lock().await;
     clear_display_vars();
 
     let tmp = tempfile::tempdir().unwrap();

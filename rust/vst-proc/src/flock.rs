@@ -55,6 +55,7 @@ mod tests {
 
         let f1 = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&path)
             .expect("open f1");
@@ -64,6 +65,7 @@ mod tests {
         // acquire the lock while f1 holds it.
         let f2 = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&path)
             .expect("open f2");
@@ -73,6 +75,7 @@ mod tests {
         drop(f1);
         let f3 = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&path)
             .expect("open f3");

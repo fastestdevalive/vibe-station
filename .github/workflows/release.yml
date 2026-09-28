@@ -47,9 +47,10 @@ jobs:
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             is_musl: true
-          - os: macos-15-large
-            target: x86_64-apple-darwin
-            is_musl: false
+          # Intel macOS (x86_64-apple-darwin) deliberately dropped: the only
+          # GitHub-hosted Intel runner left (macos-15-large) is a paid
+          # "larger runners" tier this org doesn't have enabled -- see the
+          # matching note in desktop-build.yml.
           - os: macos-latest
             target: aarch64-apple-darwin
             is_musl: false
@@ -198,8 +199,7 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-15-large
-            target: x86_64-apple-darwin
+          # Intel macOS dropped here too -- see the build-cli matrix's note above.
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
 

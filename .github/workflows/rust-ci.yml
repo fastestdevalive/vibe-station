@@ -2,9 +2,9 @@ name: Rust CI
 
 on:
   push:
-    paths: ["rust/**"]
+    paths: ["rust/**", ".github/workflows/rust-ci.yml"]
   pull_request:
-    paths: ["rust/**"]
+    paths: ["rust/**", ".github/workflows/rust-ci.yml"]
 
 concurrency:
   group: rust-ci-${{ github.ref }}
@@ -26,16 +26,45 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # vst-routes' LSP fallback-definition tests shell out to ripgrep --
+      # a pre-existing test dependency this workflow never actually
+      # installed (this gate apparently never got this far before; found
+      # while fixing unrelated cli-daemon-unification CI issues in the same
+      # PR).
+      - name: Install ripgrep
+        run: sudo apt-get update -y && sudo apt-get install -y ripgrep
+
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: "rust -> target"
 
+      # EmbarkStudios/cargo-deny-action runs its OWN check internally (against
+      # whatever manifest-path/arguments it's given) but doesn't leave the
+      # `cargo-deny` binary on PATH for later steps -- the two manual
+      # `cargo deny check` steps below (workspace, then agy-acp licenses)
+      # failed with "no such command: deny" because of that. Install the
+      # actual binary instead so both manual invocations can find it; this
+      # also avoids double-checking rust/Cargo.toml (once via the action's
+      # own run, once via the "cargo deny check (workspace)" step below).
       - name: Install cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: taiki-e/install-action@v2
         with:
-          manifest-path: rust/Cargo.toml
-          arguments: --all-features
+          tool: cargo-deny
+
+      # rust-gate.sh's clippy pass uses --all-features (by design, to catch
+      # bugs in feature-gated code that's off by default) -- vst-daemon's new
+      # `embed-ui` feature (cli-daemon-unification Part 00) has a build.rs
+      # guard that panics if web-ui/dist doesn't exist at all, since
+      # rust-embed's own failure mode for a missing folder is a confusing
+      # "no associated function `get`" error at the call site instead. This
+      # Rust-only CI job has no Node/pnpm toolchain and doesn't need the
+      # REAL built web UI to typecheck/lint the embed-ui code path -- an
+      # empty placeholder directory satisfies both the build.rs guard and
+      # rust-embed's derive macro (zero embedded files is a valid, if
+      # useless, Embed impl).
+      - name: Placeholder web-ui/dist (embed-ui feature needs the dir to exist)
+        run: mkdir -p web-ui/dist && touch web-ui/dist/index.html
 
       - name: Run the gate
         run: rust/scripts/rust-gate.sh --workspace
@@ -43,8 +72,13 @@ jobs:
       - name: Build + gate agy-acp (walled-garden)
         run: rust/scripts/agy-acp-gate.sh
 
+      # `--manifest-path` is a cargo-deny GLOBAL flag (before the `check`
+      # subcommand), not a `check` flag -- `cargo deny check --manifest-path
+      # ...` is invalid syntax on this cargo-deny version ("unexpected
+      # argument '--manifest-path' found"). Confirmed the corrected ordering
+      # actually passes locally against both manifests before fixing here.
       - name: cargo deny check (workspace)
-        run: cargo deny check --manifest-path rust/Cargo.toml
+        run: cargo deny --manifest-path rust/Cargo.toml check
 
       - name: cargo deny check licenses (agy-acp)
-        run: cargo deny check licenses --manifest-path rust/vendor/openab/agy-acp/Cargo.toml
+        run: cargo deny --manifest-path rust/vendor/openab/agy-acp/Cargo.toml check licenses

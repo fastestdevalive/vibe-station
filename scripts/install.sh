@@ -27,7 +27,8 @@
 #   vibe-station-<triple>.AppImage   + .sha256          (glibc Linux only)
 # where <triple> is:
 #   x86_64-unknown-linux-musl / aarch64-unknown-linux-musl  (Linux CLI, static)
-#   x86_64-apple-darwin / aarch64-apple-darwin              (macOS CLI)
+#   aarch64-apple-darwin                                    (macOS CLI, Apple Silicon only --
+#                                                             Intel isn't published, see detect_platform())
 #   x86_64-unknown-linux-gnu / aarch64-unknown-linux-gnu    (Linux AppImage)
 #
 # Options (each also settable via env var):
@@ -133,6 +134,13 @@ detect_platform() {
 		arm64 | aarch64) ARCH=aarch64 ;;
 		*) err "unsupported architecture: $(uname -m)" ;;
 	esac
+	# Intel macOS: no vst-x86_64-apple-darwin.tar.gz is published (GitHub's
+	# only remaining hosted Intel Mac runner is a paid "larger runners" tier
+	# this project doesn't use) -- fail clearly here instead of a bare
+	# download-404 further down.
+	if [ "$OS" = darwin ] && [ "$ARCH" = x86_64 ]; then
+		err "Intel macOS isn't published (only Apple Silicon / aarch64); download the .dmg from https://github.com/$REPO/releases if one exists for your platform, or build vst from source"
+	fi
 }
 
 cli_triple() {
