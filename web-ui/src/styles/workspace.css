@@ -7978,3 +7978,56 @@ body[data-tauri-os="macos"] .top-bar {
   padding-left: 70px;
 }
 
+
+/* ── Doctor icon badge (LeftSidebar bottom bar) ─────────────────────────── */
+
+.left-sidebar__doctor-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.left-sidebar__doctor-dot--red {
+  background: var(--status-error, var(--fg-danger, #e74c3c));
+}
+
+.left-sidebar__doctor-dot--yellow {
+  background: var(--status-warn, var(--fg-warning, #f39c12));
+}
+
+.left-sidebar__doctor-dot--grey {
+  background: var(--fg-muted, #888);
+}
+
+/* ── Doctor icon badge (TopBar — kept for reference, icon moved to sidebar) */
+
+.top-bar__doctor-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-danger, #e74c3c);
+  color: #fff;
+  font-size: 8px;
+  font-weight: bold;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.top-bar__doctor-disconnected {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-muted, #aaa);
+  pointer-events: none;
+}

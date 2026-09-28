@@ -22,6 +22,7 @@ import type {
   CreateSessionBody,
   CreateWorktreeBody,
   DetectAndBundleResult,
+  DoctorReport,
   DiffStat,
   DiskUsageResponse,
   DraftConfig,
@@ -1208,6 +1209,20 @@ export function createClientApi() {
         method: "POST",
       });
       return parseJson<{ ok: true; completed: true }>(res);
+    },
+
+    async confirmOobeStep2(): Promise<{ ok: true }> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/oobe/step2`, { method: "POST" });
+      return parseJson<{ ok: true }>(res);
+    },
+
+    // ── Doctor ──────────────────────────────────────────────────────────────────
+
+    async getDoctorReport(): Promise<DoctorReport> {
+      const root = baseUrl();
+      const res = await apiFetch(`${root}/doctor`);
+      return parseJson<DoctorReport>(res);
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

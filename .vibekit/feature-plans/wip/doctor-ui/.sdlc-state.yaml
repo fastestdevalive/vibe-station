@@ -1,0 +1,24 @@
+feature: doctor-ui
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-191
+created: 2026-09-27T00:00:00Z
+
+master:
+  prd: skipped   # informal PRD already written at docs/DOCTOR-UI-PRD.md; chain starts at plan
+  plan: complete # plan-doctor-ui.md reviewed clean by opus gate, round 2 (round 1 found 4 blockers, all fixed)
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: verifying
+    last_completed: "8.T6"
+    awaiting_phase: verify
+    awaiting_artifact: null
+    impl_turn: {phase: 8, of: 8}
+    phase_chain: [plan, turn-implement, verify]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null

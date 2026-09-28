@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Unlink } from "lucide-react";
 import type { Session, SessionState } from "@/api/types";
 import type { ApiInstance } from "@/api";
@@ -39,6 +40,56 @@ function sessionStateToStatus(state: SessionState): WorktreeRolledUpStatus {
 function statusPhrase(state: SessionState): string {
   if (state === "waiting_for_human") return "waiting for agent";
   return state.replace(/_/g, " ");
+}
+
+/**
+ * The "Detach?" confirm popup. Portaled to `document.body` (same pattern as
+ * `ProjectPlusMenu`) and positioned from a `rect` captured at click time,
+ * rather than the previous plain `position: absolute` chip child that relied
+ * on `z-index: 70` alone to beat the composer below it — that only works as
+ * long as nothing in between ever gains its own stacking context.
+ */
+function DetachConfirmPopup({
+  rect,
+  label,
+  onConfirm,
+  onCancel,
+}: {
+  rect: DOMRect;
+  label: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return createPortal(
+    <div
+      className="chat-subagent-row__confirm-popup"
+      style={{ position: "fixed", top: rect.bottom + 4, left: rect.left }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <span className="chat-subagent-row__confirm-label">{label}</span>
+      <button
+        type="button"
+        className="chat-subagent-row__confirm-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          onConfirm();
+        }}
+      >
+        Detach
+      </button>
+      <button
+        type="button"
+        className="chat-subagent-row__cancel-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          onCancel();
+        }}
+      >
+        Cancel
+      </button>
+    </div>,
+    document.body,
+  );
 }
 
 /**
@@ -102,7 +153,9 @@ export interface SubagentRowProps {
 export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
   const allSessions = useServerStore((s) => s.sessions);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
-  const [confirmDelink, setConfirmDelink] = useState<string | null>(null);
+  // `rect` is the chip's bounding box, captured at click time — anchors the
+  // portaled DetachConfirmPopup (see that component's comment).
+  const [confirmDelink, setConfirmDelink] = useState<{ id: string; rect: DOMRect } | null>(null);
 
   const byId = useMemo(() => new Map(allSessions.map((s) => [s.id, s])), [allSessions]);
 
@@ -199,46 +252,26 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
           <span className="chat-subagent-row__label" title={sessionLabel(parent)}>
             Parent · {sessionLabel(parent)}
           </span>
-          {api && confirmDelink !== session.id ? (
+          {api && confirmDelink?.id !== session.id ? (
             <button
               type="button"
               className="chat-subagent-row__delink"
               aria-label="Leave parent"
               onClick={(e) => {
                 e.stopPropagation();
-                setConfirmDelink(session.id);
+                setConfirmDelink({ id: session.id, rect: e.currentTarget.parentElement!.getBoundingClientRect() });
               }}
             >
               <Unlink size={11} />
             </button>
           ) : null}
-          {confirmDelink === session.id ? (
-            <div
-              className="chat-subagent-row__confirm-popup"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <span className="chat-subagent-row__confirm-label">Leave parent?</span>
-              <button
-                type="button"
-                className="chat-subagent-row__confirm-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleDelink(session.id);
-                }}
-              >
-                Detach
-              </button>
-              <button
-                type="button"
-                className="chat-subagent-row__cancel-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDelink(null);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
+          {confirmDelink?.id === session.id ? (
+            <DetachConfirmPopup
+              rect={confirmDelink.rect}
+              label="Leave parent?"
+              onConfirm={() => void handleDelink(session.id)}
+              onCancel={() => setConfirmDelink(null)}
+            />
           ) : null}
         </div>
       ) : null}
@@ -276,48 +309,26 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
             <StatusDot status={sessionStateToStatus(statusFor(child))} pr={null} />
             <ChipIcon session={child} api={api} />
             <span className="chat-subagent-row__label">{sessionLabel(child)}</span>
-            {api && confirmDelink !== child.id ? (
+            {api && confirmDelink?.id !== child.id ? (
               <button
                 type="button"
                 className="chat-subagent-row__delink"
                 aria-label="Detach subagent"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setConfirmDelink(child.id);
+                  setConfirmDelink({ id: child.id, rect: e.currentTarget.parentElement!.getBoundingClientRect() });
                 }}
               >
                 <Unlink size={11} />
               </button>
             ) : null}
-            {confirmDelink === child.id ? (
-              <div
-                className="chat-subagent-row__confirm-popup"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <span className="chat-subagent-row__confirm-label">
-                  Detach {sessionLabel(child)}?
-                </span>
-                <button
-                  type="button"
-                  className="chat-subagent-row__confirm-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleDelink(child.id);
-                  }}
-                >
-                  Detach
-                </button>
-                <button
-                  type="button"
-                  className="chat-subagent-row__cancel-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setConfirmDelink(null);
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
+            {confirmDelink?.id === child.id ? (
+              <DetachConfirmPopup
+                rect={confirmDelink.rect}
+                label={`Detach ${sessionLabel(child)}?`}
+                onConfirm={() => void handleDelink(child.id)}
+                onCancel={() => setConfirmDelink(null)}
+              />
             ) : null}
           </div>
         );

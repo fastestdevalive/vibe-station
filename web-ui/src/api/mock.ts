@@ -23,6 +23,7 @@ import type {
   CreateSessionBody,
   CreateWorktreeBody,
   DetectAndBundleResult,
+  DoctorReport,
   DiffStat,
   DiskUsageResponse,
   DraftConfig,
@@ -1406,6 +1407,29 @@ export function createMockApi() {
       oobeState.completed = true;
       emit({ type: "oobe:state-updated", completed: true });
       return { ok: true, completed: true };
+    },
+
+    async confirmOobeStep2(): Promise<{ ok: true }> {
+      oobeState.currentStep = 3;
+      return { ok: true };
+    },
+
+    // ── Doctor ──────────────────────────────────────────────────────────────────
+
+    async getDoctorReport(): Promise<DoctorReport> {
+      return {
+        hardOk: true,
+        ok: true,
+        hostOs: "linux",
+        hostname: "mock-host",
+        checkedAt: new Date().toISOString(),
+        checks: [
+          { name: "tmux", status: "ok", required: true, group: "required", message: "tmux 3.4", resolvedPath: "/usr/bin/tmux", installHint: null },
+          { name: "git", status: "ok", required: true, group: "required", message: "git 2.43.0", resolvedPath: "/usr/bin/git", installHint: null },
+          { name: "daemon-reachable", status: "ok", required: true, group: "required", message: "reachable", resolvedPath: null, installHint: null },
+          { name: "plugin-claude", status: "ok", required: false, group: "agent_cli", message: "claude found on PATH", resolvedPath: "/usr/local/bin/claude", installHint: null },
+        ],
+      };
     },
 
     // ── Settings ────────────────────────────────────────────────────────────────

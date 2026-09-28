@@ -3,20 +3,22 @@ import { motion, AnimatePresence } from "framer-motion";
 import type { ApiInstance } from "@/api";
 import { OobeStep1Location } from "./OobeStep1Location";
 import { OobeStep2Modes } from "./OobeStep2Modes";
+import { OobeStep3Doctor } from "./OobeStep3Doctor";
 import "./OobeFlow.css";
 
 /** Total OOBE step count. A single source of truth so the step indicator
  *  ("Step N of TOTAL_STEPS") and the "is there a previous step" check stay
  *  correct if a 3rd step is ever added — nothing else in this file hardcodes
  *  "2". */
-const TOTAL_STEPS = 2;
+const TOTAL_STEPS = 3;
 
 interface OobeFlowProps {
   api: ApiInstance;
-  currentStep: 1 | 2;
+  currentStep: 1 | 2 | 3;
   defaultProjectsDir: string;
   vstHome: string;
   onStep1Confirmed: (dir: string) => void;
+  onStep2Confirmed: () => void;
   onCompleted: () => void;
 }
 
@@ -26,9 +28,10 @@ export function OobeFlow({
   defaultProjectsDir,
   vstHome,
   onStep1Confirmed,
+  onStep2Confirmed,
   onCompleted,
 }: OobeFlowProps) {
-  const [step, setStep] = useState<1 | 2>(currentStep);
+  const [step, setStep] = useState<1 | 2 | 3>(currentStep);
 
   return (
     <div className="oobe-screen">
@@ -45,7 +48,7 @@ export function OobeFlow({
               <button
                 type="button"
                 className="oobe-back-link"
-                onClick={() => setStep((s) => (s - 1) as 1 | 2)}
+                onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}
               >
                 ← Back
               </button>
@@ -77,8 +80,16 @@ export function OobeFlow({
                   setStep(2);
                 }}
               />
+            ) : step === 2 ? (
+              <OobeStep2Modes
+                api={api}
+                onStep2Confirmed={() => {
+                  onStep2Confirmed();
+                  setStep(3);
+                }}
+              />
             ) : (
-              <OobeStep2Modes api={api} onCompleted={onCompleted} />
+              <OobeStep3Doctor api={api} onCompleted={onCompleted} />
             )}
           </motion.div>
         </AnimatePresence>
