@@ -266,7 +266,9 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
 
     let cloudflared_found = check("cloudflared", || which("cloudflared"));
     if !cloudflared_found {
-        if let Some(hint) = vst_types::rest::doctor_hints::hint_for("cloudflared", std::env::consts::OS) {
+        if let Some(hint) =
+            vst_types::rest::doctor_hints::hint_for("cloudflared", std::env::consts::OS)
+        {
             print_hint(hint);
         }
     }

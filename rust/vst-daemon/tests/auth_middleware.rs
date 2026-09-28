@@ -26,13 +26,14 @@ fn make_opts(
     auth_state: Option<AuthState>,
     no_auth: bool,
 ) -> BuildServerOptions {
-    make_opts_with_dist(tmp, auth_state, no_auth, None)
+    make_opts_with_dist(tmp, auth_state, no_auth, false, None)
 }
 
 fn make_opts_with_dist(
     tmp: &std::path::Path,
     auth_state: Option<AuthState>,
     no_auth: bool,
+    headless: bool,
     dist_path: Option<std::path::PathBuf>,
 ) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
@@ -44,6 +45,8 @@ fn make_opts_with_dist(
         port: 0,
         auth_state,
         no_auth,
+        headless,
+        stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path,
         persist_epoch: None,
         store,
@@ -174,6 +177,7 @@ async fn deep_link_get_with_missing_token_serves_spa_not_401() {
         tmp.path(),
         Some(auth_state),
         false,
+        false,
         Some(dist),
     ));
 
@@ -195,6 +199,7 @@ async fn deep_link_get_with_invalid_token_serves_spa_not_401() {
     let router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(auth_state),
+        false,
         false,
         Some(dist),
     ));
@@ -223,6 +228,7 @@ async fn api_route_is_still_protected_by_get_exemption() {
         tmp.path(),
         Some(auth_state),
         false,
+        false,
         Some(dist),
     ));
 
@@ -240,6 +246,7 @@ async fn non_get_method_on_deep_link_is_still_protected() {
     let router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(auth_state),
+        false,
         false,
         Some(dist),
     ));
@@ -268,6 +275,7 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
         tmp.path(),
         Some(AuthState::new("super-secret-token", 0)),
         false,
+        false,
         Some(dist.clone()),
     ));
     let ws_resp = ws_router.oneshot(remote_get("/ws")).await.unwrap();
@@ -280,6 +288,7 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
     let ma_router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(AuthState::new("super-secret-token", 0)),
+        false,
         false,
         Some(dist),
     ));
@@ -309,4 +318,176 @@ async fn auth_logout_exemption_matches_post_rewrite_path() {
 
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
     assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// A bare request with no `cf-connecting-ip` header — the middleware's
+/// `client_ip.is_empty()` branch treats an absent TCP peer (as in these
+/// `oneshot`-driven unit tests, which never bind a real socket) as loopback.
+fn loopback_get(uri: &str) -> Request<axum::body::Body> {
+    Request::builder()
+        .uri(uri)
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn headless_daemon_rejects_unauthenticated_loopback_request() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let router = build_app(make_opts_with_dist(
+        tmp.path(),
+        Some(auth_state),
+        false,
+        true, // headless
+        None,
+    ));
+
+    // Loopback would normally be trusted with no token — headless must
+    // remove that bypass entirely.
+    let resp = router.oneshot(loopback_get("/api/sessions")).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn headless_daemon_allows_loopback_request_with_valid_token() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let valid_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts_with_dist(
+        tmp.path(),
+        Some(auth_state),
+        false,
+        true, // headless
+        None,
+    ));
+
+    let resp = router
+        .oneshot(remote_get_with_auth("/sessions", &valid_token))
+        .await
+        .unwrap();
+
+    // Headless doesn't break legitimate authenticated use (e.g. the CLI
+    // itself, which always sends a bearer token regardless of headless mode).
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn non_headless_daemon_still_trusts_loopback_with_no_token() {
+    // Regression guard: confirms the additive nature of the headless gate —
+    // every existing (headless: false) test already covers this implicitly,
+    // but this test makes the "still works" case explicit and named.
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router.oneshot(loopback_get("/api/sessions")).await.unwrap();
+
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn daemon_stop_route_requires_auth_like_any_other_api_route() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // No exemption exists for this route — a remote (non-loopback), unauthenticated
+    // POST must be rejected exactly like any other /api route.
+    let req = Request::builder()
+        .uri("/api/daemon/stop")
+        .method("POST")
+        .header("cf-connecting-ip", "1.2.3.4")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Found in review: `/api/daemon/stop` checked only that a token was
+/// present/valid, not its scope — a Browser (or Mobile) session could stop
+/// the daemon out from under whoever's Tauri/CLI session actually owns it.
+#[tokio::test]
+async fn daemon_stop_route_rejects_a_browser_scoped_token() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let browser_token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let req = Request::builder()
+        .uri("/api/daemon/stop")
+        .method("POST")
+        .header("cf-connecting-ip", "1.2.3.4")
+        .header("authorization", format!("Bearer {browser_token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// Found in review: `/api/auth/continue/mint` is documented as CLI-only but
+/// didn't enforce it — a Browser-scoped token could mint unlimited
+/// `local-cli`-origin one-time codes.
+#[tokio::test]
+async fn continue_mint_route_rejects_a_browser_scoped_token() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let browser_token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // Deliberately no `cf-connecting-ip` here -- that header trips a SEPARATE,
+    // unrelated tunnel-block check in `mint_continue_code` itself (also a
+    // 403), which would make this test pass for the wrong reason. Loopback
+    // requests still get `TokenPayload` attached when a bearer token is
+    // present (see `auth_middleware`'s loopback branch), so the scope check
+    // is exercised either way.
+    let req = Request::builder()
+        .uri("/api/auth/continue/mint")
+        .method("POST")
+        .header("authorization", format!("Bearer {browser_token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+/// A CLI-scoped token must still be allowed through both scope gates above —
+/// confirms the fix is a scope check, not an accidental blanket rejection.
+#[tokio::test]
+async fn daemon_stop_and_continue_mint_allow_a_cli_scoped_token() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let stop_req = Request::builder()
+        .uri("/api/daemon/stop")
+        .method("POST")
+        .header("cf-connecting-ip", "1.2.3.4")
+        .header("authorization", format!("Bearer {cli_token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let stop_resp = router.clone().oneshot(stop_req).await.unwrap();
+    assert_eq!(stop_resp.status(), StatusCode::OK);
+
+    // No `cf-connecting-ip` -- see the sibling rejection test's comment.
+    let mint_req = Request::builder()
+        .uri("/api/auth/continue/mint")
+        .method("POST")
+        .header("authorization", format!("Bearer {cli_token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let mint_resp = router.oneshot(mint_req).await.unwrap();
+    assert_eq!(
+        mint_resp.status(),
+        StatusCode::OK,
+        "a Cli-scoped token must pass the scope check and successfully mint a code"
+    );
 }

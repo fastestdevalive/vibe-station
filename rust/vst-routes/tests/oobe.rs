@@ -381,7 +381,12 @@ async fn test_confirm_step2_persists_and_advances_current_step() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // Confirm step 1 first, which advances current_step to 2.
     let abs = dir.path().join("projects").to_string_lossy().to_string();
@@ -406,7 +411,12 @@ async fn test_get_state_reads_old_oobe_json_without_step2_confirmed_key() {
     let mode_routes =
         build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
     let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
-    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+    let oobe = OobeRoutes::new(
+        mode_routes.clone(),
+        settings_routes,
+        broadcaster.clone(),
+        paths.clone(),
+    );
 
     // Simulate a pre-existing oobe.json from before this feature shipped: it
     // has `step2_confirmed` key missing. `#[serde(default)]` must let it
@@ -425,7 +435,10 @@ async fn test_get_state_reads_old_oobe_json_without_step2_confirmed_key() {
     // The core regression: `#[serde(default)]` lets the old file deserialize
     // so its `completed: true` survives — it must NOT fall back to a default
     // (all-false) state and re-gate the user.
-    assert!(state.completed, "old completed=true must survive a missing step2_confirmed key");
+    assert!(
+        state.completed,
+        "old completed=true must survive a missing step2_confirmed key"
+    );
     // A file written before step 2 existed never confirmed it, so
     // step1_confirmed=true + step2_confirmed=false (the default) derives
     // current_step == 2 — not 3. The point of this test is the `completed`

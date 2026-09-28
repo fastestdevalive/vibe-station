@@ -21,7 +21,13 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
         Option<LspAction>,
         Option<&str>,
     ) = match status {
-        LspStatus::Ready => ("Ready", LspSeverity::Ok, "LSP: ready".to_string(), None, None),
+        LspStatus::Ready => (
+            "Ready",
+            LspSeverity::Ok,
+            "LSP: ready".to_string(),
+            None,
+            None,
+        ),
         LspStatus::Starting => (
             "Starting",
             LspSeverity::Warn,
@@ -73,7 +79,13 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
             // practice — this arm intentionally ignores it rather than branching on a case
             // that can't be reached, to avoid implying a "not available for X" message that
             // would never actually show.
-            ("N/A", LspSeverity::Neutral, "LSP: unsupported file type".to_string(), None, None)
+            (
+                "N/A",
+                LspSeverity::Neutral,
+                "LSP: unsupported file type".to_string(),
+                None,
+                None,
+            )
         }
         LspStatus::Error => (
             "Error",
@@ -114,17 +126,32 @@ mod tests {
     fn every_state_has_a_non_null_detail() {
         for status in ALL_STATUSES {
             let p = describe(status, None);
-            assert!(!p.detail.is_empty(), "{status:?} produced empty detail with no language");
+            assert!(
+                !p.detail.is_empty(),
+                "{status:?} produced empty detail with no language"
+            );
             let p = describe(status, Some("rust"));
-            assert!(!p.detail.is_empty(), "{status:?} produced empty detail with a language");
+            assert!(
+                !p.detail.is_empty(),
+                "{status:?} produced empty detail with a language"
+            );
         }
     }
 
     #[test]
     fn disabled_gets_enable_action_stopped_and_idle_get_resume_others_none() {
-        assert_eq!(describe(LspStatus::Disabled, None).action, Some(LspAction::Enable));
-        assert_eq!(describe(LspStatus::Stopped, Some("rust")).action, Some(LspAction::Resume));
-        assert_eq!(describe(LspStatus::Idle, Some("rust")).action, Some(LspAction::Resume));
+        assert_eq!(
+            describe(LspStatus::Disabled, None).action,
+            Some(LspAction::Enable)
+        );
+        assert_eq!(
+            describe(LspStatus::Stopped, Some("rust")).action,
+            Some(LspAction::Resume)
+        );
+        assert_eq!(
+            describe(LspStatus::Idle, Some("rust")).action,
+            Some(LspAction::Resume)
+        );
         for status in [
             LspStatus::Ready,
             LspStatus::Starting,
@@ -133,7 +160,11 @@ mod tests {
             LspStatus::Unsupported,
             LspStatus::Error,
         ] {
-            assert_eq!(describe(status, Some("rust")).action, None, "{status:?} should have no action");
+            assert_eq!(
+                describe(status, Some("rust")).action,
+                None,
+                "{status:?} should have no action"
+            );
         }
     }
 
@@ -141,8 +172,14 @@ mod tests {
     fn not_found_and_unsupported_are_neutral_not_warn() {
         // Regression guard: these are steady-state "not on this host" facts, not transient
         // busy-states like Starting/Indexing (which ARE Warn) — see the comment in `describe()`.
-        assert_eq!(describe(LspStatus::NotFound, Some("rust")).severity, LspSeverity::Neutral);
-        assert_eq!(describe(LspStatus::Unsupported, None).severity, LspSeverity::Neutral);
+        assert_eq!(
+            describe(LspStatus::NotFound, Some("rust")).severity,
+            LspSeverity::Neutral
+        );
+        assert_eq!(
+            describe(LspStatus::Unsupported, None).severity,
+            LspSeverity::Neutral
+        );
     }
 
     #[test]
@@ -176,12 +213,21 @@ mod tests {
     #[test]
     fn labels_match_existing_frontend_wording() {
         assert_eq!(describe(LspStatus::Ready, Some("rust")).label, "Ready");
-        assert_eq!(describe(LspStatus::Starting, Some("rust")).label, "Starting");
-        assert_eq!(describe(LspStatus::Indexing, Some("rust")).label, "Indexing");
+        assert_eq!(
+            describe(LspStatus::Starting, Some("rust")).label,
+            "Starting"
+        );
+        assert_eq!(
+            describe(LspStatus::Indexing, Some("rust")).label,
+            "Indexing"
+        );
         assert_eq!(describe(LspStatus::Idle, Some("rust")).label, "Idle");
         assert_eq!(describe(LspStatus::Stopped, Some("rust")).label, "Stopped");
         assert_eq!(describe(LspStatus::Disabled, None).label, "Disabled");
-        assert_eq!(describe(LspStatus::NotFound, Some("rust")).label, "Unavailable");
+        assert_eq!(
+            describe(LspStatus::NotFound, Some("rust")).label,
+            "Unavailable"
+        );
         assert_eq!(describe(LspStatus::Unsupported, None).label, "N/A");
         assert_eq!(describe(LspStatus::Error, Some("rust")).label, "Error");
     }

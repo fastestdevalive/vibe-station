@@ -78,7 +78,8 @@ jobs:
 
       # ── Bun (vendored claude-agent-acp install) ───────────────────────────
       # tauri.conf.json's beforeBuildCommand runs scripts/prep-sidecar.sh,
-      # which builds the Rust vst-daemon + vst-cli release binaries, downloads
+      # which builds the merged vst binary (CLI + daemon, one binary as of
+      # cli-daemon-unification's Part 00), downloads
       # cloudflared, installs the vendored claude-agent-acp adapter (`bun
       # install` — a bundle.resources input, so the build fails without bun),
       # and builds the agy-acp adapter — everything the now-removed

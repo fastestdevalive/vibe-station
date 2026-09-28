@@ -94,8 +94,7 @@ mod tests {
         };
 
         let value = serde_json::to_value(&report).expect("serialize report");
-        let back: DoctorReport =
-            serde_json::from_value(value).expect("deserialize report");
+        let back: DoctorReport = serde_json::from_value(value).expect("deserialize report");
         assert_eq!(report, back);
     }
 }

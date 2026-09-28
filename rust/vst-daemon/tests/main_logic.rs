@@ -88,7 +88,7 @@ async fn acquire_lock_creates_file_with_current_pid() {
     let tmp = tempdir().unwrap();
     let lock_path = tmp.path().join(".daemon.lock");
 
-    acquire_lock(&lock_path)
+    let file = acquire_lock(&lock_path)
         .await
         .expect("should acquire fresh lock");
 
@@ -99,11 +99,15 @@ async fn acquire_lock_creates_file_with_current_pid() {
         .expect("lock file should contain a PID");
     assert_eq!(written_pid, std::process::id());
 
-    release_lock(&lock_path).await;
+    release_lock(file).await;
+    // release_lock must NEVER unlink the file — only drop the flock (see
+    // lock.rs's doc comment on why deleting it would reintroduce the race).
     assert!(
-        !lock_path.exists(),
-        "lock file should be removed after release"
+        lock_path.exists(),
+        "lock file must still exist after release"
     );
+    let after = tokio::fs::read_to_string(&lock_path).await.unwrap();
+    assert_eq!(after, written, "content unchanged by release");
 }
 
 #[tokio::test]
@@ -112,29 +116,33 @@ async fn acquire_lock_creates_parent_directory() {
     // Nested path — parent does not yet exist.
     let lock_path = tmp.path().join("nested").join("dir").join(".daemon.lock");
 
-    acquire_lock(&lock_path)
+    let file = acquire_lock(&lock_path)
         .await
         .expect("should create parent dirs and acquire lock");
     assert!(lock_path.exists());
 
-    release_lock(&lock_path).await;
+    release_lock(file).await;
 }
 
 #[tokio::test]
-async fn acquire_lock_takes_over_stale_pid() {
+async fn acquire_lock_overwrites_a_stale_unheld_lock_file() {
+    // A lock file can exist on disk with old/bogus content (e.g. left behind
+    // by a process that has since exited, or an old-format lock file from
+    // before the flock-based rewrite) without anything actually holding an
+    // flock on it — acquire_lock must succeed and overwrite the content.
+    // There is no "stale PID" concept to check anymore: the kernel already
+    // released any prior lock the moment its holder exited.
     let tmp = tempdir().unwrap();
     let lock_path = tmp.path().join(".daemon.lock");
 
-    // Write a lock file with a PID that is extremely unlikely to exist.
-    let dead_pid = 999_999i32;
-    tokio::fs::write(&lock_path, dead_pid.to_string())
+    let stale_pid = 999_999i32;
+    tokio::fs::write(&lock_path, stale_pid.to_string())
         .await
         .unwrap();
 
-    // Should succeed — stale lock taken over.
-    acquire_lock(&lock_path)
+    let file = acquire_lock(&lock_path)
         .await
-        .expect("should take over stale lock");
+        .expect("should acquire lock over a stale, unheld lock file");
 
     let written = tokio::fs::read_to_string(&lock_path).await.unwrap();
     let written_pid: u32 = written.trim().parse().unwrap();
@@ -144,19 +152,25 @@ async fn acquire_lock_takes_over_stale_pid() {
         "lock should now contain our PID"
     );
 
-    release_lock(&lock_path).await;
+    release_lock(file).await;
 }
 
 #[tokio::test]
-async fn acquire_lock_rejects_live_pid() {
+async fn acquire_lock_rejects_when_flock_held() {
     let tmp = tempdir().unwrap();
     let lock_path = tmp.path().join(".daemon.lock");
 
-    // PID 1 (init/systemd) is always alive on Linux.
-    tokio::fs::write(&lock_path, "1").await.unwrap();
+    // Hold the lock via a first acquire_lock call — the returned File must
+    // stay alive (bound to `_held`) for the flock to remain held.
+    let _held = acquire_lock(&lock_path)
+        .await
+        .expect("first acquire should succeed");
 
     let err = acquire_lock(&lock_path).await;
-    assert!(err.is_err(), "should fail when stored pid is alive");
+    assert!(
+        err.is_err(),
+        "second acquire while the first holds the flock should fail"
+    );
     let msg = err.unwrap_err().to_string();
     assert!(
         msg.contains("already running"),
@@ -176,6 +190,8 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
         port: 0,
         auth_state: None,
         no_auth: true,
+        headless: false,
+        stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
         store,
