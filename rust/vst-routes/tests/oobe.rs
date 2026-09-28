@@ -15,6 +15,7 @@ use vst_routes::settings::SettingsRoutes;
 use vst_store::StoreHandle;
 use vst_types::domain::ProjectRecord;
 use vst_types::events::Broadcaster;
+use vst_types::rest::oobe::ConfirmStep2Result;
 use vst_types::rest::shared::Mode;
 use vst_types::CliId;
 
@@ -309,4 +310,65 @@ async fn test_confirm_step1_rejects_an_existing_unwritable_directory() {
         matches!(result, Err(OobeRouteError::ValidationError(_))),
         "expected a validation error for an unwritable existing directory, got {result:?}"
     );
+}
+
+#[tokio::test]
+async fn test_confirm_step2_persists_and_advances_current_step() {
+    let dir = tempdir().unwrap();
+    let paths = Paths::with_home(dir.path().join("vst"));
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let mode_routes =
+        build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
+    let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
+    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+
+    // Confirm step 1 first, which advances current_step to 2.
+    let abs = dir.path().join("projects").to_string_lossy().to_string();
+    oobe.confirm_step1(abs).await.expect("step1 should succeed");
+    let state = oobe.get_state().await;
+    assert_eq!(state.current_step, 2);
+
+    // Confirm step 2 — ok: true, and a fresh get_state() now reads step 3.
+    let result = oobe.confirm_step2().await;
+    assert_eq!(result, ConfirmStep2Result { ok: true });
+
+    let state = oobe.get_state().await;
+    assert_eq!(state.current_step, 3);
+}
+
+#[tokio::test]
+async fn test_get_state_reads_old_oobe_json_without_step2_confirmed_key() {
+    let dir = tempdir().unwrap();
+    let paths = Paths::with_home(dir.path().join("vst"));
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    let broadcaster = Broadcaster::new(16);
+    let mode_routes =
+        build_mode_routes(&store, &broadcaster, dir.path().join("modes.json"), &paths);
+    let settings_routes = SettingsRoutes::new(paths.clone(), broadcaster.clone());
+    let oobe = OobeRoutes::new(mode_routes.clone(), settings_routes, broadcaster.clone(), paths.clone());
+
+    // Simulate a pre-existing oobe.json from before this feature shipped: it
+    // has `step2_confirmed` key missing. `#[serde(default)]` must let it
+    // deserialize (with `step2_confirmed` defaulting to false) instead of
+    // failing and falling back to `PersistedOobe::default()` — which would
+    // otherwise reset `completed` back to false and re-gate this user.
+    let oobe_path = paths.vst_home().join("oobe.json");
+    std::fs::create_dir_all(paths.vst_home()).unwrap();
+    std::fs::write(
+        &oobe_path,
+        r#"{"completed":true,"step1_confirmed":true,"auto_bundle_created_for":[]}"#,
+    )
+    .unwrap();
+
+    let state = oobe.get_state().await;
+    // The core regression: `#[serde(default)]` lets the old file deserialize
+    // so its `completed: true` survives — it must NOT fall back to a default
+    // (all-false) state and re-gate the user.
+    assert!(state.completed, "old completed=true must survive a missing step2_confirmed key");
+    // A file written before step 2 existed never confirmed it, so
+    // step1_confirmed=true + step2_confirmed=false (the default) derives
+    // current_step == 2 — not 3. The point of this test is the `completed`
+    // survival, not that a pre-step-2 file is treated as fully onboarded.
+    assert_eq!(state.current_step, 2);
 }

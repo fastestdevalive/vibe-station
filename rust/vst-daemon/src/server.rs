@@ -64,12 +64,13 @@ use vst_types::rest::lsp::{
     LspOutlineResponse, LspPositionRequest, LspReferencesResponse, LspStatusResponse,
     LspStatusesResponse,
 };
+use vst_types::rest::doctor::DoctorReport;
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
 };
 use vst_types::rest::oobe::{
-    CompleteOobeResult, ConfirmStep1Body, ConfirmStep1Result, DetectAndBundleResult,
-    OobeStateResponse, StarterBundleResult,
+    CompleteOobeResult, ConfirmStep1Body, ConfirmStep1Result, ConfirmStep2Result,
+    DetectAndBundleResult, OobeStateResponse, StarterBundleResult,
 };
 use vst_types::rest::open::{OpenBody, OpenResult};
 use vst_types::rest::ordered_lists::{OrderedList, PutOrderedListBody, PutOrderedListResult};
@@ -740,11 +741,14 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         // OOBE
         .route("/oobe/state", get(handle_oobe_state))
         .route("/oobe/step1", post(handle_oobe_step1))
+        .route("/oobe/step2", post(handle_oobe_step2))
         .route(
             "/oobe/detect-and-bundle",
             post(handle_oobe_detect_and_bundle),
         )
         .route("/oobe/complete", post(handle_oobe_complete))
+        // Doctor
+        .route("/doctor", get(handle_doctor))
         // Settings
         .route(
             "/settings",
@@ -3478,6 +3482,16 @@ async fn handle_oobe_step1(
         .await
         .map(Json)
         .map_err(oobe_err_to_response)
+}
+
+async fn handle_oobe_step2(
+    State(state): State<AppState>,
+) -> Json<ConfirmStep2Result> {
+    Json(state.oobe_routes.confirm_step2().await)
+}
+
+async fn handle_doctor(State(state): State<AppState>) -> Json<DoctorReport> {
+    Json(crate::doctor::build_report(&state.store, &state.tmux, &state.paths).await)
 }
 
 async fn handle_oobe_detect_and_bundle(

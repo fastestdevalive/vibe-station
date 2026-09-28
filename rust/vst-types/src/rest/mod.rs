@@ -8,6 +8,8 @@
 
 pub mod attachments;
 pub mod auth;
+pub mod doctor;
+pub mod doctor_hints;
 pub mod fs;
 pub mod health;
 pub mod mobile_auth;
