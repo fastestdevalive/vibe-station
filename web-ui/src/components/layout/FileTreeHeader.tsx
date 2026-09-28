@@ -107,7 +107,6 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
         paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
       }}
     >
-      <span className="file-tree-sidebar-header__title">{diffMode ? "Changes" : "Files"}</span>
       <div className="file-tree-sidebar-header__tail">
         {/* One scope selector, always visible in the Files header — not
             gated on diff mode — working in both plain-tree and Changes-list
