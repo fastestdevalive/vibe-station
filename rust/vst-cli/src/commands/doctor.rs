@@ -147,61 +147,6 @@ fn print_hint(message: &str) {
     println!("\x1b[33m  →\x1b[0m {message}");
 }
 
-/// Resolve the claude-agent-acp adapter entrypoint the same way
-/// `rust/vst-agents/src/claude.rs::resolve_claude_acp_entry_path` does, for a
-/// health check here. Deliberately a separate, lightweight implementation
-/// rather than a `vst-agents` dependency — this file is explicitly
-/// self-contained (see its header comment), and pulling in the daemon-side
-/// agent-plugin crate just for one path check would break that boundary.
-fn find_claude_acp_entry() -> Option<PathBuf> {
-    const SUFFIX: &[&str] = &[
-        "node_modules",
-        "@agentclientprotocol",
-        "claude-agent-acp",
-        "dist",
-        "index.js",
-    ];
-    if let Ok(p) = std::env::var("VST_CLAUDE_ACP_ENTRY") {
-        if !p.is_empty() && Path::new(&p).is_file() {
-            return Some(PathBuf::from(p));
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // Beside the exe (hand-staged layout; also where a Windows Tauri
-            // bundle puts resources), then the Tauri bundle's resource dir
-            // relative to the bundled `vst` sidecar: `Contents/Resources/` on
-            // macOS (exe in `Contents/MacOS/`), `usr/lib/<productName>/` for a
-            // Linux deb/AppImage (exe in `usr/bin/`). The daemon itself gets
-            // the path via VST_CLAUDE_ACP_ENTRY from the Tauri host
-            // (desktop/src-tauri/src/daemon.rs), but a user running `vst
-            // doctor` from a terminal has no such env var.
-            let bases = [
-                dir.to_path_buf(),
-                dir.join("..").join("Resources"),
-                dir.join("..").join("lib").join("vibe-station"),
-            ];
-            for base in bases {
-                let mut candidate = base.join("claude-acp-vendor");
-                candidate.extend(SUFFIX);
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        for ancestor in cwd.ancestors().take(8) {
-            let mut candidate = ancestor.join("vendor").join("claude-acp");
-            candidate.extend(SUFFIX);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
 fn which(bin: &str) -> bool {
     SyncCommand::new("which")
         .arg(bin)
@@ -314,36 +259,16 @@ pub async fn run_doctor() -> Result<(), (String, i32)> {
         || which("bun"),
     );
     if !bun_found {
-        let install_cmd = if cfg!(target_os = "macos") {
-            "brew install oven-sh/bun/bun  OR  curl -fsSL https://bun.sh/install | bash"
-        } else {
-            "curl -fsSL https://bun.sh/install | bash"
-        };
-        print_hint(&format!("Install: {install_cmd}"));
-    }
-
-    let agy_acp_found = check(
-        "agy-acp adapter binary (required for agy Rich Chat / ACP)",
-        vst_agy_acp::agy_acp_available,
-    );
-    if !agy_acp_found {
-        print_hint(
-            "Build it from the vendored submodule (rust/vendor/openab/agy-acp) or set AGY_ACP_BIN",
-        );
-    }
-
-    let acp_entry = find_claude_acp_entry();
-    let acp_found = check(
-        "claude-agent-acp adapter found (Claude Rich Chat / ACP)",
-        || acp_entry.is_some(),
-    );
-    if !acp_found {
-        print_hint("Install it: ./scripts/install-claude-acp-vendor.sh (then set VST_CLAUDE_ACP_ENTRY to the path it prints, if this checkout isn't the one the daemon runs from)");
+        if let Some(hint) = vst_types::rest::doctor_hints::hint_for("bun", std::env::consts::OS) {
+            print_hint(&format!("Install: {hint}"));
+        }
     }
 
     let cloudflared_found = check("cloudflared", || which("cloudflared"));
     if !cloudflared_found {
-        print_hint("brew install cloudflared  OR  https://developers.cloudflare.com/cloudflared/");
+        if let Some(hint) = vst_types::rest::doctor_hints::hint_for("cloudflared", std::env::consts::OS) {
+            print_hint(hint);
+        }
     }
 
     check_tailscale().await;
