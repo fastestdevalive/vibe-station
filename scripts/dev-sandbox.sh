@@ -141,43 +141,36 @@ case "$CMD" in
     # history this caused). `./rust/target-docker/` exists specifically to
     # never be a host-glibc binary — every binary that lands there is built
     # INSIDE a container matching bookworm's glibc, below.
-    if [ -n "${VST_RUST_DAEMON_BIN:-}" ] && [ -x "$VST_RUST_DAEMON_BIN" ]; then
+    #
+    # ALWAYS (re)build via cargo unless both binaries are explicitly overridden
+    # via VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN. This used to build only when
+    # no target-docker binary existed yet, and reuse whatever was there
+    # otherwise — so once built, the sandbox kept mounting that first binary
+    # forever, silently ignoring every later Rust change (e.g. removed doctor
+    # checks kept showing up after `up --build`). cargo's own incremental
+    # build (cached in target-docker/build + the registry volume) is the
+    # freshness check: a no-op rebuild takes seconds, a real change rebuilds
+    # only what changed.
+    if [ -n "${VST_RUST_DAEMON_BIN:-}" ] && [ -x "$VST_RUST_DAEMON_BIN" ] \
+       && [ -n "${VST_RUST_CLI_BIN:-}" ] && [ -x "$VST_RUST_CLI_BIN" ]; then
       RUST_DAEMON_BIN="$VST_RUST_DAEMON_BIN"
-    elif [ -x "./rust/target-docker/release/vst-daemon" ]; then
-      RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
-    elif [ -x "./rust/target-docker/debug/vst-daemon" ]; then
-      RUST_DAEMON_BIN="./rust/target-docker/debug/vst-daemon"
-    else
-      RUST_DAEMON_BIN=""
-    fi
-
-    if [ -n "${VST_RUST_CLI_BIN:-}" ] && [ -x "$VST_RUST_CLI_BIN" ]; then
       RUST_CLI_BIN="$VST_RUST_CLI_BIN"
-    elif [ -x "./rust/target-docker/release/vst" ]; then
-      RUST_CLI_BIN="./rust/target-docker/release/vst"
-    elif [ -x "./rust/target-docker/debug/vst" ]; then
-      RUST_CLI_BIN="./rust/target-docker/debug/vst"
+      echo "    rust: using VST_RUST_DAEMON_BIN/VST_RUST_CLI_BIN overrides (no rebuild)"
     else
-      RUST_CLI_BIN=""
-    fi
-
-    # No usable target-docker binary → build ONE fresh, inside a container
-    # pinned to the exact toolchain (rust/rust-toolchain.toml) on a bookworm
-    # base (matching dev.Dockerfile's node:24-slim), never on the host. The
-    # cargo registry cache volume is intentionally NOT per-worktree (unlike
-    # the sandbox's own data/projects volumes) — it only caches downloaded
-    # crate sources, which are safe and desirable to share across worktrees.
-    if [ -z "$RUST_DAEMON_BIN" ] || [ -z "$RUST_CLI_BIN" ]; then
+      # Build inside a container pinned to the exact toolchain
+      # (rust/rust-toolchain.toml) on a bookworm base (matching
+      # dev.Dockerfile's node:24-slim), never on the host. The cargo registry
+      # cache volume is intentionally NOT per-worktree (unlike the sandbox's
+      # own data/projects volumes) — it only caches downloaded crate sources,
+      # which are safe and desirable to share across worktrees.
       RUST_TOOLCHAIN_CHANNEL="$(sed -nE 's/^channel = "([^"]+)".*/\1/p' rust/rust-toolchain.toml | head -1)"
       if [ -z "$RUST_TOOLCHAIN_CHANNEL" ]; then
         echo "error: could not read [toolchain].channel from rust/rust-toolchain.toml" >&2
         exit 1
       fi
-      echo "No target-docker Rust binaries found. Building them inside rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm"
+      echo "Building Rust binaries (incremental) inside rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm"
       echo "(matches dev.Dockerfile's glibc — this is the ONLY supported build path, see the"
-      echo "comment above) ... this build is cached (target-docker/build + the registry volume),"
-      echo "so this cost is paid once per host, not on every 'up' — but it does NOT auto-invalidate"
-      echo "when the Rust workspace changes; delete rust/target-docker/ to force a rebuild."
+      echo "comment above). Cached in rust/target-docker/build, so an unchanged tree is a no-op."
       # CARGO_TARGET_DIR points OUTSIDE the bind-mounted rust/ tree's default
       # `target/` (into target-docker/build instead) — the container runs as
       # root, so writing into ./rust/target/ would leave root-owned files
@@ -193,7 +186,14 @@ case "$CMD" in
         "rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm" \
         sh -c "cargo build --release -p vst-daemon -p vst-cli && chown -R $(id -u):$(id -g) /work/target-docker"
       mkdir -p ./rust/target-docker/release
-      cp ./rust/target-docker/build/release/vst-daemon ./rust/target-docker/build/release/vst ./rust/target-docker/release/
+      # Atomic replace (cp to temp + mv), not an in-place overwrite: the old
+      # binary may be the running daemon's executable (in-place write fails
+      # with ETXTBSY). The single-file bind mount pins the OLD inode, which is
+      # why `up` below uses --force-recreate.
+      for bin in vst-daemon vst; do
+        cp "./rust/target-docker/build/release/$bin" "./rust/target-docker/release/.$bin.new"
+        mv -f "./rust/target-docker/release/.$bin.new" "./rust/target-docker/release/$bin"
+      done
       RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
       RUST_CLI_BIN="./rust/target-docker/release/vst"
     fi
@@ -232,7 +232,11 @@ case "$CMD" in
     # sandboxes" section for specifics). Start with a fresh worktree-name (or
     # `docker volume rm "$VST_SANDBOX_DATA_VOLUME" "$VST_SANDBOX_PROJECTS_VOLUME"`)
     # to actually change an existing sandbox's seed mode.
-    docker compose -f docker-compose.dev.yml -p "$WORKTREE" up --build -d
+    # --force-recreate: the Rust binaries are single-file bind mounts, which
+    # pin the inode at container-create time. A rebuilt binary is a NEW inode,
+    # so without recreating, a still-running container (compose sees no config
+    # change) keeps executing the stale daemon. Volumes persist across recreate.
+    docker compose -f docker-compose.dev.yml -p "$WORKTREE" up --build --force-recreate -d
     echo "Up: http://localhost:${PORT}"
     ;;
 
