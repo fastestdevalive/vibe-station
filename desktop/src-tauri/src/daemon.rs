@@ -71,17 +71,15 @@ pub fn detect_running_daemon() -> Option<DaemonInfo> {
     }
 }
 
-/// Spawn the bundled vst-daemon sidecar and wait for it to be ready.
-/// Returns DaemonInfo once the daemon is listening.
+/// Spawn the bundled vst sidecar (merged CLI+daemon binary, via `daemon run`)
+/// and wait for it to be ready. Returns DaemonInfo once the daemon is listening.
 ///
 /// `cloudflared_bin` — absolute path to the bundled cloudflared binary.
-/// `vst_bin` — absolute path to the bundled vst CLI binary.
-/// `skill_path` — absolute path to the bundled SKILL.md resource.
+/// `vst_bin` — absolute path to the bundled vst binary.
 pub fn spawn_daemon(
     app_handle: &tauri::AppHandle,
     cloudflared_bin: &Path,
     vst_bin: &Path,
-    skill_path: &Path,
 ) -> Result<DaemonInfo, String> {
     use tauri_plugin_shell::process::CommandEvent;
     use tauri_plugin_shell::ShellExt;
@@ -96,45 +94,26 @@ pub fn spawn_daemon(
         .to_str()
         .ok_or("cloudflared path is not valid UTF-8")?;
     let vst_bin_str = vst_bin.to_str().ok_or("vst_bin path is not valid UTF-8")?;
-    let skill_path_str = skill_path.to_str().ok_or("skill_path is not valid UTF-8")?;
 
-    // The bundled vst-daemon binary is the daemon entrypoint itself —
-    // it starts listening immediately on launch without any subcommand args.
+    // The bundled `vst` sidecar is the merged CLI+daemon binary — pass
+    // "daemon run" so it enters daemon mode (see rust/vst-cli/src/dispatch.rs).
+    // VST_TAURI_SUPERVISED=1 is the ONLY way a `vst daemon run` invocation
+    // gets a non-headless (loopback-trust-bypassed) daemon — every other
+    // "vst daemon run" (self-heal spawns, an operator running it directly)
+    // defaults headless. Never set this anywhere else.
     let mut cmd = app_handle
         .shell()
-        .sidecar("vst-daemon")
+        .sidecar("vst")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
+        .args(["daemon", "run"])
         .env("VST_CLOUDFLARED_BIN", cloudflared_str)
         .env("VST_CLI_BIN", vst_bin_str)
-        .env("VST_SKILL_PATH", skill_path_str);
+        .env("VST_TAURI_SUPERVISED", "1");
 
-    // Point the Rust daemon at the built web-ui so its own HTTP server can
-    // serve the SPA when it's reached directly over HTTP (e.g. via a
-    // cloudflared/Tailscale tunnel to the daemon port). The desktop webview
-    // loads the frontend itself (Vite in dev, embedded assets in release), so
-    // this is best-effort: set it only when the built dist can be found, else
-    // leave it unset and let the daemon fall back to its exe-relative `dist/`
-    // (and degrade gracefully with 404s when neither is present).
-    //
-    // MUST resolve via the Tauri resource dir, like `cloudflared_bin`/`vst_bin`/
-    // `skill_path` above — NOT `std::env::current_dir()`. cwd is not the repo
-    // root in either context that matters: under `tauri dev` it's
-    // `desktop/src-tauri` (so `<cwd>/web-ui/dist` never exists), and in a
-    // packaged/installed app it's whatever arbitrary directory the OS launcher
-    // handed the GUI process — so the old code never fired where intended, and
-    // in the pathological case where cwd DOES happen to contain a `web-ui/dist`
-    // (e.g. launched from the repo root, or from another unrelated project),
-    // it would silently point the daemon at a foreign/stale SPA build.
-    // `web-ui/dist` must be added to `tauri.conf.json`'s `bundle.resources` for
-    // this to exist in a packaged app at all — see that file.
-    if let Ok(dir) = app_handle.path().resource_dir() {
-        let dist_candidate = dir.join("web-ui").join("dist");
-        if dist_candidate.is_dir() {
-            if let Some(dist) = dist_candidate.to_str() {
-                cmd = cmd.env("VST_DIST_PATH", dist);
-            }
-        }
-    }
+    // NOTE: SKILL.md and web-ui/dist are compiled into the `vst` binary
+    // itself (the `embed-ui` Cargo feature, always on for this sidecar build
+    // — see scripts/prep-sidecar.sh) — no VST_SKILL_PATH/VST_DIST_PATH env
+    // plumbing needed anymore; the daemon serves its own embedded copies.
 
     // Point the daemon at the bundled claude-agent-acp adapter (Claude's Rich
     // Chat / ACP path runs it as `bun <entry.js>` — see

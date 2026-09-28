@@ -50,16 +50,6 @@ fn main() {
                 })
                 .unwrap_or_else(|| PathBuf::from("vst"));
 
-            let skill_path: PathBuf = app_handle
-                .path()
-                .resource_dir()
-                .ok()
-                .map(|dir| {
-                    let p = dir.join("SKILL.md");
-                    if p.exists() { p } else { PathBuf::from("SKILL.md") }
-                })
-                .unwrap_or_else(|| PathBuf::from("SKILL.md"));
-
             // In dev mode the daemon starts via beforeDevCommand concurrently with
             // Vite; Tauri opens the window as soon as Vite is ready, which can race
             // the daemon's startup. Retry for up to 30s so the desktop self-heals
@@ -88,7 +78,7 @@ fn main() {
                 }
                 None => {
                     println!("[vst] no running daemon — spawning sidecar...");
-                    match daemon::spawn_daemon(&app_handle, &cloudflared_bin, &vst_bin, &skill_path) {
+                    match daemon::spawn_daemon(&app_handle, &cloudflared_bin, &vst_bin) {
                         Ok(info) => {
                             println!("[vst] daemon ready on port {}", info.port);
                             info

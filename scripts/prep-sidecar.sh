@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# prep-sidecar.sh — Build the Rust daemon + CLI binaries and cloudflared for the
-# host triple, then copy them into desktop/src-tauri/binaries/ for Tauri to bundle.
+# prep-sidecar.sh — Build the merged vst binary (CLI + daemon) and cloudflared
+# for the host triple, then copy them into desktop/src-tauri/binaries/ for
+# Tauri to bundle.
 #
 # Usage (called automatically by tauri.conf.json beforeBuildCommand):
 #   scripts/prep-sidecar.sh
 #
 # What it does:
 #   1. Detect host Rust target triple via rustc -vV
-#   2. Build the Rust vst-daemon + vst-cli release binaries (cargo build --release)
-#   3. Copy rust/target/release/vst-daemon → desktop/src-tauri/binaries/vst-daemon-<triple>
-#   4. Copy rust/target/release/vst-cli     → desktop/src-tauri/binaries/vst-<triple>
+#   2. Build the web UI (pnpm build) — required BEFORE the cargo build below,
+#      since the merged binary embeds web-ui/dist at compile time via the
+#      `embed-ui` Cargo feature (rust-embed reads the directory at build time).
+#   3. Build the merged vst release binary, with --features vst-daemon/embed-ui
+#      (cargo build --release) — one binary is both the CLI and, via
+#      `vst daemon run`, the daemon; see rust/vst-cli/src/dispatch.rs.
+#   4. Copy rust/target/release/vst → desktop/src-tauri/binaries/vst-<triple>
 #   5. Download cloudflared for the host triple →
 #      desktop/src-tauri/binaries/cloudflared-<triple>
 #   6. Install the vendored claude-agent-acp adapter
@@ -24,9 +29,13 @@
 #
 # This builds the Rust binaries (the "build:rust" script from part 10) and does
 # NOT touch the TypeScript daemon/ or cli/ trees at all — the desktop sidecar is
-# now the Rust vst-daemon/vst-cli, not a @yao-pkg/pkg-packaged Node binary (the
-# old build-daemon-binary.sh path produced a 75 MB Node binary that couldn't
-# even boot — an ESM/import.meta vs CJS-bundle bug, see the 10-2 N1/N2 report).
+# now the single merged Rust `vst` binary, not a @yao-pkg/pkg-packaged Node
+# binary (the old build-daemon-binary.sh path produced a 75 MB Node binary that
+# couldn't even boot — an ESM/import.meta vs CJS-bundle bug, see the 10-2
+# N1/N2 report) and, as of the cli-daemon-unification feature, not two
+# separate Rust binaries (vst-daemon + vst) either — see
+# .vibekit/feature-plans/wip/cli-daemon-unification/00-binary-merge/
+# plan-00-cli-daemon-unification-binary-merge.md.
 
 set -euo pipefail
 
@@ -69,7 +78,7 @@ if [[ "$TRIPLE" == *-apple-darwin ]]; then
   echo "  packaged with 'tauri build --target universal-apple-darwin', you" >&2
   echo "  must separately build BOTH aarch64-apple-darwin and" >&2
   echo "  x86_64-apple-darwin release binaries and lipo them together into" >&2
-  echo "  desktop/src-tauri/binaries/{vst-daemon,vst}-universal-apple-darwin" >&2
+  echo "  desktop/src-tauri/binaries/vst-universal-apple-darwin" >&2
   echo "  BEFORE the Tauri bundling step — this script does not do that for" >&2
   echo "  you, and a single-arch binary under the universal name will fail" >&2
   echo "  to launch on the architecture it wasn't built for." >&2
@@ -78,40 +87,31 @@ fi
 BINARIES_DIR="$REPO_ROOT/desktop/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
-# ── Step 2: build the Rust daemon + CLI binaries ─────────────────────────────
+# ── Step 2: build the web UI (must exist before the embed-ui cargo build) ───
 
 echo ""
-echo "==> Building Rust binaries (vst-daemon, vst-cli)..."
-cargo build --release --manifest-path "$REPO_ROOT/rust/Cargo.toml" -p vst-daemon -p vst-cli
+echo "==> Building web UI (pnpm --filter @vibestation/web build)..."
+pnpm --filter @vibestation/web build
 
-# ── Step 3: copy vst-daemon binary to binaries/ ──────────────────────────────
-
-SRC_DAEMON="$REPO_ROOT/rust/target/release/vst-daemon$EXE_SUFFIX"
-DEST_DAEMON="$BINARIES_DIR/vst-daemon-$TRIPLE$EXE_SUFFIX"
-
-if [[ ! -f "$SRC_DAEMON" ]]; then
-  echo "Error: expected daemon binary at $SRC_DAEMON — build may have failed." >&2
-  exit 1
-fi
+# ── Step 3: build the merged vst binary (CLI + daemon, web UI embedded) ─────
 
 echo ""
-echo "==> Copying vst-daemon binary to binaries/..."
-cp "$SRC_DAEMON" "$DEST_DAEMON"
-chmod +x "$DEST_DAEMON"
-echo "    $(du -h "$DEST_DAEMON" | cut -f1)  $DEST_DAEMON"
+echo "==> Building merged vst binary (--features vst-daemon/embed-ui)..."
+cargo build --release --manifest-path "$REPO_ROOT/rust/Cargo.toml" \
+  -p vst-cli --features vst-daemon/embed-ui
 
-# ── Step 4: copy vst CLI binary to binaries/ ─────────────────────────────────
+# ── Step 4: copy vst binary to binaries/ ─────────────────────────────────────
 
 SRC_CLI="$REPO_ROOT/rust/target/release/vst$EXE_SUFFIX"
 DEST_CLI="$BINARIES_DIR/vst-$TRIPLE$EXE_SUFFIX"
 
 if [[ ! -f "$SRC_CLI" ]]; then
-  echo "Error: expected vst CLI binary at $SRC_CLI — build may have failed." >&2
+  echo "Error: expected vst binary at $SRC_CLI — build may have failed." >&2
   exit 1
 fi
 
 echo ""
-echo "==> Copying vst CLI binary to binaries/..."
+echo "==> Copying vst binary to binaries/..."
 cp "$SRC_CLI" "$DEST_CLI"
 chmod +x "$DEST_CLI"
 echo "    $(du -h "$DEST_CLI" | cut -f1)  $DEST_CLI"
