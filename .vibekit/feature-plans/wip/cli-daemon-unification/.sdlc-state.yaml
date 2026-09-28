@@ -1,0 +1,108 @@
+feature: cli-daemon-unification
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-194
+created: 2026-09-27T00:00:00Z
+master:
+  prd: complete
+  plan: complete
+current_subfeature: null  # Parts 00-04 done; 05-vst-update parked (see its own entry's parked_reason)
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 00-binary-merge
+    origin: planned
+    spawned_from: null
+    mode: verifying
+    last_completed: "4.T3"
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 01-daemon-lifecycle
+    origin: planned
+    spawned_from: null
+    mode: verifying
+    last_completed: "3.T4"
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 02-continue-flow
+    origin: planned
+    spawned_from: null
+    mode: verifying
+    last_completed: "2.T8"
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 03-cuj-detection-launch
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: "3.T3"
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 04-curl-installer
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: final
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
+  - id: 05-vst-update
+    origin: planned
+    spawned_from: null
+    mode: parked
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    impl_turn: null
+    phase_chain: null
+    superseded_reason: null
+    parked_reason: >-
+      Deferred out of active scope (2026-09-27) after an Opus scope review
+      found R23/R25/R26/R27/R39's requirements trace only to
+      UPGRADE-IDEAS.md's own "not decided" language, not a real user report --
+      five sub-systems (install-shape detection, GitHub-cache endpoint, UI
+      banner, throttled background check, macOS bundle replacement) for a
+      problem nobody has hit yet. User explicitly asked not to build this now.
+      If ever revived, scope to the minimal version only: re-run the
+      installer's fetch, atomic-swap the binary, `vst daemon stop`, let
+      Part 03's self-heal respawn it -- skip the rest.
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null

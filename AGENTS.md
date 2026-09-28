@@ -18,9 +18,11 @@ invariant no longer applies — find its Rust equivalent instead of skipping the
 ### The invariant
 
 The daemon's `Router` in `server.rs` puts every REST route (`/sessions`, `/worktrees`, `/projects`, `/modes`,
-`/open`, etc.) under `.nest("/api", api)`. Only three routes are intentionally at root: `/health`,
-`/mobile-auth`, `/ws`. Anything else hit at root falls through to `.fallback(handle_fallback)`, which serves
-the SPA's `index.html` with a `200` status — **not** a `404`.
+`/open`, etc.) under `.nest("/api", api)`. Only four routes are intentionally at root: `/health`,
+`/mobile-auth`, `/ws`, `/continue` (the last added by `cli-daemon-unification` Part 02 — a browser-opened
+redemption endpoint that, like `/mobile-auth`, can't require the auth it's establishing). Anything else hit
+at root falls through to `.fallback(handle_fallback)`, which serves the SPA's `index.html` with a `200`
+status — **not** a `404`.
 
 This bit us for real: every `vst-cli` call site built its request path root-relative (`"/sessions"`,
 `"/worktrees"`, …) with no `/api` prefix anywhere, so every CLI command — including `vst session create` and
@@ -29,7 +31,7 @@ This bit us for real: every `vst-cli` call site built its request path root-rela
 the real "this isn't JSON" error and replaced it with `serde_json::from_value(Value::Null)`, which then failed
 with the misleading `invalid type: null, expected a sequence` — nothing in that message points at routing, so
 an agent hitting it reasonably (but wrongly) suspects DB/daemon corruption instead. `vst doctor`/`vst status`
-still reported "Daemon is running" throughout, because `/health` is one of the three root routes that *does*
+still reported "Daemon is running" throughout, because `/health` is one of the root routes that *does*
 work, masking the outage from the one diagnostic an agent would naturally reach for.
 
 The fix: `client.rs` has a single `api_path()` helper that every `daemon_request*` call routes through, which

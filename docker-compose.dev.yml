@@ -64,6 +64,9 @@ services:
       # Dev sandbox: disable daemon auth (no login screen) and let Vite accept
       # any Host header so Tailscale / LAN access works. Sandbox-only — do not
       # mirror these onto a network-exposed production daemon.
+      # Also makes the merged binary's default-headless mode (see
+      # cli-daemon-unification/01-daemon-lifecycle) irrelevant here: VST_NO_AUTH
+      # short-circuits the whole auth middleware before any headless check runs.
       VST_NO_AUTH: "1"
       VITE_DEV_ALLOW_ALL_HOSTS: "1"
       # Point cloudflared at Vite (port 5173) so mobile gets the full SPA
@@ -149,8 +152,12 @@ services:
       - ${OPENCODE_CONFIG_HOME:-${HOME}/.config/opencode}:/seed/opencode-config:ro
 
       # Rust daemon/CLI binaries. Mount the host's pre-built release binaries
-      # read-only. Build them with `pnpm build:rust` (or
-      # `cargo build --release -p vst-daemon -p vst-cli` from rust/).
+      # read-only. Build both with `cargo build --release -p vst-daemon -p
+      # vst-cli` from rust/ (what scripts/dev-sandbox.sh does automatically) --
+      # NOT `pnpm build:rust`, which only builds `-p vst-cli` (the merged
+      # binary) since cli-daemon-unification's binary merge (Part 00); it
+      # never produces a standalone `vst-daemon` binary, which this sandbox
+      # still needs at /usr/local/bin/vst-daemon-rust.
       # Override the paths with VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN if
       # yours differ.
       - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
