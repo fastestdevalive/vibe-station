@@ -38,6 +38,21 @@ futures = "0.3"
 regex = "1"
 ring = "0.17"
 percent-encoding = { workspace = true }
+rust-embed = { version = "8", optional = true }
+
+[features]
+# Embeds web-ui/dist and skill/SKILL.md into the binary at compile time, so a
+# curl-only daemon (no Tauri, no bundled resources) can serve the web UI and
+# install SKILL.md from itself. Off by default because `web-ui/dist` is
+# gitignored and does not exist in every build context that compiles this
+# crate (CI lint/test, scripts/dev-sandbox.sh's and Dockerfile.screenshots's
+# Docker builds, which only copy rust/ and never run `pnpm build` first) —
+# turning this on unconditionally would break all of those. Only
+# scripts/prep-sidecar.sh (release/Tauri builds) and the release CI publishing
+# vst-<triple>.tar.gz enable it, after ensuring web-ui/dist actually exists.
+# See .vibekit/feature-plans/wip/cli-daemon-unification/00-binary-merge/
+# plan-00-cli-daemon-unification-binary-merge.md, Key Decisions 3-4.
+embed-ui = ["dep:rust-embed"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,0 +1,381 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.2.0)'
+        # Found in review: this was `required: false`, so a manual dispatch
+        # with the field left blank fell through to `github.ref_name` in
+        # every "Resolve release version" step below -- on the default branch
+        # that's literally "main", producing VERSION=main (likely fails
+        # Tauri's semver validation) and a real GitHub release/tag named
+        # "main". `required: true` makes GitHub Actions itself refuse to
+        # start the run without an explicit tag, closing the gap at dispatch
+        # time rather than relying on every downstream step to notice.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. Build standalone merged vst CLI archives (Linux musl + macOS)
+  # ──────────────────────────────────────────────────────────────────────────
+  build-cli:
+    name: Build CLI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            is_musl: true
+          # Found in review: install.sh's own header comment already promises
+          # aarch64-unknown-linux-musl as a published asset, but no CI job
+          # ever built one — any aarch64 Linux curl-install would silently
+          # 404. A native ARM64 GitHub-hosted runner avoids needing any
+          # cross-compilation setup for this.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            is_musl: true
+          - os: macos-15-large
+            target: x86_64-apple-darwin
+            is_musl: false
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            is_musl: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Resolve release version (R29)
+        id: ver
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Building version $VERSION (tag: $TAG)"
+
+      # ── Node / pnpm ───────────────────────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Web UI build (required for embed-ui feature) ──────────────────────
+      - name: Build web UI (embed-ui prerequisite)
+        run: pnpm --filter @vibestation/web build
+
+      # ── Rust toolchain ────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.is_musl
+        run: sudo apt-get update -y && sudo apt-get install -y musl-tools
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+
+      # ── Build merged vst binary ───────────────────────────────────────────
+      - name: Build merged vst release binary
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --manifest-path rust/Cargo.toml \
+            -p vst-cli --features vst-daemon/embed-ui
+
+      # ── Musl runtime verification in Alpine container (R30) ───────────────
+      # Found in review: this used to `file "$BIN" | grep -i "statically
+      # linked"` as a linkage sanity check before the real boot test below.
+      # rustc's musl target produces static-PIE binaries by default, and
+      # file(1) reports those as "static-pie linked", not "statically
+      # linked" — the grep never matched, so this step (and therefore
+      # publish-release) failed on every single run. Dropped that check
+      # entirely: actually booting the daemon and hitting /health inside
+      # Alpine (no glibc at all) is a strictly stronger proof of "no glibc
+      # dependency" than a file(1) string match ever was, and it's what R30
+      # actually asks for ("verifies it boots", not "verifies a file(1)
+      # string") — `vst --version` alone (the old check) returns before
+      # run_daemon touches sqlite/portable-pty/axum at all, so it never
+      # exercised the daemon's actually-heavier dependencies either.
+      - name: Verify musl binary boots under Alpine (R30)
+        if: matrix.is_musl
+        run: |
+          BIN="rust/target/${{ matrix.target }}/release/vst"
+          echo "==> Verifying binary exists and is executable..."
+          test -x "$BIN"
+
+          echo "==> Verifying vst --version inside Alpine (no glibc at all)..."
+          OUTPUT=$(docker run --rm -v "$(pwd)/$BIN:/bin/vst:ro" alpine:latest /bin/vst --version)
+          echo "Alpine --version output: $OUTPUT"
+          test "$OUTPUT" = "${{ steps.ver.outputs.version }}"
+
+          echo "==> Booting the actual daemon inside Alpine and hitting /health..."
+          docker run --rm -d --name vst-alpine-boot-check \
+            -v "$(pwd)/$BIN:/bin/vst:ro" \
+            -e HOME=/tmp \
+            alpine:latest /bin/vst daemon run
+          trap 'docker rm -f vst-alpine-boot-check >/dev/null 2>&1 || true' EXIT
+
+          READY=0
+          for i in $(seq 1 20); do
+            if docker exec vst-alpine-boot-check wget -qO- http://127.0.0.1:7421/health >/tmp/health.json 2>/dev/null; then
+              READY=1
+              break
+            fi
+            sleep 0.5
+          done
+          test "$READY" = 1 || { echo "daemon never became healthy inside Alpine"; docker logs vst-alpine-boot-check; exit 1; }
+          cat /tmp/health.json
+          grep -q "\"ok\":true" /tmp/health.json
+
+      # ── Package archive + sha256 ──────────────────────────────────────────
+      - name: Package archive and generate sha256
+        run: |
+          BIN_DIR="rust/target/${{ matrix.target }}/release"
+          DIST_DIR="dist-cli"
+          mkdir -p "$DIST_DIR"
+
+          ASSET="vst-${{ matrix.target }}.tar.gz"
+          tar -czf "$DIST_DIR/$ASSET" -C "$BIN_DIR" vst
+
+          cd "$DIST_DIR"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ASSET" | cut -d' ' -f1 > "$ASSET.sha256"
+          else
+            shasum -a 256 "$ASSET" | cut -d' ' -f1 > "$ASSET.sha256"
+          fi
+          echo "Checksum for $ASSET:"
+          cat "$ASSET.sha256"
+          cd -
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist-cli/*
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. Build desktop apps (Linux AppImage/deb + macOS dmg)
+  # ──────────────────────────────────────────────────────────────────────────
+  build-desktop:
+    name: Build Desktop (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-large
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Resolve release version and stamp metadata (R29)
+        id: ver
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VST_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Stamping version $VERSION into desktop/src-tauri/tauri.conf.json"
+
+          # Stamp version into tauri.conf.json so Tauri bundles carry release version
+          jq --arg v "$VERSION" '.version = $v' desktop/src-tauri/tauri.conf.json > desktop/src-tauri/tauri.conf.json.tmp
+          mv desktop/src-tauri/tauri.conf.json.tmp desktop/src-tauri/tauri.conf.json
+
+      # ── Node / pnpm ───────────────────────────────────────────────────────
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ── Rust toolchain ────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "desktop/src-tauri -> target"
+
+      # ── Linux system dependencies ─────────────────────────────────────────
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev
+
+      # ── Bun (prep-sidecar claude-acp vendor dependency) ───────────────────
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      # ── Build Tauri app ───────────────────────────────────────────────────
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          args: --target ${{ matrix.target }}
+
+      # ── Stage and checksum desktop assets ─────────────────────────────────
+      - name: Stage desktop assets and generate sha256
+        run: |
+          DIST_DIR="dist-desktop"
+          mkdir -p "$DIST_DIR"
+
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            # Stage AppImage
+            APPIMAGE_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage | head -n1)
+            APPIMAGE_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.AppImage"
+            cp "$APPIMAGE_SRC" "$APPIMAGE_DEST"
+            sha256sum "$APPIMAGE_DEST" | cut -d' ' -f1 > "$APPIMAGE_DEST.sha256"
+
+            # Stage deb
+            DEB_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb | head -n1)
+            DEB_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.deb"
+            cp "$DEB_SRC" "$DEB_DEST"
+            sha256sum "$DEB_DEST" | cut -d' ' -f1 > "$DEB_DEST.sha256"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            # Stage dmg
+            DMG_SRC=$(ls desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n1)
+            DMG_DEST="$DIST_DIR/vibe-station-${{ matrix.target }}.dmg"
+            cp "$DMG_SRC" "$DMG_DEST"
+            shasum -a 256 "$DMG_DEST" | cut -d' ' -f1 > "$DMG_DEST.sha256"
+          fi
+
+          echo "Staged files in $DIST_DIR:"
+          ls -la "$DIST_DIR"
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist-desktop/*
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 3. Publish release to GitHub Releases
+  # ──────────────────────────────────────────────────────────────────────────
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-cli, build-desktop]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: ver
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Collect release assets
+        run: |
+          RELEASE_DIR="release-assets"
+          mkdir -p "$RELEASE_DIR"
+
+          # Flatten artifacts into release-assets/
+          find downloaded-artifacts/ -type f -exec cp {} "$RELEASE_DIR/" \;
+
+          echo "==> All release assets to publish:"
+          ls -lh "$RELEASE_DIR"
+
+          echo "==> Checksums:"
+          for f in "$RELEASE_DIR"/*.sha256; do
+            echo "--- $f ---"
+            cat "$f"
+          done
+
+      - name: Determine prerelease status
+        id: prerelease
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if echo "$TAG" | grep -Eq -- '-(beta|rc|alpha)'; then
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Release ${{ steps.ver.outputs.tag }}
+          draft: false
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

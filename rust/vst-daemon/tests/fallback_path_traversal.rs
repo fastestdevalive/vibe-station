@@ -33,6 +33,8 @@ fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
         port: 0,
         auth_state: Some(AuthState::new("super-secret-token", 0)),
         no_auth: false,
+        headless: false,
+        stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: Some(dist_path),
         persist_epoch: None,
         store,

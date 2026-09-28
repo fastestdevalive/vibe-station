@@ -32,6 +32,14 @@ use vst_types::events::Broadcaster;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServerOptions {
+    make_opts_with_headless(tmp, auth_state, false)
+}
+
+fn make_opts_with_headless(
+    tmp: &std::path::Path,
+    auth_state: Option<AuthState>,
+    headless: bool,
+) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
     let store = StoreHandle::open(&db_path).unwrap();
     let broadcaster = Broadcaster::new(16);
@@ -41,6 +49,8 @@ fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServe
         port: 0,
         auth_state,
         no_auth: false,
+        headless,
+        stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
         store,
@@ -75,6 +85,31 @@ async fn connect_remote(url: &str, token: &str) -> WebSocketStream<MaybeTlsStrea
         .unwrap();
     req.headers_mut()
         .insert("cf-connecting-ip", HeaderValue::from_static("1.2.3.4"));
+    let (ws, _resp) = connect_async(req).await.unwrap();
+    ws
+}
+
+/// Same as `serve`, but the daemon is headless — its loopback-trust bypass
+/// must be off, so a genuinely-loopback (real 127.0.0.1 TCP connection, no
+/// `cf-connecting-ip` tunnel tag) request with no token must NOT be silently
+/// upgraded.
+async fn serve_headless(tmp: &std::path::Path, auth_state: AuthState) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = build_app(make_opts_with_headless(tmp, Some(auth_state), true));
+    tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service())
+            .await
+            .unwrap();
+    });
+    format!("ws://{addr}/ws")
+}
+
+/// Open a WS connection with NO `cf-connecting-ip` tag and NO token — a
+/// genuinely loopback connection (real TCP to 127.0.0.1) as far as the
+/// server's `ConnectInfo` sees it.
+async fn connect_loopback_no_token(url: &str) -> WebSocketStream<MaybeTlsStream<TcpStream>> {
+    let req = url.into_client_request().unwrap();
     let (ws, _resp) = connect_async(req).await.unwrap();
     ws
 }
@@ -145,5 +180,28 @@ async fn valid_browser_token_keeps_the_socket_open() {
             assert!(t.contains("\"pong\""), "expected a pong reply, got {t}");
         }
         other => panic!("expected a pong reply (open socket), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn headless_daemon_closes_unauthenticated_loopback_ws_with_4401() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve_headless(tmp.path(), auth_state).await;
+
+    // Genuinely loopback (real 127.0.0.1 TCP, no tunnel tag), no token —
+    // headless must not silently upgrade this.
+    let mut ws = connect_loopback_no_token(&base).await;
+
+    let timeout = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+    match timeout.expect("server should close within 5s") {
+        Some(Ok(Message::Close(Some(CloseFrame { code, .. })))) => {
+            assert_eq!(
+                u16::from(code),
+                4401,
+                "expected auth-expired close code 4401"
+            );
+        }
+        other => panic!("expected a 4401 close frame, got {other:?}"),
     }
 }

@@ -143,6 +143,37 @@ impl OneTimeCodeStore {
             entry.consumed = true;
         }
     }
+
+    /// Atomically check-and-burn a code in one write-lock acquisition.
+    ///
+    /// Found in review: `redeem_common` used to call `get_code` (a read lock)
+    /// and then, separately, `mark_consumed` (its own write lock) -- two
+    /// concurrent `GET /continue?code=X` requests on different tokio worker
+    /// threads could both observe `consumed == false` under their own read
+    /// lock before either one's write lock ran, letting the same one-time
+    /// code mint two Browser sessions instead of one. Folding the check and
+    /// the mutation into a single write-lock critical section makes the
+    /// "only the winning caller sees a valid code" guarantee actually hold.
+    /// Returns the entry (still marked unconsumed, as it was found) only for
+    /// the caller that wins; every other caller — including one that arrives
+    /// after the code was already consumed, expired, or origin-mismatched —
+    /// gets `None`.
+    pub fn consume_if_valid(
+        &self,
+        code: &str,
+        expected_origin: &str,
+        now: i64,
+    ) -> Option<OneTimeCode> {
+        let mut guard = self.codes.write().unwrap();
+        let entry = guard.get_mut(code)?;
+        let valid =
+            entry.origin == expected_origin && !entry.consumed && (now - entry.created_at < 30_000);
+        if !valid {
+            return None;
+        }
+        entry.consumed = true;
+        Some(entry.clone())
+    }
 }
 
 /// Helper function to mint one-time code on a shared store.
@@ -416,61 +447,167 @@ impl MobileAuthRoutes {
         via_tunnel: bool,
         user_agent: &str,
     ) -> MobileAuthRedeemResponse {
-        let ip_to_check = client_ip.unwrap_or("unknown");
-        if !check_mobile_auth_rate_limit(ip_to_check) {
-            return MobileAuthRedeemResponse {
+        let expected_origin = if via_tunnel { "tunnel" } else { "local" };
+        match self
+            .redeem_common(
+                code_param,
+                client_ip,
+                expected_origin,
+                via_tunnel,
+                user_agent,
+            )
+            .await
+        {
+            Ok(s) => MobileAuthRedeemResponse {
+                status: 200,
+                html: SUCCESS_HTML.to_string(),
+                set_cookie: Some(s.set_cookie),
+            },
+            Err(RedeemError::RateLimited) => MobileAuthRedeemResponse {
                 status: 429,
                 html: "Rate limit exceeded".to_string(),
+                set_cookie: None,
+            },
+            Err(RedeemError::MissingCode) => MobileAuthRedeemResponse {
+                status: 400,
+                html: "Missing code parameter".to_string(),
+                set_cookie: None,
+            },
+            Err(RedeemError::Invalid) => MobileAuthRedeemResponse {
+                status: 410,
+                html: EXPIRED_HTML.to_string(),
+                set_cookie: None,
+            },
+            Err(RedeemError::AuthNotConfigured) => MobileAuthRedeemResponse {
+                status: 503,
+                html: "Auth not configured".to_string(),
+                set_cookie: None,
+            },
+        }
+    }
+
+    /// `GET /continue?code=` — CLI-opened browser tab authentication
+    /// (`cli-daemon-unification` Part 02, CUJ4). Reuses the exact same
+    /// mint/redeem mechanism as `mobile_auth` above, under a distinct
+    /// `"local-cli"` origin so codes can't cross-redeem between flows.
+    /// Never reached over a tunnel — the caller (`handle_continue_redeem`)
+    /// rejects `via_tunnel` before this is ever invoked, so the cookie is
+    /// unconditionally the non-`Secure` local shape.
+    pub async fn continue_redeem(
+        &self,
+        code_param: Option<String>,
+        client_ip: Option<&str>,
+        user_agent: &str,
+    ) -> ContinueRedeemResponse {
+        // No-auth mode: redeem_common's AuthNotConfigured path (503) is fine
+        // for the rare /mobile-auth case, but would be the GUARANTEED outcome
+        // here in every VST_NO_AUTH=1 dev-sandbox/testing setup — degrade to
+        // a plain redirect (no cookie needed; the daemon already trusts
+        // everything in no-auth mode) instead of a confusing 503.
+        if self.auth_state.is_none() {
+            return ContinueRedeemResponse {
+                status: 302,
+                redirect_to: Some("/".to_string()),
+                error_html: None,
                 set_cookie: None,
             };
         }
 
+        match self
+            .redeem_common(code_param, client_ip, "local-cli", false, user_agent)
+            .await
+        {
+            Ok(s) => ContinueRedeemResponse {
+                status: 302,
+                redirect_to: Some("/".to_string()),
+                error_html: None,
+                set_cookie: Some(s.set_cookie),
+            },
+            Err(RedeemError::RateLimited) => ContinueRedeemResponse {
+                status: 429,
+                redirect_to: None,
+                error_html: Some("Rate limit exceeded".to_string()),
+                set_cookie: None,
+            },
+            Err(RedeemError::MissingCode) => ContinueRedeemResponse {
+                status: 400,
+                redirect_to: None,
+                error_html: Some("Missing code parameter".to_string()),
+                set_cookie: None,
+            },
+            Err(RedeemError::Invalid) => ContinueRedeemResponse {
+                status: 410,
+                redirect_to: None,
+                error_html: Some(EXPIRED_HTML.to_string()),
+                set_cookie: None,
+            },
+            Err(RedeemError::AuthNotConfigured) => ContinueRedeemResponse {
+                status: 503,
+                redirect_to: None,
+                error_html: Some("Auth not configured".to_string()),
+                set_cookie: None,
+            },
+        }
+    }
+
+    /// Mint a one-time code for the browser "continue" flow (`origin: "local-cli"`).
+    /// Same `TunnelOnlyBlocked` guard as `mobile_qr`/`local_qr` — this flow is
+    /// only ever reached same-machine (CUJ2a/2b spawn the daemon locally),
+    /// never through the Cloudflare tunnel.
+    pub fn mint_continue_code(
+        &self,
+        is_remote: bool,
+    ) -> Result<(String, i64), MobileAuthRouteError> {
+        if is_remote {
+            return Err(MobileAuthRouteError::TunnelOnlyBlocked);
+        }
+        Ok(self.code_store.mint_one_time_code("local-cli"))
+    }
+
+    /// Shared validate-and-mint-cookie logic behind both `/mobile-auth` and
+    /// `/continue` — see Key Decision 1 in the `cli-daemon-unification`
+    /// Part 02 plan for why `via_tunnel`'s two former responsibilities
+    /// (origin match, `Secure` cookie attribute) are now two explicit params.
+    async fn redeem_common(
+        &self,
+        code_param: Option<String>,
+        client_ip: Option<&str>,
+        expected_origin: &str,
+        secure_cookie: bool,
+        user_agent: &str,
+    ) -> Result<RedeemSuccess, RedeemError> {
+        let ip_to_check = client_ip.unwrap_or("unknown");
+        if !check_mobile_auth_rate_limit(ip_to_check) {
+            return Err(RedeemError::RateLimited);
+        }
+
         let code = match code_param {
             Some(c) if !c.trim().is_empty() => c,
-            _ => {
-                return MobileAuthRedeemResponse {
-                    status: 400,
-                    html: "Missing code parameter".to_string(),
-                    set_cookie: None,
-                }
-            }
+            _ => return Err(RedeemError::MissingCode),
         };
 
-        let entry = self.code_store.get_code(&code);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        let origin_matches = entry.as_ref().map_or(false, |e| {
-            e.origin == if via_tunnel { "tunnel" } else { "local" }
-        });
-
-        let is_valid = entry.as_ref().map_or(false, |e| {
-            origin_matches && !e.consumed && (now - e.created_at < 30_000)
-        });
-
-        if !is_valid {
-            return MobileAuthRedeemResponse {
-                status: 410,
-                html: EXPIRED_HTML.to_string(),
-                set_cookie: None,
-            };
+        // Check-and-burn atomically (see `consume_if_valid`'s doc comment) --
+        // this MUST happen before checking `auth_state` below, since burning
+        // the code is what makes it single-use regardless of what happens
+        // next; a concurrent redeemer must never see it as still valid just
+        // because this call happens to fail for an unrelated reason.
+        if self
+            .code_store
+            .consume_if_valid(&code, expected_origin, now)
+            .is_none()
+        {
+            return Err(RedeemError::Invalid);
         }
 
         let auth_state = match &self.auth_state {
             Some(s) => s,
-            None => {
-                return MobileAuthRedeemResponse {
-                    status: 503,
-                    html: "Auth not configured".to_string(),
-                    set_cookie: None,
-                }
-            }
+            None => return Err(RedeemError::AuthNotConfigured),
         };
-
-        // Burn code
-        self.code_store.mark_consumed(&code);
 
         // Mint browser token
         let token_val = mint_token(TokenScope::Browser, auth_state, None);
@@ -487,18 +624,39 @@ impl MobileAuthRoutes {
             device_name: Some(dev_name),
         });
 
-        let secure_attr = if via_tunnel { " Secure;" } else { "" };
+        let secure_attr = if secure_cookie { " Secure;" } else { "" };
         let cookie_header = format!(
             "{}={}; HttpOnly;{} SameSite=Lax; Path=/; Max-Age={}",
             COOKIE_NAME, token_val, secure_attr, BROWSER_MAX_AGE_SECONDS
         );
 
-        MobileAuthRedeemResponse {
-            status: 200,
-            html: SUCCESS_HTML.to_string(),
-            set_cookie: Some(cookie_header),
-        }
+        Ok(RedeemSuccess {
+            set_cookie: cookie_header,
+        })
     }
+}
+
+struct RedeemSuccess {
+    set_cookie: String,
+}
+
+enum RedeemError {
+    RateLimited,
+    MissingCode,
+    Invalid,
+    AuthNotConfigured,
+}
+
+/// Response from `/continue` — a redirect on success (URL-scrubbing, per
+/// R38), or an error page on failure. Distinct from `MobileAuthRedeemResponse`
+/// (always HTML) since `/mobile-auth`'s success path has no "previous URL" to
+/// scrub (a phone scanning a QR code has no address bar history to clean up).
+#[derive(Debug, Clone)]
+pub struct ContinueRedeemResponse {
+    pub status: u16,
+    pub redirect_to: Option<String>,
+    pub error_html: Option<String>,
+    pub set_cookie: Option<String>,
 }
 
 fn pick_best_network_ip() -> Option<(String, ConnectionType)> {

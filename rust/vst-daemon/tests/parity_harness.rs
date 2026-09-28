@@ -62,6 +62,8 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
         port: 0,
         auth_state: None,
         no_auth: true,
+        headless: false,
+        stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
         store,

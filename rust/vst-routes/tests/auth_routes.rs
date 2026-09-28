@@ -400,6 +400,154 @@ async fn test_mobile_auth_routes_redeem_flow() {
 }
 
 #[tokio::test]
+async fn test_continue_redeem_local_cli_origin_does_not_cross_redeem_with_local_or_tunnel() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store.clone(), 7421, false);
+
+    // A "local" (QR) code must NOT redeem through the continue flow.
+    let (local_code, _) = code_store.mint_one_time_code("local");
+    let res = routes
+        .continue_redeem(Some(local_code), Some("203.0.113.10"), "")
+        .await;
+    assert_eq!(
+        res.status, 410,
+        "a 'local' origin code must not redeem via /continue"
+    );
+
+    // A "tunnel" code must NOT redeem through the continue flow either.
+    let (tunnel_code, _) = code_store.mint_one_time_code("tunnel");
+    let res = routes
+        .continue_redeem(Some(tunnel_code), Some("203.0.113.11"), "")
+        .await;
+    assert_eq!(
+        res.status, 410,
+        "a 'tunnel' origin code must not redeem via /continue"
+    );
+}
+
+#[tokio::test]
+async fn test_continue_redeem_success_is_redirect_with_non_secure_cookie() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store.clone(), 7421, false);
+
+    let (code, _) = routes
+        .mint_continue_code(false)
+        .expect("mint should succeed for a local caller");
+    let res = routes
+        .continue_redeem(Some(code), Some("203.0.113.20"), "curl/8.0")
+        .await;
+
+    assert_eq!(res.status, 302);
+    assert_eq!(res.redirect_to.as_deref(), Some("/"));
+    let cookie = res.set_cookie.expect("expected a Set-Cookie header");
+    assert!(cookie.contains(COOKIE_NAME));
+    assert!(cookie.contains("HttpOnly"));
+    assert!(cookie.contains("SameSite=Lax"));
+    assert!(
+        !cookie.contains("Secure"),
+        "continue-flow cookie must never be Secure — it's never reached over a tunnel: {cookie}"
+    );
+}
+
+#[tokio::test]
+async fn test_continue_redeem_replay_is_rejected() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store.clone(), 7421, false);
+
+    let (code, _) = routes
+        .mint_continue_code(false)
+        .expect("mint should succeed for a local caller");
+    let first = routes
+        .continue_redeem(Some(code.clone()), Some("203.0.113.30"), "")
+        .await;
+    assert_eq!(first.status, 302);
+
+    let second = routes
+        .continue_redeem(Some(code), Some("203.0.113.30"), "")
+        .await;
+    assert_eq!(second.status, 410);
+}
+
+/// Found in review: `redeem_common` used to call `get_code` (read lock) then
+/// separately `mark_consumed` (its own write lock) — two concurrent redeems
+/// of the SAME code could both observe `consumed == false` before either
+/// write landed, minting two Browser sessions off one one-time code. Fire two
+/// real concurrent redeems and assert exactly one wins.
+#[tokio::test]
+async fn test_continue_redeem_concurrent_requests_only_one_wins() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store.clone(), 7421, false);
+
+    let (code, _) = routes
+        .mint_continue_code(false)
+        .expect("mint should succeed for a local caller");
+
+    let (r1, r2) = tokio::join!(
+        routes.continue_redeem(Some(code.clone()), Some("203.0.113.60"), ""),
+        routes.continue_redeem(Some(code), Some("203.0.113.61"), ""),
+    );
+
+    let statuses = [r1.status, r2.status];
+    let successes = statuses.iter().filter(|&&s| s == 302).count();
+    let rejections = statuses.iter().filter(|&&s| s == 410).count();
+    assert_eq!(
+        successes, 1,
+        "exactly one concurrent redeem of the same code must succeed, got statuses {statuses:?}"
+    );
+    assert_eq!(
+        rejections, 1,
+        "the losing concurrent redeem must be rejected as already-consumed, got statuses {statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_continue_redeem_no_auth_mode_redirects_without_cookie() {
+    let code_store = OneTimeCodeStore::new();
+    // No AuthState at all -- simulates VST_NO_AUTH=1.
+    let routes = MobileAuthRoutes::new(None, code_store.clone(), 7421, false);
+
+    let (code, _) = routes
+        .mint_continue_code(false)
+        .expect("mint should succeed for a local caller");
+    let res = routes
+        .continue_redeem(Some(code), Some("203.0.113.40"), "")
+        .await;
+
+    assert_eq!(res.status, 302, "no-auth mode must still redirect, not 503");
+    assert_eq!(res.redirect_to.as_deref(), Some("/"));
+    assert!(res.set_cookie.is_none());
+}
+
+#[tokio::test]
+async fn test_mint_continue_code_blocked_over_tunnel() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store, 7421, false);
+
+    let err = routes
+        .mint_continue_code(true)
+        .expect_err("minting over a tunnel must be blocked");
+    assert_eq!(
+        err,
+        vst_routes::mobile_auth::MobileAuthRouteError::TunnelOnlyBlocked
+    );
+}
+
+#[tokio::test]
+async fn test_continue_redeem_missing_code_is_400() {
+    let auth_state = AuthState::new("test-key", 1);
+    let code_store = OneTimeCodeStore::new();
+    let routes = MobileAuthRoutes::new(Some(auth_state), code_store, 7421, false);
+
+    let res = routes.continue_redeem(None, Some("203.0.113.50"), "").await;
+    assert_eq!(res.status, 400);
+}
+
+#[tokio::test]
 async fn test_tailscale_routes() {
     let code_store = OneTimeCodeStore::new();
     let routes = TailscaleRoutes::new(code_store, 7421);

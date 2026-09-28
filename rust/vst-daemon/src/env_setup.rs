@@ -113,23 +113,45 @@ pub async fn setup_vst_environment(vst_home: &Path) {
     }
 
     // ── skill ────────────────────────────────────────────────────────────
-    if let Some(skill_src) = resolve_vst_skill_source() {
+    #[cfg(feature = "embed-ui")]
+    {
+        // Embedded builds (release/Tauri, see the `embed-ui` feature doc
+        // comment in Cargo.toml) always have SKILL.md compiled in — no
+        // filesystem source to resolve, just write the embedded string.
+        const EMBEDDED_SKILL_MD: &str = include_str!("../../../skill/SKILL.md");
         let skill_dest = vst_home.join("skill").join("vst").join("SKILL.md");
         if let Err(e) = (|| -> std::io::Result<()> {
             if let Some(parent) = skill_dest.parent() {
                 fs::create_dir_all(parent)?;
             }
             let tmp = skill_dest.with_extension("tmp");
-            fs::copy(&skill_src, &tmp)?;
+            fs::write(&tmp, EMBEDDED_SKILL_MD)?;
             fs::rename(&tmp, &skill_dest)?;
             Ok(())
         })() {
-            tracing::warn!("[vst] could not install vst SKILL.md: {e}");
+            tracing::warn!("[vst] could not install embedded vst SKILL.md: {e}");
         }
-    } else {
-        tracing::debug!(
-            "[vst] VST_SKILL_PATH not set and fallback not found — skipping skill install"
-        );
+    }
+    #[cfg(not(feature = "embed-ui"))]
+    {
+        if let Some(skill_src) = resolve_vst_skill_source() {
+            let skill_dest = vst_home.join("skill").join("vst").join("SKILL.md");
+            if let Err(e) = (|| -> std::io::Result<()> {
+                if let Some(parent) = skill_dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let tmp = skill_dest.with_extension("tmp");
+                fs::copy(&skill_src, &tmp)?;
+                fs::rename(&tmp, &skill_dest)?;
+                Ok(())
+            })() {
+                tracing::warn!("[vst] could not install vst SKILL.md: {e}");
+            }
+        } else {
+            tracing::debug!(
+                "[vst] VST_SKILL_PATH not set and fallback not found — skipping skill install"
+            );
+        }
     }
 }
 

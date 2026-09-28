@@ -61,11 +61,11 @@ use vst_types::domain::{TokenPayload, TokenScope, VerifyResult};
 use vst_types::events::Broadcaster;
 use vst_types::rest::attachments::{AttachmentsResult, DeleteAttachmentResult};
 use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
+use vst_types::rest::doctor::DoctorReport;
 use vst_types::rest::lsp::{
     LspDefinitionResponse, LspHoverResponse, LspLanguageSurveyResponse, LspOutlineResponse,
     LspPositionRequest, LspReferencesResponse, LspStatusResponse, LspStatusesResponse,
 };
-use vst_types::rest::doctor::DoctorReport;
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
 };
@@ -114,6 +114,13 @@ pub struct BuildServerOptions {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
+    /// Whether this daemon was started headless (loopback-trust bypass is
+    /// off) vs. attended/Tauri-supervised — read by `auth_middleware`'s
+    /// `is_loopback` computation (both the HTTP and WS-upgrade copies).
+    pub headless: bool,
+    /// Notified by `POST /api/daemon/stop` to trigger the same graceful
+    /// shutdown sequence a SIGINT/SIGTERM does (see `run.rs`'s signal task).
+    pub stop_requested: Arc<tokio::sync::Notify>,
     pub dist_path: Option<PathBuf>,
     pub persist_epoch: Option<PersistEpochFn>,
     pub store: StoreHandle,
@@ -131,6 +138,10 @@ pub struct AppState {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
+    /// See `BuildServerOptions::headless` doc comment.
+    pub headless: bool,
+    /// See `BuildServerOptions::stop_requested` doc comment.
+    pub stop_requested: Arc<tokio::sync::Notify>,
     pub dist_path: Option<PathBuf>,
     pub persist_epoch: Option<PersistEpochFn>,
     pub store: StoreHandle,
@@ -500,6 +511,8 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
+        headless: opts.headless,
+        stop_requested: opts.stop_requested,
         dist_path: opts
             .dist_path
             .map(|p| std::fs::canonicalize(&p).unwrap_or(p)),
@@ -559,6 +572,8 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
     // (relative /api/…) — uses the same path convention without any
     // prefix-stripping tricks.
     let api = Router::new()
+        // Daemon lifecycle
+        .route("/daemon/stop", post(handle_daemon_stop))
         // Open
         .route("/open", post(handle_open))
         // Projects
@@ -812,6 +827,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/auth/tunnel/status", get(handle_auth_tunnel_status))
         .route("/auth/local-qr", post(handle_auth_local_qr))
         .route("/auth/mobile-qr", post(handle_auth_mobile_qr))
+        .route("/auth/continue/mint", post(handle_auth_continue_mint))
         // Tailscale
         .route("/tailscale/status", get(handle_tailscale_status))
         .route(
@@ -829,6 +845,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         // Utility & protocol routes stay at root (not under /api)
         .route("/health", get(handle_health))
         .route("/mobile-auth", get(handle_mobile_auth))
+        .route("/continue", get(handle_continue_redeem))
         .route("/ws", get(handle_ws_upgrade))
         // All REST API routes under /api
         .nest("/api", api)
@@ -909,7 +926,8 @@ async fn auth_middleware(
         && (client_ip == "127.0.0.1"
             || client_ip == "::1"
             || client_ip == "::ffff:127.0.0.1"
-            || client_ip.is_empty()); // empty peer in unit test mock defaults to loopback
+            || client_ip.is_empty()) // empty peer in unit test mock defaults to loopback
+        && !state.headless; // headless daemons never get the loopback-trust bypass
 
     if is_loopback {
         // CSRF guard: if Origin header present, must match localhost / 127.0.0.1 or tauri://
@@ -966,6 +984,7 @@ async fn auth_middleware(
         || key == "GET /ws"
         || key == "POST /auth/logout"
         || key == "GET /mobile-auth"
+        || key == "GET /continue"
     {
         return next.run(req).await;
     }
@@ -981,6 +1000,7 @@ async fn auth_middleware(
         && !original_path.starts_with("/api/")
         && original_path != "/ws"
         && original_path != "/mobile-auth"
+        && original_path != "/continue"
     {
         return next.run(req).await;
     }
@@ -1064,7 +1084,8 @@ async fn handle_ws_upgrade(
             let via_tunnel = headers.contains_key("cf-connecting-ip");
             let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
             let peer_ip = connect_info.map(|ci| ci.0.ip());
-            let is_loopback = !via_tunnel && peer_ip.map_or(true, |ip| ip.is_loopback());
+            let is_loopback =
+                !via_tunnel && peer_ip.map_or(true, |ip| ip.is_loopback()) && !state.headless;
 
             let auth_hdr = headers
                 .get(header::AUTHORIZATION)
@@ -1465,6 +1486,33 @@ async fn handle_socket(
 
 async fn handle_health(State(state): State<AppState>) -> Json<vst_types::rest::health::Health> {
     Json(state.health_routes.health())
+}
+
+/// `POST /api/daemon/stop` — authenticated like every other `/api` route (no
+/// exemption), and additionally scope-gated to `Cli`/`Tauri` tokens only
+/// (found in review: a Browser- or Mobile-scoped token could otherwise stop
+/// the daemon out from under its owner — this is an operator action, not
+/// something a phone/browser session should be able to trigger). `None`
+/// (no-auth mode) is allowed through, same as every other scope-gated
+/// handler. Triggers the same graceful-shutdown sequence a SIGINT/SIGTERM
+/// does (see `run.rs`'s signal-handling task) — this handler does not itself
+/// wait for the process to actually exit; the client is expected to poll
+/// `/health` separately until the connection is refused (see
+/// `rust/vst-cli/src/commands/daemon/stop.rs`).
+async fn handle_daemon_stop(
+    State(state): State<AppState>,
+    req: Request,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(payload) = req.extensions().get::<TokenPayload>() {
+        if !matches!(payload.scope, TokenScope::Cli | TokenScope::Tauri) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "cli_or_tauri_token_required" })),
+            ));
+        }
+    }
+    state.stop_requested.notify_one();
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn handle_open(
@@ -3505,9 +3553,7 @@ async fn handle_oobe_step1(
         .map_err(oobe_err_to_response)
 }
 
-async fn handle_oobe_step2(
-    State(state): State<AppState>,
-) -> Json<ConfirmStep2Result> {
+async fn handle_oobe_step2(State(state): State<AppState>) -> Json<ConfirmStep2Result> {
     Json(state.oobe_routes.confirm_step2().await)
 }
 
@@ -3914,6 +3960,91 @@ async fn handle_mobile_auth(
     response
 }
 
+/// `POST /api/auth/continue/mint` — CLI-only (never a browser call): mints a
+/// one-time code for the browser "continue" flow (CUJ4). Authenticated like
+/// any other `/api` route (the CLI always already holds a valid `cliToken`).
+///
+/// Found in review: this only checked that *some* valid token was present,
+/// not that it was actually a CLI token — a Browser- or Mobile-scoped token
+/// could mint unlimited `local-cli`-origin codes too. Require `TokenScope::Cli`
+/// explicitly, matching the doc comment's stated contract (mirrors the
+/// `TokenScope::Tauri` check `tailscale.rs::up` already does for its own
+/// desktop-only route). `None` (no-auth mode has no `TokenPayload` attached at
+/// all) is allowed through, same as every other scope-gated handler.
+async fn handle_auth_continue_mint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    req: Request,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(payload) = req.extensions().get::<TokenPayload>() {
+        if payload.scope != TokenScope::Cli {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "cli_token_required" })),
+            ));
+        }
+    }
+    let is_remote = headers.contains_key("cf-connecting-ip");
+    state
+        .mobile_auth_routes
+        .mint_continue_code(is_remote)
+        .map(|(code, expires_at)| {
+            Json(serde_json::json!({ "code": code, "expiresAt": expires_at }))
+        })
+        .map_err(mobile_auth_err_to_response)
+}
+
+/// `GET /continue?code=` — redeem a continue-flow code (CUJ4). Root-exempt
+/// from `auth_middleware` (same reasoning as `/mobile-auth`: the handshake
+/// itself can't require the auth it's establishing) — see `auth_middleware`'s
+/// explicit exemption list and SPA-catch-all exclusion, both updated for this
+/// route. Never reachable over a tunnel: this flow is always same-machine.
+async fn handle_continue_redeem(
+    State(state): State<AppState>,
+    Query(q): Query<CodeQuery>,
+    headers: HeaderMap,
+    req: Request,
+) -> Response {
+    if headers.contains_key("cf-connecting-ip") {
+        return (StatusCode::GONE, Html(EXPIRED_HTML_FOR_TUNNEL)).into_response();
+    }
+
+    let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
+    let peer_ip = connect_info.map(|ci| ci.0.ip().to_string());
+    let client_ip = peer_ip.as_deref();
+    let user_agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let res = state
+        .mobile_auth_routes
+        .continue_redeem(q.code, client_ip, user_agent)
+        .await;
+
+    if let Some(location) = res.redirect_to {
+        let mut response =
+            (StatusCode::from_u16(res.status).unwrap_or(StatusCode::FOUND)).into_response();
+        if let Ok(val) = HeaderValue::from_str(&location) {
+            response.headers_mut().insert(header::LOCATION, val);
+        }
+        if let Some(cookie) = res.set_cookie {
+            if let Ok(val) = HeaderValue::from_str(&cookie) {
+                response.headers_mut().insert(header::SET_COOKIE, val);
+            }
+        }
+        response
+    } else {
+        (
+            StatusCode::from_u16(res.status).unwrap_or(StatusCode::BAD_REQUEST),
+            Html(res.error_html.unwrap_or_default()),
+        )
+            .into_response()
+    }
+}
+
+const EXPIRED_HTML_FOR_TUNNEL: &str = "<!DOCTYPE html><html><body>This link is only valid on the machine that opened it.</body></html>";
+
 fn mobile_auth_err_to_response(err: MobileAuthRouteError) -> (StatusCode, Json<serde_json::Value>) {
     match err {
         MobileAuthRouteError::TunnelOnlyBlocked => (
@@ -4034,9 +4165,57 @@ fn tailscale_err_to_response(err: TailscaleRouteError) -> (StatusCode, Json<serd
 
 // ── Static SPA / dist fallback ────────────────────────────────────────────
 
+#[cfg(feature = "embed-ui")]
+#[derive(rust_embed::Embed)]
+#[folder = "../../web-ui/dist"]
+struct WebUiAssets;
+
+/// Serve `path` (URL-decoded, leading `/` stripped) from the binary's
+/// embedded `web-ui/dist` copy, falling back to embedded `index.html` for
+/// SPA client-side routes — same shape as the disk-backed branch below, for
+/// a curl-only daemon with no `dist_path` on disk at all.
+#[cfg(feature = "embed-ui")]
+fn serve_embedded_asset(path: &str) -> Response {
+    if let Some(file) = WebUiAssets::get(path) {
+        let mime = mime_guess::from_path(std::path::Path::new(path))
+            .first_or_octet_stream()
+            .to_string();
+        return ([(header::CONTENT_TYPE, mime)], file.data.into_owned()).into_response();
+    }
+    if let Some(index) = WebUiAssets::get("index.html") {
+        return (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            index.data.into_owned(),
+        )
+            .into_response();
+    }
+    (StatusCode::NOT_FOUND, "Not found").into_response()
+}
+
 async fn handle_fallback(State(state): State<AppState>, req: Request) -> Response {
     let Some(ref dist) = state.dist_path else {
-        return (StatusCode::NOT_FOUND, "Not found").into_response();
+        #[cfg(feature = "embed-ui")]
+        {
+            // Only GET/HEAD ever fall through to the SPA's index.html — a
+            // POST/PUT/DELETE to a path with no matching route is a genuine
+            // 404, not a client-side route the SPA router will handle. This
+            // matters for parity with the disk-backed branch below (used
+            // when a real dist_path IS configured, which never exercises
+            // this branch) and with the pre-existing behavior every
+            // unmatched-route caller (API clients, parity tests) expects.
+            if req.method() != Method::GET && req.method() != Method::HEAD {
+                return (StatusCode::NOT_FOUND, "Not found").into_response();
+            }
+            let path = req.uri().path().trim_start_matches('/');
+            let Ok(decoded) = percent_decode_str(path).decode_utf8() else {
+                return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+            };
+            return serve_embedded_asset(decoded.as_ref());
+        }
+        #[cfg(not(feature = "embed-ui"))]
+        {
+            return (StatusCode::NOT_FOUND, "Not found").into_response();
+        }
     };
 
     let path = req.uri().path().trim_start_matches('/');

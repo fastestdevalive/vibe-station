@@ -463,10 +463,26 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
     );
 
     // 6. cloudflared (Optional, false — bundled via VST_CLOUDFLARED_BIN on desktop)
-    checks.push(with_timeout("cloudflared", CheckGroup::Optional, false, check_cloudflared).await);
+    checks.push(
+        with_timeout(
+            "cloudflared",
+            CheckGroup::Optional,
+            false,
+            check_cloudflared,
+        )
+        .await,
+    );
 
     // 7. tailscale (Optional, false)
-    checks.push(with_timeout("tailscale", CheckGroup::Optional, false, check_tailscale_binary).await);
+    checks.push(
+        with_timeout(
+            "tailscale",
+            CheckGroup::Optional,
+            false,
+            check_tailscale_binary,
+        )
+        .await,
+    );
 
     // 8. orphan-sessions (Diagnostic, false)
     checks.push(check_orphan_sessions(store, tmux).await);
@@ -477,7 +493,9 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
     // Central install_hint population for all non-Ok checks
     for check in &mut checks {
         if check.status != DoctorStatus::Ok {
-            if let Some(hint) = vst_types::rest::doctor_hints::hint_for(&check.name, std::env::consts::OS) {
+            if let Some(hint) =
+                vst_types::rest::doctor_hints::hint_for(&check.name, std::env::consts::OS)
+            {
                 check.install_hint = Some(hint.to_string());
             }
         }
@@ -579,7 +597,11 @@ mod tests {
 
         let elapsed = start.elapsed();
         assert_eq!(check.status, DoctorStatus::Timeout);
-        assert!(elapsed < Duration::from_secs(5), "Expected timeout before closure's 5s, took {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "Expected timeout before closure's 5s, took {:?}",
+            elapsed
+        );
         assert_eq!(check.name, "slow-check");
     }
 
@@ -594,7 +616,11 @@ mod tests {
         std::env::remove_var("VST_CLOUDFLARED_BIN");
 
         assert_eq!(check.status, DoctorStatus::Ok);
-        assert!(check.message.contains("bundled"), "Expected message to contain 'bundled', got: {}", check.message);
+        assert!(
+            check.message.contains("bundled"),
+            "Expected message to contain 'bundled', got: {}",
+            check.message
+        );
         assert_eq!(check.install_hint, None);
         assert_eq!(check.resolved_path, Some(temp_path));
     }
