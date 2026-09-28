@@ -141,11 +141,6 @@
   padding-right: 28px;
 }
 
-.file-tree-sidebar-header__title {
-  flex-shrink: 0;
-  font-weight: var(--font-weight-medium);
-}
-
 .file-tree-sidebar-header__tail {
   margin-left: auto;
   display: flex;
@@ -1003,7 +998,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: var(--font-weight-light);
-  color: var(--fg-secondary);
+  color: var(--fg-primary);
 }
 
 .wt-row__trail {
@@ -1210,7 +1205,7 @@
 .tree-row--direct-session {
   gap: var(--space-2);
   min-height: 28px; /* match .tree-row--worktree, not the 32px .tree-row base */
-  color: var(--fg-secondary);
+  color: var(--fg-primary);
 }
 
 .tree-row--direct-session:hover,

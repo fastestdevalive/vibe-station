@@ -142,7 +142,6 @@ describe("FileTreeSidebar", () => {
     it("renders the local/branch chips while browsing the plain tree (diff mode off)", async () => {
       render(<FileTreeSidebar api={api} />);
       await screen.findByText("README.md");
-      expect(screen.getByText("Files")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "local" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "branch" })).toBeInTheDocument();
     });
@@ -153,7 +152,7 @@ describe("FileTreeSidebar", () => {
       await screen.findByText("README.md");
 
       await user.click(screen.getByRole("button", { name: "Diff view off" }));
-      await waitFor(() => expect(screen.getByText("Changes")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view on" })).toBeInTheDocument());
       expect(screen.getByRole("button", { name: "local" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "branch" })).toBeInTheDocument();
     });
@@ -164,8 +163,8 @@ describe("FileTreeSidebar", () => {
       await screen.findByText("README.md");
 
       await user.click(screen.getByRole("button", { name: "branch" }));
-      // Still "Files" (plain tree), never flipped to "Changes".
-      expect(screen.getByText("Files")).toBeInTheDocument();
+      // Still the plain tree, never flipped to the "Changes" list.
+      expect(screen.getByRole("button", { name: "Diff view off" })).toBeInTheDocument();
       expect(screen.getByRole("treeitem", { name: "README.md" })).toBeInTheDocument();
     });
 
@@ -193,13 +192,13 @@ describe("FileTreeSidebar", () => {
       // Toggle diff mode ON — the Changes list must open showing "branch",
       // not silently revert to "local".
       await user.click(screen.getByRole("button", { name: "Diff view off" }));
-      await waitFor(() => expect(screen.getByText("Changes")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view on" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().diffScopeByWorktree["wt-1"]).toBe("branch");
       expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
 
       // Toggle diff mode OFF — the plain tree must still show "branch".
       await user.click(screen.getByRole("button", { name: "Diff view on" }));
-      await waitFor(() => expect(screen.getByText("Files")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole("button", { name: "Diff view off" })).toBeInTheDocument());
       expect(useWorkspaceStore.getState().treeScopeByWorktree["wt-1"]).toBe("branch");
       expect(screen.getByRole("button", { name: "branch" })).toHaveAttribute("aria-pressed", "true");
     });
