@@ -11,6 +11,7 @@ import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
+import { LspStatusRow } from "@/components/layout/LspStatusRow";
 import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
 import { useTopRightInset } from "@/context/TopRightInsetContext";
 
@@ -287,6 +288,11 @@ export function ToolPanel({
             </>
           )}
         </div>
+        {worktreeId != null ? (
+          <div style={{ paddingLeft: `${RAIL_WIDTH}px` }}>
+            <LspStatusRow api={api} worktreeId={worktreeId} scope={scope} />
+          </div>
+        ) : null}
       </div>
     </ToolsInsetProvider>
   );

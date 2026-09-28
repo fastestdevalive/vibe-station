@@ -10,9 +10,9 @@ use vst_lsp::{LspError, LspManager, LspRequestKind, LspResponse, WorkspaceKey};
 use vst_store::StoreHandle;
 use vst_types::domain::ProjectRecord;
 use vst_types::rest::lsp::{
-    Location, LspDefinitionResponse, LspFileRef, LspHoverResponse, LspLanguageSurveyResponse,
-    LspOutlineResponse, LspReferencesResponse, LspStatusResponse, OutlineSymbol, ReferenceEntry,
-    ReferenceGroup,
+    Location, LspDefinitionResponse, LspFileRef, LspHoverResponse, LspLanguageStatus,
+    LspLanguageSurveyResponse, LspOutlineResponse, LspReferencesResponse, LspStatusResponse,
+    OutlineSymbol, ReferenceEntry, ReferenceGroup,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -229,7 +229,12 @@ impl LspRoutes {
         let _ = self.resolve_workspace_root(&workspace).await?;
         let enabled = self.is_lsp_enabled(&workspace).await?;
         let (status, language) = self.lsp_manager.status(&workspace, path, enabled).await;
-        Ok(LspStatusResponse { status, language })
+        let presentation = vst_lsp::status::describe(status, language.as_deref());
+        Ok(LspStatusResponse {
+            status,
+            language,
+            presentation,
+        })
     }
 
     /// Per-language status for every language actually DETECTED in this
@@ -248,7 +253,7 @@ impl LspRoutes {
     pub async fn statuses(
         &self,
         workspace: WorkspaceKey,
-    ) -> Result<Vec<(String, vst_types::rest::lsp::LspStatus)>, LspRouteError> {
+    ) -> Result<Vec<LspLanguageStatus>, LspRouteError> {
         let root = self.resolve_workspace_root(&workspace).await?;
         let enabled = self.is_lsp_enabled(&workspace).await?;
 
@@ -278,11 +283,16 @@ impl LspRoutes {
             let Some(cfg) = vst_lsp::lookup_by_language(lang) else { continue };
             let Some(ext) = cfg.extensions.first() else { continue };
             let synthetic_path = format!("_.{ext}");
-            let (status, _) = self
+            let (status, resolved_language) = self
                 .lsp_manager
                 .status(&workspace, &synthetic_path, enabled)
                 .await;
-            out.push((lang.to_string(), status));
+            let presentation = vst_lsp::status::describe(status, resolved_language.as_deref());
+            out.push(LspLanguageStatus {
+                language: lang.to_string(),
+                status,
+                presentation,
+            });
         }
         Ok(out)
     }
