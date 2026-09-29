@@ -426,7 +426,6 @@ export function Workspace() {
     }
   }, [isMobile, mobileSidebarOpen, setMobileSidebarOpen]);
 
-  const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? 52 : leftSidebarWidthPx;
 
   const activeTerminalSessionId = useWorkspaceStore((s) => s.activeTerminalSessionId);
   const activeTerminalSession = activeTerminalSessionId
@@ -862,6 +861,12 @@ export function Workspace() {
           : "workspace";
 
   const isClassicLayout = !isMobile && (layoutMode === "workspace" || layoutMode === "project-workspace");
+  // On the macOS Tauri shell the classic-layout sidebar header sits under the
+  // traffic lights (70px inset), so the collapsed rail must be wide enough to
+  // still show the toggle to their right (78 + 28 button + 8 padding).
+  const isMacTauri = typeof document !== "undefined" && document.body?.dataset.tauriOs === "macos";
+  const collapsedPx = isMacTauri && isClassicLayout ? 114 : 52;
+  const leftColumnPx = isMobile ? 280 : leftSidebarCollapsed ? collapsedPx : leftSidebarWidthPx;
 
   return (
     <PaneOutletProvider>

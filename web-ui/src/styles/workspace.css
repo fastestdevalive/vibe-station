@@ -2138,18 +2138,16 @@
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-2);
+  /* Same left inset in expanded and collapsed states (12px = centred in the
+     52px collapsed rail) so the toggle doesn't shift while the sidebar width
+     animates. */
+  padding: 0 var(--space-2) 0 12px;
   gap: var(--space-2);
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
   min-width: 0;
   overflow: hidden;
-}
-
-.sidebar-header--collapsed {
-  justify-content: center;
-  padding: 0;
 }
 
 /* Floating top-right controls widget in classic per-worktree layout */
@@ -8072,6 +8070,15 @@ button.dashboard-card {
  * check done by WindowControls.tsx. */
 body[data-tauri-os="macos"] .top-bar {
   padding-left: 70px;
+}
+
+/* Classic (project) layout puts the header inside the sidebar, at the window's
+ * top-left, so it needs the same clearance. The collapsed rail is widened to
+ * fit (see MAC_TAURI_COLLAPSED_PX in Workspace.tsx). */
+body[data-tauri-os="macos"] .sidebar-header {
+  /* 70px inset + 8px row padding: matches .top-bar's 70px + .top-bar__row's
+   * var(--space-2), so the toggle sits at the same x in both layouts. */
+  padding-left: 78px;
 }
 
 

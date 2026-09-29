@@ -195,7 +195,7 @@ async fn open_project_window(
     let label = format!("project-{project_id}-{seq}");
     let script = build_init_script(daemon.port, &daemon.token, detect_os_name(), &label);
     let nav_handle = app.clone();
-    WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         &app,
         label,
         tauri::WebviewUrl::App(format!("index.html?openProject={project_id}").into()),
@@ -203,9 +203,17 @@ async fn open_project_window(
     .initialization_script(&script)
     .title("vibe-station")
     .inner_size(1400.0, 900.0)
-    .on_navigation(external_nav_handler(nav_handle))
-    .build()
-    .map_err(|e| e.to_string())?;
+    .min_inner_size(700.0, 500.0)
+    .on_navigation(external_nav_handler(nav_handle));
+    // Mirror the "main" window's overlay title bar from tauri.conf.json —
+    // without it the web content starts below a native title bar and the
+    // traffic lights get their own strip instead of overlapping the top bar.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .traffic_light_position(tauri::LogicalPosition::new(14.0, 16.0));
+    builder.build().map_err(|e| e.to_string())?;
     Ok(())
 }
 
