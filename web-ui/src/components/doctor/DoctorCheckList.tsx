@@ -23,11 +23,30 @@ const STATUS_LABEL: Record<DoctorCheckStatus, string> = {
   timeout: "Timeout",
 };
 
-const STATUS_COLOR: Record<DoctorCheckStatus, string> = {
-  ok: "var(--fg-success, var(--fg-primary))",
-  warn: "var(--fg-warning, var(--fg-primary))",
-  error: "var(--fg-danger, var(--fg-primary))",
-  timeout: "var(--fg-muted, var(--fg-secondary))",
+const STATUS_BADGE_STYLE: Record<
+  DoctorCheckStatus,
+  { color: string; bg: string; border: string }
+> = {
+  ok: {
+    color: "var(--fg-success, var(--fg-primary))",
+    bg: "color-mix(in srgb, var(--fg-success) 12%, transparent)",
+    border: "color-mix(in srgb, var(--fg-success) 28%, transparent)",
+  },
+  warn: {
+    color: "var(--fg-warning, var(--fg-primary))",
+    bg: "color-mix(in srgb, var(--fg-warning) 12%, transparent)",
+    border: "color-mix(in srgb, var(--fg-warning) 28%, transparent)",
+  },
+  error: {
+    color: "var(--fg-danger, var(--fg-primary))",
+    bg: "color-mix(in srgb, var(--fg-danger) 12%, transparent)",
+    border: "color-mix(in srgb, var(--fg-danger) 28%, transparent)",
+  },
+  timeout: {
+    color: "var(--fg-muted, var(--fg-secondary))",
+    bg: "color-mix(in srgb, var(--fg-muted, var(--fg-secondary)) 12%, transparent)",
+    border: "color-mix(in srgb, var(--fg-muted, var(--fg-secondary)) 28%, transparent)",
+  },
 };
 
 interface CheckRowProps {
@@ -40,7 +59,7 @@ function CheckRow({ check, hostname, hostOs }: CheckRowProps) {
   const [copied, setCopied] = useState(false);
   const glyph = STATUS_GLYPH[check.status];
   const label = STATUS_LABEL[check.status];
-  const color = STATUS_COLOR[check.status];
+  const badgeStyle = STATUS_BADGE_STYLE[check.status];
 
   const handleCopy = () => {
     if (!check.installHint) return;
@@ -54,66 +73,92 @@ function CheckRow({ check, hostname, hostOs }: CheckRowProps) {
       style={{
         padding: "var(--space-2) 0",
         borderBottom: "var(--border-width) solid var(--border-subtle, var(--border-default))",
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: "var(--space-3)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-        <span style={{ color, fontWeight: "bold", minWidth: "1.2em", textAlign: "center" }} aria-hidden="true">
-          {glyph}
-        </span>
-        <span style={{ color, fontSize: "var(--font-size-xs)", minWidth: "4em" }}>{label}</span>
-        <span style={{ fontWeight: "500", flexGrow: 1 }}>{check.name}</span>
-        <span style={{ color: "var(--fg-secondary)", fontSize: "var(--font-size-sm)" }}>{check.message}</span>
-      </div>
-      {check.resolvedPath && (
-        <div style={{ marginTop: "var(--space-1)", marginLeft: "calc(1.2em + var(--space-2) + 4em + var(--space-2))" }}>
-          <code style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>
-            Resolved: {check.resolvedPath}
-          </code>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: "500", color: "var(--fg-primary)" }}>{check.name}</span>
+          {check.message && (
+            <span style={{ color: "var(--fg-secondary)", fontSize: "var(--font-size-sm)" }}>{check.message}</span>
+          )}
         </div>
-      )}
-      {check.status !== "ok" && check.installHint && (
-        <div style={{ marginTop: "var(--space-1)", marginLeft: "calc(1.2em + var(--space-2) + 4em + var(--space-2))" }}>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)", marginBottom: "var(--space-1)" }}>
-            Run on {hostname} ({hostOs}):
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-            <code
-              style={{
-                fontSize: "var(--font-size-xs)",
-                color: "var(--fg-primary)",
-                background: "var(--bg-input)",
-                border: "var(--border-width) solid var(--border-default)",
-                borderRadius: "var(--radius-sm)",
-                padding: "2px var(--space-2)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                maxWidth: "100%",
-              }}
-            >
-              {check.installHint}
+        {check.resolvedPath && (
+          <div style={{ marginTop: "var(--space-1)" }}>
+            <code style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)" }}>
+              Resolved: {check.resolvedPath}
             </code>
-            <button
-              type="button"
-              onClick={handleCopy}
-              style={{
-                flexShrink: 0,
-                fontSize: "var(--font-size-xs)",
-                fontFamily: "inherit",
-                lineHeight: 1,
-                padding: "4px var(--space-3)",
-                border: "var(--border-width) solid var(--border-default)",
-                borderRadius: "var(--radius-md)",
-                background: "var(--bg-surface, var(--bg-card))",
-                color: "var(--fg-primary)",
-                cursor: "pointer",
-              }}
-            >
-              {copied ? "Copied" : "Copy"}
-            </button>
           </div>
-        </div>
-      )}
+        )}
+        {check.status !== "ok" && check.installHint && (
+          <div style={{ marginTop: "var(--space-1)" }}>
+            <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-secondary)", marginBottom: "var(--space-1)" }}>
+              Run on {hostname} ({hostOs}):
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+              <code
+                style={{
+                  fontSize: "var(--font-size-xs)",
+                  color: "var(--fg-primary)",
+                  background: "var(--bg-input)",
+                  border: "var(--border-width) solid var(--border-default)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "2px var(--space-2)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: "100%",
+                }}
+              >
+                {check.installHint}
+              </code>
+              <button
+                type="button"
+                onClick={handleCopy}
+                style={{
+                  flexShrink: 0,
+                  fontSize: "var(--font-size-xs)",
+                  fontFamily: "inherit",
+                  lineHeight: 1,
+                  padding: "4px var(--space-3)",
+                  border: "var(--border-width) solid var(--border-default)",
+                  borderRadius: "var(--radius-md)",
+                  background: "var(--bg-surface, var(--bg-card))",
+                  color: "var(--fg-primary)",
+                  cursor: "pointer",
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-1)",
+            fontSize: "var(--font-size-xs)",
+            fontWeight: "500",
+            lineHeight: 1.2,
+            padding: "2px var(--space-2)",
+            borderRadius: "var(--radius-sm)",
+            color: badgeStyle.color,
+            background: badgeStyle.bg,
+            border: `var(--border-width) solid ${badgeStyle.border}`,
+          }}
+        >
+          <span style={{ fontWeight: "bold" }} aria-hidden="true">
+            {glyph}
+          </span>
+          <span>{label}</span>
+        </span>
+      </div>
     </div>
   );
 }
