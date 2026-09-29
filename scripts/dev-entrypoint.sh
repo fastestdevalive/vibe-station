@@ -40,8 +40,18 @@ if [ -d /opt/cursor-agent-versions ]; then
     echo "cursor-agent: symlinked to $cursor_agent_version_dir/cursor-agent"
   else
     echo 'cursor-agent: WARNING — /opt/cursor-agent-versions is mounted but no version dir with a `cursor-agent` launcher was found; cursor-agent will not run' >&2
-  fi
 fi
+
+# Drop in stubs for any missing CLI binaries so modes.json validates and demo-seed.sh doesn't fail
+for bin in claude cursor-agent; do
+  if [ ! -x "/usr/local/bin/$bin" ]; then
+    cat >"/usr/local/bin/$bin" <<'STUB'
+#!/usr/bin/env bash
+exec sleep infinity
+STUB
+    chmod +x "/usr/local/bin/$bin"
+  fi
+done
 
 # Seed a writable ~/<name> dir from a read-only /seed/<name> mount, if one is
 # present, skipping any basenames listed in $3 (space-separated) — bulk,

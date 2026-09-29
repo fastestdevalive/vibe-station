@@ -32,6 +32,9 @@ import { useLayout } from "@/hooks/useLayout";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { useSubscription, useWorktreeDiffStats } from "@/hooks/useSubscription";
 import { StatusDot } from "@/components/layout/StatusDot";
+import { ModeIcon } from "@/components/agent/ModeIcon";
+import { useModeIcon } from "@/store/modesStore";
+import { sessionModeId } from "@/lib/modeIcon";
 import { Logo } from "@/components/shared/Logo";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { worktreeRolledUpStatus, type WorktreeRolledUpStatus } from "@/lib/worktreeStatus";
@@ -195,6 +198,21 @@ function DiffStatBadge({ stat }: { stat: { insertions: number; deletions: number
     <span className="wt-row__diffstat">
       {stat.insertions > 0 ? <span className="vcs-graph__add">+{stat.insertions}</span> : null}
       {stat.deletions > 0 ? <span className="vcs-graph__del">−{stat.deletions}</span> : null}
+    </span>
+  );
+}
+
+function SidebarSessionModeIcon({
+  session,
+  api,
+}: {
+  session: Session;
+  api?: ApiInstance;
+}) {
+  const iconKey = useModeIcon(sessionModeId(session), api);
+  return (
+    <span className="direct-session__mode-icon" aria-hidden="true">
+      <ModeIcon iconKey={iconKey} channel={session.channel} size={13} />
     </span>
   );
 }
@@ -699,7 +717,7 @@ export function LeftSidebar({
     return new Set<string>();
   });
 
-  const { activeWorktreeId, activeProjectId, activeSessionId, setActiveWorktree } = useLayout();
+  const { activeWorktreeId, activeProjectId, activeSessionId, setActiveWorktree, setActiveSession } = useLayout();
   const clearWorkspaceSelection = useWorkspaceStore((s) => s.clearWorkspaceSelection);
   const setMobileSidebarOpen = useWorkspaceStore((s) => s.setMobileSidebarOpen);
   const mobileSidebarOpen = useWorkspaceStore((s) => s.mobileSidebarOpen);
@@ -718,8 +736,40 @@ export function LeftSidebar({
     return true;
   });
 
+  /** Direct agents section disclosure state per project — collapsed by default. */
+  const [openDirectAgents, setOpenDirectAgents] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("sidebar:openDirectAgents");
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
+
+  function toggleDirectAgents(projectId: string) {
+    setOpenDirectAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }
+
+  /** Worktree expansion state (for showing agents under worktree) */
+  const [openWorktrees, setOpenWorktrees] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("sidebar:openWorktrees");
+      if (saved) return new Set(JSON.parse(saved) as string[]);
+    } catch { /* ignore */ }
+    return new Set<string>();
+  });
+
   const [searchQuery, setSearchQuery] = useState("");
-  const preSearchSnapshotRef = useRef<{ openProj: Set<string>; workspacesOpen: boolean } | null>(null);
+  const preSearchSnapshotRef = useRef<{
+    openProj: Set<string>;
+    openWorktrees: Set<string>;
+    openDirectAgents: Set<string>;
+    workspacesOpen: boolean;
+  } | null>(null);
 
   function handleSearchChange(nextVal: string) {
     // Compare TRIMMED values for the expand/restore transition — a
@@ -731,13 +781,19 @@ export function LeftSidebar({
     if (!prev && next) {
       preSearchSnapshotRef.current = {
         openProj: new Set(openProj),
+        openWorktrees: new Set(openWorktrees),
+        openDirectAgents: new Set(openDirectAgents),
         workspacesOpen,
       };
       setOpenProj(new Set(projects.map((p) => p.id)));
+      setOpenWorktrees(new Set(worktrees.map((w) => w.id)));
+      setOpenDirectAgents(new Set(projects.map((p) => p.id)));
       setWorkspacesOpen(true);
     } else if (prev && !next) {
       if (preSearchSnapshotRef.current) {
         setOpenProj(preSearchSnapshotRef.current.openProj);
+        setOpenWorktrees(preSearchSnapshotRef.current.openWorktrees);
+        setOpenDirectAgents(preSearchSnapshotRef.current.openDirectAgents);
         setWorkspacesOpen(preSearchSnapshotRef.current.workspacesOpen);
         preSearchSnapshotRef.current = null;
       }
@@ -1009,6 +1065,36 @@ export function LeftSidebar({
   }, [openProj]);
 
   useEffect(() => {
+    if (preSearchSnapshotRef.current != null) return;
+    try {
+      localStorage.setItem("sidebar:openDirectAgents", JSON.stringify([...openDirectAgents]));
+    } catch { /* ignore */ }
+  }, [openDirectAgents]);
+
+  useEffect(() => {
+    if (preSearchSnapshotRef.current != null) return;
+    try {
+      localStorage.setItem("sidebar:openWorktrees", JSON.stringify([...openWorktrees]));
+    } catch { /* ignore */ }
+  }, [openWorktrees]);
+
+
+  useEffect(() => {
+    const match = location.pathname.match(/^\/project\/([^/]+)\/([^/]+)$/);
+    if (match) {
+      const pid = match[1];
+      if (pid) {
+        setOpenDirectAgents((prev) => {
+          if (prev.has(pid)) return prev;
+          const next = new Set(prev);
+          next.add(pid);
+          return next;
+        });
+      }
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
     if (!activeProjectId) return;
     if (preSearchSnapshotRef.current) {
       preSearchSnapshotRef.current.openProj.add(activeProjectId);
@@ -1067,13 +1153,34 @@ export function LeftSidebar({
     });
   }
 
+  function isWorktreeActive(wtId: string): boolean {
+    return (
+      (activeWorktreeId === wtId && (location.pathname === "/worktree" || location.pathname.startsWith("/worktree/"))) ||
+      location.pathname === `/worktree/${wtId}` ||
+      location.pathname.startsWith(`/worktree/${wtId}/`)
+    );
+  }
+
   function selectWorktree(projectId: string, w: Worktree) {
-    // Early-return if re-tapping the same worktree with an active session (defense-in-depth)
-    if (w.id === activeWorktreeId && activeSessionId != null) {
+    if (isWorktreeActive(w.id)) {
+      setOpenWorktrees((prev) => {
+        const next = new Set(prev);
+        if (next.has(w.id)) next.delete(w.id);
+        else next.add(w.id);
+        return next;
+      });
       onWorktreeSelected?.(w.id);
       return;
     }
     setActiveWorktree(projectId, w.id, sessionMap[w.id]);
+    onWorktreeSelected?.(w.id);
+  }
+
+  function selectWorktreeAgent(projectId: string, w: Worktree, sessId: string) {
+    if (activeWorktreeId !== w.id) {
+      setActiveWorktree(projectId, w.id, sessionMap[w.id]);
+    }
+    setActiveSession(sessId);
     onWorktreeSelected?.(w.id);
   }
 
@@ -1150,6 +1257,7 @@ export function LeftSidebar({
     void (async () => {
       try {
         const s = await createProjectDirectDraft(api, project.id);
+        setOpenDirectAgents((prev) => new Set(prev).add(project.id));
         navigate(`/project/${project.id}/${s.id}`);
       } catch (err) {
         setDraftError(err instanceof Error ? err.message : "Couldn't start a new draft. Please try again.");
@@ -1993,8 +2101,13 @@ export function LeftSidebar({
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  navigate(`/project/${p.id}`);
-                  if (isMobile) setMobileSidebarOpen(false);
+                  if (location.pathname === `/project/${p.id}`) {
+                    toggleProj(p.id);
+                  } else {
+                    navigate(`/project/${p.id}`);
+                    setOpenProj((prev) => new Set(prev).add(p.id));
+                    if (isMobile) setMobileSidebarOpen(false);
+                  }
                 }
               }}
               {...listeners}
@@ -2013,7 +2126,13 @@ export function LeftSidebar({
                 draggable={false}
                 tabIndex={-1}
                 onClickCapture={suppressDoubleClickNavigation}
-                onClick={() => {
+                onClick={(e) => {
+                  if (location.pathname === `/project/${p.id}`) {
+                    e.preventDefault();
+                    toggleProj(p.id);
+                    return;
+                  }
+                  setOpenProj((prev) => new Set(prev).add(p.id));
                   if (isMobile) setMobileSidebarOpen(false);
                 }}
               />
@@ -2099,6 +2218,9 @@ export function LeftSidebar({
                     return sessionMatchesQuery(s);
                   });
                   if (directItems.length === 0) return null;
+                  const isExpanded = collapsed || openDirectAgents.has(p.id) || (trimmedQuery.length > 0);
+                  const count = directItems.length;
+                  const label = `${count} ${count === 1 ? "direct agent" : "direct agents"}`;
                   const orderedDirect = directItems.slice().sort((a, b) => {
                     const ao = a.sortOrder ?? 0;
                     const bo = b.sortOrder ?? 0;
@@ -2107,15 +2229,38 @@ export function LeftSidebar({
                   });
                   const orderedIds = orderedDirect.map((s) => s.id);
                   return (
-                    <div className="direct-sessions-group">
-                      <DndContext
-                        sensors={activeDndSensors}
-                        collisionDetection={closestCenter}
-                        onDragStart={markDrag}
-                        onDragCancel={markDrag}
-                        onDragEnd={(e) => handleServerReorder(orderedDirect, "session", e)}
-                      >
-                        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+                    <div className="direct-sessions-wrapper">
+                      {!collapsed ? (
+                        <div
+                          className="tree-row tree-row--group-header tree-row--direct-agents-header"
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? "Collapse" : "Expand"} direct agents for ${p.name}`}
+                          onClick={() => toggleDirectAgents(p.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              toggleDirectAgents(p.id);
+                            }
+                          }}
+                        >
+                          <span className="tree-row__group-title">{label}</span>
+                          <span className="tree-row__chevron" aria-hidden>
+                            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          </span>
+                        </div>
+                      ) : null}
+                      {isExpanded ? (
+                        <div className="direct-sessions-group">
+                          <DndContext
+                            sensors={activeDndSensors}
+                            collisionDetection={closestCenter}
+                            onDragStart={markDrag}
+                            onDragCancel={markDrag}
+                            onDragEnd={(e) => handleServerReorder(orderedDirect, "session", e)}
+                          >
+                            <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
                           {orderedDirect.map((sess) => {
                             if (sess.state === "drafting") {
                               return (
@@ -2213,6 +2358,9 @@ export function LeftSidebar({
                                           pr={null}
                                         />
                                       </span>
+                                      {!collapsed ? (
+                                        <SidebarSessionModeIcon session={sess} api={api} />
+                                      ) : null}
                                       {!collapsed &&
                                       inlineRename?.kind === "session" &&
                                       inlineRename.id === sess.id &&
@@ -2283,9 +2431,11 @@ export function LeftSidebar({
                         </SortableContext>
                       </DndContext>
                     </div>
-                  );
-                })()
-              : null}
+                  ) : null}
+                </div>
+              );
+            })()
+          : null}
             {/* Worktrees + worktree drafts (entryPoint !== "direct") — shown
                 after direct sessions. Unified reorder scope (`worktrees:${projectId}`):
                 worktrees and worktree drafts sort together by sortOrder in a
@@ -2396,7 +2546,6 @@ export function LeftSidebar({
                                   style={style}
                                   className="wt-row-wrap"
                                   {...attributes}
-                                  {...listeners}
                                 >
                                   <div
                                     className="tree-row tree-row--worktree"
@@ -2418,6 +2567,7 @@ export function LeftSidebar({
                                       e.stopPropagation();
                                       startInlineRename("worktree", w.id, label, "tree");
                                     }}
+                                    {...listeners}
                                   >
                                     <Link
                                       to={`/worktree/${w.id}`}
@@ -2426,6 +2576,7 @@ export function LeftSidebar({
                                       aria-label={`Open worktree ${label}`}
                                       onClick={(e) => {
                                         if (isModifiedClick(e)) return;
+                                        if (isWorktreeActive(w.id)) e.preventDefault();
                                         selectWorktree(p.id, w);
                                       }}
                                       tabIndex={-1}
@@ -2502,6 +2653,169 @@ export function LeftSidebar({
                                       </div>
                                     ) : null}
                                   </div>
+                                  {/* Worktree agents inside this worktree */}
+                                  {openWorktrees.has(w.id) || (trimmedQuery.length > 0)
+                                    ? (() => {
+                                        const wtAgents = (sessionMap[w.id] ?? []).filter((s) => {
+                                          if (s.type !== "agent") return false;
+                                          if (!trimmedQuery || matchText(worktreeLabel(w)) || matchText(w.branch) || projectDirectlyMatches(p)) return true;
+                                          return sessionMatchesQuery(s);
+                                        });
+                                        if (wtAgents.length === 0) return null;
+                                        return (
+                                          <div className="worktree-sessions-wrapper">
+                                            {!collapsed ? (
+                                              <div
+                                                className="tree-row tree-row--group-header tree-row--worktree-agents-header"
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => {
+                                                  setOpenWorktrees((prev) => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(w.id)) next.delete(w.id);
+                                                    else next.add(w.id);
+                                                    return next;
+                                                  });
+                                                }}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === "Enter" || e.key === " ") {
+                                                    e.preventDefault();
+                                                    setOpenWorktrees((prev) => {
+                                                      const next = new Set(prev);
+                                                      if (next.has(w.id)) next.delete(w.id);
+                                                      else next.add(w.id);
+                                                      return next;
+                                                    });
+                                                  }
+                                                }}
+                                              >
+                                                <span className="tree-row__group-title">
+                                                  {wtAgents.length} {wtAgents.length === 1 ? "agent" : "agents"}
+                                                </span>
+                                              </div>
+                                            ) : null}
+                                            <div className="worktree-sessions-group">
+                                              {wtAgents
+                                                .slice()
+                                                .sort((a, b) => {
+                                                  if (a.isMain && !b.isMain) return -1;
+                                                  if (!a.isMain && b.isMain) return 1;
+                                                  const ao = a.sortOrder ?? 0;
+                                                  const bo = b.sortOrder ?? 0;
+                                                  if (ao !== bo) return ao - bo;
+                                                  return (a.createdAt || "").localeCompare(b.createdAt || "");
+                                                })
+                                                .map((sess) => {
+                                                  const sLabel = sessionLabel(sess);
+                                                  const isSessActive =
+                                                    location.pathname.startsWith("/worktree") &&
+                                                    activeWorktreeId === w.id &&
+                                                    activeSessionId === sess.id;
+                                                  return (
+                                                    <div
+                                                      key={sess.id}
+                                                      className="tree-row tree-row--worktree-session"
+                                                      data-active={isSessActive}
+                                                      style={{ position: "relative" }}
+                                                      title={collapsed ? `${sLabel} — worktree session` : undefined}
+                                                      role="button"
+                                                      tabIndex={0}
+                                                      onKeyDown={(e) => {
+                                                        if (e.key === "Enter" || e.key === " ") {
+                                                          e.preventDefault();
+                                                          selectWorktreeAgent(p.id, w, sess.id);
+                                                        }
+                                                      }}
+                                                      onClickCapture={suppressDoubleClickNavigation}
+                                                      onDoubleClick={(e) => {
+                                                        if (collapsed) return;
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        startInlineRename("session", sess.id, sLabel, "tree");
+                                                      }}
+                                                    >
+                                                      <Link
+                                                        to={`/worktree/${w.id}/${sess.id}`}
+                                                        className="wt-row__stretch-link"
+                                                        draggable={false}
+                                                        aria-label={`Open session ${sLabel}`}
+                                                        onClick={(e) => {
+                                                          if (isModifiedClick(e)) return;
+                                                          if (isMobile) setMobileSidebarOpen(false);
+                                                          selectWorktreeAgent(p.id, w, sess.id);
+                                                        }}
+                                                        tabIndex={-1}
+                                                      />
+                                                      <span className="direct-session__icon">
+                                                        <StatusDot
+                                                          status={sessionStateToStatus(sessionStates[sess.id] ?? sess.state)}
+                                                          pr={null}
+                                                        />
+                                                      </span>
+                                                      {!collapsed ? (
+                                                        <SidebarSessionModeIcon session={sess} api={api} />
+                                                      ) : null}
+                                                      {!collapsed &&
+                                                      inlineRename?.kind === "session" &&
+                                                      inlineRename.id === sess.id &&
+                                                      inlineRename.site === "tree" ? (
+                                                        <input
+                                                          ref={inlineInputRef}
+                                                          className="direct-session__label direct-session__rename-input"
+                                                          aria-label="Rename"
+                                                          value={inlineValue}
+                                                          autoFocus
+                                                          onClick={(e) => e.stopPropagation()}
+                                                          onPointerDown={(e) => e.stopPropagation()}
+                                                          onChange={(e) => setInlineValue(e.target.value)}
+                                                          onBlur={commitInlineRename}
+                                                          onKeyDown={(e) => {
+                                                            e.stopPropagation();
+                                                            if (e.key === "Enter") { e.preventDefault(); commitInlineRename(); }
+                                                            if (e.key === "Escape") { e.preventDefault(); setInlineRename(null); }
+                                                          }}
+                                                          maxLength={60}
+                                                        />
+                                                      ) : (
+                                                        <span className="direct-session__label">
+                                                          {collapsed ? sLabel.slice(0, 3) : sLabel}
+                                                        </span>
+                                                      )}
+                                                      {!collapsed && sess.pinnedAt ? (
+                                                        <Pin size={10} fill="currentColor" aria-label="Pinned" style={{ flexShrink: 0, opacity: 0.7 }} />
+                                                      ) : null}
+                                                      {!collapsed ? (
+                                                        <div className="wt-row__trail" style={{ position: "relative", zIndex: 2 }}>
+                                                          <button
+                                                            type="button"
+                                                            data-sess-menu-trigger
+                                                            className="icon-btn wt-menu-trigger tree-row__action"
+                                                            aria-label={`Session actions for ${sLabel}`}
+                                                            aria-haspopup="menu"
+                                                            aria-expanded={sessMenu?.session.id === sess.id}
+                                                            title="Session menu"
+                                                            onPointerDown={(e) => e.stopPropagation()}
+                                                            onClick={(e) => {
+                                                              e.preventDefault();
+                                                              e.stopPropagation();
+                                                              const rect = e.currentTarget.getBoundingClientRect();
+                                                              setSessMenu((prev) =>
+                                                                prev?.session.id === sess.id ? null : { session: sess, rect },
+                                                              );
+                                                            }}
+                                                          >
+                                                            <MoreHorizontal size={16} />
+                                                          </button>
+                                                        </div>
+                                                      ) : null}
+                                                    </div>
+                                                  );
+                                                })}
+                                            </div>
+                                          </div>
+                                        );
+                                      })()
+                                    : null}
                                 </div>
                               )}
                             </SortableRow>
