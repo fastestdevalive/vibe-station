@@ -151,17 +151,28 @@ services:
       - ${OPENCODE_DATA_HOME:-${HOME}/.local/share/opencode}:/seed/opencode-data:ro
       - ${OPENCODE_CONFIG_HOME:-${HOME}/.config/opencode}:/seed/opencode-config:ro
 
-      # Rust daemon/CLI binaries. Mount the host's pre-built release binaries
-      # read-only. Build both with `cargo build --release -p vst-daemon -p
-      # vst-cli` from rust/ (what scripts/dev-sandbox.sh does automatically) --
-      # NOT `pnpm build:rust`, which only builds `-p vst-cli` (the merged
-      # binary) since cli-daemon-unification's binary merge (Part 00); it
-      # never produces a standalone `vst-daemon` binary, which this sandbox
-      # still needs at /usr/local/bin/vst-daemon-rust.
+      # Rust daemon/CLI binaries. Mount the host's pre-built DEBUG binaries
+      # read-only (scripts/dev-sandbox.sh builds `cargo build -p vst-daemon -p
+      # vst-cli`, deliberately without `--release` — this is a dev sandbox for
+      # iteration speed, and `--release`'s optimization passes dominate Rust
+      # rebuild time; see the comment in dev-sandbox.sh above its `docker run`
+      # build step for the full reasoning, and the glibc-mismatch warning
+      # there for why these must be built inside a bookworm container, never
+      # on the host, regardless of debug/release). NOT `pnpm build:rust`,
+      # which only builds `-p vst-cli` (the merged binary) since
+      # cli-daemon-unification's binary merge (Part 00); it never produces a
+      # standalone `vst-daemon` binary, which this sandbox still needs at
+      # /usr/local/bin/vst-daemon-rust.
       # Override the paths with VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN if
-      # yours differ.
-      - ${VST_RUST_DAEMON_BIN:-./rust/target/release/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
-      - ${VST_RUST_CLI_BIN:-./rust/target/release/vst}:/usr/local/bin/vst-rust:ro
+      # yours differ (e.g. to test an actual release build). The default
+      # points at target-docker/debug (the bookworm-container build output),
+      # NOT rust/target/debug — a bare host `cargo build`/`cargo test` run
+      # populates rust/target/debug too, and defaulting there would silently
+      # reintroduce the host-glibc mismatch this whole container-build
+      # mechanism exists to avoid (see scripts/dev-sandbox.sh's comment above
+      # its `docker run` build step) the moment that path happens to exist.
+      - ${VST_RUST_DAEMON_BIN:-./rust/target-docker/debug/vst-daemon}:/usr/local/bin/vst-daemon-rust:ro
+      - ${VST_RUST_CLI_BIN:-./rust/target-docker/debug/vst}:/usr/local/bin/vst-rust:ro
 
       # agy-acp adapter binary (openab, vendored submodule) built by
       # scripts/prep-sidecar.sh into ./rust/target/agy-acp/release/. Override

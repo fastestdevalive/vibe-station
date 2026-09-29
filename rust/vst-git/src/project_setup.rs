@@ -124,7 +124,20 @@ pub async fn run_project_setup(dir: &str) -> Result<(), GitError> {
 }
 
 async fn run_bash_script(dir: &str) -> Result<(), std::io::Error> {
-    let script_dir = std::env::temp_dir().join(format!("vst-project-setup-{}", std::process::id()));
+    // Keyed by PID alone, this collided: multiple `#[tokio::test]`s run
+    // concurrently in the SAME OS process (cargo test's default), so two
+    // simultaneous `run_project_setup` calls shared one `script_dir` — one
+    // call's `remove_dir_all` cleanup (below) could delete the script out
+    // from under another call's still-running `bash` invocation, surfacing
+    // as an intermittent "No such file or directory" on the script path.
+    // A random suffix per invocation makes each call's directory its own.
+    let mut suffix = [0u8; 8];
+    let _ = getrandom::fill(&mut suffix);
+    let suffix_hex: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
+    let script_dir = std::env::temp_dir().join(format!(
+        "vst-project-setup-{}-{suffix_hex}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&script_dir)?;
     let script_path = script_dir.join("project-setup.sh");
     let mut f = std::fs::File::create(&script_path)?;

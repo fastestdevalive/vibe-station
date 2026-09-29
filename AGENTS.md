@@ -35,7 +35,9 @@ still reported "Daemon is running" throughout, because `/health` is one of the r
 work, masking the outage from the one diagnostic an agent would naturally reach for.
 
 The fix: `client.rs` has a single `api_path()` helper that every `daemon_request*` call routes through, which
-prefixes `/api` onto anything except the three root paths. **Do not add `/api` at individual call sites** —
+prefixes `/api` onto anything except `ROOT_PATHS` (`/health`, `/mobile-auth`, `/ws` — three, not the daemon's
+four root routes above, since the CLI itself never requests `/continue`; it's browser-opened only).
+**Do not add `/api` at individual call sites** —
 if a new CLI command needs a new route, add the route under `.nest("/api", ...)` in `server.rs` as usual and
 call it root-relative from the CLI; `api_path()` handles the prefix.
 

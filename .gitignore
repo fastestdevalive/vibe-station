@@ -23,10 +23,12 @@ target/
 # target/ above already covers desktop/src-tauri/target/ — no duplicate needed.
 # rust/target/ is explicit for clarity (also covered by the bare `target/` above).
 rust/target/
-# rust/target-docker/ — a one-off containerized release build (built inside
-# node:24-slim to match the dev-sandbox's glibc, since a host-built binary
-# can hit `GLIBC_x.xx not found` inside the container). Not a standard build
-# location; kept out of git the same as rust/target/.
+# rust/target-docker/ — a one-off containerized debug build (built inside a
+# rust:<toolchain>-bookworm container to match the dev-sandbox's glibc, since
+# a host-built binary can hit `GLIBC_x.xx not found` inside the sandbox
+# container — dev.Dockerfile is node:24-slim, also Debian bookworm-based, so
+# the two glibc versions match). Not a standard build location; kept out of
+# git the same as rust/target/.
 rust/target-docker/
 # rust/target-bookworm/ — same reason as rust/target-docker/ above, built via
 # `rust:slim-bookworm` to match the dev-sandbox's Debian bookworm base image.

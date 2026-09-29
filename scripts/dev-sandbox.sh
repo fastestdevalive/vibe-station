@@ -142,6 +142,16 @@ case "$CMD" in
     # never be a host-glibc binary — every binary that lands there is built
     # INSIDE a container matching bookworm's glibc, below.
     #
+    # DEBUG, not --release: this is a dev sandbox for iteration speed, not a
+    # release-fidelity check (that's what docker-compose.screenshots.yml /
+    # the actual release CI are for). `--release`'s optimization passes are
+    # the dominant cost of a Rust rebuild — a debug build after a small
+    # source change is typically several times faster to compile, at the
+    # cost of a slower-at-runtime binary that's a non-issue for manual
+    # clicking-around testing. If you specifically need to profile
+    # performance, override VST_RUST_DAEMON_BIN/VST_RUST_CLI_BIN with your
+    # own release build instead of changing this default.
+    #
     # ALWAYS (re)build via cargo unless both binaries are explicitly overridden
     # via VST_RUST_DAEMON_BIN / VST_RUST_CLI_BIN. This used to build only when
     # no target-docker binary existed yet, and reuse whatever was there
@@ -168,7 +178,7 @@ case "$CMD" in
         echo "error: could not read [toolchain].channel from rust/rust-toolchain.toml" >&2
         exit 1
       fi
-      echo "Building Rust binaries (incremental) inside rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm"
+      echo "Building Rust binaries (incremental, debug) inside rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm"
       echo "(matches dev.Dockerfile's glibc — this is the ONLY supported build path, see the"
       echo "comment above). Cached in rust/target-docker/build, so an unchanged tree is a no-op."
       # CARGO_TARGET_DIR points OUTSIDE the bind-mounted rust/ tree's default
@@ -184,18 +194,18 @@ case "$CMD" in
         -e CARGO_TARGET_DIR=/work/target-docker/build \
         -v vst-dev-sandbox-cargo-registry:/usr/local/cargo/registry \
         "rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm" \
-        sh -c "cargo build --release -p vst-daemon -p vst-cli && chown -R $(id -u):$(id -g) /work/target-docker"
-      mkdir -p ./rust/target-docker/release
+        sh -c "cargo build -p vst-daemon -p vst-cli && chown -R $(id -u):$(id -g) /work/target-docker"
+      mkdir -p ./rust/target-docker/debug
       # Atomic replace (cp to temp + mv), not an in-place overwrite: the old
       # binary may be the running daemon's executable (in-place write fails
       # with ETXTBSY). The single-file bind mount pins the OLD inode, which is
       # why `up` below uses --force-recreate.
       for bin in vst-daemon vst; do
-        cp "./rust/target-docker/build/release/$bin" "./rust/target-docker/release/.$bin.new"
-        mv -f "./rust/target-docker/release/.$bin.new" "./rust/target-docker/release/$bin"
+        cp "./rust/target-docker/build/debug/$bin" "./rust/target-docker/debug/.$bin.new"
+        mv -f "./rust/target-docker/debug/.$bin.new" "./rust/target-docker/debug/$bin"
       done
-      RUST_DAEMON_BIN="./rust/target-docker/release/vst-daemon"
-      RUST_CLI_BIN="./rust/target-docker/release/vst"
+      RUST_DAEMON_BIN="./rust/target-docker/debug/vst-daemon"
+      RUST_CLI_BIN="./rust/target-docker/debug/vst"
     fi
 
     if [ ! -x "$RUST_DAEMON_BIN" ] || [ ! -x "$RUST_CLI_BIN" ]; then
