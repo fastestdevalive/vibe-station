@@ -24,6 +24,7 @@ regex = "1"
 trybuild = "1"
 tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
 tempfile = "3"
+mockito = "0.31"
 
 [lints]
 workspace = true
