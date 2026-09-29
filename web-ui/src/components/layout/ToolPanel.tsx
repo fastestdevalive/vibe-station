@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Columns2, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { FileScope } from "@/api/types";
+import type { FileScope, PrStatus } from "@/api/types";
 import type { ToolTab } from "@/hooks/useStore";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { useServerStore } from "@/hooks/useServerStore";
+import { worktreePrStatus } from "@/lib/statusColor";
 import { useLayout } from "@/hooks/useLayout";
 import { FilesPanel } from "@/components/tools/FilesPanel";
 import { DevicesPanel } from "@/components/tools/DevicesPanel";
@@ -161,6 +163,14 @@ export function ToolPanel({
 
   const outerInset = useTopRightInset();
 
+  // PR status for the VCS panel — resolved from the session store (branch-guarded).
+  const sessions = useServerStore((s) => s.sessions);
+  const prStatus: PrStatus | null = useMemo(() => {
+    if (!worktreeId || scope === "project") return null;
+    const wtSessions = sessions.filter((s) => s.worktreeId === worktreeId);
+    return worktreePrStatus(wtSessions, branch ?? "");
+  }, [worktreeId, scope, sessions, branch]);
+
   return (
     <ToolsInsetProvider value={insetContextValue}>
       <div
@@ -283,6 +293,7 @@ export function ToolPanel({
                   baseBranch={baseBranch}
                   branch={branch}
                   scope={scope}
+                  prStatus={prStatus}
                 />
               ) : null}
             </>
