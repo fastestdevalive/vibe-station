@@ -1193,13 +1193,10 @@
  * ───────────────────────────────────────────────────────────────────────── */
 
 .direct-sessions-group {
-  /* Rail aligns with the worktree rows' 12px indent (see
-     `.tree-row.tree-row--worktree`). --border-subtle is near-invisible
-     against the sidebar bg in both themes; --border-default keeps the rail
-     quiet but perceivable. */
-  border-left: 1px dashed var(--border-default);
-  margin-left: 12px;
-  padding-left: var(--space-1);
+  /* Rail aligns directly below the number in the direct agents header. */
+  border-left: 1px dotted color-mix(in srgb, var(--fg-muted) 65%, transparent);
+  margin-left: 31px;
+  padding-left: var(--space-2);
 }
 
 .tree-row--direct-session {
@@ -1251,6 +1248,65 @@
   white-space: nowrap;
   font-style: normal;
   font-weight: var(--font-weight-normal);
+}
+
+.tree-row--group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 2px var(--space-2) 2px calc(var(--space-2) - 2px);
+  user-select: none;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.tree-row--group-header:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+.tree-row--direct-agents-header {
+  margin-left: 22px;
+}
+
+.tree-row--worktree-agents-header {
+  margin-left: 38px;
+}
+
+.tree-row__group-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktree-sessions-group {
+  border-left: 1px dotted color-mix(in srgb, var(--fg-muted) 65%, transparent);
+  margin-left: 47px;
+  padding-left: var(--space-2);
+}
+
+.tree-row--worktree-session {
+  gap: var(--space-2);
+  min-height: 26px;
+  color: var(--fg-primary);
+}
+
+.tree-row--worktree-session:hover,
+.tree-row--worktree-session[data-active="true"] {
+  color: var(--fg-primary);
+}
+
+.direct-session__mode-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 
@@ -1367,7 +1423,8 @@
   min-height: 26px;
 }
 
-.left-sidebar--collapsed .direct-session__icon {
+.left-sidebar--collapsed .direct-session__icon,
+.left-sidebar--collapsed .direct-session__mode-icon {
   display: none;
 }
 
@@ -1378,6 +1435,22 @@
   line-height: 1.2;
   font-weight: var(--font-weight-medium);
   letter-spacing: -0.03em;
+}
+
+.left-sidebar--collapsed .tree-row--group-header {
+  display: none;
+}
+
+.left-sidebar--collapsed .worktree-sessions-group {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+.left-sidebar--collapsed .tree-row--worktree-session {
+  justify-content: center;
+  padding: var(--space-1);
+  min-height: 26px;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1402,7 +1475,7 @@
  * the row is two lines tall. */
 .pinned-row {
   align-items: flex-start;
-  /* `.tree-row.tree-row--worktree { margin-left: 12px }` indents worktrees
+  /* `.tree-row.tree-row--worktree { margin-left: 22px }` indents worktrees
      under their project disclosure — pinned rows are top-level so reset it. */
   margin-left: 0;
   min-height: auto;
@@ -1471,9 +1544,9 @@
 
 /* The `.pinned-row` resets for indent/height/alignment (above) are single-class
  * (0,1,0) and were silently defeated by the later, higher-specificity
- * `.tree-row.tree-row--worktree` rule (margin-left:12px; min-height:28px) and the
+ * `.tree-row.tree-row--worktree` rule (margin-left:22px; min-height:28px) and the
  * base `.tree-row` (min-height:32px; align-items:center). That left the pinned
- * worktree row indented 12px and a few px taller than the pinned direct-session
+ * worktree row indented 22px and a few px taller than the pinned direct-session
  * row. Carry `.left-sidebar` + `.tree-row` to reach (0,3,0) so BOTH pinned row
  * types align pixel-for-pixel. No markup change. */
 .left-sidebar .tree-row.pinned-row {
@@ -2163,7 +2236,7 @@
 .tree-row.tree-row--worktree {
   font-size: var(--font-size-sm);
   min-height: 28px;
-  margin-left: 12px;
+  margin-left: 22px;
 }
 
 .left-sidebar .tree-row--project {
@@ -2384,6 +2457,12 @@
      max-width: 640px) so several agent tabs fit on a phone viewport. */
   max-width: var(--agent-surface-max-width);
   min-width: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.tab:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
 }
 
 /* The inline flex wrapper around the tab's icon + label (+ draft/archived
@@ -2430,6 +2509,7 @@
 .tab[data-active="true"] {
   color: var(--fg-primary);
   border-bottom-color: var(--accent);
+  background: var(--bg-tertiary);
 }
 
 /* Pinned "Overview" tab (plan-04 naming decision) — collapses to icon-only

@@ -1297,6 +1297,7 @@ describe("LeftSidebar", () => {
     }
 
     it("lists direct agent sessions but never direct terminals", async () => {
+      const user = userEvent.setup();
       render(
         <MemoryRouter>
           <Harness api={api}>
@@ -1309,6 +1310,8 @@ describe("LeftSidebar", () => {
       emitDirect("proj-a-d1", "agent", "direct 1");
       emitDirect("proj-a-d2", "terminal", "Terminal 1");
 
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
+
       // The agent row shows up...
       await screen.findByRole("link", { name: /Open direct session direct 1/i });
       // ...and the auto-created terminal never does.
@@ -1319,6 +1322,7 @@ describe("LeftSidebar", () => {
     });
 
     it("3.3 — an archived direct session row is visually dimmed with an 'archived' badge", async () => {
+      const user = userEvent.setup();
       render(
         <MemoryRouter>
           <Harness api={api}>
@@ -1349,6 +1353,8 @@ describe("LeftSidebar", () => {
           archivedAt: new Date().toISOString(),
         },
       });
+
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
 
       const link = await screen.findByRole("link", { name: /Open direct session old direct/i });
       const row = link.closest(".tree-row")! as HTMLElement;
@@ -1401,6 +1407,7 @@ describe("LeftSidebar", () => {
           },
         });
 
+        await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
         const trigger = await screen.findByRole("button", { name: /Session actions for sole direct agent/i });
         await user.click(trigger);
         await user.click(await screen.findByRole("menuitem", { name: /^Terminate$/i }));
@@ -1573,6 +1580,7 @@ describe("LeftSidebar", () => {
       await screen.findByText("Proj A");
       emitDirectAgent(localApi, "proj-a-rename", "direct rename");
 
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
       const link = await screen.findByRole("link", { name: /Open direct session direct rename/i });
       const row = link.closest(".tree-row")! as HTMLElement;
       fireEvent.doubleClick(row);
@@ -1741,6 +1749,7 @@ describe("LeftSidebar", () => {
 
       await screen.findByText("Proj A");
       emitDirectAgent(localApi, "proj-a-menu-check", "menu check session");
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
       const sessRow = (
         await screen.findByRole("link", { name: /Open direct session menu check session/i })
       ).closest(".tree-row")!;
@@ -1816,6 +1825,7 @@ describe("LeftSidebar", () => {
         name: /Open pinned direct session pin mirror session/i,
       });
       const pinnedRow = pinnedLink.closest(".tree-row")! as HTMLElement;
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
       const treeLink = screen.getByRole("link", { name: /^Open direct session pin mirror session$/i });
       const treeRow = treeLink.closest(".tree-row")! as HTMLElement;
 
@@ -1873,6 +1883,7 @@ describe("LeftSidebar", () => {
     // treatment for the same anchor-overlay problem.
     it("the inline rename input carries a *__rename-input class at every render site", async () => {
       const localApi = createMockApi();
+      const user = userEvent.setup();
       await localApi.pinWorktree("wt-1");
       const sess = await localApi.createDirectSession({
         target: "direct",
@@ -1904,6 +1915,7 @@ describe("LeftSidebar", () => {
       fireEvent.keyDown(screen.getByLabelText("Rename"), { key: "Escape" });
 
       // Tree direct-session row
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
       const treeSessLink = screen.getByRole("link", { name: /^Open direct session class check session$/i });
       const treeSessRow = treeSessLink.closest(".tree-row")! as HTMLElement;
       fireEvent.doubleClick(treeSessRow);
@@ -2126,6 +2138,7 @@ describe("LeftSidebar - global Workspaces section", () => {
       await screen.findByText("Proj A");
       emitDirectSession(localApi, "proj-a-d1", "direct agent one");
 
+      await user.click(await screen.findByRole("button", { name: /Expand direct agents/i }));
       const link = await screen.findByRole("link", { name: /Open direct session direct agent one/i });
       expect(link).toHaveAttribute("href", "/project/proj-a/proj-a-d1");
       await user.click(link);
@@ -2372,6 +2385,193 @@ describe("LeftSidebar - global Workspaces section", () => {
       // Pre-search state restored: Proj A was collapsed, so it is collapsed again
       expect(screen.queryByRole("link", { name: /Open worktree wt-1/i })).toBeNull();
       expect(searchInput).toHaveValue("");
+    });
+  });
+
+  describe("Chevron tapping and collapsible direct/worktree agents (Requirements 1, 2, 3)", () => {
+    it("Requirement 1 — direct agents has dropdown chevron, is collapsed by default, and expands on tap", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      // Emit two direct agent sessions
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "d1",
+          worktreeId: null,
+          projectId: "proj-a",
+          sessionType: "agent",
+          snapshot: {
+            id: "d1",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: "mode-1",
+            type: "agent",
+            name: "Agent One",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "tm-d1",
+            createdAt: new Date().toISOString(),
+          },
+        });
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "d2",
+          worktreeId: null,
+          projectId: "proj-a",
+          sessionType: "agent",
+          snapshot: {
+            id: "d2",
+            worktreeId: null,
+            projectId: "proj-a",
+            modeId: "mode-1",
+            type: "agent",
+            name: "Agent Two",
+            isMain: false,
+            state: "idle",
+            lifecycleState: "idle",
+            tmuxName: "tm-d2",
+            createdAt: new Date().toISOString(),
+          },
+        });
+      });
+
+      // 1. Shows "2 direct agents" row with chevron
+      const directHeader = await screen.findByRole("button", { name: /Expand direct agents/i });
+      expect(directHeader).toHaveTextContent("2 direct agents");
+
+      // By default it should be collapsed (child sessions not rendered)
+      expect(screen.queryByRole("link", { name: /Open direct session Agent One/i })).toBeNull();
+      expect(screen.queryByRole("link", { name: /Open direct session Agent Two/i })).toBeNull();
+
+      // 2. Tapping on that row should expand it
+      await user.click(directHeader);
+      const agentOneLink = await screen.findByRole("link", { name: /Open direct session Agent One/i });
+      expect(agentOneLink).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Open direct session Agent Two/i })).toBeInTheDocument();
+      // Direct agent rows render the mode icon
+      expect(agentOneLink.closest(".tree-row")!.querySelector(".mode-icon")).toBeInTheDocument();
+
+      // 3. Tapping again should collapse it
+      const collapseTrigger = screen.getByRole("button", { name: /Collapse direct agents/i });
+      await user.click(collapseTrigger);
+      expect(screen.queryByRole("link", { name: /Open direct session Agent One/i })).toBeNull();
+    });
+
+    it("Requirement 2 — agents in worktree only expand when selected worktree is tapped again", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      // 1. Initial selection: wt-1 is selected, but agents are collapsed by default
+      expect(screen.queryByText("2 agents")).toBeNull();
+      expect(screen.queryByRole("link", { name: /Open session main/i })).toBeNull();
+
+      // 2. Tapping the already-selected worktree wt-1 expands it
+      const wt1Link = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      await user.click(wt1Link);
+
+      // Now expanded: shows "2 agents" and child sessions with mode icons
+      const agentsHeader = await screen.findByText("2 agents");
+      expect(agentsHeader).toBeInTheDocument();
+      const mainLink = screen.getByRole("link", { name: /Open session main/i });
+      expect(mainLink).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: /Open session agent-2/i })).toBeInTheDocument();
+      expect(mainLink.closest(".tree-row")!.querySelector(".mode-icon")).toBeInTheDocument();
+
+      // 3. Re-tapping the selected worktree wt-1 collapses it
+      await user.click(wt1Link);
+      expect(screen.queryByText("2 agents")).toBeNull();
+      expect(screen.queryByRole("link", { name: /Open session main/i })).toBeNull();
+
+      // 4. Clicking another worktree (wt-2) selects wt-2, but does NOT expand wt-2's agents
+      const wt2Link = screen.getByRole("link", { name: /^Open worktree wt-2$/i });
+      await user.click(wt2Link);
+      // wt-2 agents should remain collapsed on initial click
+      expect(screen.queryByText("1 agent")).toBeNull();
+
+      // 5. Tapping wt-2 again (now that it is selected) expands its agents
+      await user.click(wt2Link);
+      expect(await screen.findByText("1 agent")).toBeInTheDocument();
+    });
+
+    it("Requirement 3 — entire project folder closes when tapping selected project again, while folder icon only collapses/opens without selection", async () => {
+      function LocationProbe() {
+        const location = useLocation();
+        return <div data-testid="loc">{location.pathname}</div>;
+      }
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/project/proj-a"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+          <LocationProbe />
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      expect(screen.getByTestId("loc").textContent).toBe("/project/proj-a");
+
+      // Proj A is selected and open, its worktree wt-1 is visible
+      expect(screen.getByRole("link", { name: /^Open worktree wt-1$/i })).toBeInTheDocument();
+
+      // Tapping the selected project row again closes the entire project folder
+      const projLink = screen.getByRole("link", { name: /Open project Proj A/i });
+      await user.click(projLink);
+
+      // Worktrees are now closed
+      expect(screen.queryByRole("link", { name: /^Open worktree wt-1$/i })).toBeNull();
+      // Still on /project/proj-a
+      expect(screen.getByTestId("loc").textContent).toBe("/project/proj-a");
+
+      // Tapping it again re-opens the project folder
+      await user.click(projLink);
+      expect(await screen.findByRole("link", { name: /^Open worktree wt-1$/i })).toBeInTheDocument();
+
+      // Tapping folder icon toggles open/close without selecting
+      const folderBtn = screen.getByRole("button", { name: /(Expand|Collapse) project Proj A/i });
+      await user.click(folderBtn);
+      expect(screen.queryByRole("link", { name: /^Open worktree wt-1$/i })).toBeNull();
+    });
+
+    it("Requirement 4 — clicking an agent row inside a worktree selects the worktree and session", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter initialEntries={["/worktree/wt-1"]}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      // Expand wt-1's agents
+      const wt1Link = screen.getByRole("link", { name: /^Open worktree wt-1$/i });
+      await user.click(wt1Link);
+
+      const agent2Link = await screen.findByRole("link", { name: /Open session agent-2/i });
+      await user.click(agent2Link);
+
+      expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
     });
   });
 });

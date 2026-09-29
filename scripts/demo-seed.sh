@@ -26,12 +26,12 @@ else
   # If host hasn't mounted real binaries, drop in stubs so modes.json validates.
   for bin in claude cursor-agent; do
     if [ ! -x "/usr/local/bin/$bin" ]; then
-      cat >"/usr/local/bin/$bin" <<'STUB'
+      cat >"/usr/local/bin/$bin" <<'STUB' 2>/dev/null || true
 #!/usr/bin/env bash
 # vibe-station screenshot stub — never invoked, just satisfies PATH lookup.
 exec sleep infinity
 STUB
-      chmod +x "/usr/local/bin/$bin"
+      chmod +x "/usr/local/bin/$bin" 2>/dev/null || true
     fi
   done
 

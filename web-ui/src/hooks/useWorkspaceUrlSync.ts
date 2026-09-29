@@ -13,22 +13,24 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
   const navigate = useNavigate();
   const activeWorktreeId = useWorkspaceStore((s) => s.activeWorktreeId);
   const activeSessionId = useWorkspaceStore((s) => s.activeSessionId);
-  const urlConsumed = useRef(false);
+  const lastParamsRef = useRef<{ wtId?: string; sessionId?: string } | null>(null);
 
-  // Read effect: apply path params to store
+  // Read effect: apply path params to store only when path params actually change
   useEffect(() => {
-    if (!ready || urlConsumed.current) return;
+    if (!ready) return;
 
     // Skip URL sync for direct session paths — Workspace handles them directly
     if (location.pathname.startsWith("/session/")) {
-      urlConsumed.current = true;
+      lastParamsRef.current = null;
+      return;
+    }
+
+    if (!location.pathname.startsWith("/worktree")) {
+      lastParamsRef.current = null;
       return;
     }
 
     // Backward-compat: if ?wt= query param exists (old URL), redirect to new path format.
-    // Do NOT set urlConsumed.current yet — let the next render's read effect consume the
-    // new path params and populate the store. Setting it here would cause the write effect
-    // to fire with an empty store and clobber the redirected URL back to "/worktree".
     const searchParams = new URLSearchParams(location.search);
     const wtParam = searchParams.get("wt");
     if (wtParam) {
@@ -41,6 +43,14 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
     // Apply path params to store
     const wtId = params.wtId;
     const sessionId = params.sessionId;
+
+    // Skip if URL path parameters have not changed (e.g. sessions/worktrees array identity re-render)
+    const paramsUnchanged =
+      lastParamsRef.current !== null &&
+      lastParamsRef.current.wtId === wtId &&
+      lastParamsRef.current.sessionId === sessionId;
+    if (paramsUnchanged) return;
+    lastParamsRef.current = { wtId, sessionId };
 
     if (wtId) {
       const w = worktrees.find((x) => x.id === wtId);
@@ -67,17 +77,13 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
           activeWorktreeId: w.id,
           activeSessionId: pickedSessionId,
         });
-
-        // Only mark consumed once the worktree was found and the store populated,
-        // so the read effect retries if the worktree is still loading.
-        urlConsumed.current = true;
       }
     }
-  }, [ready, worktrees, sessions, params.wtId, params.sessionId, navigate, location.search]);
+  }, [ready, worktrees, sessions, params.wtId, params.sessionId, navigate, location.search, location.pathname]);
 
   // Write effect: mirror active ids to path
   useEffect(() => {
-    if (!ready || !urlConsumed.current) return;
+    if (!ready) return;
     // Only update URL if we're on a /worktree path
     if (!location.pathname.startsWith("/worktree")) return;
 
@@ -88,6 +94,7 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
 
     // Compute target path
     let targetPath = "/worktree";
+    let targetSessionParam: string | undefined = undefined;
     if (wtId) {
       targetPath = `/worktree/${wtId}`;
       if (sessId) {
@@ -95,12 +102,14 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
         // Only append sessionId if it's not the main slot
         if (!activeSession?.isMain) {
           targetPath = `/worktree/${wtId}/${sessId}`;
+          targetSessionParam = sessId;
         }
       }
     }
 
     // Guard: only navigate if path changed
     if (location.pathname !== targetPath) {
+      lastParamsRef.current = { wtId: wtId ?? undefined, sessionId: targetSessionParam };
       navigate(targetPath, { replace: true });
     }
   }, [ready, activeWorktreeId, activeSessionId, sessions, navigate, location.pathname]);
