@@ -8106,6 +8106,29 @@ body[data-tauri-os="macos"] .sidebar-header {
   background: var(--fg-muted, #888);
 }
 
+/* ── Dashboard PR error chip ─────────────────────────────────────────────── */
+
+.dashboard-pr-error-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--status-warning-bg, rgba(234, 179, 8, 0.12));
+  color: var(--status-warning, var(--warning, #ca8a04));
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+/* ── VCS panel PR error text ─────────────────────────────────────────────── */
+
+.vcs-pr-error {
+  color: var(--fg-muted, #888);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
 /* ── Doctor icon badge (TopBar — kept for reference, icon moved to sidebar) */
 
 .top-bar__doctor-badge {

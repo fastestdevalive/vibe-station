@@ -150,10 +150,12 @@ export function DoctorCheckList({ checks, hostname, hostOs, groupBy }: DoctorChe
 
   const required = checks.filter((c) => c.group === "required");
   const agentCli = checks.filter((c) => c.group === "agent_cli");
+  const feature = checks.filter((c) => c.group === "feature");
   const rest = checks.filter((c) => c.group === "optional" || c.group === "diagnostic");
 
   const reqPass = required.filter((c) => c.status === "ok" || c.status === "timeout").length;
   const agentPass = agentCli.filter((c) => c.status === "ok").length;
+  const featurePass = feature.filter((c) => c.status === "ok").length;
 
   return (
     <div>
@@ -175,6 +177,14 @@ export function DoctorCheckList({ checks, hostname, hostOs, groupBy }: DoctorChe
             detail={`${agentPass} of ${agentCli.length} found (need ≥1)`}
           />
           {agentCli.map((c) => (
+            <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
+          ))}
+        </>
+      )}
+      {feature.length > 0 && (
+        <>
+          <SectionHeading title="Features" />
+          {feature.map((c) => (
             <CheckRow key={c.name} check={c} hostname={hostname} hostOs={hostOs} />
           ))}
         </>

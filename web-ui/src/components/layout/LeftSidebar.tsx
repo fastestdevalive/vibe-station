@@ -2881,7 +2881,7 @@ export function LeftSidebar({
                 <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--grey" aria-hidden="true" />
               ) : doctorStatus.report && !doctorStatus.report.hardOk ? (
                 <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--red" aria-hidden="true" />
-              ) : doctorStatus.report && !doctorStatus.report.ok ? (
+              ) : doctorStatus.report && (doctorStatus.report.featureOk === false || !doctorStatus.report.ok) ? (
                 <span className="left-sidebar__doctor-dot left-sidebar__doctor-dot--yellow" aria-hidden="true" />
               ) : null}
             </button>
