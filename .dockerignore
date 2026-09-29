@@ -11,10 +11,19 @@
 # would bake host-platform-specific native addon builds into a Linux
 # container, which is actively wrong, not just slow).
 
-# Rust build artifacts — never needed in the image; the dev sandbox mounts
-# pre-built release binaries from the host (see docker-compose.dev.yml).
-rust/target/
-rust/target-docker/
+# The entire rust/ tree — not just its build artifacts. Nothing inside the
+# sandbox image needs Rust SOURCE either: the daemon/CLI are pre-built
+# debug binaries bind-mounted in from the host at container-start time (see
+# docker-compose.dev.yml, scripts/dev-sandbox.sh), never compiled inside this
+# image. Excluding source too (not just rust/target*/) matters because
+# `COPY --chown=vst:vst . .` below hashes the whole build context — with only
+# the target dirs excluded, editing so much as one .rs file still changed the
+# context and invalidated that COPY layer, forcing `--build` to rerun
+# `pnpm install`/the bun install/the claude-acp vendor install on every Rust
+# edit even though none of them depend on Rust source at all. Excluding all
+# of rust/ makes `--build` a near no-op unless web-ui/vendor/skill actually
+# changed.
+rust/
 
 # Reinstalled fresh inside the container (dev.Dockerfile's pnpm install
 # step) — copying the host's node_modules in is wasted transfer at best,
