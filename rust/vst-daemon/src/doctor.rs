@@ -50,6 +50,7 @@ pub enum CheckGroup {
     AgentCli,
     Optional,
     Diagnostic,
+    Feature,
 }
 
 fn resolve_bin_path(binary: &str) -> Option<String> {
@@ -350,6 +351,148 @@ pub async fn check_orphan_worktrees(store: &StoreHandle, paths: &Paths) -> Docto
     }
 }
 
+/// Check that `gh` CLI is installed and >= 2.40.
+pub async fn check_github_cli() -> DoctorCheck {
+    let output = match tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::process::Command::new("gh").arg("--version").output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        _ => {
+            return DoctorCheck {
+                name: "github-cli".to_string(),
+                status: DoctorStatus::Error,
+                required: false,
+                group: CheckGroup::Feature,
+                message: "gh CLI not installed (requires 2.40+)".to_string(),
+                resolved_path: None,
+                install_hint: Some("https://cli.github.com".to_string()),
+            };
+        }
+    };
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let re = regex::Regex::new(r"(\d+)\.(\d+)").unwrap();
+    let caps = re.captures(&text);
+
+    match caps {
+        Some(caps) => {
+            let major: u32 = caps[1].parse().unwrap_or(0);
+            let minor: u32 = caps[2].parse().unwrap_or(0);
+            let version_str = format!("{major}.{minor}");
+
+            if (major, minor) >= (2, 40) {
+                DoctorCheck {
+                    name: "github-cli".to_string(),
+                    status: DoctorStatus::Ok,
+                    required: false,
+                    group: CheckGroup::Feature,
+                    message: format!("gh {version_str}"),
+                    resolved_path: None,
+                    install_hint: None,
+                }
+            } else {
+                DoctorCheck {
+                    name: "github-cli".to_string(),
+                    status: DoctorStatus::Error,
+                    required: false,
+                    group: CheckGroup::Feature,
+                    message: format!("gh {version_str} found, requires 2.40+"),
+                    resolved_path: None,
+                    install_hint: Some("https://cli.github.com".to_string()),
+                }
+            }
+        }
+        None => DoctorCheck {
+            name: "github-cli".to_string(),
+            status: DoctorStatus::Error,
+            required: false,
+            group: CheckGroup::Feature,
+            message: "gh CLI not installed (requires 2.40+)".to_string(),
+            resolved_path: None,
+            install_hint: Some("https://cli.github.com".to_string()),
+        },
+    }
+}
+
+/// Check GitHub auth status for PR lookups.
+///
+/// Priority: `GITHUB_TOKEN`/`GH_TOKEN` env var → `gh auth login` accounts.
+pub async fn check_github_auth() -> DoctorCheck {
+    // First check env token — this path must NOT depend on gh being installed.
+    if vst_lifecycle::github_auth::env_generic_token().is_some() {
+        return DoctorCheck {
+            name: "github-auth".to_string(),
+            status: DoctorStatus::Ok,
+            required: false,
+            group: CheckGroup::Feature,
+            message: "PR status active via GITHUB_TOKEN env var".to_string(),
+            resolved_path: None,
+            install_hint: None,
+        };
+    }
+
+    // If no env token, gh CLI is required.
+    let cli_check = check_github_cli().await;
+    if cli_check.status == DoctorStatus::Error {
+        return DoctorCheck {
+            name: "github-auth".to_string(),
+            status: DoctorStatus::Error,
+            required: false,
+            group: CheckGroup::Feature,
+            message: "requires gh CLI (see github-cli check)".to_string(),
+            resolved_path: None,
+            install_hint: None,
+        };
+    }
+
+    // Check accounts.
+    let accounts = match tokio::time::timeout(
+        Duration::from_secs(10),
+        vst_lifecycle::github_auth::list_accounts(),
+    )
+    .await
+    {
+        Ok(accounts) => accounts,
+        Err(_) => {
+            return DoctorCheck {
+                name: "github-auth".to_string(),
+                status: DoctorStatus::Error,
+                required: false,
+                group: CheckGroup::Feature,
+                message: "Not logged in — run gh auth login".to_string(),
+                resolved_path: None,
+                install_hint: None,
+            };
+        }
+    };
+
+    if !accounts.iter().any(|a| a.token.is_some()) {
+        return DoctorCheck {
+            name: "github-auth".to_string(),
+            status: DoctorStatus::Error,
+            required: false,
+            group: CheckGroup::Feature,
+            message: "Not logged in — run gh auth login".to_string(),
+            resolved_path: None,
+            install_hint: None,
+        };
+    }
+
+    let logins: Vec<String> = accounts.iter().map(|a| a.login.clone()).collect();
+    DoctorCheck {
+        name: "github-auth".to_string(),
+        status: DoctorStatus::Ok,
+        required: false,
+        group: CheckGroup::Feature,
+        message: format!("Logged in as {}", logins.join(", ")),
+        resolved_path: None,
+        install_hint: None,
+    }
+}
+
 pub fn resolve_hostname() -> String {
     std::process::Command::new("hostname")
         .output()
@@ -490,6 +633,12 @@ pub async fn run_doctor(store: &StoreHandle, tmux: &Tmux, paths: &Paths) -> Vec<
     // 9. orphan-worktrees (Diagnostic, false)
     checks.push(check_orphan_worktrees(store, paths).await);
 
+    // 10. github-cli (Feature, false)
+    checks.push(check_github_cli().await);
+
+    // 11. github-auth (Feature, false)
+    checks.push(check_github_auth().await);
+
     // Central install_hint population for all non-Ok checks
     for check in &mut checks {
         if check.status != DoctorStatus::Ok {
@@ -522,6 +671,7 @@ impl From<CheckGroup> for vst_types::rest::doctor::CheckGroup {
             CheckGroup::AgentCli => vst_types::rest::doctor::CheckGroup::AgentCli,
             CheckGroup::Optional => vst_types::rest::doctor::CheckGroup::Optional,
             CheckGroup::Diagnostic => vst_types::rest::doctor::CheckGroup::Diagnostic,
+            CheckGroup::Feature => vst_types::rest::doctor::CheckGroup::Feature,
         }
     }
 }
@@ -548,11 +698,15 @@ pub async fn build_report(
     let checks = run_doctor(store, tmux, paths).await;
     let hard_ok = compute_hard_ok(&checks);
     let ok = compute_ok(&checks);
+    let feature_ok = !checks
+        .iter()
+        .any(|c| c.group == CheckGroup::Feature && c.status == DoctorStatus::Error);
     let wire_checks = checks.into_iter().map(Into::into).collect();
 
     vst_types::rest::doctor::DoctorReport {
         hard_ok,
         ok,
+        feature_ok,
         host_os: std::env::consts::OS.to_string(),
         hostname: resolve_hostname(),
         checked_at: chrono::Utc::now().to_rfc3339(),

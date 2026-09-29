@@ -56,6 +56,8 @@ pub fn hint_for(check_name: &str, host_os: &str) -> Option<&'static str> {
         "plugin-agy" => Some(
             "Build it from the vendored submodule (rust/vendor/openab/agy-acp) — see AGENTS.md or CLI-SUPPORT.md for the agy CLI itself",
         ),
+        "github-cli" => Some("https://cli.github.com"),
+        "github-auth" => Some("gh auth login"),
         _ => None,
     }
 }

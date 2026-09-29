@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct DoctorReport {
     pub hard_ok: bool,
     pub ok: bool,
+    pub feature_ok: bool,
     pub host_os: String,
     pub hostname: String,
     pub checked_at: String,
@@ -39,6 +40,7 @@ pub enum CheckGroup {
     AgentCli,
     Optional,
     Diagnostic,
+    Feature,
 }
 
 #[cfg(test)]
@@ -50,6 +52,7 @@ mod tests {
         let report = DoctorReport {
             hard_ok: true,
             ok: false,
+            feature_ok: true,
             host_os: "linux".to_string(),
             hostname: "test-host".to_string(),
             checked_at: "2026-01-01T00:00:00Z".to_string(),

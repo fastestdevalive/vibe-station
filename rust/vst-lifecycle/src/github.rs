@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use thiserror::Error;
+use vst_types::domain::PrErrorKind;
 
 #[derive(Debug, Error)]
 pub enum GithubError {
@@ -43,8 +44,7 @@ pub struct GithubRemote {
 pub enum PrLookupResult {
     NoPr,
     Pr(PrData),
-    NoCredentials { error: String },
-    Error { error: String },
+    Error { kind: PrErrorKind, error: String },
 }
 
 #[derive(Clone, Debug)]
@@ -235,24 +235,71 @@ fn parse_ssh_config_for_host(text: &str, alias: &str, ssh_dir: &str) -> Option<S
     host_map.get(&alias_lc).cloned()
 }
 
-/// Fetch PR statuses for multiple branches in one batched GraphQL query.
+/// Parse per-alias GraphQL errors from the response body.
 ///
-/// Key (D1/K4): one query per GitHub account, using aliased queries so that
-/// all branches in a single project can be looked up in one round-trip.
-pub async fn fetch_prs_for_branches(
+/// When alias `aN` is null/missing, checks `body.errors[]` for an entry where
+/// `path` contains the alias string. Maps:
+/// - `type == "INSUFFICIENT_SCOPES"` → `(Auth, "token for <login> lacks 'repo' scope")`
+/// - `type == "NOT_FOUND"` or no matching error entry → `(NotFound, "repo not visible to <login>")`
+fn parse_alias_error(body: &serde_json::Value, alias: &str, login: &str) -> (PrErrorKind, String) {
+    if let Some(errors) = body.get("errors").and_then(|e| e.as_array()) {
+        for err in errors {
+            let path_matches = err
+                .get("path")
+                .and_then(|p| p.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .any(|p| p.as_str().map(|s| s == alias).unwrap_or(false))
+                })
+                .unwrap_or(false);
+
+            if path_matches {
+                let type_str = err.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if type_str == "INSUFFICIENT_SCOPES" {
+                    return (
+                        PrErrorKind::Auth,
+                        format!("token for {login} lacks 'repo' scope"),
+                    );
+                } else if type_str == "NOT_FOUND" {
+                    return (
+                        PrErrorKind::NotFound,
+                        format!("repo not visible to {login}"),
+                    );
+                }
+            }
+        }
+    }
+
+    (
+        PrErrorKind::NotFound,
+        format!("repo not visible to {login}"),
+    )
+}
+
+/// Fetch PR statuses for multiple branches using the provided accounts.
+///
+/// This is the testable inner function — `fetch_prs_for_branches` builds
+/// accounts and calls this with the production base URL.
+///
+/// Maintains two maps:
+/// - `resolved`: only `Pr`/`NoPr` results (successes)
+/// - `last_err`: `(PrErrorKind, String)` for each failed branch
+///
+/// After the account loop, merges: for each branch not in `resolved`,
+/// inserts from `last_err` as `PrLookupResult::Error`, or `NoPr` if neither.
+pub(crate) async fn fetch_with(
+    accounts: Vec<crate::github_auth::GithubAccount>,
+    base_url: &str,
     remote: &GithubRemote,
     branches: &[String],
 ) -> GithubResult<HashMap<String, PrLookupResult>> {
-    use crate::github_auth::list_accounts;
-
-    let accounts = list_accounts().await;
-
     if accounts.is_empty() || accounts.iter().all(|a| a.token.is_none()) {
         let mut result = HashMap::new();
         for branch in branches {
             result.insert(
                 branch.clone(),
-                PrLookupResult::NoCredentials {
+                PrLookupResult::Error {
+                    kind: PrErrorKind::NoCredentials,
                     error: "no GitHub credentials available".to_string(),
                 },
             );
@@ -264,7 +311,8 @@ pub async fn fetch_prs_for_branches(
         .user_agent("vibe-station/vst-lifecycle")
         .build()?;
 
-    let mut result: HashMap<String, PrLookupResult> = HashMap::new();
+    let mut resolved: HashMap<String, PrLookupResult> = HashMap::new();
+    let mut last_err: HashMap<String, (PrErrorKind, String)> = HashMap::new();
 
     // Try each account.
     'account_loop: for account in &accounts {
@@ -288,8 +336,9 @@ pub async fn fetch_prs_for_branches(
 
         let query = format!("query {{ {} }}", fragments.join(" "));
 
+        let url = format!("{base_url}/graphql");
         let resp = match client
-            .post("https://api.github.com/graphql")
+            .post(&url)
             .bearer_auth(token)
             .json(&serde_json::json!({ "query": query }))
             .send()
@@ -299,11 +348,7 @@ pub async fn fetch_prs_for_branches(
             Err(e) => {
                 let err_str = e.to_string();
                 for branch in branches {
-                    result
-                        .entry(branch.clone())
-                        .or_insert_with(|| PrLookupResult::Error {
-                            error: err_str.clone(),
-                        });
+                    last_err.insert(branch.clone(), (PrErrorKind::Transient, err_str.clone()));
                 }
                 continue 'account_loop;
             }
@@ -311,11 +356,16 @@ pub async fn fetch_prs_for_branches(
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            let err = format!("GitHub API HTTP {status}");
+            let (kind, err) = if status == 401 {
+                (
+                    PrErrorKind::Auth,
+                    format!("bad credentials for {}", account.login),
+                )
+            } else {
+                (PrErrorKind::Transient, "GitHub API HTTP 5xx".to_string())
+            };
             for branch in branches {
-                result
-                    .entry(branch.clone())
-                    .or_insert_with(|| PrLookupResult::Error { error: err.clone() });
+                last_err.insert(branch.clone(), (kind, err.clone()));
             }
             continue 'account_loop;
         }
@@ -325,50 +375,58 @@ pub async fn fetch_prs_for_branches(
             Err(e) => {
                 let err = e.to_string();
                 for branch in branches {
-                    result
-                        .entry(branch.clone())
-                        .or_insert_with(|| PrLookupResult::Error { error: err.clone() });
+                    last_err.insert(branch.clone(), (PrErrorKind::Transient, err.clone()));
                 }
                 continue 'account_loop;
             }
         };
 
         // B1: null data → error, not no_pr.
+        // B3: inspect body.errors for classification — RATE_LIMITED is
+        // transient, INSUFFICIENT_SCOPES is auth, NOT_FOUND is not-found.
         let data = match body.get("data") {
             Some(d) if !d.is_null() => d,
             _ => {
+                let kind = if let Some(errors) = body.get("errors").and_then(|e| e.as_array()) {
+                    let first_type = errors
+                        .first()
+                        .and_then(|e| e.get("type"))
+                        .and_then(|t| t.as_str());
+                    match first_type {
+                        Some("RATE_LIMITED") => PrErrorKind::Transient,
+                        Some("INSUFFICIENT_SCOPES") => PrErrorKind::Auth,
+                        Some("NOT_FOUND") => PrErrorKind::NotFound,
+                        _ => PrErrorKind::Transient,
+                    }
+                } else {
+                    PrErrorKind::Transient
+                };
                 let err = body
                     .get("errors")
                     .and_then(|e| e.as_array())
                     .and_then(|arr| arr.first())
                     .and_then(|e| e.get("message"))
                     .and_then(|m| m.as_str())
-                    .unwrap_or("GraphQL returned no data")
+                    .unwrap_or("GitHub API returned null data")
                     .to_string();
                 for branch in branches {
-                    result
-                        .entry(branch.clone())
-                        .or_insert_with(|| PrLookupResult::Error { error: err.clone() });
+                    last_err.insert(branch.clone(), (kind, err.clone()));
                 }
                 continue 'account_loop;
             }
         };
 
         for (i, branch) in branches.iter().enumerate() {
-            if result.contains_key(branch) {
+            if resolved.contains_key(branch) {
                 continue;
             }
             let alias = format!("a{i}");
             let repo_data = match data.get(&alias) {
                 Some(v) if !v.is_null() => v,
                 _ => {
-                    // B1: alias missing/null without NOT_FOUND error → error
-                    result.insert(
-                        branch.clone(),
-                        PrLookupResult::Error {
-                            error: "repository not found or inaccessible".to_string(),
-                        },
-                    );
+                    // Check body.errors[] for per-alias error
+                    let (kind, err) = parse_alias_error(&body, &alias, &account.login);
+                    last_err.insert(branch.clone(), (kind, err));
                     continue;
                 }
             };
@@ -411,14 +469,42 @@ pub async fn fetch_prs_for_branches(
                 }
             };
 
-            result.insert(branch.clone(), lookup);
+            resolved.insert(branch.clone(), lookup);
         }
     }
 
-    // Fill any remaining branches with NoPr.
+    // Merge: for each branch not in resolved, insert from last_err or NoPr.
+    let mut result = resolved;
     for branch in branches {
-        result.entry(branch.clone()).or_insert(PrLookupResult::NoPr);
+        if !result.contains_key(branch) {
+            if let Some((kind, error)) = last_err.get(branch) {
+                result.insert(
+                    branch.clone(),
+                    PrLookupResult::Error {
+                        kind: *kind,
+                        error: error.clone(),
+                    },
+                );
+            } else {
+                result.insert(branch.clone(), PrLookupResult::NoPr);
+            }
+        }
     }
 
     Ok(result)
+}
+
+/// Fetch PR statuses for multiple branches in one batched GraphQL query.
+///
+/// Key (D1/K4): one query per GitHub account, using aliased queries so that
+/// all branches in a single project can be looked up in one round-trip.
+pub async fn fetch_prs_for_branches(
+    remote: &GithubRemote,
+    branches: &[String],
+) -> GithubResult<HashMap<String, PrLookupResult>> {
+    use crate::github_auth::list_accounts;
+
+    let accounts = list_accounts().await;
+    let base_url = "https://api.github.com";
+    fetch_with(accounts, base_url, remote, branches).await
 }
