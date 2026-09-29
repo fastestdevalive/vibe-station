@@ -40,6 +40,7 @@ if [ -d /opt/cursor-agent-versions ]; then
     echo "cursor-agent: symlinked to $cursor_agent_version_dir/cursor-agent"
   else
     echo 'cursor-agent: WARNING — /opt/cursor-agent-versions is mounted but no version dir with a `cursor-agent` launcher was found; cursor-agent will not run' >&2
+  fi
 fi
 
 # Drop in stubs for any missing CLI binaries so modes.json validates and demo-seed.sh doesn't fail

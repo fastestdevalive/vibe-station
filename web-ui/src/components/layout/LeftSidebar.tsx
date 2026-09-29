@@ -1986,8 +1986,8 @@ export function LeftSidebar({
             style={{ position: "relative" }}
           >
             <Link to="/draft/new" className="wt-row__stretch-link" draggable={false} tabIndex={-1} />
-            {/* Mirror the project-expand button structure so icon+label gap matches project rows. */}
-            <div className="tree-row__project-expand" style={{ pointerEvents: "none" }}>
+            {/* Mirror the project main structure so icon+label expands and matches project rows. */}
+            <div className="tree-row__project-main" style={{ pointerEvents: "none" }}>
               <span className="tree-row__project-chevron" aria-hidden>
                 <Folder size={14} />
               </span>
@@ -1997,7 +1997,7 @@ export function LeftSidebar({
               <span className="draft-chip">Draft</span>
               <button
                 type="button"
-                className="draft-row__discard icon-btn tree-row__action"
+                className="draft-row__discard icon-btn"
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2047,7 +2047,7 @@ export function LeftSidebar({
                       style={{ position: "relative" }}
                     >
                       <Link to={`/draft/${s.id}`} className="wt-row__stretch-link" draggable={false} tabIndex={-1} />
-                      <div className="tree-row__project-expand" style={{ pointerEvents: "none" }}>
+                      <div className="tree-row__project-main" style={{ pointerEvents: "none" }}>
                         <span className="tree-row__project-chevron" aria-hidden>
                           <Folder size={14} />
                         </span>
@@ -2057,7 +2057,7 @@ export function LeftSidebar({
                         <span className="draft-chip">Draft</span>
                         <button
                           type="button"
-                          className="draft-row__discard icon-btn tree-row__action"
+                          className="draft-row__discard icon-btn"
                           onPointerDown={(e) => e.stopPropagation()}
                           onClick={(e) => {
                             e.preventDefault();
