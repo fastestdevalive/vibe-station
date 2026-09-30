@@ -351,10 +351,14 @@ impl AgentPlugin for OpencodePlugin {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = write_opencode_config_blocking(&config_path, &prompt_file);
-        BTreeMap::from([(
-            "OPENCODE_CONFIG".to_string(),
-            config_path.to_string_lossy().into_owned(),
-        )])
+        BTreeMap::from([
+            (
+                "OPENCODE_CONFIG".to_string(),
+                config_path.to_string_lossy().into_owned(),
+            ),
+            // See OPENCODE_DISABLE_FILEWATCHER note in `build_spec` below.
+            ("OPENCODE_DISABLE_FILEWATCHER".to_string(), "1".to_string()),
+        ])
     }
 
     fn get_ready_signal(&self) -> ReadySignal {
@@ -614,6 +618,15 @@ impl AgentPlugin for OpencodePlugin {
                     cwd: ctx.cwd.clone(),
                     env: BTreeMap::from([
                         ("OPENCODE_CONFIG".to_string(), config_path),
+                        // Every opencode instance opens its own inotify
+                        // instance for its file watcher. The kernel caps these
+                        // per-USER (fs.inotify.max_user_instances, default
+                        // 128), not per-process, so with several agent
+                        // sessions plus browsers/editors the cap is exhausted
+                        // and opencode fails with EMFILE ("too many open
+                        // files") even though `ulimit -n` is huge. Agent
+                        // sessions don't need live file-change events.
+                        ("OPENCODE_DISABLE_FILEWATCHER".to_string(), "1".to_string()),
                         ("VST_SPAWN_TOKEN".to_string(), ctx.session.id.clone()),
                     ])
                     .into_iter()
