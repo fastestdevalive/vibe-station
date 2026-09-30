@@ -539,6 +539,7 @@ pub async fn read_session_meta(
         mode_name,
         model_override: ctx.session.model_override.clone(),
         cwd: Some(cwd),
+        model_overridden: ctx.session.model_override.is_some(),
     };
     let meta: TranscriptMeta = read_meta_from_data_dir(&session_data_dir_for(ctx), &ctx.session.id);
     build_meta_from_store_meta(&opts, &meta)

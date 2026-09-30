@@ -29,8 +29,7 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
     ? report.checks.filter(
         (c) => c.group === "required" && c.status !== "ok" && c.status !== "timeout",
       ).length +
-      (report.checks.some((c) => c.group === "agent_cli" && c.status === "ok") ? 0 : 1) +
-      report.checks.filter((c) => c.group === "feature" && c.status === "error").length
+      (report.checks.some((c) => c.group === "agent_cli" && c.status === "ok") ? 0 : 1)
     : 0;
 
   return (

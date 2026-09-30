@@ -16,9 +16,6 @@
 //! `run_turn` wrapper supplies its own `RunTurnAcpParams`.
 //!
 //! ## Known gaps vs. the TS (flagged for the report, not silently hidden)
-//! - The frozen `AcpTransport` surfaces only `StopReason` from `PromptTurn.result`
-//!   — not the `usage` bag the TS reads there. So `usage` / `result` events
-//!   here carry no usage figures; the `usage` event is omitted entirely.
 //! - `TurnContext.on_spawn` is threaded through but the frozen `AcpLaunchSpec`
 //!   has no `on_spawn` surface, so the ACP connection never reports child pids
 //!   back for orphan-safe group-kill. Documented, not silently dropped.
@@ -237,18 +234,18 @@ pub async fn run_turn_acp(
         }
     }
 
-    let stop_reason = if watchdog_fired {
+    let (stop_reason, turn_usage) = if watchdog_fired {
         // We just asked the adapter to cancel; give it a short grace period to
         // answer the still-outstanding `session/prompt` request before giving
         // up and treating the turn as done anyway. Either way this branch
         // never waits the full hour `do_send_prompt` would otherwise allow.
         match tokio::time::timeout(cancel_grace, turn.result).await {
-            Ok(Ok(Ok(reason))) => reason,
-            _ => StopReason::Cancelled,
+            Ok(Ok(Ok(outcome))) => (outcome.stop_reason, outcome.usage),
+            _ => (StopReason::Cancelled, None),
         }
     } else {
         match turn.result.await {
-            Ok(Ok(reason)) => reason,
+            Ok(Ok(outcome)) => (outcome.stop_reason, outcome.usage),
             Ok(Err(e)) => {
                 if !cancel.is_cancelled() {
                     let _ = tx.send(error_event(&ctx, &params.provider, format!("{e}")));
@@ -270,15 +267,32 @@ pub async fn run_turn_acp(
         }
     };
 
-    // Terminal `result` event. No usage figures (frozen trait gap — see the
-    // module doc). The TS yields `result` first, then a refusal `error` AFTER
-    // it (so the error is the terminal event), matching claude.ts.
+    // End-of-turn usage: a standalone `usage` event then the terminal `result`
+    // carrying the same figures (claude.ts order). The TS yields `result`
+    // first, then a refusal `error` AFTER it (so the error is the terminal
+    // event).
+    // Stamp the observed model onto the turn usage. `ctx.model` is usually
+    // empty (the turn context carries no model unless one was explicitly
+    // resolved), so this is typically a no-op write of "" — harmless, and it
+    // keeps the door open for a future ctx.model without another edit here.
+    let turn_usage = turn_usage.map(|mut u| {
+        if let Some(m) = ctx.model.as_deref().filter(|m| !m.is_empty()) {
+            u.model = m.to_string();
+        }
+        u
+    });
+    if let Some(u) = &turn_usage {
+        let mut ev = base_event(&ctx.session.id, params.provider, NormalizedEventKind::Usage);
+        ev.usage = Some(u.clone());
+        let _ = tx.send(ev);
+    }
     let mut result = base_event(
         &ctx.session.id,
         params.provider,
         NormalizedEventKind::Result,
     );
     result.turn_id = None;
+    result.usage = turn_usage;
     let _ = tx.send(result);
 
     if params.emit_refusal_error && stop_reason == StopReason::Refusal {

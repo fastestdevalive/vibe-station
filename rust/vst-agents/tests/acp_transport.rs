@@ -114,7 +114,7 @@ async fn happy_path_initialize_new_session_send_prompt_streams_and_resolves_end_
         .await
         .expect("result resolves")
         .expect("prompt succeeds");
-    assert_eq!(stop, StopReason::EndTurn);
+    assert_eq!(stop.stop_reason, StopReason::EndTurn);
     assert!(
         seen.iter()
             .any(|u| matches!(u, SessionUpdate::AgentMessageChunk(_))),
@@ -142,7 +142,7 @@ async fn cancel_active_prompt_resolves_with_cancelled_without_killing_connection
         .await
         .expect("result resolves")
         .expect("prompt succeeds");
-    assert_eq!(stop, StopReason::Cancelled);
+    assert_eq!(stop.stop_reason, StopReason::Cancelled);
     assert!(conn.is_alive());
 
     // Connection still usable for a next turn. (The fake agent's
@@ -157,7 +157,8 @@ async fn cancel_active_prompt_resolves_with_cancelled_without_killing_connection
         .result
         .await
         .expect("result resolves")
-        .expect("second turn succeeds");
+        .expect("second turn succeeds")
+        .stop_reason;
     conn.dispose().await;
 }
 

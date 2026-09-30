@@ -27,8 +27,13 @@ interface StatusBarProps {
   fontControls?: ReactNode;
 }
 
-function fmt(n: number): string {
-  return n.toLocaleString("en-US");
+/** Compact token count: exact below 1000, then 1.3k / 22.8k / 999.9k / 1M. */
+export function fmt(n: number): string {
+  const trim = (x: number) => x.toFixed(1).replace(/\.0$/, "");
+  if (n < 1000) return String(n);
+  const k = Math.round(n / 100) / 10;
+  if (k < 1000) return `${trim(k)}k`;
+  return `${trim(Math.round(n / 100000) / 10)}M`;
 }
 
 const BUSY_STATES: TurnState[] = ["thinking", "responding", "tool"];
@@ -60,7 +65,7 @@ export function turnLabel(state: TurnState | undefined, queue: number): string {
 /**
  * Composer status bar: tokens used / context %, model, mode name, and a live
  * turn-state indicator (Decision 4 — one cross-harness contract, no per-CLI
- * branching). Fields absent from `meta` (e.g. costUsd, contextWindow) hide
+ * branching). Fields absent from `meta` (e.g. contextWindow) hide
  * gracefully.
  */
 export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sessionId, atBottom = true, fontControls }: StatusBarProps) {
@@ -117,15 +122,19 @@ export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sess
             {pct != null ? <span className="chat-statusbar__pct"> ({pct}%)</span> : null}
           </span>
         ) : null}
-        {usage?.costUsd != null ? (
-          <span className="chat-statusbar__cost">${usage.costUsd.toFixed(3)}</span>
-        ) : null}
         {api && sessionId && meta && meta.cli !== "cursor" ? (
           <ModelSwitch api={api} sessionId={sessionId} cli={meta.cli} model={model} />
         ) : model ? (
           <span className="chat-statusbar__model">{model}</span>
         ) : null}
-        {meta?.modeName ? <span className="chat-statusbar__mode">{meta.modeName}</span> : null}
+        {meta?.modeName ? (
+          <span
+            className={`chat-statusbar__mode${meta.modelOverridden ? " chat-statusbar__mode--overridden" : ""}`}
+            title={meta.modelOverridden ? `Started as: ${meta.modeName}` : meta.modeName}
+          >
+            {meta.modelOverridden ? `via ${meta.modeName}` : meta.modeName}
+          </span>
+        ) : null}
       </div>
       <div className="chat-statusbar__turn">
         {/* While busy, the SAME label already rides next to the in-feed

@@ -35,7 +35,7 @@
 //! - `CAPTURE_LINES = 20`
 //! - `everWorked` seeded `true` → idle-stable always → `WaitingForHuman`
 //!
-//! ### github_auth.rs / gh CLI credential chain
+//! ### github_auth.rs / parse_hosts_yml
 //! - Parses `github.com:` users block; excludes GHES hosts
 //! - Trailing `: # comment` on login lines handled
 //! - Empty / unrelated content → empty vec
@@ -317,7 +317,6 @@ fn pr_status_equivalent_ignores_checked_at() {
         url: Some("https://example.com/pull/7".to_string()),
         checked_at: "2025-01-01T00:00:00Z".to_string(),
         error: None,
-        error_kind: None,
         pr_branch: Some("feat".to_string()),
     };
     let b = PrStatus {
@@ -338,7 +337,6 @@ fn pr_status_not_equivalent_on_state_change() {
         url: None,
         checked_at: now.clone(),
         error: None,
-        error_kind: None,
         pr_branch: None,
     };
     let b = PrStatus {
@@ -400,9 +398,105 @@ fn subagent_notify_only_waiting_for_human_is_notable() {
     handle.note_subagent_state_change("c1", LifecycleState::Done, LifecycleState::Exited, &deps);
 }
 
-// ─── github_auth — parse_hosts_yml removed (replaced by gh CLI) ───────────────
-// These tests were deleted along with parse_hosts_yml in Phase 2 of
-// pr-status-gh-auth. Credential discovery now uses `gh auth status`.
+// ─── github_auth::parse_hosts_yml ─────────────────────────────────────────────
+
+#[test]
+fn parse_hosts_yml_extracts_github_com_users() {
+    use vst_lifecycle::github_auth::{parse_hosts_yml, GithubAccount};
+    let text = "\
+github.com:
+    users:
+        alice:
+            oauth_token: gho_aaa
+        fastestdevalive:
+            oauth_token: gho_bbb
+    git_protocol: ssh
+    user: alice
+    oauth_token: gho_aaa
+";
+    let accounts = parse_hosts_yml(text);
+    assert_eq!(
+        accounts,
+        vec![
+            GithubAccount {
+                login: "alice".to_string(),
+                token: Some("gho_aaa".to_string())
+            },
+            GithubAccount {
+                login: "fastestdevalive".to_string(),
+                token: Some("gho_bbb".to_string())
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_hosts_yml_keyring_user_has_null_token() {
+    use vst_lifecycle::github_auth::{parse_hosts_yml, GithubAccount};
+    let text = "\
+github.com:
+    users:
+        keyring-user: {}
+    git_protocol: https
+";
+    let accounts = parse_hosts_yml(text);
+    assert_eq!(
+        accounts,
+        vec![GithubAccount {
+            login: "keyring-user".to_string(),
+            token: None
+        }]
+    );
+}
+
+#[test]
+fn parse_hosts_yml_empty_returns_empty() {
+    use vst_lifecycle::github_auth::parse_hosts_yml;
+    assert!(parse_hosts_yml("").is_empty());
+    assert!(parse_hosts_yml("some_other_key: value\n").is_empty());
+}
+
+#[test]
+fn parse_hosts_yml_excludes_ghes_host_blocks() {
+    use vst_lifecycle::github_auth::{parse_hosts_yml, GithubAccount};
+    let text = "\
+my-ghes.example.com:
+    users:
+        ghes-user:
+            oauth_token: ghes_token
+github.com:
+    users:
+        real-user:
+            oauth_token: gho_real
+";
+    let accounts = parse_hosts_yml(text);
+    assert_eq!(
+        accounts,
+        vec![GithubAccount {
+            login: "real-user".to_string(),
+            token: Some("gho_real".to_string())
+        }]
+    );
+}
+
+#[test]
+fn parse_hosts_yml_handles_trailing_comment_on_login() {
+    use vst_lifecycle::github_auth::{parse_hosts_yml, GithubAccount};
+    let text = "\
+github.com:
+    users:
+        commented-login: # some nickname
+            oauth_token: gho_commented
+";
+    let accounts = parse_hosts_yml(text);
+    assert_eq!(
+        accounts,
+        vec![GithubAccount {
+            login: "commented-login".to_string(),
+            token: Some("gho_commented".to_string())
+        }]
+    );
+}
 
 // ─── mutex.rs ─────────────────────────────────────────────────────────────────
 

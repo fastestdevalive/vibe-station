@@ -52,9 +52,37 @@ impl JsonAgentSession {
 
         // Update usage only for turns that actually made a model call (hasRealUsage gate).
         if has_real_usage(ev.usage.as_ref()) {
-            let usage = ev.usage.clone();
+            let mut usage = ev.usage.clone();
             let mut s = self.0.state.lock().unwrap();
-            s.usage = usage;
+            if let (Some(new), Some(old)) = (usage.as_mut(), s.usage.as_ref()) {
+                if new.context_window.is_none() && old.context_window.is_some() {
+                    if old.total_tokens > 0 {
+                        // A real mid-turn window snapshot exists. The
+                        // end-of-turn `totalTokens` is accumulated across ALL
+                        // API calls in the turn (inflated: 500k on a 50k
+                        // context reads "250%"). Keep the window fill from
+                        // the snapshot and copy only the input/output/cache
+                        // breakdown.
+                        new.total_tokens = old.total_tokens;
+                        new.context_window = old.context_window;
+                        new.cost_usd = new.cost_usd.or(old.cost_usd);
+                    }
+                    // old.total_tokens == 0 (compaction/zero snapshot): don't
+                    // pair the end-of-turn total with a window it wasn't
+                    // measured against — skip window inheritance entirely.
+                } else {
+                    // No window conflict — safely inherit window/cost from the
+                    // stored snapshot.
+                    new.context_window = new.context_window.or(old.context_window);
+                    new.cost_usd = new.cost_usd.or(old.cost_usd);
+                }
+            }
+            s.usage = usage.clone();
+            // The merged usage (with context_window/cost preserved) must be
+            // what gets persisted and broadcast — otherwise the restart
+            // paths (build_meta_from_transcript, TranscriptStore::last_meta)
+            // rebuild from the unmerged event and lose window/cost.
+            ev.usage = usage;
         }
 
         // commands_update: full-replace (never merge).
@@ -176,8 +204,10 @@ pub(super) struct EmitUserEventOpts {
 }
 
 /// True when a usage record reflects a real model call (not a slash-command
-/// that returned totalTokens: 0). Load-bearing — porting the TS's own
+/// that returned totalTokens: 0). A mid-turn context-window snapshot with
+/// `used == 0` still carries the window/cost the status bar needs, so it
+/// passes the gate too. Load-bearing — porting the TS's own
 /// `hasRealUsage` doc-commented helper exactly.
 pub(super) fn has_real_usage(usage: Option<&vst_types::UsageInfo>) -> bool {
-    usage.map_or(false, |u| u.total_tokens > 0)
+    usage.map_or(false, |u| u.total_tokens > 0 || u.context_window.is_some())
 }

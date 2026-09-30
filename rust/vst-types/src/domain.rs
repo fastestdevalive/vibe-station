@@ -111,8 +111,6 @@ pub struct PrStatus {
     pub checked_at: String,
     /// Set on `no_credentials`/`error` results.
     pub error: Option<String>,
-    /// Categorized error kind for PR status failures.
-    pub error_kind: Option<PrErrorKind>,
     /// The branch `prPoller` queried GitHub for (D20).
     pub pr_branch: Option<String>,
 }
@@ -126,16 +124,6 @@ pub enum PrState {
     Open,
     Merged,
     Closed,
-}
-
-/// Categorized error kind for PR status failures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PrErrorKind {
-    NoCredentials,
-    Auth,
-    NotFound,
-    Transient,
 }
 
 /// `agent` | `terminal`.
@@ -486,6 +474,11 @@ pub struct SessionMeta {
     pub notice_slot: Option<NoticeSlot>,
     /// The currently active turn id, if any.
     pub active_turn_id: Option<String>,
+    /// True when the user has explicitly overridden the mode's default model via
+    /// the model switcher. When true the UI renders the mode label differently
+    /// (e.g. "via <mode>") to signal that the active model no longer matches the
+    /// mode's configured default.
+    pub model_overridden: Option<bool>,
 }
 
 /// The `noticeSlot` sub-object of `SessionMeta`.

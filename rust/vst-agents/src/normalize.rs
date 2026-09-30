@@ -23,7 +23,7 @@ use agent_client_protocol::schema::v1::{
 };
 use vst_types::{
     AcpToolKind, ContentBlockType, NormalizedContentBlock, NormalizedEvent, NormalizedEventKind,
-    NormalizedEventProvider, Role, ToolDiff, ToolLocation, ToolStatus,
+    NormalizedEventProvider, Role, ToolDiff, ToolLocation, ToolStatus, UsageInfo,
 };
 
 /// Per-plugin enrichment hook: given the raw update and the event this module
@@ -468,9 +468,23 @@ pub fn normalize_session_update(
             ev.text = Some(text);
             base = Some(stamp(NormalizedEventKind::Status, ev));
         }
-        SessionUpdate::SessionInfoUpdate(_)
-        | SessionUpdate::ConfigOptionUpdate(_)
-        | SessionUpdate::UsageUpdate(_) => return None,
+        SessionUpdate::UsageUpdate(u) => {
+            // Mid-turn context-window snapshot: `used` = tokens in context,
+            // `size` = window. Cost only when reported in USD.
+            let mut ev = NormalizedEvent::default();
+            ev.usage = Some(UsageInfo {
+                total_tokens: u.used as i64,
+                context_window: (u.size > 0).then_some(u.size as i64),
+                cost_usd: u
+                    .cost
+                    .as_ref()
+                    .filter(|c| c.currency == "USD")
+                    .map(|c| c.amount),
+                ..Default::default()
+            });
+            base = Some(stamp(NormalizedEventKind::Usage, ev));
+        }
+        SessionUpdate::SessionInfoUpdate(_) | SessionUpdate::ConfigOptionUpdate(_) => return None,
         // `#[non_exhaustive]` — unknown future update kinds are dropped, not
         // thrown, matching the TS default arm.
         _ => return None,

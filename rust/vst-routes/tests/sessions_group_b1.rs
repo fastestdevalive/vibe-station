@@ -248,7 +248,6 @@ async fn delete_worktree_main_promotes_eligible_sibling_and_carries_pr() {
         url: Some("https://example.com/pr/42".into()),
         checked_at: "2026-01-01T00:00:00.000Z".into(),
         error: None,
-        error_kind: None,
         pr_branch: Some("branch-w1".into()),
     });
     let mut other = make_session("s-other", "p1");

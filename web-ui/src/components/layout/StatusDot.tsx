@@ -36,12 +36,11 @@ export function StatusDot({ status, pr = null }: StatusDotProps) {
       pr?.state === "merged" ? " status-spinner--pr-merged"
       : pr?.state === "open" ? " status-spinner--pr-open"
       : "";
-    const workingTitle = pr?.error ? `working · PR: ${pr.error}` : "working";
     return (
       <span
         className={`status-spinner${prMod}`}
         aria-label="status: working"
-        title={workingTitle}
+        title="working"
       />
     );
   }
@@ -57,12 +56,11 @@ export function StatusDot({ status, pr = null }: StatusDotProps) {
         ? "!"
         : GLYPH[status];
 
-  const dotTitle = pr?.error ? `${label} · PR: ${pr.error}` : label;
   return (
     <span
       className={`status-dot status-dot--${label}`}
       aria-label={`status: ${label}`}
-      title={dotTitle}
+      title={label}
     >
       {glyph}
     </span>

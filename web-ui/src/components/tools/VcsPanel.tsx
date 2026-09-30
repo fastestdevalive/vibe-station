@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, ExternalLink, GitCommit, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import type { ApiInstance } from "@/api";
-import type { CommitLogEntry, FileScope, PrInfo, PrStatus, SubmoduleInfo } from "@/api/types";
+import type { CommitLogEntry, FileScope, PrInfo, SubmoduleInfo } from "@/api/types";
 import { VcsCommitView } from "@/components/tools/VcsCommitView";
 import { useWorkspaceStore } from "@/hooks/useStore";
 
@@ -17,9 +17,6 @@ interface VcsPanelProps {
    *  into. Under project scope the branch diff toggle is hidden and PR/submodule
    *  lookups (worktree-only concepts) never fire. */
   scope?: FileScope;
-  /** PR status from the session store (branch-guarded). Used for the error row
-   *  when `api.getPr` hasn't returned a PR yet or returned null. */
-  prStatus?: PrStatus | null;
 }
 
 /** Relative time like "3m ago", "2h ago", "5d ago"; falls back to a date past ~30d. */
@@ -241,7 +238,7 @@ const SERVER_MAX_LIMIT = 1000;
  * for each additional page on "Load more"; no live updates yet (commits/PR
  * state changes aren't push-notified to the UI today).
  */
-export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktree", prStatus = null }: VcsPanelProps) {
+export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktree" }: VcsPanelProps) {
   const isProject = scope === "project";
   // `commits` holds at most `pageLimit + 1` entries — the lookahead extra
   // entry (never rendered) is how `hasMore` is known for certain instead of
@@ -540,14 +537,6 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
         </div>
       </div>
       {pr ? <PrBanner pr={pr} /> : null}
-      {!pr && prStatus?.errorKind && !prStatus?.url ? (
-        <div className="vcs-pr-error">
-          {prStatus.errorKind === "no_credentials" && "No GitHub credentials — run gh auth login"}
-          {prStatus.errorKind === "auth" && "GitHub token can't access this repo"}
-          {prStatus.errorKind === "not_found" && "Repo not visible to configured accounts"}
-          {prStatus.errorKind === "transient" && "PR lookup failed, retrying…"}
-        </div>
-      ) : null}
       <div className="vcs-panel__body">
         {error ? (
           <div className="empty-state">Failed to load commits: {error}</div>

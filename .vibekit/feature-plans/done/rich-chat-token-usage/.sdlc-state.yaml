@@ -1,0 +1,25 @@
+feature: rich-chat-token-usage
+
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-204
+
+created: 2026-09-29T21:50:00Z
+
+master:
+  prd: skipped
+  plan: complete
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: implementing
+    last_completed: null
+    awaiting_phase: implement
+    awaiting_artifact: .vibekit/feature-plans/wip/rich-chat-token-usage/plan-rich-chat-token-usage.md
+    impl_turn: {phase: 1, of: 3}
+    phase_chain: [plan, turn-implement]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: "1.1", returned_at: null, verified_by: null}

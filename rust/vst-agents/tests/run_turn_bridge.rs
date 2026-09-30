@@ -153,11 +153,70 @@ async fn run_turn_acp_drains_updates_and_emits_result() {
     let events = collect(&mut rx);
     assert_eq!(
         kinds(&events),
-        vec![NormalizedEventKind::Text, NormalizedEventKind::Result],
-        "expected one streamed text event then a terminal result"
+        vec![
+            NormalizedEventKind::Text,
+            NormalizedEventKind::Usage,
+            NormalizedEventKind::Result
+        ],
+        "expected one streamed text event, the end-of-turn usage, then a terminal result"
     );
     assert_eq!(events[0].text.as_deref(), Some("hi from fake agent"));
     assert_eq!(events[0].provider, NormalizedEventProvider::Claude);
+    let usage = events[2].usage.as_ref().expect("result carries usage");
+    assert_eq!(
+        (usage.total_tokens, usage.input_tokens, usage.output_tokens),
+        (12, 10, 2)
+    );
+    assert_eq!(events[1].usage.as_ref(), Some(usage));
+}
+
+/// The `usage_update` fake-agent mode sends a mid-turn context-window
+/// snapshot before any content: the turn must surface a `Usage` event with
+/// the window/cost BEFORE the streamed text, and the end-of-turn `Result`
+/// must still carry the prompt-response usage (the events.rs merge keeps
+/// the window on the live session state).
+#[tokio::test]
+async fn mid_turn_usage_update_then_result_carries_usage() {
+    let (ctx, captured) = ctx_with_spec(spec_for("usage_update"));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let params = base_params(NormalizedEventProvider::Claude, "usage_update");
+    let task = tokio::spawn(run_turn_acp(
+        tx,
+        default_input(true),
+        ctx,
+        CancellationToken::new(),
+        params,
+    ));
+    task.await.unwrap();
+    dispose_captured(&captured).await;
+
+    let events = collect(&mut rx);
+    assert_eq!(
+        kinds(&events),
+        vec![
+            NormalizedEventKind::Usage,
+            NormalizedEventKind::Text,
+            NormalizedEventKind::Usage,
+            NormalizedEventKind::Result
+        ],
+        "mid-turn usage_update → Usage event first, then text, then the \
+         end-of-turn Usage + Result pair"
+    );
+    let mid = events[0].usage.as_ref().expect("mid-turn usage set");
+    assert_eq!(mid.total_tokens, 12_000, "mid-turn used = context fill");
+    assert_eq!(mid.context_window, Some(200_000));
+    assert_eq!(mid.cost_usd, Some(0.5));
+    let result_usage = events[3].usage.as_ref().expect("result carries usage");
+    assert_eq!(
+        (
+            result_usage.total_tokens,
+            result_usage.input_tokens,
+            result_usage.output_tokens
+        ),
+        (12, 10, 2),
+        "end-of-turn usage comes from the prompt response"
+    );
+    assert_eq!(events[2].usage.as_ref(), Some(result_usage));
 }
 
 /// On first turn with a claude-style `first_turn_session_init` hook, a

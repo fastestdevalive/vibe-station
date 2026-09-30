@@ -244,7 +244,6 @@ async fn update_session_pr_writes_one_row() {
                 url: Some("https://github.com/acme/widgets/pull/11".into()),
                 checked_at: "2026-01-01T00:00:00.000Z".into(),
                 error: None,
-                error_kind: None,
                 pr_branch: None,
             },
         )
@@ -266,7 +265,6 @@ async fn update_session_pr_writes_one_row() {
                 url: None,
                 checked_at: "2026-01-01T00:00:00.000Z".into(),
                 error: None,
-                error_kind: None,
                 pr_branch: None,
             },
         )
@@ -293,7 +291,6 @@ async fn session_pr_survives_write_read_round_trip() {
                         url: Some("https://github.com/acme/widgets/pull/42".into()),
                         checked_at: "2026-01-01T00:00:00.000Z".into(),
                         error: None,
-                        error_kind: None,
                         pr_branch: None,
                     });
                 }
@@ -336,7 +333,6 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
                         url: Some("https://github.com/acme/widgets/pull/9".into()),
                         checked_at: "2026-01-01T00:00:00.000Z".into(),
                         error: None,
-                        error_kind: None,
                         pr_branch: Some("feature-x".into()),
                     });
                 }
@@ -361,7 +357,6 @@ async fn pr_branch_survives_round_trip_via_mutate_and_fast_path() {
                 url: Some("https://github.com/acme/widgets/pull/9".into()),
                 checked_at: "2026-01-02T00:00:00.000Z".into(),
                 error: None,
-                error_kind: None,
                 pr_branch: Some("feature-y".into()),
             },
         )
@@ -411,7 +406,6 @@ async fn two_axis_status_writers_do_not_clobber_each_other() {
                 url: Some("https://github.com/acme/widgets/pull/7".into()),
                 checked_at: "2026-01-01T00:00:00.000Z".into(),
                 error: None,
-                error_kind: None,
                 pr_branch: Some("feat-two-axis".into()),
             },
         )
@@ -473,7 +467,6 @@ async fn two_axis_status_writers_do_not_clobber_each_other() {
                 url: Some("https://github.com/acme/widgets/pull/7".into()),
                 checked_at: "2026-01-04T00:00:00.000Z".into(),
                 error: None,
-                error_kind: None,
                 pr_branch: Some("feat-two-axis".into()),
             },
         )

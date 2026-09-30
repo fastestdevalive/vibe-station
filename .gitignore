@@ -104,3 +104,4 @@ coverage/
 # pnpm-lock.yaml
 .vibe-station/
 .opencode/
+.playwright-mcp/

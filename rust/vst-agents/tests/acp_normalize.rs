@@ -254,10 +254,30 @@ fn empty_plan_maps_to_status_with_default_text() {
 
 #[test]
 fn unknown_update_kind_is_dropped_not_thrown() {
-    // SessionInfoUpdate / ConfigOptionUpdate / UsageUpdate are not rendered.
+    // SessionInfoUpdate / ConfigOptionUpdate are not rendered.
     use agent_client_protocol::schema::v1::SessionInfoUpdate;
     let ev = norm(SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()));
     assert!(ev.is_none(), "unmapped update kinds are dropped");
+}
+
+#[test]
+fn usage_update_maps_to_usage_event_with_window_and_usd_cost() {
+    use agent_client_protocol::schema::v1::{Cost, UsageUpdate};
+    let ev = norm(SessionUpdate::UsageUpdate(
+        UsageUpdate::new(12_000, 200_000).cost(Cost::new(0.5, "USD")),
+    ))
+    .expect("usage update is mapped");
+    assert_eq!(ev.kind, NormalizedEventKind::Usage);
+    let u = ev.usage.expect("usage set");
+    assert_eq!(u.total_tokens, 12_000);
+    assert_eq!(u.context_window, Some(200_000));
+    assert_eq!(u.cost_usd, Some(0.5));
+
+    let ev = norm(SessionUpdate::UsageUpdate(
+        UsageUpdate::new(1, 2).cost(Cost::new(0.5, "EUR")),
+    ))
+    .unwrap();
+    assert_eq!(ev.usage.unwrap().cost_usd, None, "non-USD cost is dropped");
 }
 
 #[test]

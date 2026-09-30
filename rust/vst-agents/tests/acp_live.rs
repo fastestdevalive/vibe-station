@@ -64,6 +64,6 @@ async fn live_claude_initialize_new_session_prompt() {
         .expect("live prompt must not hang")
         .expect("live prompt result resolves")
         .expect("live prompt succeeds");
-    assert_eq!(stop, StopReason::EndTurn);
+    assert_eq!(stop.stop_reason, StopReason::EndTurn);
     conn.dispose().await;
 }
