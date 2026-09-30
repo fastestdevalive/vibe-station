@@ -83,7 +83,12 @@ impl ModelCatalog {
 
         let probe = plugin.list_models();
         let task = tokio::spawn(async move {
-            let result = probe.await;
+            let mut result = probe.await;
+            // An empty list is never a valid success: surface it as an error
+            // (and don't cache it for the full TTL).
+            if result.error.is_none() && result.models.is_empty() {
+                result.error = Some("The CLI reported no models. Try again.".to_string());
+            }
             match result.error {
                 Some(err) => {
                     slot.models = None;

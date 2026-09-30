@@ -419,67 +419,88 @@ impl AgentPlugin for OpencodePlugin {
     }
 
     fn list_models(&self) -> AsyncResult<ListModelsResult> {
-        // Mirrors TS `daemon/src/agent-plugins/opencode.ts`'s `listModels()`:
-        // shell out to `opencode models` and split stdout into one model id
-        // per line. This was previously stubbed to always return an empty
-        // list + generic error (an earlier phase's "no live process" rule,
-        // never wired up to a real subprocess afterward) — that stub is the
-        // confirmed cause of "opencode is not showing any models".
+        // Shells out to `opencode models` (one model id per line). Right after
+        // opencode starts, its providers/config may not have loaded yet, and it
+        // then exits 0 with an EMPTY or PARTIAL list (the same startup race
+        // that makes `opencode acp` pick a fallback model) — so run it until
+        // two consecutive runs agree on a non-empty list, and report an error
+        // (never an empty success) if it never produces one.
         Box::pin(async move {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(15),
-                tokio::process::Command::new("opencode")
-                    .arg("models")
-                    .output(),
-            )
-            .await
-            {
-                Ok(Ok(output)) if output.status.success() => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    let models: Vec<String> = stdout
-                        .lines()
-                        .map(|l| l.trim().to_string())
-                        .filter(|l| !l.is_empty())
-                        .collect();
-                    ListModelsResult {
-                        models,
-                        error: None,
-                    }
+            let fail = |msg: String| ListModelsResult {
+                models: vec![],
+                error: Some(msg),
+            };
+            let deadline = std::time::Instant::now() + LIST_MODELS_BUDGET;
+            let mut previous: Option<Vec<String>> = None;
+            let mut best: Vec<String> = Vec::new();
+            for attempt in 0..LIST_MODELS_MAX_RUNS {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
                 }
-                Ok(Ok(output)) => {
+                let output = match tokio::time::timeout(
+                    remaining,
+                    tokio::process::Command::new("opencode")
+                        .arg("models")
+                        .output(),
+                )
+                .await
+                {
+                    Ok(Ok(o)) => o,
+                    Ok(Err(err)) => {
+                        eprintln!("[cli-models] opencode fetch failed to spawn: {err}");
+                        return fail(format!(
+                            "Couldn't run `opencode models`: {err}. Check that opencode is installed."
+                        ));
+                    }
+                    Err(_) => break,
+                };
+                if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     eprintln!(
                         "[cli-models] opencode fetch failed: status={} stderr={}",
                         output.status,
                         stderr.trim()
                     );
-                    ListModelsResult {
-                        models: vec![],
-                        error: Some(
-                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
-                                .to_string(),
-                        ),
-                    }
+                    return fail(format!(
+                        "`opencode models` failed ({}). Check that opencode is installed and authenticated.",
+                        output.status
+                    ));
                 }
-                Ok(Err(err)) => {
-                    eprintln!("[cli-models] opencode fetch failed to spawn: {err}");
-                    ListModelsResult {
-                        models: vec![],
-                        error: Some(
-                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
-                                .to_string(),
-                        ),
+                let models: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if !models.is_empty() {
+                    if previous.as_ref() == Some(&models) {
+                        return ListModelsResult {
+                            models,
+                            error: None,
+                        };
                     }
+                    if models.len() > best.len() {
+                        best = models.clone();
+                    }
+                    previous = Some(models);
+                } else {
+                    previous = None;
                 }
-                Err(_timeout) => {
-                    eprintln!("[cli-models] opencode fetch timed out after 15s");
-                    ListModelsResult {
-                        models: vec![],
-                        error: Some(
-                            "Failed to fetch models from CLI. Check that the CLI is installed and authenticated."
-                                .to_string(),
-                        ),
-                    }
+                if attempt + 1 < LIST_MODELS_MAX_RUNS {
+                    tokio::time::sleep(LIST_MODELS_RETRY_DELAY).await;
+                }
+            }
+            if best.is_empty() {
+                fail(
+                    "opencode reported no models (its providers may not have finished loading). Try again."
+                        .to_string(),
+                )
+            } else {
+                // Never stabilised within the budget; the largest run seen is
+                // the most complete one.
+                ListModelsResult {
+                    models: best,
+                    error: None,
                 }
             }
         })
@@ -644,6 +665,11 @@ impl AgentPlugin for OpencodePlugin {
         rx
     }
 }
+
+/// Budget for the `opencode models` probe (see `list_models`).
+const LIST_MODELS_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+const LIST_MODELS_MAX_RUNS: usize = 8;
+const LIST_MODELS_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn opencode_config_path_for(paths: &Paths, cfg: &LaunchConfig) -> PathBuf {
     match &cfg.ctx.worktree {
