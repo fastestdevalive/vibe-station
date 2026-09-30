@@ -1,0 +1,13 @@
+feature: pr-status-gh-auth
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-202
+master:
+  prd: skipped
+  plan: complete
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null

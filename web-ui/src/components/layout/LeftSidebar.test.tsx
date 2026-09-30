@@ -1263,6 +1263,50 @@ describe("LeftSidebar", () => {
         "proj-b",
       ]);
     });
+
+    it("renders global draft row with tree-row__project-main and draft-row__trail", async () => {
+      const localApi = createMockApi();
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+
+      act(() => {
+        localApi.__test.emit({
+          type: "session:created",
+          sessionId: "global-d1",
+          projectId: null as unknown as string,
+          worktreeId: null,
+          sessionType: "agent",
+          snapshot: {
+            id: "global-d1",
+            worktreeId: null,
+            projectId: null,
+            state: "drafting",
+            lifecycleState: "drafting",
+            type: "agent",
+            name: "Global Draft 1",
+            sortOrder: 100,
+            draftPrompt: "draft prompt 1",
+            createdAt: new Date().toISOString(),
+          } as never,
+        });
+      });
+
+      await screen.findByText("Global Draft 1");
+      const row = screen.getByText("Global Draft 1").closest(".tree-row--project.draft-row");
+      expect(row).not.toBeNull();
+      const mainContainer = row?.querySelector(".tree-row__project-main");
+      expect(mainContainer).not.toBeNull();
+      const trail = row?.querySelector(".draft-row__trail");
+      expect(trail).not.toBeNull();
+      expect(trail?.querySelector(".draft-chip")).toBeInTheDocument();
+      expect(trail?.querySelector(".draft-row__discard")).toBeInTheDocument();
+    });
   });
 
   // ─── Direct sessions ───────────────────────────────────────────────────

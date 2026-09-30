@@ -33,7 +33,7 @@ export function AboutSetting({ api }: { api: ApiInstance }) {
   }, [api]);
 
   return (
-    <div>
+    <div style={{ maxWidth: 560, margin: "0 auto" }}>
       <SectionHeader title="About" description="Version, credits, and a bit of context." />
 
       <div

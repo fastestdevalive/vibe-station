@@ -29,26 +29,30 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
     ? report.checks.filter(
         (c) => c.group === "required" && c.status !== "ok" && c.status !== "timeout",
       ).length +
-      (report.checks.some((c) => c.group === "agent_cli" && c.status === "ok") ? 0 : 1)
+      (report.checks.some((c) => c.group === "agent_cli" && c.status === "ok") ? 0 : 1) +
+      report.checks.filter((c) => c.group === "feature" && c.status === "error").length
     : 0;
 
   return (
     <div>
       <SectionHeader title="Doctor" />
 
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", gap: "var(--space-3)", marginBottom: "var(--space-1)" }}>
         {report ? (
-          <span style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
-            Checked on: {report.hostname} ({report.hostOs})
+          <span
+            style={{
+              fontSize: "var(--font-size-sm)",
+              fontWeight: 500,
+              color: report.ok ? "var(--fg-success)" : "var(--fg-danger)",
+            }}
+          >
+            {report.ok
+              ? "✓ All checks passing"
+              : `✗ ${issueCount > 0 ? `${issueCount} check${issueCount !== 1 ? "s" : ""} need attention` : "Some checks need attention"}`}
           </span>
         ) : (
           <span style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-secondary)" }}>
             {fetchState === "unreachable" ? "Can't reach daemon" : "Checking…"}
-          </span>
-        )}
-        {lastCheckedAt !== null && secondsAgo !== null && (
-          <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            · Last checked {secondsAgo}s ago
           </span>
         )}
         <button
@@ -56,11 +60,17 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
           className="btn btn--ghost"
           disabled={checking}
           onClick={recheck}
-          style={{ marginLeft: "auto", fontSize: "var(--font-size-xs)" }}
+          style={{ fontSize: "var(--font-size-xs)" }}
         >
           {checking ? "Checking…" : "Re-check"}
         </button>
       </div>
+      {report && (
+        <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", marginBottom: "var(--space-3)" }}>
+          Checked on {report.hostname} ({report.hostOs})
+          {lastCheckedAt !== null && secondsAgo !== null && ` · Last checked ${secondsAgo}s ago`}
+        </div>
+      )}
 
       {fetchState === "unreachable" ? (
         <p style={{ color: "var(--fg-danger)", fontSize: "var(--font-size-sm)" }}>
@@ -68,27 +78,6 @@ export function DoctorSetting({ api }: DoctorSettingProps) {
         </p>
       ) : report ? (
         <>
-          {!report.ok ? (
-            <p
-              style={{
-                fontSize: "var(--font-size-sm)",
-                color: "var(--fg-danger)",
-                marginBottom: "var(--space-2)",
-              }}
-            >
-              ✗ {issueCount > 0 ? `${issueCount} check${issueCount !== 1 ? "s" : ""} need attention` : "Some checks need attention"}
-            </p>
-          ) : (
-            <p
-              style={{
-                fontSize: "var(--font-size-sm)",
-                color: "var(--fg-success)",
-                marginBottom: "var(--space-2)",
-              }}
-            >
-              ✓ All checks passing
-            </p>
-          )}
           <DoctorCheckList
             checks={report.checks}
             hostname={report.hostname}
