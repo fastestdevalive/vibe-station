@@ -194,7 +194,7 @@ case "$CMD" in
         -e CARGO_TARGET_DIR=/work/target-docker/build \
         -v vst-dev-sandbox-cargo-registry:/usr/local/cargo/registry \
         "rust:${RUST_TOOLCHAIN_CHANNEL}-bookworm" \
-        sh -c "cargo build -p vst-daemon -p vst-cli && chown -R $(id -u):$(id -g) /work/target-docker"
+        sh -c "cargo build -p vst-daemon -p vst-cli --features vst-daemon/insecure-no-auth,vst-cli/insecure-no-auth && chown -R $(id -u):$(id -g) /work/target-docker"
       mkdir -p ./rust/target-docker/debug
       # Atomic replace (cp to temp + mv), not an in-place overwrite: the old
       # binary may be the running daemon's executable (in-place write fails

@@ -22,11 +22,7 @@ use vst_types::events::Broadcaster;
 
 use vst_daemon::server::{build_app, BuildServerOptions};
 
-fn make_opts(
-    tmp: &std::path::Path,
-    auth_state: Option<AuthState>,
-    headless: bool,
-) -> BuildServerOptions {
+fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
     let store = StoreHandle::open(&db_path).unwrap();
     let broadcaster = Broadcaster::new(16);
@@ -36,7 +32,6 @@ fn make_opts(
         port: 0,
         auth_state,
         no_auth: false,
-        headless,
         stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
@@ -70,12 +65,11 @@ fn mint_post_remote(uri: &str, token: Option<&str>) -> Request<axum::body::Body>
 }
 
 #[tokio::test]
-async fn mint_requires_auth_on_a_headless_daemon() {
+async fn mint_requires_auth() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
-    // Genuinely loopback (no cf-connecting-ip), but headless -> no bypass.
     let req = Request::builder()
         .uri("/api/auth/continue/mint")
         .method("POST")
@@ -86,11 +80,11 @@ async fn mint_requires_auth_on_a_headless_daemon() {
 }
 
 #[tokio::test]
-async fn mint_succeeds_with_valid_cli_token_on_headless_daemon() {
+async fn mint_succeeds_with_valid_cli_token() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let resp = router
         .oneshot(mint_post("/api/auth/continue/mint", Some(&cli_token)))
@@ -119,7 +113,7 @@ async fn mint_is_blocked_over_tunnel() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let resp = router
         .oneshot(mint_post_remote(
@@ -132,11 +126,42 @@ async fn mint_is_blocked_over_tunnel() {
 }
 
 #[tokio::test]
+async fn mint_is_blocked_with_non_local_origin() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
+
+    let mut req = mint_post("/api/auth/continue/mint", Some(&cli_token));
+    req.headers_mut()
+        .insert("origin", "http://192.168.1.50:7421".parse().unwrap());
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mint_is_blocked_with_remote_peer_ip() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
+
+    let mut req = mint_post("/api/auth/continue/mint", Some(&cli_token));
+    req.extensions_mut().insert(axum::extract::ConnectInfo(
+        "192.168.1.100:12345"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn full_round_trip_mint_then_redeem_then_authenticated_call() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     // Mint.
     let mint_resp = router
@@ -190,7 +215,7 @@ async fn redeem_is_blocked_over_tunnel_even_with_a_valid_code() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let mint_resp = router
         .clone()
@@ -214,11 +239,73 @@ async fn redeem_is_blocked_over_tunnel_even_with_a_valid_code() {
 }
 
 #[tokio::test]
+async fn redeem_is_blocked_with_non_local_origin() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
+
+    let mint_resp = router
+        .clone()
+        .oneshot(mint_post("/api/auth/continue/mint", Some(&cli_token)))
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(mint_resp.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let code = json.get("code").unwrap().as_str().unwrap().to_string();
+
+    let redeem_req = Request::builder()
+        .uri(format!("/continue?code={code}"))
+        .method("GET")
+        .header("origin", "http://192.168.1.50:7421")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let redeem_resp = router.oneshot(redeem_req).await.unwrap();
+    assert_eq!(redeem_resp.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn redeem_is_blocked_with_remote_peer_ip() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
+
+    let mint_resp = router
+        .clone()
+        .oneshot(mint_post("/api/auth/continue/mint", Some(&cli_token)))
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(mint_resp.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let code = json.get("code").unwrap().as_str().unwrap().to_string();
+
+    let mut redeem_req = Request::builder()
+        .uri(format!("/continue?code={code}"))
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    redeem_req
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(
+            "192.168.1.100:12345"
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
+    let redeem_resp = router.oneshot(redeem_req).await.unwrap();
+    assert_eq!(redeem_resp.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
 async fn redeem_same_code_twice_is_rejected_the_second_time() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let mint_resp = router
         .clone()
@@ -250,7 +337,7 @@ async fn redeem_same_code_twice_is_rejected_the_second_time() {
 async fn redeem_with_no_code_param_is_400() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let req = Request::builder()
         .uri("/continue")
@@ -266,7 +353,7 @@ async fn continue_route_is_exempt_from_auth_middleware_not_served_as_spa() {
     // and that reaching it doesn't accidentally serve the SPA fallback.
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), true));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
 
     let req = Request::builder()
         .uri("/continue")

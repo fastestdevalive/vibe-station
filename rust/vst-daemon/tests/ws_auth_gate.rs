@@ -32,14 +32,6 @@ use vst_types::events::Broadcaster;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServerOptions {
-    make_opts_with_headless(tmp, auth_state, false)
-}
-
-fn make_opts_with_headless(
-    tmp: &std::path::Path,
-    auth_state: Option<AuthState>,
-    headless: bool,
-) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
     let store = StoreHandle::open(&db_path).unwrap();
     let broadcaster = Broadcaster::new(16);
@@ -49,7 +41,6 @@ fn make_opts_with_headless(
         port: 0,
         auth_state,
         no_auth: false,
-        headless,
         stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
@@ -87,22 +78,6 @@ async fn connect_remote(url: &str, token: &str) -> WebSocketStream<MaybeTlsStrea
         .insert("cf-connecting-ip", HeaderValue::from_static("1.2.3.4"));
     let (ws, _resp) = connect_async(req).await.unwrap();
     ws
-}
-
-/// Same as `serve`, but the daemon is headless — its loopback-trust bypass
-/// must be off, so a genuinely-loopback (real 127.0.0.1 TCP connection, no
-/// `cf-connecting-ip` tunnel tag) request with no token must NOT be silently
-/// upgraded.
-async fn serve_headless(tmp: &std::path::Path, auth_state: AuthState) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let router = build_app(make_opts_with_headless(tmp, Some(auth_state), true));
-    tokio::spawn(async move {
-        axum::serve(listener, router.into_make_service())
-            .await
-            .unwrap();
-    });
-    format!("ws://{addr}/ws")
 }
 
 /// Open a WS connection with NO `cf-connecting-ip` tag and NO token — a
@@ -184,13 +159,13 @@ async fn valid_browser_token_keeps_the_socket_open() {
 }
 
 #[tokio::test]
-async fn headless_daemon_closes_unauthenticated_loopback_ws_with_4401() {
+async fn unauthenticated_loopback_ws_closes_with_4401() {
     let tmp = tempfile::tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
-    let base = serve_headless(tmp.path(), auth_state).await;
+    let base = serve(tmp.path(), auth_state).await;
 
     // Genuinely loopback (real 127.0.0.1 TCP, no tunnel tag), no token —
-    // headless must not silently upgrade this.
+    // daemon must not silently upgrade this.
     let mut ws = connect_loopback_no_token(&base).await;
 
     let timeout = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
@@ -203,5 +178,97 @@ async fn headless_daemon_closes_unauthenticated_loopback_ws_with_4401() {
             );
         }
         other => panic!("expected a 4401 close frame, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn hostile_origin_refused_with_403() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve(tmp.path(), auth_state.clone()).await;
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+
+    let mut req = format!("{base}?token={token}")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        axum::http::header::ORIGIN,
+        HeaderValue::from_static("http://evil.com"),
+    );
+
+    match connect_async(req).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(
+                resp.status(),
+                axum::http::StatusCode::FORBIDDEN,
+                "hostile Origin must be rejected with 403 Forbidden"
+            );
+        }
+        other => panic!("expected HTTP 403 Forbidden, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tauri_localhost_origin_with_token_allowed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve(tmp.path(), auth_state.clone()).await;
+    let token = mint_token(TokenScope::Tauri, &auth_state, None);
+
+    let mut req = format!("{base}?token={token}")
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert(
+        axum::http::header::ORIGIN,
+        HeaderValue::from_static("tauri://localhost"),
+    );
+
+    let (mut ws, _resp) = connect_async(req)
+        .await
+        .expect("tauri://localhost origin with valid token should connect");
+
+    ws.send(Message::Text(r#"{"type":"ping"}"#.to_string()))
+        .await
+        .unwrap();
+
+    let timeout = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+    match timeout.expect("server should respond within 5s") {
+        Some(Ok(Message::Text(t))) => {
+            assert!(t.contains("\"pong\""), "expected a pong reply, got {t}");
+        }
+        other => panic!("expected a pong reply (open socket), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn stale_cookie_does_not_shadow_valid_query_token() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve(tmp.path(), auth_state.clone()).await;
+    let valid_token = mint_token(TokenScope::Browser, &auth_state, None);
+
+    let mut req = format!("{base}?token={valid_token}")
+        .into_client_request()
+        .unwrap();
+    // Present a stale/invalid cookie along with the valid query token.
+    req.headers_mut().insert(
+        axum::http::header::COOKIE,
+        HeaderValue::from_static("vst_token=stale-expired-invalid-token"),
+    );
+
+    let (mut ws, _resp) = connect_async(req)
+        .await
+        .expect("valid ?token= should not be shadowed by stale cookie");
+
+    ws.send(Message::Text(r#"{"type":"ping"}"#.to_string()))
+        .await
+        .unwrap();
+
+    let timeout = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+    match timeout.expect("server should respond within 5s") {
+        Some(Ok(Message::Text(t))) => {
+            assert!(t.contains("\"pong\""), "expected a pong reply, got {t}");
+        }
+        other => panic!("expected a pong reply (open socket), got {other:?}"),
     }
 }

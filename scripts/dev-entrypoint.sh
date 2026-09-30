@@ -229,7 +229,7 @@ fi
 export VST_CLAUDE_ACP_ENTRY=/app/vendor/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js
 
 echo "[daemon] starting Rust daemon (/usr/local/bin/vst-daemon-rust)"
-su vst -c "VST_CLAUDE_ACP_ENTRY='$VST_CLAUDE_ACP_ENTRY' /usr/local/bin/vst-daemon-rust" &
+su vst -c "VST_CLAUDE_ACP_ENTRY='$VST_CLAUDE_ACP_ENTRY' VST_NO_AUTH_BIND_ALL=1 /usr/local/bin/vst-daemon-rust" &
 echo 'Waiting for daemon...'
 timeout=60
 while ! curl -sf http://127.0.0.1:7421/health > /dev/null 2>&1; do

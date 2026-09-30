@@ -9,11 +9,11 @@ use vst_cli::program::{
 #[tokio::main]
 async fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
-    if let vst_cli::dispatch::EntryMode::Daemon { headless } =
-        vst_cli::dispatch::resolve_entry_mode(&raw_args[0], &raw_args[1..])
+    if vst_cli::dispatch::resolve_entry_mode(&raw_args[0], &raw_args[1..])
+        == vst_cli::dispatch::EntryMode::Daemon
     {
         vst_daemon::init_tracing();
-        if let Err(e) = vst_daemon::run_daemon(vst_daemon::DaemonOptions { headless }).await {
+        if let Err(e) = vst_daemon::run_daemon(vst_daemon::DaemonOptions::default()).await {
             eprintln!("{e:?}");
             std::process::exit(1);
         }
@@ -502,7 +502,7 @@ async fn main() {
                     // run" before parse_args ever runs (see dispatch.rs).
                     vst_daemon::init_tracing();
                     if let Err(e) =
-                        vst_daemon::run_daemon(vst_daemon::DaemonOptions { headless: true }).await
+                        vst_daemon::run_daemon(vst_daemon::DaemonOptions::default()).await
                     {
                         eprintln!("{e:?}");
                         std::process::exit(1);

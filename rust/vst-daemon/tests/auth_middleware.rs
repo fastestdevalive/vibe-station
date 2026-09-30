@@ -26,14 +26,13 @@ fn make_opts(
     auth_state: Option<AuthState>,
     no_auth: bool,
 ) -> BuildServerOptions {
-    make_opts_with_dist(tmp, auth_state, no_auth, false, None)
+    make_opts_with_dist(tmp, auth_state, no_auth, None)
 }
 
 fn make_opts_with_dist(
     tmp: &std::path::Path,
     auth_state: Option<AuthState>,
     no_auth: bool,
-    headless: bool,
     dist_path: Option<std::path::PathBuf>,
 ) -> BuildServerOptions {
     let db_path = tmp.join("test.db");
@@ -45,7 +44,6 @@ fn make_opts_with_dist(
         port: 0,
         auth_state,
         no_auth,
-        headless,
         stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path,
         persist_epoch: None,
@@ -158,6 +156,34 @@ async fn auth_middleware_exempts_health_endpoint() {
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn auth_middleware_exempts_api_prefixed_health_and_ws() {
+    let tmp = tempdir().unwrap();
+    let router = build_app(make_opts(
+        tmp.path(),
+        Some(AuthState::new("super-secret-token", 0)),
+        false,
+    ));
+
+    // A proxy in front of the daemon may probe these with the /api prefix. No
+    // route serves them (routing happens before the middleware's path rewrite),
+    // so the pre-change behavior was 404; the exemption must keep it from
+    // turning into a 401 that a client would read as "auth expired".
+    let health = router
+        .clone()
+        .oneshot(remote_get("/api/health"))
+        .await
+        .unwrap();
+    assert_ne!(health.status(), StatusCode::UNAUTHORIZED);
+
+    let ws = router.clone().oneshot(remote_get("/api/ws")).await.unwrap();
+    assert_ne!(ws.status(), StatusCode::UNAUTHORIZED);
+
+    // The exemption must not leak to other /api routes.
+    let other = router.oneshot(remote_get("/api/sessions")).await.unwrap();
+    assert_eq!(other.status(), StatusCode::UNAUTHORIZED);
+}
+
 // ── Phase 1b: broadened GET/HEAD SPA-fallback exemption ────────────────────
 
 /// Build a temp dir acting as the SPA `dist` root with an `index.html`.
@@ -176,7 +202,6 @@ async fn deep_link_get_with_missing_token_serves_spa_not_401() {
     let router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(auth_state),
-        false,
         false,
         Some(dist),
     ));
@@ -199,7 +224,6 @@ async fn deep_link_get_with_invalid_token_serves_spa_not_401() {
     let router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(auth_state),
-        false,
         false,
         Some(dist),
     ));
@@ -228,7 +252,6 @@ async fn api_route_is_still_protected_by_get_exemption() {
         tmp.path(),
         Some(auth_state),
         false,
-        false,
         Some(dist),
     ));
 
@@ -246,7 +269,6 @@ async fn non_get_method_on_deep_link_is_still_protected() {
     let router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(auth_state),
-        false,
         false,
         Some(dist),
     ));
@@ -275,7 +297,6 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
         tmp.path(),
         Some(AuthState::new("super-secret-token", 0)),
         false,
-        false,
         Some(dist.clone()),
     ));
     let ws_resp = ws_router.oneshot(remote_get("/ws")).await.unwrap();
@@ -288,7 +309,6 @@ async fn ws_and_mobile_auth_not_served_as_spa_with_missing_token() {
     let ma_router = build_app(make_opts_with_dist(
         tmp.path(),
         Some(AuthState::new("super-secret-token", 0)),
-        false,
         false,
         Some(dist),
     ));
@@ -332,57 +352,27 @@ fn loopback_get(uri: &str) -> Request<axum::body::Body> {
 }
 
 #[tokio::test]
-async fn headless_daemon_rejects_unauthenticated_loopback_request() {
+async fn daemon_rejects_unauthenticated_loopback_request() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
-    let router = build_app(make_opts_with_dist(
-        tmp.path(),
-        Some(auth_state),
-        false,
-        true, // headless
-        None,
-    ));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
 
-    // Loopback would normally be trusted with no token — headless must
-    // remove that bypass entirely.
     let resp = router.oneshot(loopback_get("/api/sessions")).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn headless_daemon_allows_loopback_request_with_valid_token() {
+async fn daemon_allows_loopback_request_with_valid_token() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let valid_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts_with_dist(
-        tmp.path(),
-        Some(auth_state),
-        false,
-        true, // headless
-        None,
-    ));
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
 
     let resp = router
         .oneshot(remote_get_with_auth("/sessions", &valid_token))
         .await
         .unwrap();
-
-    // Headless doesn't break legitimate authenticated use (e.g. the CLI
-    // itself, which always sends a bearer token regardless of headless mode).
-    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn non_headless_daemon_still_trusts_loopback_with_no_token() {
-    // Regression guard: confirms the additive nature of the headless gate —
-    // every existing (headless: false) test already covers this implicitly,
-    // but this test makes the "still works" case explicit and named.
-    let tmp = tempdir().unwrap();
-    let auth_state = AuthState::new("super-secret-token", 0);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
-
-    let resp = router.oneshot(loopback_get("/api/sessions")).await.unwrap();
 
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
 }

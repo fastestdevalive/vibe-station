@@ -126,7 +126,8 @@ done
 
 # Read the daemon's bearer token from its config file.
 CONFIG_PATH="${VST_CONFIG_PATH:-${HOME:-/home/vst}/.vibe-station/config.json}"
-TOKEN=$(grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_PATH" | sed 's/.*"\([^"]*\)"$/\1/')
+# `cliToken` is what the daemon writes (the legacy `token` field no longer exists).
+TOKEN=$(grep -o '"cliToken"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_PATH" | sed 's/.*"\([^"]*\)"$/\1/' || true)
 if [ -z "$TOKEN" ]; then
   echo "[seed-file-search] WARNING: could not read daemon token from $CONFIG_PATH; skipping project registration"
   echo "[seed-file-search] Register the project manually via the UI: $REPO_PATH"

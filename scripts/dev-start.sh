@@ -15,11 +15,12 @@
 #    tauri.conf.json bundle.resources entry, so build.rs's resource-path check
 #    fails without it, and the dev daemon needs it for Claude Rich Chat anyway.
 # 5. Runs the Rust daemon and Vite dev server concurrently, with VST_CLI_BIN set
-#    so the daemon writes the shim on first boot, and VST_TAURI_SUPERVISED=1 so
-#    the dev daemon isn't headless (a headless daemon requires a bearer token
-#    even from loopback, per the daemon-lifecycle part of cli-daemon-unification
-#    — dev via this script is Tauri-adjacent enough to skip that, and
-#    VST_DIST_PATH/local dev already runs with full trust anyway).
+#    so the daemon writes the shim on first boot.
+#    The daemon ALWAYS authenticates (no loopback trust). The Tauri window gets its
+#    token injected, so it just works; a plain browser pointed at Vite shows the
+#    login screen — sign in with the "Browser login password" the daemon prints at
+#    startup, or mint a one-time link: POST /api/auth/continue/mint with the
+#    cliToken from ~/.vibe-station/config.json, then open /continue?code=<code>.
 #
 # Called from desktop/src-tauri/tauri.conf.json beforeDevCommand.
 # CWD when invoked: desktop/ (where `tauri dev` is run)
@@ -98,7 +99,7 @@ CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' VST_TAURI_SUPERVISED=1 cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

@@ -245,7 +245,6 @@ const STRIPPED_ENV_VARS: &[&str] = &[
     "VST_WORKTREE",
     "VST_DATA_DIR",
     "VST_DAEMON_URL",
-    "VST_TAURI_SUPERVISED",
 ];
 
 fn stripped_env() -> HashMap<String, String> {

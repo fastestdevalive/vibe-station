@@ -168,17 +168,5 @@ pub fn build_vst_env(opts: &BuildVstEnvOptions) -> HashMap<String, String> {
     }
     env.insert("PATH".to_string(), path_env);
     env.insert("VST_SKILL_PATH".to_string(), vst_skill_path);
-    // Explicitly override (never inherit) VST_TAURI_SUPERVISED: if THIS
-    // daemon was itself launched by Tauri with that var set, spawning an
-    // agent process normally inherits the ambient environment — without this
-    // override an agent that later runs `vst daemon run` inside its own
-    // session would wrongly inherit "supervised" and boot non-headless,
-    // silently defeating the headless-auth default (cli-daemon-unification,
-    // Part 01). Setting it to an empty string here wins over any inherited
-    // value once merged into the spawned process's env (an empty string
-    // never matches the strict "1"/"true" check in
-    // rust/vst-cli/src/dispatch.rs), which is equivalent to "absent" for
-    // every reader of this var.
-    env.insert("VST_TAURI_SUPERVISED".to_string(), String::new());
     env
 }

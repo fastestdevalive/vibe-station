@@ -190,7 +190,6 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
         port: 0,
         auth_state: None,
         no_auth: true,
-        headless: false,
         stop_requested: Arc::new(tokio::sync::Notify::new()),
         dist_path: None,
         persist_epoch: None,
@@ -222,4 +221,20 @@ async fn build_state_shares_one_file_search_index() {
         ),
         "DispatchContext and WorktreeRoutes must share the same Arc<FileSearchIndex>"
     );
+}
+
+#[test]
+fn default_build_ignores_vst_no_auth() {
+    std::env::set_var("VST_NO_AUTH", "1");
+    #[cfg(not(feature = "insecure-no-auth"))]
+    assert!(
+        !vst_daemon::run::resolve_no_auth(),
+        "build without insecure-no-auth feature must ignore VST_NO_AUTH=1"
+    );
+    #[cfg(feature = "insecure-no-auth")]
+    assert!(
+        vst_daemon::run::resolve_no_auth(),
+        "build with insecure-no-auth feature must honor VST_NO_AUTH=1"
+    );
+    std::env::remove_var("VST_NO_AUTH");
 }

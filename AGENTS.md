@@ -347,8 +347,10 @@ There are two separate docker setups in this repo. They look similar (both boot 
 | Purpose | Interactive dev/testing sandbox | Frozen, realistic dataset for README screenshots |
 | Source | Bind-mounted (`web-ui/src`) — hot reload on edit | Baked into the image (`COPY . .`) — rebuild to see changes |
 | Seed data | `VST_SEED_MODE=demo` (default, 3 projects / 9 worktrees / 14 sessions, via `scripts/demo-seed.sh`) or `VST_SEED_MODE=file-search` (one lightweight project) | Always the same 3-project/9-worktree/14-session dataset |
-| Auth | `VST_NO_AUTH=1` — no login screen | Real token login (printed to container logs) |
+| Auth | `VST_NO_AUTH=1` (requires `insecure-no-auth` feature) — no login screen | Real token login (printed to container logs) |
 | Instances | Per-worktree (`scripts/dev-sandbox.sh` picks a free port + isolated volumes per worktree checkout) | Single, fixed name/port (`vst-screenshots`, `5174`) — not meant to run more than one at a time |
+
+**Network exposure (deliberate):** the dev sandbox publishes its port on all host interfaces so it can be used from other devices, and its daemon runs with `VST_NO_AUTH=1` — anyone who can reach the host on that port gets an unauthenticated UI/API, including terminals and agent sessions (command execution as the container user). Only run it on a trusted network; never on a shared or public one. If you need to lock one down, edit the `ports:` line in `docker-compose.dev.yml` to `127.0.0.1:${VST_SANDBOX_PORT:-5174}:5173` locally.
 
 **Rule of thumb:** a bare `scripts/dev-sandbox.sh up` already gives you *some* worktrees/agent sessions to click into — hot reload, no login, and the realistic dataset, in one sandbox, no flags needed. Pass `--seed=file-search` only when you specifically want a fast, empty single-project tree instead. Reach for `docker-compose.screenshots.yml` directly only when you're actually regenerating README screenshots (`scripts/take-screenshots.ts` targets its fixed port/dataset).
 

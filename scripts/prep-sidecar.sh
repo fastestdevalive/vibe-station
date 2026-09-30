@@ -110,6 +110,12 @@ if [[ ! -f "$SRC_CLI" ]]; then
   exit 1
 fi
 
+# grep the binary directly: `strings | grep -q` under pipefail misses a match (SIGPIPE on strings).
+if grep -qaF "INSECURE: VST_NO_AUTH=1 is active" "$SRC_CLI"; then
+  echo "Error: release binary was built with insecure-no-auth feature!" >&2
+  exit 1
+fi
+
 echo ""
 echo "==> Copying vst binary to binaries/..."
 cp "$SRC_CLI" "$DEST_CLI"

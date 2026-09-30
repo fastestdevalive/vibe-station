@@ -24,6 +24,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 
+[features]
+embed-ui = ["vst-daemon/embed-ui"]
+insecure-no-auth = ["vst-daemon/insecure-no-auth"]
+
 [dev-dependencies]
 axum = { workspace = true }
 tempfile = "3"
