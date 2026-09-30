@@ -26,6 +26,10 @@ fn build_mode_routes(
     paths: &Paths,
 ) -> ModeRoutes {
     ModeRoutes::new(store.clone(), broadcaster.clone())
+        .with_model_catalog(vst_routes::model_catalog::ModelCatalog::seeded(
+            CliId::Claude,
+            vec!["sonnet".into(), "opus".into(), "claude-fable-5-1".into()],
+        ))
         .with_modes_file(modes_file)
         .with_paths(paths.clone())
 }

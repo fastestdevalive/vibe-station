@@ -1256,7 +1256,7 @@ export function createMockApi() {
       const base: SupportedCli[] = [
         {
           id: "claude",
-          defaultModel: "sonnet",
+          defaultModel: "",
           supportsJson: true,
           importsNativeHistory: true,
           supportsJsonToTerminalResume: true,
@@ -1321,22 +1321,8 @@ export function createMockApi() {
 
     async listCliModels(cli: CliId): Promise<{ models: string[]; error?: string }> {
       if (cli === "claude") {
-        return {
-          models: [
-            "sonnet",
-            "sonnet[1m]",
-            "opus",
-            "opus[1m]",
-            "haiku",
-            "fable",
-            "claude-opus-4-5",
-            "claude-opus-4-5[1m]",
-            "claude-sonnet-4-5",
-            "claude-sonnet-4-5[1m]",
-            "claude-haiku-4-5",
-            "claude-fable-5",
-          ],
-        };
+        // Mock data only — mirrors the shape of the live ACP session/new list.
+        return { models: ["default", "opus", "sonnet", "haiku", "claude-opus-5", "claude-sonnet-5"] };
       }
       if (cli === "cursor") {
         return { models: ["auto", "composer-2-fast", "gpt-5.3-codex"] };

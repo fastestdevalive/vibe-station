@@ -131,6 +131,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         json_unsupported: Arc::new(|_| None),
         subagent_notify: SubagentNotifyHandle::new(),
         attachment_registry: AttachmentRegistry::new(),
+        model_catalog: Default::default(),
     }
 }
 

@@ -13,10 +13,9 @@
 //! Plus the existing read/resolve helpers: `load_modes`, `resolve_mode_id`,
 //! `json_unsupported_cli`, and `find_mode`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
 use vst_agents::home::home_dir;
@@ -33,6 +32,7 @@ use vst_types::rest::modes::{
 use vst_types::rest::shared::Mode;
 use vst_types::CliId;
 
+use crate::model_catalog::ModelCatalog;
 use crate::settings::load_default_channel_overrides;
 
 pub const MAX_MODES: usize = 20;
@@ -52,7 +52,6 @@ fn validate_icon(icon: &str) -> Result<String, ModeRouteError> {
         )))
     }
 }
-pub const CLI_MODEL_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Load all modes from `~/.vibe-station/modes.json`. Returns an empty vec on
 /// any error (file missing, unparseable) — mirrors the TS `loadModes` catch.
@@ -213,9 +212,9 @@ fn rand_u32() -> u32 {
     (hasher.finish() & 0xFFFFFFFF) as u32
 }
 
-struct CliModelCacheEntry {
-    models: Vec<String>,
-    fetched_at: Instant,
+/// `None` for an empty string (a plugin with no explicit default model).
+fn non_empty(s: &str) -> Option<String> {
+    (!s.is_empty()).then(|| s.to_string())
 }
 
 /// ModeRoutes handle providing full CRUD and resolution for modes.
@@ -226,8 +225,7 @@ pub struct ModeRoutes {
     pub paths: Paths,
     modes_file: Option<PathBuf>,
     modes_cache: Arc<RwLock<Option<Vec<Mode>>>>,
-    cli_model_cache: Arc<RwLock<HashMap<CliId, CliModelCacheEntry>>>,
-    cli_model_inflight: Arc<Mutex<HashMap<CliId, Arc<Mutex<()>>>>>,
+    model_catalog: ModelCatalog,
     /// Serializes `create_mode`'s check-then-write (name-uniqueness check +
     /// `save_modes`) across concurrent callers. Without this, two concurrent
     /// `create_mode` calls for different names can both pass the
@@ -252,8 +250,7 @@ impl ModeRoutes {
             paths: Paths::default(),
             modes_file: None,
             modes_cache: Arc::new(RwLock::new(None)),
-            cli_model_cache: Arc::new(RwLock::new(HashMap::new())),
-            cli_model_inflight: Arc::new(Mutex::new(HashMap::new())),
+            model_catalog: ModelCatalog::default(),
             create_mode_lock: Arc::new(Mutex::new(())),
             plugin_resolver: resolve_plugin,
             binary_checker: check_binary,
@@ -275,6 +272,12 @@ impl ModeRoutes {
     /// Override the binary checker (test seam).
     pub fn with_binary_checker(mut self, f: fn(&str) -> bool) -> Self {
         self.binary_checker = f;
+        self
+    }
+
+    /// Share one model catalog with other routes (e.g. `SessionRoutes`).
+    pub fn with_model_catalog(mut self, catalog: ModelCatalog) -> Self {
+        self.model_catalog = catalog;
         self
     }
 
@@ -398,73 +401,8 @@ impl ModeRoutes {
 
     // ── 2. GET /cli-models?cli= ───────────────────────────────────────────
     pub async fn resolve_cli_models(&self, cli: CliId) -> CliModels {
-        // 1. Check TTL cache
-        {
-            let cache = self.cli_model_cache.read().await;
-            if let Some(entry) = cache.get(&cli) {
-                if entry.fetched_at.elapsed() < CLI_MODEL_CACHE_TTL {
-                    return CliModels {
-                        models: entry.models.clone(),
-                        error: None,
-                    };
-                }
-            }
-        }
-
-        // 2. In-flight deduplication
-        let inflight_lock = {
-            let mut map = self.cli_model_inflight.lock().await;
-            map.entry(cli)
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
-
-        let _guard = inflight_lock.lock().await;
-
-        // Re-check cache after acquiring lock
-        {
-            let cache = self.cli_model_cache.read().await;
-            if let Some(entry) = cache.get(&cli) {
-                if entry.fetched_at.elapsed() < CLI_MODEL_CACHE_TTL {
-                    return CliModels {
-                        models: entry.models.clone(),
-                        error: None,
-                    };
-                }
-            }
-        }
-
         let plugin = (self.plugin_resolver)(cli);
-        let result = plugin.list_models().await;
-
-        let res = if let Some(ref err) = result.error {
-            CliModels {
-                models: result.models,
-                error: Some(err.clone()),
-            }
-        } else {
-            let models = result.models;
-            let mut cache = self.cli_model_cache.write().await;
-            cache.insert(
-                cli,
-                CliModelCacheEntry {
-                    models: models.clone(),
-                    fetched_at: Instant::now(),
-                },
-            );
-            CliModels {
-                models,
-                error: None,
-            }
-        };
-
-        // Clean up inflight entry
-        {
-            let mut map = self.cli_model_inflight.lock().await;
-            map.remove(&cli);
-        }
-
-        res
+        self.model_catalog.get(cli, plugin.as_ref()).await
     }
 
     // ── 3. GET /modes ─────────────────────────────────────────────────────
@@ -719,6 +657,45 @@ impl ModeRoutes {
         let has_named_entries = entries.iter().any(|e| e.model_name.is_some());
         let existing_modes = self.load_modes().await;
 
+        // Resolve the live model list ONCE, and only if some named entry still
+        // needs it (a bundle that already exists never depends on discovery).
+        // If discovery fails, create nothing — no hardcoded fallback mode — and
+        // report the error so the caller can surface it and retry.
+        let needs_models = entries.iter().any(|e| {
+            e.model_name.is_some()
+                && !existing_modes
+                    .iter()
+                    .any(|m| m.cli == cli && m.name == e.name)
+        });
+        let live_models = if needs_models {
+            let r = self.resolve_cli_models(cli).await;
+            if let Some(err) = r.error {
+                return BundleOutcome {
+                    created,
+                    already_present: existing_modes
+                        .iter()
+                        .filter(|m| m.cli == cli && entries.iter().any(|e| e.name == m.name))
+                        .cloned()
+                        .collect(),
+                    skipped: entries
+                        .iter()
+                        .filter(|e| {
+                            !existing_modes
+                                .iter()
+                                .any(|m| m.cli == cli && m.name == e.name)
+                        })
+                        .map(|e| e.name.clone())
+                        .collect(),
+                    used_fallback: false,
+                    primary_satisfied: false,
+                    models_error: Some(err),
+                };
+            }
+            r.models
+        } else {
+            Vec::new()
+        };
+
         for entry in &entries {
             // An existing mode with this bundle name is ALWAYS "satisfied" —
             // check this BEFORE attempting any discovery lookup or create_mode
@@ -733,16 +710,14 @@ impl ModeRoutes {
             }
 
             let model = match &entry.model_name {
-                None => plugin.default_model().to_string(),
-                Some(name) => {
-                    let models = self.resolve_cli_models(cli).await; // TTL-cached
-                    if models.models.iter().any(|m| m == name) {
-                        name.clone()
-                    } else {
+                None => non_empty(plugin.default_model()),
+                Some(name) => match plugin.resolve_starter_model(name, &live_models) {
+                    Some(id) => Some(id),
+                    None => {
                         skipped.push(entry.name.clone()); // R13b: skip only this one
                         continue;
                     }
-                }
+                },
             };
             match self
                 .create_mode(CreateModeBody {
@@ -750,7 +725,7 @@ impl ModeRoutes {
                     cli,
                     context: entry.context.clone(),
                     preset_id: None,
-                    model: Some(model),
+                    model,
                     icon: None,
                 })
                 .await
@@ -802,7 +777,7 @@ impl ModeRoutes {
                     cli,
                     context: "You are a helpful coding assistant.".into(),
                     preset_id: None,
-                    model: Some(plugin.default_model().to_string()),
+                    model: non_empty(plugin.default_model()),
                     icon: None,
                 })
                 .await
@@ -821,6 +796,7 @@ impl ModeRoutes {
             skipped,
             used_fallback,
             primary_satisfied,
+            models_error: None,
         }
     }
 }
@@ -834,6 +810,8 @@ pub struct BundleOutcome {
     pub skipped: Vec<String>,
     pub used_fallback: bool,
     pub primary_satisfied: bool,
+    /// Set when the live model list couldn't be fetched; nothing was created.
+    pub models_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -939,12 +917,25 @@ mod tests {
         }
     }
 
-    fn empty_routes() -> ModeRoutes {
+    /// Routes with no seeded catalog — the plugin resolver decides the list.
+    fn bare_routes() -> ModeRoutes {
         let dir = tempdir().unwrap();
         let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
         ModeRoutes::new(store, Broadcaster::new(16))
             .with_modes_file(dir.path().join("modes.json"))
             .with_plugin_resolver(|_| Box::new(create_claude_plugin()))
+    }
+
+    /// Routes whose live claude list is pre-seeded, so tests never spawn the
+    /// real adapter (and don't depend on the host being logged in).
+    fn empty_routes() -> ModeRoutes {
+        bare_routes().with_model_catalog(ModelCatalog::seeded(
+            CliId::Claude,
+            ["sonnet", "opus", "claude-fable-5-1"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        ))
     }
 
     #[tokio::test]
@@ -958,24 +949,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ensure_starter_bundle_models_offline_falls_back() {
-        let routes = empty_routes().with_plugin_resolver(|_| Box::new(FailingModelsPlugin));
+    async fn test_ensure_starter_bundle_models_offline_creates_nothing_and_reports_error() {
+        let routes = bare_routes().with_plugin_resolver(|_| Box::new(FailingModelsPlugin));
         let out = routes.ensure_starter_bundle(CliId::Claude).await;
-        assert_eq!(
-            out.created
-                .iter()
-                .map(|m| m.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["claude-default"]
-        );
+        assert!(out.created.is_empty());
         assert!(out.already_present.is_empty());
-        assert!(out.used_fallback);
+        assert!(!out.used_fallback);
         assert!(!out.primary_satisfied);
+        assert_eq!(out.models_error.as_deref(), Some("offline"));
+    }
+
+    #[tokio::test]
+    async fn test_catalog_caches_success_and_short_lived_error() {
+        let catalog = ModelCatalog::default();
+        // A failure is served from the short error cache (the second plugin,
+        // which would succeed, is not consulted within ERROR_TTL).
+        let first = catalog.get(CliId::Claude, &FailingModelsPlugin).await;
+        assert_eq!(first.error.as_deref(), Some("offline"));
+        let second = catalog.get(CliId::Claude, &PartialModelsPlugin).await;
+        assert_eq!(second.error.as_deref(), Some("offline"));
+
+        // A success is cached; a later failing plugin is not consulted.
+        let catalog = ModelCatalog::default();
+        let ok = catalog.get(CliId::Claude, &PartialModelsPlugin).await;
+        assert_eq!(ok.models, vec!["sonnet".to_string()]);
+        let cached = catalog.get(CliId::Claude, &FailingModelsPlugin).await;
+        assert!(cached.error.is_none());
+        assert_eq!(cached.models, vec!["sonnet".to_string()]);
     }
 
     #[tokio::test]
     async fn test_ensure_starter_bundle_partial_models_skips_missing() {
-        let routes = empty_routes().with_plugin_resolver(|_| Box::new(PartialModelsPlugin));
+        let routes = bare_routes().with_plugin_resolver(|_| Box::new(PartialModelsPlugin));
         let out = routes.ensure_starter_bundle(CliId::Claude).await;
         assert_eq!(out.created.len(), 1);
         assert_eq!(out.created[0].name, "sonnet-implementer");
@@ -988,6 +993,35 @@ mod tests {
         );
         assert!(out.already_present.is_empty());
         assert!(!out.used_fallback);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_starter_bundle_probe_fails_with_some_modes_existing() {
+        let routes = bare_routes().with_plugin_resolver(|_| Box::new(FailingModelsPlugin));
+        routes
+            .create_mode(CreateModeBody {
+                name: "sonnet-implementer".to_string(),
+                cli: CliId::Claude,
+                context: "c".to_string(),
+                preset_id: None,
+                model: Some("sonnet".to_string()),
+                icon: None,
+            })
+            .await
+            .unwrap();
+        let out = routes.ensure_starter_bundle(CliId::Claude).await;
+        assert!(out.created.is_empty());
+        assert!(!out.used_fallback);
+        assert_eq!(out.already_present.len(), 1);
+        // Only the entries that still needed the list are reported skipped.
+        assert_eq!(
+            out.skipped,
+            vec![
+                "opus-planner".to_string(),
+                "fable-security-reviewer".to_string()
+            ]
+        );
+        assert_eq!(out.models_error.as_deref(), Some("offline"));
     }
 
     #[tokio::test]

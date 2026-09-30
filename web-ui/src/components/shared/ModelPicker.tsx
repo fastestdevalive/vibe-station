@@ -37,6 +37,11 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
       } else {
         setModels(r.models);
       }
+    }).catch((e: unknown) => {
+      if (cancelled) return;
+      setLoading(false);
+      setFetchError(e instanceof Error ? e.message : "Could not fetch models");
+      setModels([]);
     });
     return () => {
       cancelled = true;
@@ -67,11 +72,11 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
           style={{
             display: "block",
             fontSize: "13px",
-            color: "var(--fg-muted)",
+            color: "var(--fg-danger, #ef4444)",
             marginBottom: "var(--space-2)",
           }}
         >
-          Could not fetch models. Type a model name below.
+          {fetchError}
         </span>
         <Input
           aria-label="Model name"
@@ -100,7 +105,8 @@ export function ModelPicker({ api, cli, value, onChange }: ModelPickerProps) {
       {!valueInList && (
         <option value={selectValue}>{selectValue} (not in current list)</option>
       )}
-      {models.map((m) => (
+      {/* The CLI may list a literal "default" id; "(default)" above already means it. */}
+      {models.filter((m) => m !== "default").map((m) => (
         <option key={m} value={m}>{m}</option>
       ))}
     </Select>

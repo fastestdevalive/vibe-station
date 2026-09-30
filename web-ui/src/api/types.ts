@@ -557,12 +557,16 @@ export interface StarterBundleResult {
   skipped: string[];
   usedFallback: boolean;
   alreadyComplete: boolean;
+  /** Live model-list fetch failed; nothing was created. */
+  modelsError?: string;
 }
 
 /** Response from POST /api/oobe/detect-and-bundle. */
 export interface DetectAndBundleResult {
   supportedClis: SupportedCli[];
   created: Mode[];
+  /** Per-CLI live model-list failures (keyed by CLI id); no starter modes were created for them. */
+  modelsErrors?: Record<string, string>;
 }
 
 export interface Mode {

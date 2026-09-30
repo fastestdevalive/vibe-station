@@ -57,6 +57,14 @@ pub enum AcpTransportError {
     RequestFailed(String),
 }
 
+/// Result of `session/new`: the minted id plus the live model ids the adapter
+/// advertised in `configOptions` (empty if it advertised no model selector).
+#[derive(Clone, Debug)]
+pub struct NewSessionOutcome {
+    pub session_id: String,
+    pub models: Vec<String>,
+}
+
 /// What `initialize()` reports back — mirrors the TS method's
 /// `{ loadSession: boolean }` return shape (derived from
 /// `agentCapabilities.loadSession`).
@@ -133,7 +141,7 @@ pub trait AcpTransport: Send + Sync {
         &self,
         cwd: &Path,
         meta: Option<serde_json::Value>,
-    ) -> impl std::future::Future<Output = Result<String, AcpTransportError>> + Send;
+    ) -> impl std::future::Future<Output = Result<NewSessionOutcome, AcpTransportError>> + Send;
 
     /// `session/load` — resume a prior ACP session. Callers must only call
     /// this when the prior [`InitializeOutcome::load_session_supported`] was

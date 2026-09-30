@@ -302,6 +302,8 @@ pub struct SessionRoutes {
     /// records for `/send`, `/chat`, `/resubmit` (mirrors
     /// `attachmentRegistry.ts`).
     pub attachment_registry: AttachmentRegistry,
+    /// Live model catalog shared with `ModeRoutes` (validates `PATCH …/model`).
+    pub model_catalog: crate::model_catalog::ModelCatalog,
 }
 
 impl std::fmt::Debug for SessionRoutes {
@@ -337,6 +339,7 @@ impl Clone for SessionRoutes {
             json_unsupported: self.json_unsupported.clone(),
             subagent_notify: self.subagent_notify.clone(),
             attachment_registry: self.attachment_registry.clone(),
+            model_catalog: self.model_catalog.clone(),
         }
     }
 }
@@ -3591,12 +3594,27 @@ impl SessionRoutes {
         .await
         .map_err(ChatRouteError::from_enqueue)?;
 
-        // Soft validation: when the CLI's model list is available, reject an
-        // unknown model. If the list can't be fetched, accept free text.
+        // Validate against the CLI's model list. For a plugin whose list is
+        // live and authoritative (claude) a failure to fetch it is an error;
+        // for the rest the check stays soft (best-effort list, free text OK
+        // when it's unavailable or empty).
         if let Some(m) = &model {
-            let plugin = resolve_plugin(provider_to_cli(resolved.mode.cli));
-            let list = plugin.list_models().await;
-            if list.error.is_none() && !list.models.is_empty() && !list.models.contains(m) {
+            let cli = provider_to_cli(resolved.mode.cli);
+            let plugin = resolve_plugin(cli);
+            let list = self.model_catalog.get(cli, plugin.as_ref()).await;
+            if plugin.model_list_is_authoritative() {
+                if let Some(err) = list.error {
+                    return Err(ChatRouteError::ModelListUnavailable(format!(
+                        "Can't verify model '{m}': {err}"
+                    )));
+                }
+                if !list.models.contains(m) {
+                    return Err(ChatRouteError::UnknownModel(format!(
+                        "Unknown model '{m}' for {:?}",
+                        resolved.mode.cli
+                    )));
+                }
+            } else if list.error.is_none() && !list.models.is_empty() && !list.models.contains(m) {
                 return Err(ChatRouteError::UnknownModel(format!(
                     "Unknown model '{m}' for {:?}",
                     resolved.mode.cli
@@ -4944,6 +4962,8 @@ pub enum ChatRouteError {
     TurnNotQueued(String),
     /// 400 — model not in the CLI's available list.
     UnknownModel(String),
+    /// 502 — the CLI's live model list couldn't be fetched to validate against.
+    ModelListUnavailable(String),
     /// 409 — model switch on a `done` session.
     Done(String),
     /// 500 — internal failure.

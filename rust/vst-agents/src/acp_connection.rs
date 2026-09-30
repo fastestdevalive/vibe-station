@@ -45,11 +45,13 @@ use agent_client_protocol::schema::v1::{
     KillTerminalRequest, KillTerminalResponse, LoadSessionRequest, NewSessionRequest,
     PermissionOptionKind, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, TerminalExitStatus as AcpTerminalExitStatus,
-    TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
+    SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    TerminalExitStatus as AcpTerminalExitStatus, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
@@ -61,7 +63,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp_file_system;
 use crate::acp_terminal_manager::{TerminalCreateParams, TerminalManager};
 use crate::acp_transport::{
-    AcpTransport, AcpTransportError, InitializeOutcome, PromptTurn, PromptTurnOutcome, SteerOutcome,
+    AcpTransport, AcpTransportError, InitializeOutcome, NewSessionOutcome, PromptTurn,
+    PromptTurnOutcome, SteerOutcome,
 };
 
 /// Launch spec for the agent process — a plugin supplies only this (argv/env
@@ -158,7 +161,7 @@ enum Command {
     NewSession {
         cwd: std::path::PathBuf,
         meta: Option<serde_json::Value>,
-        reply: oneshot::Sender<Result<String, AcpTransportError>>,
+        reply: oneshot::Sender<Result<NewSessionOutcome, AcpTransportError>>,
     },
     LoadSession {
         cwd: std::path::PathBuf,
@@ -265,7 +268,7 @@ impl AcpTransport for AcpConnection {
         &self,
         cwd: &Path,
         meta: Option<serde_json::Value>,
-    ) -> Result<String, AcpTransportError> {
+    ) -> Result<NewSessionOutcome, AcpTransportError> {
         if self.0.shared.disposed.load(Ordering::Relaxed) {
             return Err(AcpTransportError::RequestFailed(
                 "ACP connection is disposed; cannot create session".to_string(),
@@ -656,8 +659,16 @@ async fn command_loop(
                 let _ = reply.send(result);
             }
             Command::NewSession { cwd, meta, reply } => {
-                let result = do_new_session(&cx, &shared, &cwd, meta).await;
-                let _ = reply.send(result);
+                // Spawned (like `SendPrompt`) so the loop stays free to
+                // process `Dispose` while `session/new` is in flight; a hung
+                // adapter must not pin the child process past `dispose()`.
+                let cx2 = cx.clone();
+                let shared2 = Arc::clone(&shared);
+                let _ = cx.spawn(async move {
+                    let result = do_new_session(&cx2, &shared2, &cwd, meta).await;
+                    let _ = reply.send(result);
+                    Ok(())
+                });
             }
             Command::LoadSession {
                 cwd,
@@ -809,7 +820,7 @@ async fn do_new_session(
     shared: &Arc<Shared>,
     cwd: &Path,
     meta: Option<serde_json::Value>,
-) -> Result<String, AcpTransportError> {
+) -> Result<NewSessionOutcome, AcpTransportError> {
     let req = NewSessionRequest::new(cwd.to_path_buf()).meta(meta_map(meta));
     let response = cx
         .send_request(req)
@@ -818,7 +829,37 @@ async fn do_new_session(
         .map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
     let session_id = response.session_id.to_string();
     *shared.session_id.lock().unwrap() = Some(session_id.clone());
-    Ok(session_id)
+    let models = response
+        .config_options
+        .as_deref()
+        .map(live_models_from_config_options)
+        .unwrap_or_default();
+    Ok(NewSessionOutcome { session_id, models })
+}
+
+/// Extract the model ids from the `category == "model"` select in a
+/// `session/new` response's `configOptions` (grouped and ungrouped alike).
+/// Empty when the adapter advertises no model selector.
+fn live_models_from_config_options(options: &[SessionConfigOption]) -> Vec<String> {
+    for opt in options {
+        if !matches!(opt.category, Some(SessionConfigOptionCategory::Model)) {
+            continue;
+        }
+        let SessionConfigKind::Select(select) = &opt.kind else {
+            continue;
+        };
+        return match &select.options {
+            SessionConfigSelectOptions::Ungrouped(list) => {
+                list.iter().map(|o| o.value.to_string()).collect()
+            }
+            SessionConfigSelectOptions::Grouped(groups) => groups
+                .iter()
+                .flat_map(|g| g.options.iter().map(|o| o.value.to_string()))
+                .collect(),
+            _ => Vec::new(),
+        };
+    }
+    Vec::new()
 }
 
 async fn do_load_session(

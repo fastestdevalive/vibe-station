@@ -29,6 +29,8 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
   // network error) otherwise fails silently and leaves the select looking
   // like nothing happened (round-3 m3).
   const [channelErrors, setChannelErrors] = useState<Record<string, string>>({});
+  const [bundleErrors, setBundleErrors] = useState<Record<string, string>>({});
+  const [bundleBusy, setBundleBusy] = useState<Set<string>>(new Set());
   // CLI ids with a default-channel PATCH in flight — disables that row's
   // select so a second change can't race the first's refetch (round-3 m3).
   const [pendingChannelChanges, setPendingChannelChanges] = useState<Set<string>>(new Set());
@@ -56,7 +58,22 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
   }, [api]);
 
   async function createBundle(cli: SupportedCli) {
-    await api.createStarterBundle(cli.id);
+    setBundleBusy((prev) => new Set(prev).add(cli.id));
+    try {
+      const res = await api.createStarterBundle(cli.id);
+      setBundleErrors((prev) => ({ ...prev, [cli.id]: res.modelsError ?? "" }));
+    } catch (e) {
+      setBundleErrors((prev) => ({
+        ...prev,
+        [cli.id]: e instanceof Error ? e.message : "Couldn't create the starter modes.",
+      }));
+    } finally {
+      setBundleBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(cli.id);
+        return next;
+      });
+    }
     const [nextModes, nextClis] = await Promise.all([api.listModes(), api.getSupportedClis()]);
     setModes(nextModes);
     setSupportedClis(nextClis);
@@ -127,6 +144,14 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
                   <span style={{ fontWeight: 500, color: "var(--fg-primary)" }}>{cli.id}</span>
                 </div>
+                {bundleErrors[cli.id] ? (
+                  <div
+                    data-testid={`bundle-error-${cli.id}`}
+                    style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-danger, #ef4444)" }}
+                  >
+                    {bundleErrors[cli.id]}
+                  </div>
+                ) : null}
                 <div style={{ marginTop: 4 }}>
                   <span
                     data-testid={`cli-detected-${cli.id}`}
@@ -171,17 +196,18 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                     <button
                       type="button"
                       onClick={() => void createBundle(cli)}
+                      disabled={bundleBusy.has(cli.id)}
                       style={{
                         background: "var(--bg-input)",
                         border: "var(--border-width) solid var(--border-default)",
                         borderRadius: 6,
                         padding: "6px 12px",
-                        cursor: "pointer",
+                        cursor: bundleBusy.has(cli.id) ? "wait" : "pointer",
                         fontSize: "13px",
                         color: "var(--fg-primary)",
                       }}
                     >
-                      {missingCount === total ? "Create starter modes" : `Recreate ${missingCount}`}
+                      {bundleBusy.has(cli.id) ? "Creating…" : missingCount === total ? "Create starter modes" : `Recreate ${missingCount}`}
                     </button>
                   </div>
                 ) : (

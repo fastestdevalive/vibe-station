@@ -15,8 +15,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use vst_types::{Channel, NormalizedEvent, NormalizedEventKind, NormalizedEventProvider};
 
-use crate::acp_connection::AcpLaunchSpec;
+use crate::acp_connection::{AcpConnection, AcpLaunchSpec};
 use crate::acp_run_turn::{run_turn_acp, RunTurnAcpParams};
+use crate::acp_transport::AcpTransport;
 use crate::native_chat_id::find_latest_claude_chat_uuid;
 use crate::plugin::{
     base_event, AgentPlugin, AsyncResult, CaptureArgs, ComposePromptInput, ComposePromptResult,
@@ -29,21 +30,23 @@ use crate::plugin::{
 /// apostrophe (`sh -lc` syntax error → pane dies instantly → `exited`).
 use vst_proc::sq;
 
-/// The curated claude model list (`CLAUDE_MODELS`).
-pub const CLAUDE_MODELS: [&str; 12] = [
-    "sonnet",
-    "sonnet[1m]",
-    "opus",
-    "opus[1m]",
-    "haiku",
-    "fable",
-    "claude-opus-4-5",
-    "claude-opus-4-5[1m]",
-    "claude-sonnet-4-5",
-    "claude-sonnet-4-5[1m]",
-    "claude-haiku-4-5",
-    "claude-fable-5",
-];
+/// Launch spec for the claude ACP adapter — shared by real turns and the
+/// model-list probe so both always run the same setup.
+fn claude_acp_spec(cwd: PathBuf) -> AcpLaunchSpec {
+    AcpLaunchSpec {
+        command: claude_acp_bun_command(),
+        args: vec![claude_acp_entry_path()],
+        cwd,
+        env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".to_string(), "claude".to_string())])
+            .into_iter()
+            .collect(),
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+    }
+}
+
+/// Budget for the whole throwaway `initialize` + `session/new` model probe.
+const LIST_MODELS_TIMEOUT_MS: u64 = 30_000;
 
 /// Format (never resolve) a `<skill-invocations>` directive block and append it
 /// to `message` — `formatSkillDirective` in `claude.ts`.
@@ -207,8 +210,10 @@ impl AgentPlugin for ClaudePlugin {
         "claude"
     }
 
+    /// Empty = "no explicit model": the adapter/account default applies. A
+    /// hardcoded id here could name a model the account doesn't have.
     fn default_model(&self) -> &str {
-        "sonnet"
+        ""
     }
 
     fn default_mode_icon(&self, _model: Option<&str>) -> &'static str {
@@ -348,13 +353,84 @@ impl AgentPlugin for ClaudePlugin {
         })
     }
 
+    /// Live list from a throwaway ACP `session/new` (its `configOptions`
+    /// model select). There is deliberately no static fallback: any failure
+    /// (spawn, not logged in, no model selector) comes back as `error`.
     fn list_models(&self) -> AsyncResult<ListModelsResult> {
         Box::pin(async move {
-            ListModelsResult {
-                models: CLAUDE_MODELS.iter().map(|s| s.to_string()).collect(),
-                error: None,
+            let fail = |e: String| {
+                let lower = e.to_lowercase();
+                let hint = if lower.contains("auth") || lower.contains("login") {
+                    " Check that you're logged in (`claude /login`)."
+                } else {
+                    ""
+                };
+                ListModelsResult {
+                    models: Vec::new(),
+                    error: Some(format!(
+                        "Couldn't fetch the model list from Claude: {e}.{hint}"
+                    )),
+                }
+            };
+            // A stable, daemon-owned cwd for the probe session: the adapter
+            // loads `.claude/settings.json` (hooks) from `session/new`'s cwd,
+            // so it must not be a shared world-writable dir, and reusing one
+            // path avoids leaving a new per-probe project entry under ~/.claude.
+            let probe_cwd = crate::home::home_dir()
+                .join(".vibe-station")
+                .join("model-probe");
+            if let Err(e) = fs::create_dir_all(&probe_cwd).await {
+                return fail(format!("couldn't create the probe directory: {e}"));
+            }
+            let conn = AcpConnection::new(AcpLaunchSpec {
+                initialize_timeout_ms: Some(LIST_MODELS_TIMEOUT_MS),
+                ..claude_acp_spec(probe_cwd.clone())
+            });
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_millis(LIST_MODELS_TIMEOUT_MS),
+                async {
+                    conn.initialize().await?;
+                    conn.new_session(&probe_cwd, None).await
+                },
+            )
+            .await;
+            conn.dispose().await;
+            match outcome {
+                Err(_) => fail("timed out".to_string()),
+                Ok(Err(e)) => fail(e.to_string()),
+                Ok(Ok(o)) if o.models.is_empty() => fail("Claude advertised no models".to_string()),
+                Ok(Ok(o)) => ListModelsResult {
+                    models: o.models,
+                    error: None,
+                },
             }
         })
+    }
+
+    fn model_list_is_authoritative(&self) -> bool {
+        true
+    }
+
+    fn resolve_starter_model(&self, name: &str, live_models: &[String]) -> Option<String> {
+        if let Some(exact) = live_models.iter().find(|m| m.as_str() == name) {
+            return Some(exact.clone());
+        }
+        // Family match (`fable` -> `claude-fable-5-1`): pick the highest
+        // version by its numeric segments, independent of list order.
+        let prefix = format!("claude-{name}-");
+        live_models
+            .iter()
+            .filter_map(|m| {
+                let rest = m.strip_prefix(&prefix)?;
+                let version: Vec<u32> = rest
+                    .split('-')
+                    // Stop at a date-like suffix (e.g. `-20260101`).
+                    .map_while(|seg| seg.parse::<u32>().ok().filter(|_| seg.len() < 8))
+                    .collect();
+                (!version.is_empty()).then_some((version, m))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, m)| m.clone())
     }
 
     fn starter_bundle(&self) -> Vec<StarterBundleEntry> {
@@ -443,16 +519,7 @@ impl AgentPlugin for ClaudePlugin {
         let (tx, rx) = mpsc::unbounded_channel();
         let params = RunTurnAcpParams {
             provider: NormalizedEventProvider::Claude,
-            build_spec: Box::new(|ctx| AcpLaunchSpec {
-                command: claude_acp_bun_command(),
-                args: vec![claude_acp_entry_path()],
-                cwd: ctx.cwd.clone(),
-                env: BTreeMap::from([("CLAUDE_CODE_EXECUTABLE".to_string(), "claude".to_string())])
-                    .into_iter()
-                    .collect(),
-                initialize_timeout_ms: None,
-                prompt_timeout_ms: None,
-            }),
+            build_spec: Box::new(|ctx| claude_acp_spec(ctx.cwd.clone())),
             enrich: None,
             // Decision 6 Option A: the ACP session id IS claude's native resume
             // id — surface it as `agentChatId` via a synthetic `session_init`.
@@ -491,19 +558,12 @@ impl AgentPlugin for ClaudePlugin {
     }
 
     fn acp_meta(&self, model: &str) -> Option<serde_json::Value> {
-        let model_for_acp = match model {
-            "claude-sonnet-4-5" => "claude-sonnet-4-5[1m]",
-            "claude-opus-4-5" => "claude-opus-4-5[1m]",
-            other => other,
-        };
-        Some(serde_json::json!({
-            "claudeCode": {
-                "options": {
-                    "model": model_for_acp,
-                    "betas": ["context-1m-2025-08-07"]
-                }
-            }
-        }))
+        let model_for_acp = model;
+        let mut options = serde_json::json!({ "betas": ["context-1m-2025-08-07"] });
+        if !model_for_acp.is_empty() {
+            options["model"] = serde_json::json!(model_for_acp);
+        }
+        Some(serde_json::json!({ "claudeCode": { "options": options } }))
     }
 }
 
@@ -638,6 +698,47 @@ async fn write_mode_755(path: &PathBuf, content: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resolve_starter_model_matches_family_newest_first() {
+        let live: Vec<String> = [
+            "default",
+            "opus",
+            "claude-fable-5-1",
+            "sonnet",
+            "claude-fable-5",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let p = create_claude_plugin();
+        assert_eq!(
+            p.resolve_starter_model("opus", &live).as_deref(),
+            Some("opus")
+        );
+        assert_eq!(
+            p.resolve_starter_model("fable", &live).as_deref(),
+            Some("claude-fable-5-1")
+        );
+        assert_eq!(p.resolve_starter_model("haiku", &live), None);
+        let dated: Vec<String> = ["claude-fable-5-20260101", "claude-fable-5-1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            p.resolve_starter_model("fable", &dated).as_deref(),
+            Some("claude-fable-5-1")
+        );
+        // Independent of list order (oldest first here).
+        let oldest_first: Vec<String> = ["claude-fable-4-9", "claude-fable-5", "claude-fable-5-1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            p.resolve_starter_model("fable", &oldest_first).as_deref(),
+            Some("claude-fable-5-1")
+        );
+    }
+
     use super::*;
 
     #[test]

@@ -24,6 +24,7 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
   const [finishBusy, setFinishBusy] = useState(false);
   const [detectBusy, setDetectBusy] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
+  const [modelsErrors, setModelsErrors] = useState<Record<string, string>>({});
   // Bumped after every successful detectAndBundleOobe() call, and threaded
   // into CliDetectionPanel's refreshSignal prop — without this, the panel's
   // own independent getSupportedClis() fetch races this component's own
@@ -36,6 +37,7 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
     try {
       const [res, list] = await Promise.all([api.detectAndBundleOobe(), api.listModes()]);
       setSupportedClis(res.supportedClis);
+      setModelsErrors(res.modelsErrors ?? {});
       setModes(list);
       setRefreshSignal((n) => n + 1);
     } catch (e) {
@@ -148,6 +150,30 @@ export function OobeStep2Modes({ api, onStep2Confirmed }: OobeStep2ModesProps) {
           </button>
         </div>
       )}
+
+      {Object.entries(modelsErrors).map(([cliId, msg]) => (
+        <div
+          key={cliId}
+          data-testid={`models-error-${cliId}`}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-3)",
+            padding: "var(--space-3)",
+            borderRadius: "var(--radius-sm)",
+            border: "var(--border-width) solid var(--fg-danger)",
+            background: "var(--bg-input)",
+          }}
+        >
+          <Info size={14} style={{ flexShrink: 0, color: "var(--fg-danger)" }} />
+          <span style={{ flex: 1, fontSize: "13px", color: "var(--fg-secondary)", lineHeight: 1.5 }}>
+            Couldn&apos;t set up starter modes for {cliId}: {msg}
+          </span>
+          <button type="button" onClick={() => void handleRecheck()} disabled={detectBusy} className="btn btn--secondary">
+            Retry
+          </button>
+        </div>
+      ))}
 
       {zeroDetected && (
         <div

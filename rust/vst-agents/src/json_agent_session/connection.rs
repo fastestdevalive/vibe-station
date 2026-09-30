@@ -117,7 +117,7 @@ impl JsonAgentSession {
         }
 
         if used_fresh_session {
-            let acp_session_id = conn.new_session(&cwd, acp_meta).await?;
+            let acp_session_id = conn.new_session(&cwd, acp_meta).await?.session_id;
             self.persist_acp_session_id(acp_session_id).await;
         }
 
