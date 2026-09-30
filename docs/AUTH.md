@@ -1,23 +1,21 @@
 # Authentication
 
-vibe-station uses a single shared secret (the *daemon token*) with two session tiers: the local desktop user is trusted implicitly; remote devices authenticate via a one-time QR code.
+vibe-station uses a single shared secret (the *daemon token*). **Every request authenticates, from every client, including the same machine** — there is no loopback trust and no "attended vs. headless" mode. The desktop app and the `vst` CLI carry a pre-minted token; remote devices authenticate via a one-time QR code.
 
 ---
 
-## Local desktop (same machine)
+## Local clients (same machine)
 
-Requests arriving from `127.0.0.1` / `::1` bypass the auth guard entirely — **unless** they carry a `CF-Connecting-IP` header. `cloudflared` dials the daemon at `http://127.0.0.1:<port>`, so every tunnel request also arrives from loopback; without that exception the bypass would grant anyone holding the public tunnel URL unauthenticated access to every route.
+| Client | Credential |
+|--------|------------|
+| Tauri desktop window | `tauriToken` from `~/.vibe-station/config.json`, injected as `window.__VST_TOKEN__` before page scripts; sent as `Authorization: Bearer` (REST) and `?token=` (WebSocket) |
+| `vst` CLI / spawned agents | `cliToken` from `~/.vibe-station/config.json` (or `VST_CLI_TOKEN`) |
+| Plain browser (e.g. Vite dev) | Sign in with the "Browser login password" printed at daemon startup, or redeem a one-time link: `POST /api/auth/continue/mint` with the `cliToken`, then open `/continue?code=<code>` |
 
-```
-Browser on localhost ──► daemon :7421
-                         req.ip === 127.0.0.1 → trusted, no cookie check
-```
-
-- No login screen, no password prompt
-- Applies to both the browser (`http://localhost:7421`) and the `vst` CLI (`Authorization: Bearer <token>`)
-- **Assumption:** loopback reachability = physical machine access. Acceptable for a personal workstation; not appropriate for a shared server
-
-> **Electron / Tauri (future):** the webview opens `http://localhost:<port>` by definition, so this trust model carries over unchanged. For additional hardening, generate a per-launch token, embed it in the webview URL as a query param, and exchange it for a cookie on first load — no user interaction required.
+- Exempt routes: `GET /health`, `GET /ws` (authenticates in its own handler; a bad token closes the socket with 4401), `GET /mobile-auth`, `GET /continue`, `POST /api/auth/logout`, and static UI `GET`/`HEAD`
+- `Origin`, when present, must match the allowlist (localhost, tauri, tunnel/Tailscale hosts, private IPs) on REST, CORS and the WebSocket upgrade
+- Token lookup order: `Authorization` header, then `?token=` (WebSocket only), then the session cookie
+- **`VST_NO_AUTH` only exists in binaries built with the `insecure-no-auth` cargo feature** (off by default; release builds are guarded in CI and `scripts/prep-sidecar.sh`). Such a build binds `127.0.0.1` unless `VST_NO_AUTH_BIND_ALL=1`. The Docker dev sandbox is the intended user
 
 ---
 

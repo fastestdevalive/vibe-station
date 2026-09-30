@@ -60,7 +60,7 @@ pub fn detect_running_daemon() -> Option<DaemonInfo> {
             .tauri_token
             .or(config.cli_token)
             .or(config.token)
-            .unwrap_or_default();
+            .filter(|t| !t.is_empty())?;
         Some(DaemonInfo {
             port: config.port,
             pid: config.pid,
@@ -97,18 +97,13 @@ pub fn spawn_daemon(
 
     // The bundled `vst` sidecar is the merged CLI+daemon binary — pass
     // "daemon run" so it enters daemon mode (see rust/vst-cli/src/dispatch.rs).
-    // VST_TAURI_SUPERVISED=1 is the ONLY way a `vst daemon run` invocation
-    // gets a non-headless (loopback-trust-bypassed) daemon — every other
-    // "vst daemon run" (self-heal spawns, an operator running it directly)
-    // defaults headless. Never set this anywhere else.
     let mut cmd = app_handle
         .shell()
         .sidecar("vst")
         .map_err(|e| format!("failed to create sidecar command: {e}"))?
         .args(["daemon", "run"])
         .env("VST_CLOUDFLARED_BIN", cloudflared_str)
-        .env("VST_CLI_BIN", vst_bin_str)
-        .env("VST_TAURI_SUPERVISED", "1");
+        .env("VST_CLI_BIN", vst_bin_str);
 
     // NOTE: SKILL.md and web-ui/dist are compiled into the `vst` binary
     // itself (the `embed-ui` Cargo feature, always on for this sidecar build
@@ -221,7 +216,8 @@ pub fn spawn_daemon(
         .tauri_token
         .or(config.cli_token)
         .or(config.token)
-        .unwrap_or_default();
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| "no auth token found in daemon config.json".to_string())?;
     Ok(DaemonInfo {
         port: config.port,
         pid: config.pid,

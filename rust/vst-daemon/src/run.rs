@@ -50,15 +50,9 @@ use crate::lock::{acquire_lock, release_lock};
 use crate::port::{find_free_port, DEFAULT_PORT};
 use crate::server::{build_app, BuildServerOptions};
 
-/// Options controlling how the daemon boots. `headless` is threaded through to
-/// `BuildServerOptions`/`AppState` as a plain data field by this part of the
-/// `cli-daemon-unification` feature — the auth-bypass GATE that actually reads
-/// it is a *separate* part's responsibility (headless-mode loopback-trust
-/// gating), not added here. See the feature's arch doc for the ownership split.
+/// Options controlling how the daemon boots.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct DaemonOptions {
-    pub headless: bool,
-}
+pub struct DaemonOptions {}
 
 /// Initialize the global tracing subscriber. Safe to call more than once
 /// (uses `try_init`, never panics on a second call) — every entry point that
@@ -72,6 +66,50 @@ pub fn init_tracing() {
         )
         .try_init();
 }
+
+/// Resolve whether `no_auth` mode is enabled.
+///
+/// Compile-time gated behind the `insecure-no-auth` cargo feature (P4).
+/// If `VST_NO_AUTH` is set on a binary built without the feature, a warning
+/// is logged and the variable is ignored (authentication remains enabled).
+///
+/// The two variants are selected with `#[cfg]`, NOT `cfg!()`: `cfg!` keeps both
+/// branches (and both string literals) in every binary, so the CI/packaging
+/// `strings` guard for [`INSECURE_NO_AUTH_MARKER`] could never tell a
+/// feature-on binary from a release one.
+#[cfg(feature = "insecure-no-auth")]
+pub fn resolve_no_auth() -> bool {
+    let requested = matches!(
+        std::env::var("VST_NO_AUTH").as_deref(),
+        Ok("1") | Ok("true")
+    );
+    if requested {
+        tracing::warn!("{INSECURE_NO_AUTH_MARKER}");
+    }
+    requested
+}
+
+#[cfg(not(feature = "insecure-no-auth"))]
+pub fn resolve_no_auth() -> bool {
+    if matches!(
+        std::env::var("VST_NO_AUTH").as_deref(),
+        Ok("1") | Ok("true")
+    ) {
+        tracing::warn!(
+            "⚠  VST_NO_AUTH is set, but this binary was built without the \
+             `insecure-no-auth` feature. Authentication remains ENABLED."
+        );
+    }
+    false
+}
+
+/// Marker text present in a binary ONLY when `insecure-no-auth` is compiled in.
+/// `scripts/prep-sidecar.sh` and `.github/workflows/release.yml` grep release
+/// binaries for this exact string and fail if found — do not reword it without
+/// updating both.
+#[cfg(feature = "insecure-no-auth")]
+pub const INSECURE_NO_AUTH_MARKER: &str =
+    "INSECURE: VST_NO_AUTH=1 is active — authentication is DISABLED (insecure-no-auth feature)";
 
 // ─── config.json I/O ─────────────────────────────────────────────────────────
 
@@ -234,10 +272,9 @@ async fn cloudflared_restore_on_boot(tunnel_port: u16, store: &StoreHandle) {
 /// Run the daemon to completion (i.e. until a shutdown signal is received).
 /// Callable from both the standalone `vst-daemon` binary and the merged `vst`
 /// binary's `daemon run` subcommand.
-pub async fn run_daemon(opts: DaemonOptions) -> Result<()> {
+pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     tracing::info!(
-        "[vst] starting daemon (headless={}, version={})",
-        opts.headless,
+        "[vst] starting daemon (version={})",
         crate::version::current()
     );
 
@@ -335,10 +372,7 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<()> {
     .await
     .context("write config.json")?;
 
-    let no_auth = matches!(
-        std::env::var("VST_NO_AUTH").as_deref(),
-        Ok("1") | Ok("true")
-    );
+    let no_auth = resolve_no_auth();
     if no_auth {
         tracing::warn!(
             "⚠  VST_NO_AUTH set — authentication is DISABLED. \
@@ -462,7 +496,6 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<()> {
         port,
         auth_state: Some(auth_state.clone()),
         no_auth,
-        headless: opts.headless,
         stop_requested,
         dist_path,
         persist_epoch: Some(persist_epoch_fn),
@@ -514,12 +547,24 @@ pub async fn run_daemon(opts: DaemonOptions) -> Result<()> {
     });
 
     // ── Bind and serve ────────────────────────────────────────────────────────
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+    let bind_host = if no_auth {
+        if matches!(
+            std::env::var("VST_NO_AUTH_BIND_ALL").as_deref(),
+            Ok("1") | Ok("true")
+        ) {
+            "0.0.0.0"
+        } else {
+            "127.0.0.1"
+        }
+    } else {
+        "0.0.0.0"
+    };
+    let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{port}"))
         .await
-        .with_context(|| format!("bind 0.0.0.0:{port}"))?;
+        .with_context(|| format!("bind {bind_host}:{port}"))?;
 
-    tracing::info!("vst daemon listening on http://0.0.0.0:{port}");
-    println!("vst daemon listening on http://0.0.0.0:{port}");
+    tracing::info!("vst daemon listening on http://{bind_host}:{port}");
+    println!("vst daemon listening on http://{bind_host}:{port}");
 
     // ── agy-acp availability (non-fatal safety net) ──────────────────────────
     // The openab agy-acp adapter binary is required for Rich Chat with the agy

@@ -26,6 +26,8 @@ serde_json = "1"
 libc = "0.2"
 regex = "1"
 dirs-next = "2"
+percent-encoding = "2"
+url = "2"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified,

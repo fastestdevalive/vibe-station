@@ -69,6 +69,24 @@ jobs:
       - name: Run the gate
         run: rust/scripts/rust-gate.sh --workspace
 
+      # A name filter without `--exact` passes with "0 passed" if the test is ever
+      # renamed, so require exactly one test to have run, in both configurations:
+      # default build must IGNORE VST_NO_AUTH, feature build must HONOR it (proves
+      # the test actually exercises the cfg split rather than passing vacuously).
+      - name: Assert default build excludes insecure-no-auth
+        run: |
+          cargo test --manifest-path rust/Cargo.toml -p vst-daemon --test main_logic \
+            -- --exact default_build_ignores_vst_no_auth 2>&1 | tee /tmp/no-auth-default.txt
+          grep -q "test result: ok. 1 passed" /tmp/no-auth-default.txt \
+            || { echo "default_build_ignores_vst_no_auth did not run exactly once and pass" >&2; exit 1; }
+
+      - name: Assert insecure-no-auth feature build honors VST_NO_AUTH (guard test is not vacuous)
+        run: |
+          cargo test --manifest-path rust/Cargo.toml -p vst-daemon --features insecure-no-auth --test main_logic \
+            -- --exact default_build_ignores_vst_no_auth 2>&1 | tee /tmp/no-auth-feature.txt
+          grep -q "test result: ok. 1 passed" /tmp/no-auth-feature.txt \
+            || { echo "feature-build variant did not run exactly once and pass" >&2; exit 1; }
+
       - name: Build + gate agy-acp (walled-garden)
         run: rust/scripts/agy-acp-gate.sh
 

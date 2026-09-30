@@ -53,6 +53,9 @@ rust-embed = { version = "8", optional = true }
 # See .vibekit/feature-plans/wip/cli-daemon-unification/00-binary-merge/
 # plan-00-cli-daemon-unification-binary-merge.md, Key Decisions 3-4.
 embed-ui = ["dep:rust-embed"]
+# Compile-time opt-in to allow VST_NO_AUTH=1 to disable daemon authentication.
+# Must never be enabled for release builds. Off by default.
+insecure-no-auth = []
 
 [dev-dependencies]
 tempfile = "3"

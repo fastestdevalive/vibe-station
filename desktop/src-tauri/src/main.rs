@@ -89,11 +89,45 @@ fn main() {
                             #[cfg(not(debug_assertions))]
                             {
                                 eprintln!("[vst] failed to start daemon: {e}");
-                                daemon::DaemonInfo {
-                                    port: 7422,
-                                    pid: 0,
-                                    token: String::new(),
-                                }
+                                let conf = app.config().app.windows.first().cloned()
+                                    .ok_or("no window config found")?;
+                                let escaped_err = e.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+                                let error_html = format!(
+                                    r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Vibe Station - Error</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f141c; color: #e6edf3; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }}
+.box {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 28px; max-width: 520px; width: 100%; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }}
+h2 {{ color: #f85149; margin-top: 0; font-size: 18px; }}
+p {{ font-size: 14px; color: #8b949e; line-height: 1.5; }}
+pre {{ background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; color: #c9d1d9; font-size: 12px; border: 1px solid #21262d; }}
+</style>
+</head>
+<body>
+<div class="box">
+<h2>Failed to start daemon</h2>
+<p>Vibe Station could not start or connect to the daemon. Authentication token could not be established.</p>
+<pre>{}</pre>
+</div>
+</body>
+</html>"#,
+                                    escaped_err
+                                );
+                                let encoded = percent_encoding::percent_encode(
+                                    error_html.as_bytes(),
+                                    percent_encoding::NON_ALPHANUMERIC,
+                                );
+                                let data_url = format!("data:text/html;charset=utf-8,{encoded}");
+                                let parsed_url: url::Url = data_url.parse().map_err(|err| format!("invalid data url: {err}"))?;
+                                WebviewWindowBuilder::new(app.handle(), "main", tauri::WebviewUrl::External(parsed_url))
+                                    .title("Vibe Station - Error")
+                                    .inner_size(conf.width, conf.height)
+                                    .build()?;
+                                tray::build_tray(&app_handle)?;
+                                return Ok(());
                             }
                         }
                     }

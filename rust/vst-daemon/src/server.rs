@@ -114,10 +114,6 @@ pub struct BuildServerOptions {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
-    /// Whether this daemon was started headless (loopback-trust bypass is
-    /// off) vs. attended/Tauri-supervised — read by `auth_middleware`'s
-    /// `is_loopback` computation (both the HTTP and WS-upgrade copies).
-    pub headless: bool,
     /// Notified by `POST /api/daemon/stop` to trigger the same graceful
     /// shutdown sequence a SIGINT/SIGTERM does (see `run.rs`'s signal task).
     pub stop_requested: Arc<tokio::sync::Notify>,
@@ -138,8 +134,6 @@ pub struct AppState {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
-    /// See `BuildServerOptions::headless` doc comment.
-    pub headless: bool,
     /// See `BuildServerOptions::stop_requested` doc comment.
     pub stop_requested: Arc<tokio::sync::Notify>,
     pub dist_path: Option<PathBuf>,
@@ -514,7 +508,6 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
-        headless: opts.headless,
         stop_requested: opts.stop_requested,
         dist_path: opts
             .dist_path
@@ -555,9 +548,11 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
 pub fn build_app(opts: BuildServerOptions) -> Router {
     let state = build_state(opts);
 
-    // CORS configuration: reflect origin (allow Any credentials), allow headers and methods
+    // CORS configuration: allow allowed origins, allow headers and methods
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::mirror_request())
+        .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
+            is_allowed_origin_header(origin)
+        }))
         .allow_credentials(true)
         .allow_methods([
             Method::GET,
@@ -863,8 +858,176 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auth Middleware
+// Auth Middleware & Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Validate whether an `Origin` matches the allowlist (P3):
+/// - localhost / 127.0.0.1 / [::1] (any port, http or https)
+/// - tauri://localhost, http://tauri.localhost, https://tauri.localhost
+/// - *.trycloudflare.com
+/// - *.ts.net
+/// - Private / LAN IP addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10)
+pub fn is_allowed_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme == "tauri" {
+        return rest == "localhost" || rest.starts_with("localhost/");
+    }
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    let host = if rest.starts_with('[') {
+        if let Some(end) = rest.find(']') {
+            &rest[1..end]
+        } else {
+            return false;
+        }
+    } else {
+        rest.split(':').next().unwrap_or("")
+    };
+    let host = host.split('/').next().unwrap_or("");
+
+    if host == "localhost" || host == "tauri.localhost" {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if ip.is_loopback() {
+            return true;
+        }
+        match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+                // 10.0.0.0/8
+                if octets[0] == 10 {
+                    return true;
+                }
+                // 172.16.0.0/12
+                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                    return true;
+                }
+                // 192.168.0.0/16
+                if octets[0] == 192 && octets[1] == 168 {
+                    return true;
+                }
+                // 100.64.0.0/10 (CGNAT / Tailscale)
+                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
+                    return true;
+                }
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                let segments = ipv6.segments();
+                // Unique local (fc00::/7) or Link-local (fe80::/10)
+                if (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80 {
+                    return true;
+                }
+            }
+        }
+    }
+    if host.ends_with(".trycloudflare.com") || host.ends_with(".ts.net") {
+        return true;
+    }
+    false
+}
+
+pub fn is_allowed_origin_header(val: &HeaderValue) -> bool {
+    val.to_str().map(is_allowed_origin).unwrap_or(false)
+}
+
+/// Check if an origin is local (tauri:// or localhost/loopback).
+pub fn is_local_origin(origin: &str) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    if scheme == "tauri" {
+        return rest == "localhost" || rest.starts_with("localhost/");
+    }
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    let host = if rest.starts_with('[') {
+        if let Some(end) = rest.find(']') {
+            &rest[1..end]
+        } else {
+            return false;
+        }
+    } else {
+        rest.split(':').next().unwrap_or("")
+    };
+    let host = host.split('/').next().unwrap_or("");
+
+    if host == "localhost" || host == "tauri.localhost" {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+    false
+}
+
+/// Decide remote-ness for tunnel, QR, and continue routes (P8).
+/// A request is considered remote if:
+/// - Arrived via Cloudflare tunnel (`cf-connecting-ip` present)
+/// - Peer IP is known and not loopback
+/// - Token scope is Mobile
+/// - Origin header is present and not local
+pub fn is_remote_request(req: &Request) -> bool {
+    let headers = req.headers();
+    if headers.contains_key("cf-connecting-ip") {
+        return true;
+    }
+    if let Some(ci) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        if !ci.0.ip().is_loopback() {
+            return true;
+        }
+    }
+    if let Some(payload) = req.extensions().get::<TokenPayload>() {
+        if payload.scope == TokenScope::Mobile {
+            return true;
+        }
+    }
+    if let Some(origin_val) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+        if !is_local_origin(origin_val) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract authentication token from request headers or query params (P2).
+///
+/// Order of precedence:
+/// 1. `Authorization: Bearer <token>`
+/// 2. `?token=` query parameter (WS only)
+/// 3. `vst_token` cookie
+pub fn authenticate(headers: &HeaderMap, query_token: Option<&str>) -> Option<String> {
+    if let Some(auth_hdr) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(token) = auth_hdr.strip_prefix("Bearer ") {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    if let Some(q) = query_token {
+        let token = q.trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    if let Some(cookie_hdr) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok()) {
+        if let Some(token) = parse_cookie_value(cookie_hdr, COOKIE_NAME) {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
+}
 
 async fn auth_middleware(
     State(state): State<AppState>,
@@ -906,89 +1069,21 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    let auth_state = state.auth_state.as_ref().unwrap();
-
-    // Determine client IP (trusting loopback proxy headers)
-    let via_tunnel = headers.contains_key("cf-connecting-ip");
-    let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
-    let peer_ip = connect_info.map(|ci| ci.0.ip());
-
-    let client_ip = if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
-    {
-        // If TCP peer is loopback, trust rightmost trusted hop from X-Forwarded-For
-        if peer_ip.map_or(false, |ip| ip.is_loopback()) {
-            xff.split(',').next_back().unwrap_or("").trim().to_string()
-        } else {
-            peer_ip.map_or("".to_string(), |ip| ip.to_string())
-        }
-    } else {
-        peer_ip.map_or("".to_string(), |ip| ip.to_string())
+    // Exempt routes (health, ws, mobile-auth, continue stay at root; logout is under /api).
+    // Checked against original_path (before /api rewrite). `/api/health` and `/api/ws`
+    // are also exempt: a Vite/tunnel proxy in front of the daemon reaches them with the
+    // `/api` prefix, and 401-ing the reconnect probe during a disconnect would turn a
+    // transient drop into a logged-out UI. `/ws` still authenticates in its own handler.
+    let is_exempt = match (method.clone(), original_path.as_str()) {
+        (Method::GET | Method::HEAD, "/health" | "/api/health") => true,
+        (Method::GET | Method::HEAD, "/ws" | "/api/ws") => true,
+        (Method::GET | Method::HEAD, "/mobile-auth") => true,
+        (Method::GET | Method::HEAD, "/continue") => true,
+        (Method::POST, "/api/auth/logout" | "/auth/logout") => true,
+        _ => false,
     };
 
-    let is_loopback = !via_tunnel
-        && (client_ip == "127.0.0.1"
-            || client_ip == "::1"
-            || client_ip == "::ffff:127.0.0.1"
-            || client_ip.is_empty()) // empty peer in unit test mock defaults to loopback
-        && !state.headless; // headless daemons never get the loopback-trust bypass
-
-    if is_loopback {
-        // CSRF guard: if Origin header present, must match localhost / 127.0.0.1 or tauri://
-        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            let is_localhost = origin.starts_with("http://localhost")
-                || origin.starts_with("https://localhost")
-                || origin.starts_with("http://127.0.0.1")
-                || origin.starts_with("https://127.0.0.1");
-            let is_tauri = origin == "tauri://localhost"
-                || origin == "http://tauri.localhost"
-                || origin == "https://tauri.localhost";
-            if !is_localhost && !is_tauri {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({ "error": "Forbidden." })),
-                )
-                    .into_response();
-            }
-        }
-
-        // Attach TokenPayload if token is present
-        let auth_hdr = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        let cookie_hdr = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-        let raw_token = if let Some(auth) = auth_hdr {
-            if let Some(b) = auth.strip_prefix("Bearer ") {
-                b.trim()
-            } else {
-                ""
-            }
-        } else if let Some(cookie) = cookie_hdr {
-            parse_cookie_value(cookie, COOKIE_NAME)
-                .unwrap_or_default()
-                .leak()
-        } else {
-            ""
-        };
-
-        if !raw_token.is_empty() {
-            if let VerifyResult::Ok { payload } = verify_token(raw_token, auth_state) {
-                req.extensions_mut().insert(payload);
-            }
-        }
-
-        return next.run(req).await;
-    }
-
-    // Exempt routes (health, ws, mobile-auth stay at root; auth/logout is under
-    // /api). Note: `path` has already been rewritten `/api/*` -> `/*` above, so
-    // the logout key matches its post-rewrite form `/auth/logout`.
-    let key = format!("{} {}", method, path);
-    if key == "GET /health"
-        || key == "GET /ws"
-        || key == "POST /auth/logout"
-        || key == "GET /mobile-auth"
-        || key == "GET /continue"
-    {
+    if is_exempt {
         return next.run(req).await;
     }
 
@@ -1008,34 +1103,31 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Non-loopback request: verify token
-    let auth_hdr = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    let cookie_hdr = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-    let raw_token = if let Some(auth) = auth_hdr {
-        if let Some(b) = auth.strip_prefix("Bearer ") {
-            b.trim()
-        } else {
-            ""
+    // Origin allowlist check: if Origin is present, must match allowlist (P3)
+    if let Some(origin_val) = headers.get(header::ORIGIN) {
+        if !is_allowed_origin_header(origin_val) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "Forbidden." })),
+            )
+                .into_response();
         }
-    } else if let Some(cookie) = cookie_hdr {
-        parse_cookie_value(cookie, COOKIE_NAME)
-            .unwrap_or_default()
-            .leak()
-    } else {
-        ""
-    };
-
-    if raw_token.is_empty() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({ "error": "Not authenticated." })),
-        )
-            .into_response();
     }
 
-    match verify_token(raw_token, auth_state) {
+    let auth_state = state.auth_state.as_ref().unwrap();
+
+    let raw_token = match authenticate(&headers, None) {
+        Some(tok) => tok,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({ "error": "Not authenticated." })),
+            )
+                .into_response();
+        }
+    };
+
+    match verify_token(&raw_token, auth_state) {
         VerifyResult::Ok { payload } => {
             req.extensions_mut().insert(payload);
             next.run(req).await
@@ -1062,8 +1154,18 @@ async fn handle_ws_upgrade(
     State(state): State<AppState>,
     Query(query): Query<WsQuery>,
     headers: HeaderMap,
-    req: Request,
 ) -> Response {
+    // Origin allowlist check: reject hostile Origin before upgrade (P3)
+    if let Some(origin_val) = headers.get(header::ORIGIN) {
+        if !is_allowed_origin_header(origin_val) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": "Forbidden." })),
+            )
+                .into_response();
+        }
+    }
+
     let auth_state = state.auth_state.clone();
     let no_auth = state.no_auth;
 
@@ -1072,56 +1174,27 @@ async fn handle_ws_upgrade(
     let mut token_id = None;
     let mut token_issued_at = None;
     let mut token_expires_at = None;
-    // True when a non-loopback request presented a missing/invalid/expired
-    // token. We still accept the upgrade, but immediately close the new socket
+    // True when a request presented a missing/invalid/expired token.
+    // We still accept the upgrade, but immediately close the new socket
     // with the auth-expired code (4401) instead of returning a bare HTTP 401:
     // the browser sees a 401-before-upgrade as close code 1006, which the
-    // client treats as an ordinary disconnect and reconnects forever. This is
-    // the common remote-session path (token expires while the socket is down,
-    // then the client reconnects and hits this gate), so it must emit 4401 so
-    // the client shows the login screen instead of looping.
+    // client treats as an ordinary disconnect and reconnects forever.
     let mut auth_rejected = false;
 
     if let Some(ref auth_state) = auth_state {
         if !no_auth {
-            let via_tunnel = headers.contains_key("cf-connecting-ip");
-            let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
-            let peer_ip = connect_info.map(|ci| ci.0.ip());
-            let is_loopback =
-                !via_tunnel && peer_ip.map_or(true, |ip| ip.is_loopback()) && !state.headless;
-
-            let auth_hdr = headers
-                .get(header::AUTHORIZATION)
-                .and_then(|v| v.to_str().ok());
-            let cookie_hdr = headers.get(header::COOKIE).and_then(|v| v.to_str().ok());
-            let raw_token = if let Some(auth) = auth_hdr {
-                if let Some(b) = auth.strip_prefix("Bearer ") {
-                    b.trim()
-                } else {
-                    ""
-                }
-            } else if let Some(cookie) = cookie_hdr {
-                parse_cookie_value(cookie, COOKIE_NAME)
-                    .unwrap_or_default()
-                    .leak()
-            } else if let Some(ref q) = query.token {
-                q.as_str()
-            } else {
-                ""
-            };
-
-            if !raw_token.is_empty() {
-                if let VerifyResult::Ok { payload } = verify_token(raw_token, auth_state) {
+            if let Some(raw_token) = authenticate(&headers, query.token.as_deref()) {
+                if let VerifyResult::Ok { payload } = verify_token(&raw_token, auth_state) {
                     scope = Some(payload.scope);
                     token_issued_at = Some(payload.iat);
                     token_expires_at = payload.exp;
                     if let Some(dot) = raw_token.rfind('.') {
                         token_id = Some(raw_token[..dot].to_string());
                     }
-                } else if !is_loopback {
+                } else {
                     auth_rejected = true;
                 }
-            } else if !is_loopback {
+            } else {
                 auth_rejected = true;
             }
         }
@@ -3854,12 +3927,12 @@ use axum::http::header::HeaderName;
 
 async fn handle_auth_tunnel_enable(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    req: Request,
 ) -> Result<
     Json<vst_types::rest::mobile_auth::TunnelEnableResult>,
     (StatusCode, Json<serde_json::Value>),
 > {
-    let is_remote = headers.contains_key("cf-connecting-ip");
+    let is_remote = is_remote_request(&req);
     state
         .mobile_auth_routes
         .enable_tunnel(is_remote)
@@ -3870,12 +3943,12 @@ async fn handle_auth_tunnel_enable(
 
 async fn handle_auth_tunnel_disable(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    req: Request,
 ) -> Result<
     Json<vst_types::rest::mobile_auth::TunnelDisableResult>,
     (StatusCode, Json<serde_json::Value>),
 > {
-    let is_remote = headers.contains_key("cf-connecting-ip");
+    let is_remote = is_remote_request(&req);
     state
         .mobile_auth_routes
         .disable_tunnel(is_remote)
@@ -3898,10 +3971,10 @@ async fn handle_auth_tunnel_status(
 
 async fn handle_auth_local_qr(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    req: Request,
 ) -> Result<Json<vst_types::rest::mobile_auth::LocalQrResult>, (StatusCode, Json<serde_json::Value>)>
 {
-    let is_remote = headers.contains_key("cf-connecting-ip");
+    let is_remote = is_remote_request(&req);
     state
         .mobile_auth_routes
         .local_qr(is_remote)
@@ -3912,10 +3985,10 @@ async fn handle_auth_local_qr(
 
 async fn handle_auth_mobile_qr(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    req: Request,
 ) -> Result<Json<vst_types::rest::mobile_auth::MobileQrResult>, (StatusCode, Json<serde_json::Value>)>
 {
-    let is_remote = headers.contains_key("cf-connecting-ip");
+    let is_remote = is_remote_request(&req);
     state
         .mobile_auth_routes
         .mobile_qr(is_remote)
@@ -3982,7 +4055,6 @@ async fn handle_mobile_auth(
 /// all) is allowed through, same as every other scope-gated handler.
 async fn handle_auth_continue_mint(
     State(state): State<AppState>,
-    headers: HeaderMap,
     req: Request,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     if let Some(payload) = req.extensions().get::<TokenPayload>() {
@@ -3993,7 +4065,7 @@ async fn handle_auth_continue_mint(
             ));
         }
     }
-    let is_remote = headers.contains_key("cf-connecting-ip");
+    let is_remote = is_remote_request(&req);
     state
         .mobile_auth_routes
         .mint_continue_code(is_remote)
@@ -4011,17 +4083,17 @@ async fn handle_auth_continue_mint(
 async fn handle_continue_redeem(
     State(state): State<AppState>,
     Query(q): Query<CodeQuery>,
-    headers: HeaderMap,
     req: Request,
 ) -> Response {
-    if headers.contains_key("cf-connecting-ip") {
+    if is_remote_request(&req) {
         return (StatusCode::GONE, Html(EXPIRED_HTML_FOR_TUNNEL)).into_response();
     }
 
     let connect_info = req.extensions().get::<ConnectInfo<SocketAddr>>().copied();
     let peer_ip = connect_info.map(|ci| ci.0.ip().to_string());
     let client_ip = peer_ip.as_deref();
-    let user_agent = headers
+    let user_agent = req
+        .headers()
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");

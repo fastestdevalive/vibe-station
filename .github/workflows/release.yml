@@ -116,6 +116,17 @@ jobs:
             --manifest-path rust/Cargo.toml \
             -p vst-cli --features vst-daemon/embed-ui
 
+      # ── Assert release binary excludes insecure-no-auth ─────────────────
+      - name: Assert release binary excludes insecure-no-auth
+        run: |
+          BIN="rust/target/${{ matrix.target }}/release/vst"
+          # grep the binary directly: `strings | grep -q` under pipefail misses a match (SIGPIPE on strings).
+          if grep -qaF "INSECURE: VST_NO_AUTH=1 is active" "$BIN"; then
+            echo "ERROR: release binary contains insecure-no-auth feature!" >&2
+            exit 1
+          fi
+          echo "Confirmed: release binary does not contain insecure-no-auth."
+
       # ── Musl runtime verification in Alpine container (R30) ───────────────
       # Found in review: this used to `file "$BIN" | grep -i "statically
       # linked"` as a linkage sanity check before the real boot test below.
@@ -147,7 +158,7 @@ jobs:
             -v "$(pwd)/$BIN:/bin/vst:ro" \
             -e HOME=/tmp \
             alpine:latest /bin/vst daemon run
-          trap 'docker rm -f vst-alpine-boot-check >/dev/null 2>&1 || true' EXIT
+          trap 'docker rm -f vst-alpine-boot-check vst-alpine-no-auth-check >/dev/null 2>&1 || true' EXIT
 
           READY=0
           for i in $(seq 1 20); do
@@ -160,6 +171,27 @@ jobs:
           test "$READY" = 1 || { echo "daemon never became healthy inside Alpine"; docker logs vst-alpine-boot-check; exit 1; }
           cat /tmp/health.json
           grep -q "\"ok\":true" /tmp/health.json
+
+          echo "==> Verifying VST_NO_AUTH=1 is ignored by release binary..."
+          docker run --rm -d --name vst-alpine-no-auth-check \
+            -v "$(pwd)/$BIN:/bin/vst:ro" \
+            -e HOME=/tmp \
+            -e VST_NO_AUTH=1 \
+            alpine:latest /bin/vst daemon run
+
+          NO_AUTH_READY=0
+          for i in $(seq 1 20); do
+            if docker exec vst-alpine-no-auth-check wget -qO- http://127.0.0.1:7421/health >/tmp/health.json 2>/dev/null; then
+              NO_AUTH_READY=1
+              break
+            fi
+            sleep 0.5
+          done
+          test "$NO_AUTH_READY" = 1 || { echo "daemon failed to boot under VST_NO_AUTH=1"; docker logs vst-alpine-no-auth-check; exit 1; }
+          STATUS=$(docker exec vst-alpine-no-auth-check wget -S --spider http://127.0.0.1:7421/api/sessions 2>&1 | awk '/^ +HTTP\// {print $2}' | tail -n1 || true)
+          docker rm -f vst-alpine-no-auth-check >/dev/null 2>&1 || true
+          test "$STATUS" = "401" || { echo "expected HTTP 401 under VST_NO_AUTH=1, got $STATUS"; exit 1; }
+          echo "Confirmed: VST_NO_AUTH=1 is ignored by release binary (HTTP 401 returned)"
 
       # ── Package archive + sha256 ──────────────────────────────────────────
       - name: Package archive and generate sha256
