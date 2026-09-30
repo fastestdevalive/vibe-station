@@ -126,6 +126,9 @@ pub(super) struct Established<T> {
     pub attempts: usize,
 }
 
+/// Callback `(wanted, actual)` fired on the first mismatch when a retry will follow.
+pub(super) type RetryNotifier<'a> = dyn Fn(&str, &str) + Send + Sync + 'a;
+
 pub(super) struct EstablishParams<'a> {
     pub cwd: &'a Path,
     pub prior_session_id: Option<&'a str>,
@@ -135,7 +138,7 @@ pub(super) struct EstablishParams<'a> {
     /// Called once, on the FIRST mismatch, only when a retry will actually
     /// follow: `(wanted, actual)`. Lets the caller tell the user why the chat
     /// is about to pause.
-    pub on_first_retry: Option<&'a (dyn Fn(&str, &str) + Send + Sync)>,
+    pub on_first_retry: Option<&'a RetryNotifier<'a>>,
 }
 
 /// One attempt on an already-initialized connection: load-or-new, then verify
@@ -380,7 +383,7 @@ mod tests {
         fail_new_on_spawn: Option<usize>,
         budget: RetryBudget,
         models: Vec<&'static str>,
-        on_first_retry: Option<Box<dyn Fn(&str, &str) + Send + Sync>>,
+        on_first_retry: Option<Box<RetryNotifier<'static>>>,
     }
 
     impl Script {

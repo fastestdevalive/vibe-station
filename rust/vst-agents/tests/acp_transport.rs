@@ -402,8 +402,7 @@ async fn steer_returns_injected_when_agent_accepts() {
     conn.initialize().await.expect("initialize");
     conn.new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session")
-        .session_id;
+        .expect("new_session");
     let outcome = conn
         .steer(vec![ContentBlock::Text(TextContent::new("steer me"))])
         .await;
@@ -420,8 +419,7 @@ async fn steer_returns_unsupported_on_method_not_found() {
     conn.initialize().await.expect("initialize");
     conn.new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session")
-        .session_id;
+        .expect("new_session");
     let outcome = conn
         .steer(vec![ContentBlock::Text(TextContent::new("steer me"))])
         .await;
