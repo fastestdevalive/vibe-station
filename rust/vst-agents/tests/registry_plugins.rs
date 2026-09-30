@@ -175,6 +175,18 @@ mod claude_plugin {
         assert_eq!(create_agy_plugin().acp_meta("Gemini 3.1 Pro (High)"), None);
     }
 
+    #[test]
+    fn opencode_sets_model_over_acp_but_never_an_empty_one() {
+        let p = create_opencode_plugin();
+        assert_eq!(
+            p.acp_initial_config_option("x"),
+            Some(("model".to_string(), "x".to_string()))
+        );
+        assert_eq!(p.acp_initial_config_option(""), None);
+        // Plugins without the hook are untouched.
+        assert_eq!(create_claude_plugin().acp_initial_config_option("x"), None);
+    }
+
     #[tokio::test]
     async fn restore_command_null_when_no_uuid() {
         let home = tempfile::tempdir().unwrap();

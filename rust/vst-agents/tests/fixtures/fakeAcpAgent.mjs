@@ -48,6 +48,9 @@
 //     defaults 12000/200000/0.5) before the agent_message_chunk, so a test can
 //     exercise the mid-turn context-window path (normalize → Usage event →
 //     events.rs merge) end to end.
+//   FAKE_ACP_MODE=model_options — session/new AND session/load results carry a
+//     `category: "model"` select in `configOptions` (ids m-a, m-b; currentValue
+//     m-b) so a test can assert both calls report the model list + current model.
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 
@@ -71,6 +74,14 @@ let sessionId = "fake-session-1";
 let cancelRequested = false;
 let promptCount = 0;
 let nextClientReqId = 1000;
+
+const modelConfigOptions = () =>
+  mode === "model_options"
+    ? [{
+        id: "model", name: "Model", category: "model", type: "select", currentValue: "m-b",
+        options: [{ value: "m-a", name: "A" }, { value: "m-b", name: "B" }],
+      }]
+    : undefined;
 
 function write(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -122,7 +133,7 @@ rl.on("line", (line) => {
   }
   if (msg.method === "session/new") {
     recordMeta(msg.params);
-    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId } });
+    write({ jsonrpc: "2.0", id: msg.id, result: { sessionId, configOptions: modelConfigOptions() } });
     return;
   }
   if (msg.method === "session/load") {
@@ -130,7 +141,7 @@ rl.on("line", (line) => {
       write({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such session" } });
     } else {
       recordMeta(msg.params);
-      write({ jsonrpc: "2.0", id: msg.id, result: {} });
+      write({ jsonrpc: "2.0", id: msg.id, result: { configOptions: modelConfigOptions() } });
     }
     return;
   }

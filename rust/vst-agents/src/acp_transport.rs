@@ -58,11 +58,23 @@ pub enum AcpTransportError {
 }
 
 /// Result of `session/new`: the minted id plus the live model ids the adapter
-/// advertised in `configOptions` (empty if it advertised no model selector).
+/// advertised in `configOptions` (empty if it advertised no model selector)
+/// and the selector's `currentValue` (`None` if it advertised none).
 #[derive(Clone, Debug)]
 pub struct NewSessionOutcome {
     pub session_id: String,
     pub models: Vec<String>,
+    /// The model the session is actually running on, as reported by the
+    /// `category == "model"` select's `currentValue`.
+    pub current_model: Option<String>,
+}
+
+/// Result of `session/load` — the same model report [`NewSessionOutcome`]
+/// carries (the session id is the caller's own `prior_session_id`).
+#[derive(Clone, Debug, Default)]
+pub struct LoadSessionOutcome {
+    pub models: Vec<String>,
+    pub current_model: Option<String>,
 }
 
 /// What `initialize()` reports back — mirrors the TS method's
@@ -154,7 +166,7 @@ pub trait AcpTransport: Send + Sync {
         cwd: &Path,
         prior_session_id: &str,
         meta: Option<serde_json::Value>,
-    ) -> impl std::future::Future<Output = Result<(), AcpTransportError>> + Send;
+    ) -> impl std::future::Future<Output = Result<LoadSessionOutcome, AcpTransportError>> + Send;
 
     /// The ACP session id established by the most recent successful
     /// `new_session`/`load_session` call, if any.

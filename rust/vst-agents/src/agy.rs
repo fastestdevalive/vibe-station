@@ -621,6 +621,7 @@ impl AgentPlugin for AgyPlugin {
                     // Phase 4.3 — never lets the connect/initialize hang indefinitely.
                     initialize_timeout_ms: Some(20_000),
                     prompt_timeout_ms: None,
+                    reap_detached_descendants: false,
                 }
             }),
             enrich: None,
