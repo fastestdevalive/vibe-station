@@ -14,6 +14,7 @@ pub mod fs;
 pub mod health;
 pub mod lsp;
 pub mod mobile_auth;
+pub mod model_catalog;
 pub mod modes;
 pub mod oobe;
 pub mod open;

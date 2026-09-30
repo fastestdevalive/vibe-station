@@ -48,7 +48,7 @@ mod resolution {
 
     #[test]
     fn default_model_matches_plugin_defaults() {
-        assert_eq!(resolve_plugin(CliId::Claude).default_model(), "sonnet");
+        assert_eq!(resolve_plugin(CliId::Claude).default_model(), "");
         assert_eq!(resolve_plugin(CliId::Cursor).default_model(), "auto");
         assert_eq!(
             resolve_plugin(CliId::Opencode).default_model(),
@@ -85,13 +85,6 @@ mod claude_plugin {
             create_claude_plugin().get_launch_command(&launch_cfg_worktree())[0],
             "claude"
         );
-    }
-
-    #[tokio::test]
-    async fn list_models_includes_fable_alias_and_full_name() {
-        let res = create_claude_plugin().list_models().await;
-        assert!(res.models.iter().any(|m| m == "fable"));
-        assert!(res.models.iter().any(|m| m == "claude-fable-5"));
     }
 
     #[test]
@@ -160,7 +153,7 @@ mod claude_plugin {
     }
 
     #[test]
-    fn acp_meta_forwards_model_and_normalizes_pinned_1m() {
+    fn acp_meta_forwards_model_verbatim() {
         let plugin = create_claude_plugin();
 
         let meta_sonnet = plugin.acp_meta("sonnet").expect("should have acp_meta");
@@ -168,22 +161,6 @@ mod claude_plugin {
         assert_eq!(
             meta_sonnet["claudeCode"]["options"]["betas"][0],
             "context-1m-2025-08-07"
-        );
-
-        let meta_pinned = plugin
-            .acp_meta("claude-sonnet-4-5")
-            .expect("should have acp_meta");
-        assert_eq!(
-            meta_pinned["claudeCode"]["options"]["model"],
-            "claude-sonnet-4-5[1m]"
-        );
-
-        let meta_opus = plugin
-            .acp_meta("claude-opus-4-5")
-            .expect("should have acp_meta");
-        assert_eq!(
-            meta_opus["claudeCode"]["options"]["model"],
-            "claude-opus-4-5[1m]"
         );
 
         let meta_explicit = plugin.acp_meta("sonnet[1m]").expect("should have acp_meta");

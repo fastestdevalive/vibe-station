@@ -46,6 +46,10 @@ export function ModelSwitch({ api, sessionId, cli, model }: ModelSwitchProps) {
       setLoading(false);
       if (r.error) setError(r.error);
       else setModels(r.models);
+    }).catch((e: unknown) => {
+      if (cancelled) return;
+      setLoading(false);
+      setError(e instanceof Error ? e.message : "Could not fetch models");
     });
     return () => {
       cancelled = true;
@@ -67,7 +71,7 @@ export function ModelSwitch({ api, sessionId, cli, model }: ModelSwitchProps) {
   // Options: "(mode default)" (clears override) + the fetched models.
   const options: { label: string; value: string | null }[] = [
     { label: "(mode default)", value: null },
-    ...models.map((m) => ({ label: m, value: m })),
+    ...models.filter((m) => m !== "default").map((m) => ({ label: m, value: m })),
   ];
 
   async function pick(value: string | null) {

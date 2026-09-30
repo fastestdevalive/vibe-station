@@ -116,7 +116,7 @@ pub struct ListModelsResult {
 
 /// One entry in a CLI's starter mode bundle. `model_name` is a name to look
 /// up in this CLI's OWN discovery/curated list at creation time (R13a) — e.g.
-/// "sonnet" for claude, matched by plain membership against
+/// e.g. "sonnet" for claude, matched by plain membership against
 /// `resolve_cli_models(cli).models`. `None` means "use `default_model()`
 /// literally, no discovery lookup required" (the generic-CLI shape, R14).
 pub struct StarterBundleEntry {
@@ -391,6 +391,22 @@ pub trait AgentPlugin: Send + Sync {
     /// without calling code inspecting CLI IDs (AGENTS.md Plugin Invariant).
     fn acp_meta(&self, _model: &str) -> Option<serde_json::Value> {
         None
+    }
+
+    /// `true` when `list_models()` is the live, authoritative model list (the
+    /// CLI reports exactly what the account can use), so a model outside it
+    /// — or a failure to fetch it — is a hard error. Default `false`: the
+    /// list is best-effort and callers validate softly.
+    fn model_list_is_authoritative(&self) -> bool {
+        false
+    }
+
+    /// Map a starter-bundle model name (e.g. `"fable"`) onto an id from this
+    /// CLI's LIVE model list, or `None` if the account has no such model.
+    /// Default: exact membership. A plugin whose live ids are versioned
+    /// (claude: `claude-fable-5-1`) overrides this to match by family.
+    fn resolve_starter_model(&self, name: &str, live_models: &[String]) -> Option<String> {
+        live_models.iter().find(|m| m.as_str() == name).cloned()
     }
 
     /// Optional `(config_id, value)` pair to set via a follow-up

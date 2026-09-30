@@ -52,7 +52,8 @@ async fn live_claude_initialize_new_session_prompt() {
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     let turn = conn.send_prompt(
         &session_id,
         vec![ContentBlock::Text(TextContent::new(

@@ -25,6 +25,24 @@ function mode(over: Partial<Mode>): Mode {
 }
 
 describe("OobeStep2Modes", () => {
+  it("shows the per-CLI models error with a Retry that re-runs detect-and-bundle", async () => {
+    const api = createMockApi() as MockApi;
+    const detect = vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({
+      supportedClis: [cli({ id: "claude", detected: true })],
+      created: [],
+      modelsErrors: { claude: "Couldn't fetch the model list from Claude: timed out." },
+    } as DetectAndBundleResult);
+    vi.spyOn(api, "listModes").mockResolvedValue([]);
+
+    render(<OobeStep2Modes api={api} onStep2Confirmed={vi.fn()} />);
+
+    const banner = await screen.findByTestId("models-error-claude");
+    expect(banner.textContent).toContain("timed out");
+    const before = detect.mock.calls.length;
+    fireEvent.click(screen.getAllByText("Retry")[0]!);
+    await waitFor(() => expect(detect.mock.calls.length).toBeGreaterThan(before));
+  });
+
   it("4.T3 — with zero detected CLIs the Next button is disabled", async () => {
     const api = createMockApi() as MockApi;
     vi.spyOn(api, "detectAndBundleOobe").mockResolvedValue({

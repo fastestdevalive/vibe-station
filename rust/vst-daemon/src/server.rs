@@ -405,6 +405,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         notify_deps,
     );
     let attachment_registry = vst_ws::state::attachment_registry::AttachmentRegistry::new();
+    let model_catalog = vst_routes::model_catalog::ModelCatalog::default();
     let json_unsupported = Arc::new(json_unsupported_cli);
 
     // Shared with the WS `DispatchContext` below (same `Arc`) — `spawn_terminal`
@@ -425,11 +426,13 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         json_unsupported,
         subagent_notify,
         attachment_registry: attachment_registry.clone(),
+        model_catalog: model_catalog.clone(),
     };
 
     let attachment_routes =
         AttachmentRoutes::new(opts.store.clone(), opts.paths.clone(), attachment_registry);
     let mode_routes = ModeRoutes::new(opts.store.clone(), opts.broadcaster.clone())
+        .with_model_catalog(model_catalog)
         .with_paths(opts.paths.clone());
     let settings_routes = SettingsRoutes::new(opts.paths.clone(), opts.broadcaster.clone());
     let oobe_routes = OobeRoutes::new(
@@ -3252,6 +3255,10 @@ fn chat_err_to_response(err: ChatRouteError) -> (StatusCode, Json<serde_json::Va
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": m })),
         ),
+        ChatRouteError::ModelListUnavailable(m) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": m })),
+        ),
         ChatRouteError::Internal(m) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": m })),
@@ -3525,13 +3532,15 @@ async fn handle_starter_bundle(
         }
     };
     let outcome = state.mode_routes.ensure_starter_bundle(cli_id).await;
-    let already_complete = outcome.created.is_empty() && outcome.skipped.is_empty();
+    let already_complete =
+        outcome.models_error.is_none() && outcome.created.is_empty() && outcome.skipped.is_empty();
     Ok(Json(StarterBundleResult {
         created: outcome.created,
         already_present: outcome.already_present,
         skipped: outcome.skipped,
         used_fallback: outcome.used_fallback,
         already_complete,
+        models_error: outcome.models_error,
     }))
 }
 

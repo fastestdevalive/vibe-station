@@ -43,6 +43,10 @@ pub struct ConfirmStep1Result {
 pub struct DetectAndBundleResult {
     pub supported_clis: Vec<SupportedCli>,
     pub created: Vec<Mode>,
+    /// Per-CLI (keyed by CLI id) live model-list failures; that CLI got no
+    /// starter modes this call and is retried on the next call.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models_errors: std::collections::BTreeMap<crate::CliId, String>,
 }
 
 /// `POST /oobe/step2` success — step 2 has no user-supplied fields (the
@@ -63,6 +67,9 @@ pub struct StarterBundleResult {
     pub skipped: Vec<String>,
     pub used_fallback: bool,
     pub already_complete: bool,
+    /// Live model-list fetch failed; nothing was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models_error: Option<String>,
 }
 
 /// `POST /oobe/complete` success.

@@ -232,11 +232,15 @@ impl OobeRoutes {
         // attempt this call — NOT what gets written back (see below).
         let snapshot = self.read_raw().await;
         let mut newly_satisfied: Vec<CliId> = vec![];
+        let mut models_errors = std::collections::BTreeMap::new();
 
         for entry in &supported_clis {
             if entry.detected && !snapshot.auto_bundle_created_for.contains(&entry.id) {
                 let outcome: BundleOutcome = self.mode_routes.ensure_starter_bundle(entry.id).await;
                 created.extend(outcome.created);
+                if let Some(err) = outcome.models_error {
+                    models_errors.insert(entry.id, err);
+                }
                 if outcome.primary_satisfied {
                     newly_satisfied.push(entry.id);
                 }
@@ -269,6 +273,7 @@ impl OobeRoutes {
         DetectAndBundleResult {
             supported_clis,
             created,
+            models_errors,
         }
     }
 

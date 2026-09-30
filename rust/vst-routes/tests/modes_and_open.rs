@@ -112,7 +112,8 @@ async fn test_modes_supported_clis_and_models() {
     assert_eq!(supported.len(), 4);
 
     let claude = supported.iter().find(|s| s.id == CliId::Claude).unwrap();
-    assert!(!claude.default_model.is_empty());
+    // claude has no hardcoded default model (the adapter/account default applies).
+    assert!(claude.default_model.is_empty());
     assert!(claude.supports_json);
     assert!(claude.imports_native_history);
     assert!(claude.supports_json_to_terminal_resume);

@@ -100,7 +100,8 @@ async fn happy_path_initialize_new_session_send_prompt_streams_and_resolves_end_
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     assert!(!session_id.is_empty());
 
     let turn = conn.send_prompt(
@@ -130,7 +131,8 @@ async fn cancel_active_prompt_resolves_with_cancelled_without_killing_connection
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
 
     let turn = conn.send_prompt(
         &session_id,
@@ -179,7 +181,8 @@ async fn is_alive_flips_false_when_child_exits_on_its_own() {
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     // The fake agent keeps running; kill the child out from under the
     // connection to simulate a crash. We can't reach the OS pid from the
     // handle directly, so drive a prompt that forces EOF-triggered teardown
@@ -235,7 +238,8 @@ async fn prompt_times_out_with_clear_error_instead_of_hanging() {
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     let start = std::time::Instant::now();
     let turn = conn.send_prompt(
         &session_id,
@@ -282,7 +286,8 @@ async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent()
     let session_id = conn
         .new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     let start = std::time::Instant::now();
     let turn = conn.send_prompt(
         &session_id,
@@ -392,7 +397,8 @@ async fn steer_returns_injected_when_agent_accepts() {
     conn.initialize().await.expect("initialize");
     conn.new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     let outcome = conn
         .steer(vec![ContentBlock::Text(TextContent::new("steer me"))])
         .await;
@@ -409,7 +415,8 @@ async fn steer_returns_unsupported_on_method_not_found() {
     conn.initialize().await.expect("initialize");
     conn.new_session(&PathBuf::from("/tmp"), None)
         .await
-        .expect("new_session");
+        .expect("new_session")
+        .session_id;
     let outcome = conn
         .steer(vec![ContentBlock::Text(TextContent::new("steer me"))])
         .await;
