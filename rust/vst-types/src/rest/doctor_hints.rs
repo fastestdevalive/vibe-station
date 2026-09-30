@@ -54,7 +54,7 @@ pub fn hint_for(check_name: &str, host_os: &str) -> Option<&'static str> {
         // same vendored-submodule build step the agy-acp check itself uses
         // (see the "agy-acp" case above), not a guessed public URL.
         "plugin-agy" => Some(
-            "Build it from the vendored submodule (rust/vendor/openab/agy-acp) — see AGENTS.md or CLI-SUPPORT.md for the agy CLI itself",
+            "Build it from the vendored submodule (rust/vendor/openab/agy-acp) — see AGENTS.md or docs/RICH-CHAT-ACP.md for the agy CLI itself",
         ),
         _ => None,
     }

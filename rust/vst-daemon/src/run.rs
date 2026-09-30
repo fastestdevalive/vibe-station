@@ -2,7 +2,7 @@
 
 //! Daemon startup sequence — extracted from the standalone `vst-daemon` binary's
 //! `main()` so it's callable from `vst-cli`'s merged `vst` binary too
-//! (`vst daemon run`). See `docs/CLI-DAEMON-TAURI-CUJS.md` / the
+//! (`vst daemon run`). See the
 //! `cli-daemon-unification` feature plan for why this merge exists.
 //!
 //! Startup sequence (mirrors the original `daemon/src/main.ts` port):

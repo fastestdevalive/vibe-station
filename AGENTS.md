@@ -208,7 +208,7 @@ false`). Per-CLI resolution code lives in
 `daemon/src/agent-plugins/native-chat-id/` (one file per CLI that needs one —
 opencode's absence is meaningful). The model is stated once in the
 "two session identities" block above `captureNativeChatId` in `spawn.ts`, and
-in full in [`docs/AGENT-CHAT-ID-CAPTURE.md`](docs/AGENT-CHAT-ID-CAPTURE.md).
+in full in [`docs/RICH-CHAT-ACP.md`](docs/RICH-CHAT-ACP.md) (§ Two session identities).
 
 ### What to watch for
 
