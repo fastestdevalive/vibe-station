@@ -26,9 +26,12 @@
 #   scripts/bench-daemon.sh [N]      # N = runs per metric, default 5
 #
 # Requires: a release build already present at rust/target/release/vst-daemon
-# (run `pnpm run build:rust` first if it's missing). Runs the daemon with an
-# isolated $HOME so it never touches your real ~/.vibe-station or collides
-# with a daemon you already have running.
+# (run `cargo build --release --manifest-path rust/Cargo.toml -p vst-daemon`
+# first if it's missing). Note: `pnpm run build:rust` builds the merged
+# `vst` sidecar binary, NOT the standalone `vst-daemon` — use the cargo
+# command above directly. Runs the daemon with an isolated $HOME so it never
+# touches your real ~/.vibe-station or collides with a daemon you already
+# have running.
 
 set -euo pipefail
 
@@ -38,7 +41,8 @@ RUNS="${1:-5}"
 
 if [[ ! -x "$DAEMON_BIN" ]]; then
   echo "error: $DAEMON_BIN not found or not executable." >&2
-  echo "Build it first: pnpm run build:rust" >&2
+  echo "Build it first:" >&2
+  echo "  cargo build --release --manifest-path rust/Cargo.toml -p vst-daemon" >&2
   exit 1
 fi
 

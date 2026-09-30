@@ -1,5 +1,5 @@
-//! 3-layer prompt builder per HIGH-LEVEL-DESIGN.md §4 (ports
-//! `services/promptBuilder.ts`).
+//! 3-layer prompt builder (ports `services/promptBuilder.ts`); see
+//! `docs/ARCHITECTURE.md` for the layered-prompt design.
 //!
 //! L1 — base: `assets/agent-system-prompt.md` (embedded at compile
 //! time, cached) + the Rich-Chat-only subagent fragment when `rich_chat`.

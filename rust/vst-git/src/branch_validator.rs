@@ -1,5 +1,4 @@
-//! Ports `branchValidator.ts` — branch name validation per
-//! HIGH-LEVEL-DESIGN.md §5.
+//! Ports `branchValidator.ts` — branch name validation.
 
 use crate::git::branch_exists;
 
