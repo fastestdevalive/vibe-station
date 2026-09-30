@@ -1328,7 +1328,7 @@
   color: var(--fg-secondary);
 }
 .chat-statusbar__mode--overridden {
-  /* "via <mode>" — slightly dimmer to distinguish from the un-overridden label */
+  /* "started as <mode>" — slightly dimmer to distinguish from the un-overridden label */
   opacity: 0.7;
   font-style: italic;
 }

@@ -150,13 +150,13 @@ describe("StatusBar (5.T2)", () => {
     expect(modeEl!.getAttribute("title")).toBe("Bugfix");
   });
 
-  it("shows 'via <mode>' with overridden class and tooltip when model is overridden", () => {
+  it("shows 'started as <mode>' with overridden class and tooltip when model is overridden", () => {
     const { container } = render(
       <StatusBar meta={meta({ modeName: "Bugfix", modelOverridden: true })} />,
     );
     const modeEl = container.querySelector(".chat-statusbar__mode");
     expect(modeEl).toBeTruthy();
-    expect(modeEl!.textContent).toBe("via Bugfix");
+    expect(modeEl!.textContent).toBe("started as Bugfix");
     expect(modeEl!.className).toContain("chat-statusbar__mode--overridden");
     expect(modeEl!.getAttribute("title")).toBe("Started as: Bugfix");
   });

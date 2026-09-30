@@ -132,7 +132,7 @@ export function StatusBar({ meta, queueDepth = 0, onStop, stopPending, api, sess
             className={`chat-statusbar__mode${meta.modelOverridden ? " chat-statusbar__mode--overridden" : ""}`}
             title={meta.modelOverridden ? `Started as: ${meta.modeName}` : meta.modeName}
           >
-            {meta.modelOverridden ? `via ${meta.modeName}` : meta.modeName}
+            {meta.modelOverridden ? `started as ${meta.modeName}` : meta.modeName}
           </span>
         ) : null}
       </div>
