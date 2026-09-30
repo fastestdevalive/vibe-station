@@ -1,5 +1,4 @@
-//! Ports `rollback.ts` — rollback helpers for worktree creation failure
-//! (HIGH-LEVEL-DESIGN.md §5).
+//! Ports `rollback.ts` — rollback helpers for worktree creation failure.
 
 use vst_proc::Tmux;
 use vst_types::{ProjectRecord, WorktreeRecord};

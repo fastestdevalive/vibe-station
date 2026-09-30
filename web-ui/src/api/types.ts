@@ -1,4 +1,4 @@
-/** Mirrors docs/HIGH-LEVEL-DESIGN.md §8 */
+/** REST/WS types — see docs/ARCHITECTURE.md */
 
 export interface TunnelState {
   enabled: boolean;

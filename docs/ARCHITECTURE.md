@@ -40,7 +40,7 @@ via tmux (session processes) + SQLite (metadata).
         ↑
         │ same REST API
 ┌──────────────────────────────────────────────────────────────────┐
-│  vst CLI (Rust, separate binary sharing the daemon's crates)      │
+│  vst CLI (Rust; desktop: merged binary with embedded daemon+UI)    │
 │  vst project add <path> · vst worktree create · vst doctor · ...  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -58,7 +58,7 @@ via tmux (session processes) + SQLite (metadata).
 | `rust/vst-lsp`, `rust/vst-proc`, `rust/vst-ws`, `rust/vst-rpc`, `rust/vst-types` | Language-server integration, process/tmux control, WebSocket plumbing, internal RPC, shared types. |
 | `rust/vst-cli` | The `vst` CLI binary — full scripting surface, drives the same REST API the UI uses. |
 | `web-ui/` | React 19 + Vite frontend (`@vibestation/web`). Served by the daemon; renders identically in the desktop shell and the browser. |
-| `desktop/` | Tauri v2 shell (`@vibe-station/desktop`). Rust + system webview; supervises the bundled `vst-daemon`/`vst-cli`/`cloudflared` sidecars. |
+| `desktop/` | Tauri v2 shell (`@vibe-station/desktop`). Rust + system webview; supervises the bundled `vst`/`cloudflared` sidecars (the `vst` binary is the merged CLI+daemon built with `--features vst-daemon/embed-ui`). |
 
 ## The daemon
 
@@ -112,12 +112,13 @@ starts the Vite dev server (hot-reload), and starts `vst-daemon` via
 `cargo run` (debug build, unoptimized, fast recompile). The Tauri window
 loads from Vite; the daemon also serves `web-ui/dist` to any other client.
 
-**`pnpm build`** — Tauri release build. `scripts/prep-sidecar.sh` runs
-`cargo build --release -p vst-daemon -p vst-cli` (fully optimized, stripped),
-copies the binaries into `desktop/src-tauri/binaries/` as Tauri sidecars
-alongside `cloudflared`, and bundles everything into a distributable
-`.app` / `.deb` / `.AppImage` — no Docker, no separate install step for end
-users.
+**`pnpm build`** — Tauri release build. `scripts/prep-sidecar.sh` builds
+the web UI first, then runs `cargo build --release -p vst-cli
+--features vst-daemon/embed-ui` which produces a **single merged `vst` binary**
+(CLI + daemon + embedded web UI). It copies `vst` and `cloudflared` into
+`desktop/src-tauri/binaries/` as Tauri sidecars, then bundles everything into a
+distributable `.app` / `.deb` / `.AppImage` — no Docker, no separate install step
+for end users.
 
 **`scripts/dev-sandbox.sh`** — runs the daemon + web UI in Docker for
 testing the backend in isolation. Mounts a host-built Rust binary in; does
