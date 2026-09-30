@@ -4,7 +4,6 @@
 works today — the index, the watchers that keep it fresh, and the two closely
 related but distinct watch types. Update it whenever this area changes; it is
 meant to stay the map, not a point-in-time design note (see
-`docs/FILE-SEARCH-PLAN.md` for the original `/file-list` planning doc, and
 `.vibekit/feature-plans/wip/` for the phased implementation plans this doc is
 distilled from).
 
