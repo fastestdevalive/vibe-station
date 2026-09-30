@@ -45,6 +45,8 @@ fn base_row() -> SessionRow {
         pr_url: None,
         pr_checked_at: None,
         pr_branch: None,
+        pr_error: None,
+        pr_error_kind: None,
     }
 }
 
@@ -284,6 +286,7 @@ fn session_to_row_writes_pr_branch_null_when_absent() {
             url: None,
             checked_at: "2024-01-01T00:00:00.000Z".into(),
             error: None,
+            error_kind: None,
             pr_branch: Some("feature-x".into()),
         }),
     };

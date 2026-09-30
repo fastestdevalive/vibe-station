@@ -4,7 +4,7 @@
 //! (`0`/`1`, never `true`/`false`).
 
 use vst_types::{
-    Channel, DraftConfig, LifecycleState, PrState, ProjectRecord, SessionLifecycle,
+    Channel, DraftConfig, LifecycleState, PrErrorKind, PrState, ProjectRecord, SessionLifecycle,
     SessionNameSource, SessionRecord, SessionType, TranscriptKind, TranscriptRef, WorktreeRecord,
 };
 
@@ -133,6 +133,25 @@ fn pr_state_str(s: PrState) -> &'static str {
     }
 }
 
+fn parse_pr_error_kind(s: &str) -> Option<PrErrorKind> {
+    match s {
+        "no_credentials" => Some(PrErrorKind::NoCredentials),
+        "auth" => Some(PrErrorKind::Auth),
+        "not_found" => Some(PrErrorKind::NotFound),
+        "transient" => Some(PrErrorKind::Transient),
+        _ => None,
+    }
+}
+
+pub(crate) fn pr_error_kind_str(k: PrErrorKind) -> &'static str {
+    match k {
+        PrErrorKind::NoCredentials => "no_credentials",
+        PrErrorKind::Auth => "auth",
+        PrErrorKind::NotFound => "not_found",
+        PrErrorKind::Transient => "transient",
+    }
+}
+
 /// The raw `sessions` row shape as stored in the DB.
 #[derive(Clone, Debug, Default)]
 pub struct SessionRow {
@@ -169,6 +188,8 @@ pub struct SessionRow {
     pub pr_url: Option<String>,
     pub pr_checked_at: Option<String>,
     pub pr_branch: Option<String>,
+    pub pr_error: Option<String>,
+    pub pr_error_kind: Option<String>,
 }
 
 /// Row -> `SessionRecord`, applying the `needs_review` back-compat (R10): a
@@ -187,7 +208,8 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
             number: row.pr_number,
             url: row.pr_url.clone(),
             checked_at: row.pr_checked_at.clone().unwrap_or_default(),
-            error: None,
+            error: row.pr_error.clone(),
+            error_kind: row.pr_error_kind.as_deref().and_then(parse_pr_error_kind),
             pr_branch: row.pr_branch.clone(),
         })
     });
@@ -205,6 +227,7 @@ pub fn row_to_session(row: &SessionRow) -> SessionRecord {
         url: None,
         checked_at: String::new(),
         error: None,
+        error_kind: None,
         pr_branch: None,
     });
 
@@ -295,6 +318,13 @@ pub fn session_to_row(
         pr_url: session.pr.as_ref().and_then(|p| p.url.clone()),
         pr_checked_at: session.pr.as_ref().map(|p| p.checked_at.clone()),
         pr_branch: session.pr.as_ref().and_then(|p| p.pr_branch.clone()),
+        pr_error: session.pr.as_ref().and_then(|p| p.error.clone()),
+        pr_error_kind: session
+            .pr
+            .as_ref()
+            .and_then(|p| p.error_kind)
+            .map(pr_error_kind_str)
+            .map(str::to_string),
     }
 }
 

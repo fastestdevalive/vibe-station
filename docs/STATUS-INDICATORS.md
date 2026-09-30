@@ -75,6 +75,9 @@ done.
 - PR beats `waiting_for_human` on purpose: an agent idles at its prompt immediately after opening
   a PR, so red would otherwise mask blue permanently.
 
+> **pr.error / pr.errorKind** — informational only. Never affects dot colour or dashboard bucket.
+> Surfaced in: StatusDot tooltip, VCS panel error row, Dashboard header chip, Doctor Feature group.
+
 ### Precedence — dashboard bucket (D19, split by 6.6)
 ```
 1. done | exited        → Finished     (checked FIRST, unconditionally)

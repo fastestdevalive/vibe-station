@@ -1858,10 +1858,7 @@ impl WorktreeRoutes {
 
         let res = res_map.get(&branch);
         match res {
-            Some(vst_lifecycle::github::PrLookupResult::NoCredentials { error }) => {
-                Err(WorktreeRouteError::ServiceUnavailable(error.clone()))
-            }
-            Some(vst_lifecycle::github::PrLookupResult::Error { error }) => {
+            Some(vst_lifecycle::github::PrLookupResult::Error { error, .. }) => {
                 Err(WorktreeRouteError::ServiceUnavailable(error.clone()))
             }
             Some(vst_lifecycle::github::PrLookupResult::NoPr) => Ok(PrLookupResult::NoPr),
