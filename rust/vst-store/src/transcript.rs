@@ -84,9 +84,12 @@ fn kind_str(kind: NormalizedEventKind) -> &'static str {
     }
 }
 
-/// A usage event reflects a real model call only when it billed tokens.
+/// A usage event reflects a real model call: billed tokens, or a context-window
+/// snapshot (which carries window/cost the status bar needs even at zero tokens).
 fn has_real_usage(usage: &Option<vst_types::UsageInfo>) -> bool {
-    usage.as_ref().is_some_and(|u| u.total_tokens > 0)
+    usage
+        .as_ref()
+        .is_some_and(|u| u.total_tokens > 0 || u.context_window.is_some())
 }
 
 /// Content signature of a `user` event for round-trip dedup: trimmed prompt

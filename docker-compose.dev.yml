@@ -69,10 +69,6 @@ services:
       # short-circuits the whole auth middleware before any headless check runs.
       VST_NO_AUTH: "1"
       VITE_DEV_ALLOW_ALL_HOSTS: "1"
-      # Forward host GITHUB_TOKEN into the sandbox so the daemon's PR status
-      # feature can pick it up. The `:-` default makes it optional — unset on
-      # host → empty string in container → env_generic_token() returns None.
-      GITHUB_TOKEN: "${GITHUB_TOKEN:-}"
       # Point cloudflared at Vite (port 5173) so mobile gets the full SPA
       # through the tunnel. Vite proxies /mobile-auth and /api/* back to the
       # daemon. Unset in production (daemon serves SPA directly on its own port).

@@ -1446,7 +1446,6 @@ export function createMockApi() {
       return {
         hardOk: true,
         ok: true,
-        featureOk: true,
         hostOs: "linux",
         hostname: "mock-host",
         checkedAt: new Date().toISOString(),

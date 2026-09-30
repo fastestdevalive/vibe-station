@@ -4012,6 +4012,11 @@ impl SessionRoutes {
                         commands: None,
                         notice_slot: None,
                         active_turn_id: None,
+                        model_overridden: if session.model_override.is_some() {
+                            Some(true)
+                        } else {
+                            None
+                        },
                     }
                 }
             }
@@ -4043,6 +4048,11 @@ impl SessionRoutes {
                 commands: None,
                 notice_slot: None,
                 active_turn_id: None,
+                model_overridden: if session.model_override.is_some() {
+                    Some(true)
+                } else {
+                    None
+                },
             }
         };
 

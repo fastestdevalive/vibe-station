@@ -38,6 +38,7 @@ use std::path::Path;
 
 use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate, StopReason};
 use tokio::sync::{mpsc, oneshot};
+use vst_types::UsageInfo;
 
 /// Mirrors the TS class's typed failure modes (`ConnectionSpawnFailed`,
 /// `InitializeFailed`, `SessionLoadFailed`) plus a catch-all for any other
@@ -95,7 +96,14 @@ pub enum SteerOutcome {
 /// authoritative turn-done signal.
 pub struct PromptTurn {
     pub updates: mpsc::UnboundedReceiver<SessionUpdate>,
-    pub result: oneshot::Receiver<Result<StopReason, AcpTransportError>>,
+    pub result: oneshot::Receiver<Result<PromptTurnOutcome, AcpTransportError>>,
+}
+
+/// The outcome of a prompt turn — stop reason plus optional token usage.
+#[derive(Debug, Clone)]
+pub struct PromptTurnOutcome {
+    pub stop_reason: StopReason,
+    pub usage: Option<UsageInfo>,
 }
 
 /// One persistent ACP JSON-RPC connection to an external agent CLI (spawned

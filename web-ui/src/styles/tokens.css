@@ -127,7 +127,6 @@
   --success-muted: #14532d;
   --warning: #ca8a04;
   --warning-muted: #713f12;
-  --status-warning-bg: rgba(234, 179, 8, 0.12);
 
   /* D17 (2026-08-17, superseding D14) — four-colour scheme: `working` gets
      the yellow that `pr-open` used to have; `pr-open` moves to blue (now
@@ -216,7 +215,6 @@
   --success-muted: #bbf7d0;
   --warning: #ca8a04;
   --warning-muted: #fef08a;
-  --status-warning-bg: rgba(234, 179, 8, 0.18);
 
   --status-working: #a16207;
   --status-waiting: #dc2626;

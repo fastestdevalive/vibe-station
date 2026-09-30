@@ -42,6 +42,12 @@
 //     META_OUT_FILE, as `{ hasMeta, meta }`. The file is ALWAYS written (with
 //     hasMeta:false when `_meta` was omitted) so tests can assert absence
 //     positively rather than relying on a missing file.
+//   FAKE_ACP_MODE=usage_update — like normal, but session/prompt first sends a
+//     mid-turn `usage_update` session/update (used/size/cost from
+//     FAKE_ACP_USAGE_USED / FAKE_ACP_USAGE_SIZE / FAKE_ACP_USAGE_COST_USD,
+//     defaults 12000/200000/0.5) before the agent_message_chunk, so a test can
+//     exercise the mid-turn context-window path (normalize → Usage event →
+//     events.rs merge) end to end.
 import { createInterface } from "node:readline";
 import { writeFileSync } from "node:fs";
 
@@ -229,6 +235,22 @@ rl.on("line", (line) => {
       }, 20);
       return;
     }
+    if (mode === "usage_update") {
+      // Mid-turn context-window snapshot BEFORE any content, so a test can
+      // assert the Usage event (and its survival across the end-of-turn
+      // merge) without racing the streamed text.
+      const used = Number(process.env.FAKE_ACP_USAGE_USED ?? 12000);
+      const size = Number(process.env.FAKE_ACP_USAGE_SIZE ?? 200000);
+      const costUsd = Number(process.env.FAKE_ACP_USAGE_COST_USD ?? 0.5);
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: {
+          sessionId: sid,
+          update: { sessionUpdate: "usage_update", used, size, cost: { amount: costUsd, currency: "USD" } },
+        },
+      });
+    }
     write({
       jsonrpc: "2.0",
       method: "session/update",
@@ -236,7 +258,14 @@ rl.on("line", (line) => {
     });
     setTimeout(() => {
       const stopReason = mode === "refusal" ? "refusal" : "end_turn";
-      write({ jsonrpc: "2.0", id: msg.id, result: { stopReason } });
+      write({
+        jsonrpc: "2.0",
+        id: msg.id,
+        result: {
+          stopReason,
+          usage: { totalTokens: 12, inputTokens: 10, outputTokens: 2 },
+        },
+      });
     }, 20);
     return;
   }

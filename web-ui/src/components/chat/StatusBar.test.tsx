@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionMeta } from "@/api/types";
 import { createMockApi } from "@/api/mock";
-import { StatusBar, turnLabel } from "./StatusBar";
+import { StatusBar, fmt, turnLabel } from "./StatusBar";
 
 function meta(extra: Partial<SessionMeta> = {}): SessionMeta {
   return {
@@ -17,6 +17,16 @@ function meta(extra: Partial<SessionMeta> = {}): SessionMeta {
     ...extra,
   };
 }
+
+describe("fmt", () => {
+  it("is exact below 1000 and compact above", () => {
+    const cases: Array<[number, string]> = [
+      [0, "0"], [999, "999"], [1000, "1k"], [1300, "1.3k"], [22800, "22.8k"],
+      [100800, "100.8k"], [999900, "999.9k"], [999960, "1M"], [1000000, "1M"], [1250000, "1.3M"],
+    ];
+    for (const [n, out] of cases) expect(fmt(n)).toBe(out);
+  });
+});
 
 describe("StatusBar (5.T2)", () => {
   it("renders used/total tokens with context %", () => {
@@ -36,12 +46,12 @@ describe("StatusBar (5.T2)", () => {
         })}
       />,
     );
-    expect(screen.getByText(/12,000 \/ 200,000 tok/)).toBeTruthy();
+    expect(screen.getByText(/12k \/ 200k tok/)).toBeTruthy();
     expect(screen.getByText(/\(6%\)/)).toBeTruthy();
     expect(screen.getByText("opus")).toBeTruthy();
   });
 
-  it("hides cost gracefully when costUsd is missing", () => {
+  it("never renders cost, even when costUsd is reported", () => {
     const { container } = render(
       <StatusBar
         meta={meta({
@@ -51,6 +61,7 @@ describe("StatusBar (5.T2)", () => {
             cacheReadTokens: 0,
             cacheCreateTokens: 0,
             totalTokens: 100,
+            costUsd: 0.5,
             model: "sonnet",
           },
         })}
@@ -127,6 +138,32 @@ describe("StatusBar (5.T2)", () => {
     expect(screen.queryByRole("button", { name: /Change model/i })).toBeNull();
     // Falls back to the plain model label.
     expect(screen.getByText("auto")).toBeTruthy();
+  });
+
+  // ── mode label (model-override indicator) ──────────────────────────────────
+  it("shows plain mode name when model is not overridden", () => {
+    const { container } = render(<StatusBar meta={meta({ modeName: "Bugfix" })} />);
+    const modeEl = container.querySelector(".chat-statusbar__mode");
+    expect(modeEl).toBeTruthy();
+    expect(modeEl!.textContent).toBe("Bugfix");
+    expect(modeEl!.className).not.toContain("chat-statusbar__mode--overridden");
+    expect(modeEl!.getAttribute("title")).toBe("Bugfix");
+  });
+
+  it("shows 'via <mode>' with overridden class and tooltip when model is overridden", () => {
+    const { container } = render(
+      <StatusBar meta={meta({ modeName: "Bugfix", modelOverridden: true })} />,
+    );
+    const modeEl = container.querySelector(".chat-statusbar__mode");
+    expect(modeEl).toBeTruthy();
+    expect(modeEl!.textContent).toBe("via Bugfix");
+    expect(modeEl!.className).toContain("chat-statusbar__mode--overridden");
+    expect(modeEl!.getAttribute("title")).toBe("Started as: Bugfix");
+  });
+
+  it("hides the mode label when modeName is absent", () => {
+    const { container } = render(<StatusBar meta={meta({})} />);
+    expect(container.querySelector(".chat-statusbar__mode")).toBeNull();
   });
 
   // ── P3 channel toggle (R1.1) ───────────────────────────────────────────────

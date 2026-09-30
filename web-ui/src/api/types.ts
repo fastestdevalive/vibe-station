@@ -255,11 +255,7 @@ export interface PrStatus {
    * show a stale PR colour until the next poll tick.
    */
   prBranch?: string;
-  /** Categorized error kind — camelCase from serde. */
-  errorKind?: PrErrorKind;
 }
-
-export type PrErrorKind = "no_credentials" | "auth" | "not_found" | "transient";
 
 /** Token / cost usage numbers (mirror of daemon `UsageInfo`). */
 export interface UsageInfo {
@@ -460,6 +456,12 @@ export interface SessionMeta {
   noticeSlot?: { children: Record<string, string>; running: boolean };
   /** The currently active turn id, if any. */
   activeTurnId?: string;
+  /** True when the user has explicitly overridden the mode's default model via
+   *  the model switcher. When true the status bar renders the mode label as
+   *  "via <mode>" to signal the active model no longer matches the mode's
+   *  configured default. Absent (falsy) when the mode's default model is in
+   *  use. */
+  modelOverridden?: boolean;
 }
 
 /** Dynamic CLI id strings — canonical list from GET /supported-clis */
@@ -520,7 +522,7 @@ export interface OobeState {
 }
 
 export type DoctorCheckStatus = "ok" | "warn" | "error" | "timeout";
-export type DoctorCheckGroup = "required" | "agent_cli" | "optional" | "diagnostic" | "feature";
+export type DoctorCheckGroup = "required" | "agent_cli" | "optional" | "diagnostic";
 
 export interface DoctorCheckDto {
   name: string;
@@ -536,8 +538,6 @@ export interface DoctorCheckDto {
 export interface DoctorReport {
   hardOk: boolean;
   ok: boolean;
-  /** True when no Feature-group check has status "error". */
-  featureOk: boolean;
   hostOs: string;
   hostname: string;
   checkedAt: string;

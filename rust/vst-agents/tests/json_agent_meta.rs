@@ -55,6 +55,7 @@ fn base_opts() -> MetaOptions {
         mode_name: Some("Mode One".into()),
         model_override: None,
         cwd: None,
+        model_overridden: false,
     }
 }
 
@@ -188,6 +189,7 @@ fn session_meta_roundtrips_notice_slot_shape() {
         commands: None,
         notice_slot: None,
         active_turn_id: None,
+        model_overridden: None,
     };
     meta.notice_slot = Some(vst_types::NoticeSlot {
         children: BTreeMap::from([("c1".into(), "Child One".into())]),
@@ -218,6 +220,7 @@ fn session_meta_omits_active_turn_id_when_none() {
         commands: None,
         notice_slot: None,
         active_turn_id: None,
+        model_overridden: None,
     };
     let json = serde_json::to_string(&meta).unwrap();
     assert!(!json.contains("activeTurnId"));

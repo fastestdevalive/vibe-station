@@ -20,6 +20,10 @@ pub struct MetaOptions {
     pub mode_name: Option<String>,
     pub model_override: Option<String>,
     pub cwd: Option<String>,
+    /// True when the session's model was explicitly overridden by the user (i.e.
+    /// `SessionRecord.model_override` is Some). Used to render the mode label
+    /// differently in the status bar.
+    pub model_overridden: bool,
 }
 
 /// True when a usage event reflects a real model call. A claude slash command
@@ -27,7 +31,7 @@ pub struct MetaOptions {
 /// `totalTokens: 0`; treating that as authoritative would clobber the running
 /// token count with zero. Gate all `usage` writes through this.
 pub fn has_real_usage(usage: &Option<UsageInfo>) -> bool {
-    matches!(usage, Some(u) if u.total_tokens > 0)
+    matches!(usage, Some(u) if u.total_tokens > 0 || u.context_window.is_some())
 }
 
 /// Rebuild a `SessionMeta` from a full transcript (Decision 8 meta durability).
@@ -90,5 +94,10 @@ pub fn assemble_meta(opts: &MetaOptions, found: &TranscriptMeta) -> SessionMeta 
         commands,
         notice_slot: None,
         active_turn_id: None,
+        model_overridden: if opts.model_overridden {
+            Some(true)
+        } else {
+            None
+        },
     }
 }

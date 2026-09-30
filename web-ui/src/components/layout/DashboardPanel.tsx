@@ -456,23 +456,6 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
     [pr, worktreeById],
   );
 
-  /** Count of distinct worktrees whose isMain session has a PR error.
-   *  Applies the same projectFilter/hiddenProjectIds filter as
-   *  `useSessionBuckets` so the chip respects the current view. */
-  const prErrorWorktreeCount = useMemo(() => {
-    const affected = new Set<string>();
-    for (const wt of worktrees) {
-      if (projectFilter != null && wt.projectId !== projectFilter) continue;
-      if (projects.find((p) => p.id === wt.projectId)?.hidden) continue;
-      const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
-      const prStatus = worktreePrStatus(sessionsForWt, wt.branch);
-      if (prStatus?.errorKind) {
-        affected.add(wt.id);
-      }
-    }
-    return affected.size;
-  }, [worktrees, sessions, projectFilter, projects]);
-
   const [expandedCols, setExpandedCols] = useState<Record<string, boolean>>({});
 
   const renderDashboardItem = useCallback(
@@ -566,16 +549,6 @@ export function DashboardPanel({ api, projectFilter }: DashboardPanelProps) {
       >
         <div className="dashboard-header">
           <div className="dashboard-header__wordmark">vibe-station</div>
-          {prErrorWorktreeCount > 0 ? (
-            <button
-              type="button"
-              className="dashboard-pr-error-chip"
-              onClick={() => navigate("/settings/doctor")}
-              title="PR status unavailable — click to open Doctor"
-            >
-              ⚠ PR status unavailable ({prErrorWorktreeCount} worktree{prErrorWorktreeCount !== 1 ? "s" : ""})
-            </button>
-          ) : null}
           <span
             style={{
               fontSize: "var(--font-size-xs)",

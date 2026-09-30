@@ -34,8 +34,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use vst_types::{ProjectRecord, SessionLifecycle, SessionRecord, WorktreeRecord};
 
 use crate::row_mappers::{
-    pr_error_kind_str, project_to_row, row_to_project, row_to_session, row_to_worktree,
-    session_to_row, worktree_to_row, ProjectRow, SessionRow, WorktreeRow,
+    project_to_row, row_to_project, row_to_session, row_to_worktree, session_to_row,
+    worktree_to_row, ProjectRow, SessionRow, WorktreeRow,
 };
 use crate::schema::ensure_schema;
 
@@ -326,15 +326,13 @@ impl StoreHandle {
         tokio::task::spawn_blocking(move || -> StoreResult<bool> {
             let conn = inner.conn.lock().unwrap();
             let changes = conn.execute(
-                "UPDATE sessions SET prState = ?1, prNumber = ?2, prUrl = ?3, prCheckedAt = ?4, prBranch = ?5, prError = ?6, prErrorKind = ?7 WHERE id = ?8",
+                "UPDATE sessions SET prState = ?1, prNumber = ?2, prUrl = ?3, prCheckedAt = ?4, prBranch = ?5 WHERE id = ?6",
                 params![
                     pr_state_str(pr.state),
                     pr.number,
                     pr.url,
                     pr.checked_at,
                     pr.pr_branch,
-                    pr.error,
-                    pr.error_kind.map(pr_error_kind_str),
                     session_id
                 ],
             )?;
@@ -392,7 +390,7 @@ fn pr_state_str(s: vst_types::PrState) -> &'static str {
 
 // --- SQL helpers (all invoked from within spawn_blocking) ---
 
-const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind";
+const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch";
 
 fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -429,8 +427,6 @@ fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
         pr_url: r.get(30)?,
         pr_checked_at: r.get(31)?,
         pr_branch: r.get(32)?,
-        pr_error: r.get(33)?,
-        pr_error_kind: r.get(34)?,
     })
 }
 
@@ -640,16 +636,15 @@ fn insert_session(
 ) -> StoreResult<()> {
     let row = session_to_row(s, project_id, worktree_id);
     conn.execute(
-        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
+        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, draftPrompt, draftConfig)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)",
         params![
             row.id, row.worktree_id, row.project_id, row.is_main, row.sort_order, row.r#type, row.mode_id,
             row.name, row.name_source, row.tmux_name, row.use_tmux, row.channel, row.state, row.reason,
             row.last_transition_at, row.transcript_kind, row.transcript_path, row.agent_chat_id,
             row.acp_session_id, row.model_override, row.pinned_at, row.initial_prompt, row.archived_at,
             row.handoff_summary, row.spawned_from, row.superseded_by, row.pr_state, row.pr_number,
-            row.pr_url, row.pr_checked_at, row.pr_branch, row.pr_error, row.pr_error_kind,
-            row.draft_prompt, row.draft_config
+            row.pr_url, row.pr_checked_at, row.pr_branch, row.draft_prompt, row.draft_config
         ],
     )?;
     Ok(())

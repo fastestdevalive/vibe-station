@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use vst_store::StoreHandle;
-use vst_types::domain::{PrErrorKind, PrState, PrStatus, SessionRecord};
+use vst_types::domain::{PrState, PrStatus, SessionRecord};
 use vst_types::events::{Broadcaster, ServerEvent};
 
 use crate::github::{
@@ -55,7 +55,6 @@ pub fn pr_status_equivalent(a: &PrStatus, b: &PrStatus) -> bool {
         && a.number == b.number
         && a.url == b.url
         && a.error == b.error
-        && a.error_kind == b.error_kind
         && a.pr_branch == b.pr_branch
 }
 
@@ -92,12 +91,7 @@ async fn set_pr_status(
     });
 }
 
-fn pr_lookup_to_status(
-    result: &PrLookupResult,
-    branch: &str,
-    checked_at: &str,
-    existing: Option<&PrStatus>,
-) -> PrStatus {
+fn pr_lookup_to_status(result: &PrLookupResult, branch: &str, checked_at: &str) -> PrStatus {
     match result {
         PrLookupResult::NoPr => PrStatus {
             state: PrState::None,
@@ -105,7 +99,6 @@ fn pr_lookup_to_status(
             url: None,
             checked_at: checked_at.to_string(),
             error: None,
-            error_kind: None,
             pr_branch: Some(branch.to_string()),
         },
         PrLookupResult::Pr(data) => PrStatus {
@@ -114,36 +107,16 @@ fn pr_lookup_to_status(
             url: Some(data.url.clone()),
             checked_at: checked_at.to_string(),
             error: None,
-            error_kind: None,
             pr_branch: Some(branch.to_string()),
         },
-        PrLookupResult::Error { kind, error } => {
-            let is_transient_same_branch = *kind == PrErrorKind::Transient
-                && existing.and_then(|e| e.pr_branch.as_deref()) == Some(branch);
-
-            if is_transient_same_branch {
-                // Preserve last-known PR state on transient errors.
-                PrStatus {
-                    state: existing.map(|e| e.state).unwrap_or(PrState::None),
-                    number: existing.and_then(|e| e.number),
-                    url: existing.and_then(|e| e.url.clone()),
-                    checked_at: checked_at.to_string(),
-                    error: Some(error.clone()),
-                    error_kind: Some(*kind),
-                    pr_branch: Some(branch.to_string()),
-                }
-            } else {
-                PrStatus {
-                    state: PrState::None,
-                    number: None,
-                    url: None,
-                    checked_at: checked_at.to_string(),
-                    error: Some(error.clone()),
-                    error_kind: Some(*kind),
-                    pr_branch: Some(branch.to_string()),
-                }
-            }
-        }
+        PrLookupResult::NoCredentials { error } | PrLookupResult::Error { error } => PrStatus {
+            state: PrState::None,
+            number: None,
+            url: None,
+            checked_at: checked_at.to_string(),
+            error: Some(error.clone()),
+            pr_branch: Some(branch.to_string()),
+        },
     }
 }
 
@@ -234,8 +207,7 @@ impl PrPollerHandle {
                 let Some(&session) = sessions_by_id.get(session_id) else {
                     continue;
                 };
-                let pr_status =
-                    pr_lookup_to_status(result, branch, &checked_at, session.pr.as_ref());
+                let pr_status = pr_lookup_to_status(result, branch, &checked_at);
                 set_pr_status(
                     &project.id,
                     session,

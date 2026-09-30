@@ -468,6 +468,11 @@ impl JsonAgentSession {
             commands,
             notice_slot: notice_slot_meta,
             active_turn_id: s.active_turn.as_ref().map(|t| t.turn_id.clone()),
+            model_overridden: if s.session.model_override.is_some() {
+                Some(true)
+            } else {
+                None
+            },
         }
     }
 
@@ -1058,6 +1063,7 @@ pub(super) fn now_ms() -> u64 {
 mod tests {
     use std::collections::BTreeMap;
 
+    use super::meta::{build_meta_from_transcript, MetaOptions};
     use super::*;
     use crate::plugin::{
         AgentPlugin, ComposePromptInput, ComposePromptResult, LaunchConfig, ListModelsResult,
@@ -1381,5 +1387,138 @@ mod tests {
         assert_eq!(queued.len(), 1, "the held turn must still be reported");
         assert_eq!(queued[0].turn_id, res.turn_id);
         assert_eq!(queued[0].message, "original");
+    }
+
+    // ------------------------------------------------------------------
+    // Usage merge (reviewer findings 1–3)
+    // ------------------------------------------------------------------
+
+    fn usage_event(kind: NormalizedEventKind, usage: UsageInfo) -> NormalizedEvent {
+        let mut ev = NormalizedEvent::default();
+        ev.kind = kind;
+        ev.usage = Some(usage);
+        ev
+    }
+
+    fn windowed_usage(total: i64, window: i64) -> UsageInfo {
+        UsageInfo {
+            total_tokens: total,
+            context_window: Some(window),
+            ..Default::default()
+        }
+    }
+
+    /// Finding 1 — a mid-turn `UsageUpdate(used=12000, size=200000)` then an
+    /// end-of-turn `Result` whose total is accumulated across all API calls
+    /// in the turn (500k): the merge keeps the context fill (12000) and the
+    /// window (200000). Letting the breakdown's total win would render
+    /// "250%" on the status bar.
+    #[tokio::test]
+    async fn usage_merge_keeps_context_fill_and_window_over_inflated_total() {
+        let s = session();
+        s.handle_event(&mut usage_event(
+            NormalizedEventKind::Usage,
+            windowed_usage(12_000, 200_000),
+        ))
+        .await;
+
+        let mut result = usage_event(
+            NormalizedEventKind::Result,
+            UsageInfo {
+                input_tokens: 400_000,
+                output_tokens: 100_000,
+                total_tokens: 500_000,
+                ..Default::default()
+            },
+        );
+        s.handle_event(&mut result).await;
+
+        let st = s.0.state.lock().unwrap();
+        let u = st.usage.clone().expect("usage recorded");
+        assert_eq!(
+            u.total_tokens, 12_000,
+            "context fill wins over the accumulated end-of-turn total"
+        );
+        assert_eq!(u.context_window, Some(200_000), "window preserved");
+        assert_eq!(
+            u.input_tokens, 400_000,
+            "breakdown copied from the end-of-turn usage"
+        );
+        assert_eq!(u.output_tokens, 100_000);
+    }
+
+    /// Finding 2 — the merged usage must be what gets persisted, so the
+    /// restart-durable meta rebuild (`build_meta_from_transcript`) sees the
+    /// context window after a restart.
+    #[tokio::test]
+    async fn usage_merge_is_persisted_so_meta_rebuild_keeps_window() {
+        let s = session();
+        s.handle_event(&mut usage_event(
+            NormalizedEventKind::Usage,
+            windowed_usage(12_000, 200_000),
+        ))
+        .await;
+        s.handle_event(&mut usage_event(
+            NormalizedEventKind::Result,
+            UsageInfo {
+                total_tokens: 500_000,
+                ..Default::default()
+            },
+        ))
+        .await;
+
+        let events = s.read_transcript();
+        let meta = build_meta_from_transcript(
+            &MetaOptions {
+                session_id: "s1".into(),
+                cli: "claude".into(),
+                mode_id: None,
+                mode_name: None,
+                model_override: None,
+                cwd: None,
+                model_overridden: false,
+            },
+            &events,
+        );
+        let u = meta.usage.expect("meta carries usage");
+        assert_eq!(
+            u.total_tokens, 12_000,
+            "context fill survives the restart rebuild"
+        );
+        assert_eq!(
+            u.context_window,
+            Some(200_000),
+            "window survives the restart rebuild"
+        );
+    }
+
+    /// Finding 3 — a mid-turn window snapshot with `used == 0` is not a
+    /// slash-command zero; it must pass the `has_real_usage` gate and merge.
+    #[tokio::test]
+    async fn zero_token_usage_with_window_passes_gate_and_merges() {
+        assert!(events::has_real_usage(
+            Some(windowed_usage(0, 200_000)).as_ref()
+        ));
+        assert!(!events::has_real_usage(
+            Some(UsageInfo {
+                total_tokens: 0,
+                context_window: None,
+                ..Default::default()
+            })
+            .as_ref()
+        ));
+
+        let s = session();
+        s.handle_event(&mut usage_event(
+            NormalizedEventKind::Usage,
+            windowed_usage(0, 200_000),
+        ))
+        .await;
+        let st = s.0.state.lock().unwrap();
+        assert_eq!(
+            st.usage.as_ref().and_then(|u| u.context_window),
+            Some(200_000),
+            "window-only snapshot must be recorded, not dropped"
+        );
     }
 }

@@ -47,7 +47,7 @@ use agent_client_protocol::schema::v1::{
     ReleaseTerminalRequest, ReleaseTerminalResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
     SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionConfigOptionResponse, StopReason, TerminalExitStatus as AcpTerminalExitStatus,
+    SetSessionConfigOptionResponse, TerminalExitStatus as AcpTerminalExitStatus,
     TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
@@ -61,7 +61,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp_file_system;
 use crate::acp_terminal_manager::{TerminalCreateParams, TerminalManager};
 use crate::acp_transport::{
-    AcpTransport, AcpTransportError, InitializeOutcome, PromptTurn, SteerOutcome,
+    AcpTransport, AcpTransportError, InitializeOutcome, PromptTurn, PromptTurnOutcome, SteerOutcome,
 };
 
 /// Launch spec for the agent process — a plugin supplies only this (argv/env
@@ -169,7 +169,7 @@ enum Command {
     SendPrompt {
         session_id: String,
         prompt: Vec<ContentBlock>,
-        result_tx: oneshot::Sender<Result<StopReason, AcpTransportError>>,
+        result_tx: oneshot::Sender<Result<PromptTurnOutcome, AcpTransportError>>,
         /// Identifies THIS turn's sink, so the completion handler can tell
         /// whether `active_update` still points at it before clearing —
         /// see the comment at the `SendPrompt` command-loop arm.
@@ -317,7 +317,8 @@ impl AcpTransport for AcpConnection {
 
     fn send_prompt(&self, session_id: &str, prompt: Vec<ContentBlock>) -> PromptTurn {
         let (updates_tx, updates_rx) = mpsc::unbounded_channel::<SessionUpdate>();
-        let (result_tx, result_rx) = oneshot::channel::<Result<StopReason, AcpTransportError>>();
+        let (result_tx, result_rx) =
+            oneshot::channel::<Result<PromptTurnOutcome, AcpTransportError>>();
 
         if self.0.shared.disposed.load(Ordering::Relaxed) {
             // Reject immediately — never let a dead connection hang a caller.
@@ -849,7 +850,7 @@ async fn do_send_prompt(
     session_id: &str,
     prompt: Vec<ContentBlock>,
     timeout_ms: Option<u64>,
-) -> Result<StopReason, AcpTransportError> {
+) -> Result<PromptTurnOutcome, AcpTransportError> {
     let idle_timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_PROMPT_TIMEOUT_MS));
     // Reset the clock right before issuing the request so a notification left
     // over from a previous turn (or from `initialize`/`new_session`) can't
@@ -867,7 +868,9 @@ async fn do_send_prompt(
             Ok(response) => {
                 let response: PromptResponse =
                     response.map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
-                return Ok(response.stop_reason);
+                let stop_reason = response.stop_reason;
+                let usage = extract_usage(&response);
+                return Ok(PromptTurnOutcome { stop_reason, usage });
             }
             Err(_) => {
                 let idle_for = shared.last_activity.lock().unwrap().elapsed();
@@ -881,6 +884,114 @@ async fn do_send_prompt(
             }
         }
     }
+}
+
+/// Read an integer from a JSON object, trying each key in `keys` in order.
+/// Falls back to `as_f64` (truncating) so `12.0`-style floats parse; missing
+/// or non-numeric fields yield 0. Clamps to `[0, i64::MAX]` to avoid sign-flip
+/// on huge `u64`/`f64` values.
+fn num_any(v: &serde_json::Value, keys: &[&str]) -> i64 {
+    for key in keys {
+        if let Some(x) = v.get(key) {
+            if let Some(n) = x.as_i64() {
+                return n.max(0);
+            }
+            if let Some(f) = x.as_f64() {
+                return (f as i64).max(0);
+            }
+        }
+    }
+    0
+}
+
+/// Convenience wrapper for a camelCase + snake_case pair.
+fn num(v: &serde_json::Value, camel: &str, snake: &str) -> i64 {
+    num_any(v, &[camel, snake])
+}
+
+/// Build a `UsageInfo` from the token breakdown, applying the shared
+/// "total 0 → sum the parts" fallback (some adapters omit `totalTokens`
+/// when it equals the obvious sum).
+fn usage_info(
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cache_create: i64,
+    total: i64,
+) -> vst_types::UsageInfo {
+    let total = if total == 0 {
+        input
+            .saturating_add(output)
+            .saturating_add(cache_read)
+            .saturating_add(cache_create)
+    } else {
+        total
+    };
+    vst_types::UsageInfo {
+        input_tokens: input,
+        output_tokens: output,
+        cache_read_tokens: cache_read,
+        cache_create_tokens: cache_create,
+        total_tokens: total,
+        context_window: None,
+        cost_usd: None,
+        model: String::new(),
+    }
+}
+
+/// Extract token usage from a `PromptResponse`.
+///
+/// Reads the typed `response.usage` field first (behind the
+/// `unstable_end_turn_token_usage` feature). Falls back to `response.meta`
+/// for a `"usage"` sub-object supporting camelCase and snake_case keys.
+fn extract_usage(response: &PromptResponse) -> Option<vst_types::UsageInfo> {
+    // Path 1: typed `response.usage` (unstable_end_turn_token_usage feature)
+    if let Some(usage) = &response.usage {
+        return Some(usage_info(
+            i64::try_from(usage.input_tokens).unwrap_or(i64::MAX),
+            i64::try_from(usage.output_tokens).unwrap_or(i64::MAX),
+            i64::try_from(usage.cached_read_tokens.unwrap_or(0)).unwrap_or(i64::MAX),
+            i64::try_from(usage.cached_write_tokens.unwrap_or(0)).unwrap_or(i64::MAX),
+            i64::try_from(usage.total_tokens).unwrap_or(i64::MAX),
+        ));
+    }
+
+    // Path 2: `_meta.usage` fallback (camelCase + snake_case, multiple aliases).
+    // Only proceed if the value is an object; null/string/number would yield all zeros.
+    if let Some(meta) = &response.meta {
+        if let Some(usage_val) = meta.get("usage").filter(|v| v.is_object()) {
+            return Some(usage_info(
+                num(usage_val, "inputTokens", "input_tokens"),
+                num(usage_val, "outputTokens", "output_tokens"),
+                // ACP spec: cachedReadTokens; Anthropic snake: cache_read_input_tokens
+                num_any(
+                    usage_val,
+                    &[
+                        "cachedReadTokens",
+                        "cacheReadTokens",
+                        "cache_read_tokens",
+                        "cached_read_tokens",
+                        "cache_read_input_tokens",
+                    ],
+                ),
+                // ACP spec: cachedWriteTokens; Anthropic snake: cache_creation_input_tokens
+                num_any(
+                    usage_val,
+                    &[
+                        "cachedWriteTokens",
+                        "cacheWriteTokens",
+                        "cacheCreateTokens",
+                        "cache_write_tokens",
+                        "cache_create_tokens",
+                        "cache_creation_input_tokens",
+                    ],
+                ),
+                num(usage_val, "totalTokens", "total_tokens"),
+            ));
+        }
+    }
+
+    None
 }
 
 fn do_cancel(cx: &ConnectionTo<Agent>, shared: &Arc<Shared>) {
@@ -969,4 +1080,87 @@ mod wire_tests {
     // in tests/acp_transport.rs, rather than re-asserted here against an
     // isolated builder call (which would still pass if `do_initialize` never
     // called `.client_capabilities(...)` at all).
+
+    // ---- extract_usage (typed `response.usage` + `_meta.usage` paths) ----
+
+    #[test]
+    fn extract_usage_typed_path_maps_all_fields() {
+        use agent_client_protocol::schema::v1::{StopReason, Usage};
+        let resp = PromptResponse::new(StopReason::EndTurn).usage(Usage::new(50, 30, 20));
+        let u = extract_usage(&resp).expect("typed usage extracted");
+        assert_eq!(
+            (
+                u.total_tokens,
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_create_tokens
+            ),
+            (50, 30, 20, 0, 0)
+        );
+        assert_eq!(u.context_window, None);
+        assert_eq!(u.cost_usd, None);
+    }
+
+    #[test]
+    fn extract_usage_typed_path_zero_total_sums_parts() {
+        use agent_client_protocol::schema::v1::{StopReason, Usage};
+        let resp = PromptResponse::new(StopReason::EndTurn).usage(Usage::new(0, 7, 5));
+        let u = extract_usage(&resp).expect("typed usage extracted");
+        assert_eq!(u.total_tokens, 12, "total 0 falls back to the parts sum");
+    }
+
+    #[test]
+    fn extract_usage_meta_path_camel_case() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "usage".to_string(),
+            serde_json::json!({
+                "inputTokens": 10,
+                "outputTokens": 4,
+                "cacheReadTokens": 6,
+                "cacheCreateTokens": 2,
+                "totalTokens": 22,
+            }),
+        );
+        let resp =
+            PromptResponse::new(agent_client_protocol::schema::v1::StopReason::EndTurn).meta(meta);
+        let u = extract_usage(&resp).expect("_meta.usage extracted");
+        assert_eq!(
+            (
+                u.total_tokens,
+                u.input_tokens,
+                u.output_tokens,
+                u.cache_read_tokens,
+                u.cache_create_tokens
+            ),
+            (22, 10, 4, 6, 2)
+        );
+    }
+
+    #[test]
+    fn extract_usage_meta_path_snake_case_and_total_fallback() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "usage".to_string(),
+            serde_json::json!({
+                "input_tokens": 3,
+                "output_tokens": 2,
+                "cache_read_tokens": 1,
+                "cache_create_tokens": 1,
+                "total_tokens": 0,
+            }),
+        );
+        let resp =
+            PromptResponse::new(agent_client_protocol::schema::v1::StopReason::EndTurn).meta(meta);
+        let u = extract_usage(&resp).expect("_meta.usage extracted");
+        assert_eq!(u.total_tokens, 7, "snake_case keys + total-0 sum fallback");
+        assert_eq!((u.input_tokens, u.output_tokens), (3, 2));
+    }
+
+    #[test]
+    fn extract_usage_none_when_neither_path_present() {
+        let resp = PromptResponse::new(agent_client_protocol::schema::v1::StopReason::EndTurn);
+        assert!(extract_usage(&resp).is_none());
+    }
 }
