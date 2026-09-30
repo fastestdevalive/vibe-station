@@ -13,6 +13,7 @@ pub mod connection;
 pub mod drain;
 pub mod events;
 pub mod meta;
+pub mod model_race;
 pub mod pids;
 pub mod queue;
 
@@ -178,6 +179,12 @@ pub(super) struct State {
     // ---- ACP connection ----
     pub(super) connection: Option<AcpConnection>,
     pub(super) connection_first_turn_pending: bool,
+    /// Bumped by `set_model` whenever the requested model changes; connection
+    /// setup compares it under the lock that stores the connection.
+    pub(super) model_generation: u64,
+    /// Wanted model of the last connection setup that ended in a final
+    /// mismatch; selects the reduced retry budget while it stays wanted.
+    pub(super) last_unrecovered_model: Option<String>,
     pub(super) out_of_band_turn_id: Option<String>,
     pub(super) out_of_band_last_at_ms: u64,
 
@@ -350,6 +357,8 @@ impl JsonAgentSession {
             live_pids: HashSet::new(),
             connection: None,
             connection_first_turn_pending: false,
+            model_generation: 0,
+            last_unrecovered_model: None,
             out_of_band_turn_id: None,
             out_of_band_last_at_ms: 0,
             notice_slot: None,
@@ -493,8 +502,12 @@ impl JsonAgentSession {
             let mut s = self.0.state.lock().unwrap();
             let changed = s.requested_model != requested;
             s.requested_model = requested.clone();
+            // Visible immediately to an in-flight connection setup, which
+            // re-reads the desired model when it finishes.
+            s.session.model_override = override_model.clone();
             s.model = requested;
             if changed {
+                s.model_generation += 1;
                 s.connection.take()
             } else {
                 None

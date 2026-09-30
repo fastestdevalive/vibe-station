@@ -63,8 +63,8 @@ use tokio::sync::{mpsc, oneshot};
 use crate::acp_file_system;
 use crate::acp_terminal_manager::{TerminalCreateParams, TerminalManager};
 use crate::acp_transport::{
-    AcpTransport, AcpTransportError, InitializeOutcome, NewSessionOutcome, PromptTurn,
-    PromptTurnOutcome, SteerOutcome,
+    AcpTransport, AcpTransportError, InitializeOutcome, LoadSessionOutcome, NewSessionOutcome,
+    PromptTurn, PromptTurnOutcome, SteerOutcome,
 };
 
 /// Launch spec for the agent process — a plugin supplies only this (argv/env
@@ -84,6 +84,11 @@ pub struct AcpLaunchSpec {
     /// thinking chunks, diffs, …) can run indefinitely; only an agent that
     /// goes fully silent for this long is killed. See `do_send_prompt`.
     pub prompt_timeout_ms: Option<u64>,
+    /// On close, SIGKILL the agent's descendant tree (incl. `setsid`'d
+    /// children the group kill can't reach). Opt-in via
+    /// `AgentPlugin::reap_detached_descendants`; off, agent-detached
+    /// processes survive dispose.
+    pub reap_detached_descendants: bool,
 }
 
 const DEFAULT_INITIALIZE_TIMEOUT_MS: u64 = 30_000;
@@ -138,6 +143,13 @@ struct Shared {
     /// than a flat cap on total turn duration. Reset whenever a notification
     /// arrives, regardless of whether a sink is currently attached.
     last_activity: Mutex<Instant>,
+    /// Stamped into the agent's environment purely so its root pid can be
+    /// located among the daemon's children (see `snapshot_descendants`);
+    /// nothing is ever killed by matching it.
+    root_tag: String,
+    /// `(pid, starttime)` of the agent's descendants, snapshotted at close
+    /// while the agent is still alive; killed after `AcpAgent`'s group kill.
+    descendants: Mutex<Vec<(u32, u64)>>,
 }
 
 impl Shared {
@@ -149,6 +161,8 @@ impl Shared {
             steering_supported: AtomicBool::new(false),
             disposed: AtomicBool::new(false),
             last_activity: Mutex::new(Instant::now()),
+            root_tag: uuid::Uuid::new_v4().to_string(),
+            descendants: Mutex::new(Vec::new()),
         }
     }
 }
@@ -167,7 +181,7 @@ enum Command {
         cwd: std::path::PathBuf,
         prior_session_id: String,
         meta: Option<serde_json::Value>,
-        reply: oneshot::Sender<Result<(), AcpTransportError>>,
+        reply: oneshot::Sender<Result<LoadSessionOutcome, AcpTransportError>>,
     },
     SendPrompt {
         session_id: String,
@@ -293,7 +307,7 @@ impl AcpTransport for AcpConnection {
         cwd: &Path,
         prior_session_id: &str,
         meta: Option<serde_json::Value>,
-    ) -> Result<(), AcpTransportError> {
+    ) -> Result<LoadSessionOutcome, AcpTransportError> {
         if self.0.shared.disposed.load(Ordering::Relaxed) {
             return Err(AcpTransportError::SessionLoadFailed(
                 "ACP connection is disposed; cannot load session".to_string(),
@@ -434,10 +448,14 @@ fn spawn_actor(
         // plugin-agnostic (every ACP-driven CLI benefits), so it lives here
         // rather than in any one plugin.
         let debug_command = spec.command.clone();
+        // Tag the agent so its pid can be found for the descendant snapshot
+        // taken at close (see `snapshot_descendants`).
+        let mut agent_env = spec.env.clone();
+        agent_env.insert(ROOT_TAG_ENV.to_string(), shared.root_tag.clone());
         let agent = AcpAgent::new(
             AcpAgentConfig::new(spec.command.clone())
                 .args(spec.args.clone())
-                .envs(spec.env.clone()),
+                .envs(agent_env),
         )
         .with_debug(move |line, direction| {
             if direction == LineDirection::Stderr {
@@ -642,7 +660,118 @@ fn spawn_actor(
         // any late commands fail fast.
         shared_after.disposed.store(true, Ordering::SeqCst);
         shared_after.active_update.lock().unwrap().take();
+
+        // `AcpAgent` has already SIGKILLed the child's process group. Finish
+        // the job for descendants that left it (snapshotted at close).
+        let victims = std::mem::take(&mut *shared_after.descendants.lock().unwrap());
+        let _ = tokio::task::spawn_blocking(move || kill_descendants(&victims)).await;
     });
+}
+
+/// Env var stamped on the agent process so its pid can be located; see
+/// [`Shared::root_tag`]. Never used to select processes to kill.
+const ROOT_TAG_ENV: &str = "VST_ACP_ROOT_TAG";
+
+/// `(ppid, starttime)` from `/proc/<pid>/stat`. Parsed after the last `)`
+/// because the comm field may itself contain spaces and parens.
+#[cfg(target_os = "linux")]
+fn proc_stat(pid: u32) -> Option<(u32, u64)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.rsplit_once(')')?.1;
+    let mut f = rest.split_whitespace();
+    // fields after comm: state(3) ppid(4) ... starttime(22)
+    let ppid = f.nth(1)?.parse().ok()?;
+    let start = f.nth(17)?.parse().ok()?;
+    Some((ppid, start))
+}
+
+/// Snapshot the agent's descendants by walking `ppid` links from the agent
+/// process (the direct child of the daemon carrying `root_tag`).
+///
+/// `AcpAgent` makes the agent a process-group leader and `killpg`s that group
+/// on teardown, which covers wrapper launchers (`npx → node`). It does NOT
+/// reach a descendant that `setsid()`s into its own session/group: opencode
+/// acp spawns `opencode serve --stdio` that way, so each disposed opencode
+/// connection orphaned a live server. `setsid` does not change the parent
+/// link, so the ppid tree still reaches it while the agent is alive. Processes
+/// the agent deliberately detached (double-fork/daemonize → reparented to
+/// init) are not in the tree and so are left running, as before.
+///
+/// Must run BEFORE the agent is killed: afterwards its children reparent and
+/// the tree is unrecoverable. Linux-only (`/proc`); empty elsewhere. The
+/// daemon's own pid is never included.
+fn snapshot_descendants(root_tag: &str) -> Vec<(u32, u64)> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::collections::HashMap;
+        let me = std::process::id();
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        let mut children: HashMap<u32, Vec<(u32, u64)>> = HashMap::new();
+        for entry in entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|n| n.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if let Some((ppid, start)) = proc_stat(pid) {
+                children.entry(ppid).or_default().push((pid, start));
+            }
+        }
+        let needle = format!("{ROOT_TAG_ENV}={root_tag}");
+        let root = children.get(&me).and_then(|kids| {
+            kids.iter().find(|(pid, _)| {
+                std::fs::read(format!("/proc/{pid}/environ"))
+                    .map(|e| e.split(|b| *b == 0).any(|kv| kv == needle.as_bytes()))
+                    .unwrap_or(false)
+            })
+        });
+        let Some(&(root_pid, _)) = root else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut stack = vec![root_pid];
+        while let Some(p) = stack.pop() {
+            for &(pid, start) in children.get(&p).into_iter().flatten() {
+                if pid != me {
+                    out.push((pid, start));
+                    stack.push(pid);
+                }
+            }
+        }
+        out
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = root_tag;
+        Vec::new()
+    }
+}
+
+/// SIGKILL snapshotted descendants that are still the same process (pid +
+/// start time, guarding against pid reuse).
+fn kill_descendants(victims: &[(u32, u64)]) {
+    #[cfg(target_os = "linux")]
+    {
+        let pids: Vec<String> = victims
+            .iter()
+            .filter(|(pid, start)| proc_stat(*pid).is_some_and(|(_, s)| s == *start))
+            .map(|(pid, _)| pid.to_string())
+            .collect();
+        if !pids.is_empty() {
+            // `kill(1)` rather than libc: this crate forbids `unsafe`.
+            let _ = std::process::Command::new("kill")
+                .arg("-KILL")
+                .args(&pids)
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = victims;
 }
 
 /// The actor's command loop — runs inside the `connect_with` closure.
@@ -751,6 +880,17 @@ async fn command_loop(
             }
         }
     }
+    // Agent is still alive here; `connect_with` returning is what kills it.
+    // Only reached on a clean command-loop exit (dispose/handle drop). An
+    // agent that crashes on its own has already had its children reparented,
+    // so there is no tree left to recover. The /proc scan + environ reads are
+    // blocking I/O, hence `spawn_blocking` rather than running on the actor.
+    if spec.reap_detached_descendants {
+        let tag = shared.root_tag.clone();
+        if let Ok(v) = tokio::task::spawn_blocking(move || snapshot_descendants(&tag)).await {
+            *shared.descendants.lock().unwrap() = v;
+        }
+    }
     Ok(())
 }
 
@@ -829,18 +969,25 @@ async fn do_new_session(
         .map_err(|e| AcpTransportError::RequestFailed(e.to_string()))?;
     let session_id = response.session_id.to_string();
     *shared.session_id.lock().unwrap() = Some(session_id.clone());
-    let models = response
+    let (models, current_model) = response
         .config_options
         .as_deref()
-        .map(live_models_from_config_options)
+        .map(model_report_from_config_options)
         .unwrap_or_default();
-    Ok(NewSessionOutcome { session_id, models })
+    Ok(NewSessionOutcome {
+        session_id,
+        models,
+        current_model,
+    })
 }
 
-/// Extract the model ids from the `category == "model"` select in a
-/// `session/new` response's `configOptions` (grouped and ungrouped alike).
-/// Empty when the adapter advertises no model selector.
-fn live_models_from_config_options(options: &[SessionConfigOption]) -> Vec<String> {
+/// Extract the model ids (grouped and ungrouped alike) and the `currentValue`
+/// from the `category == "model"` select in a `session/new`/`session/load`
+/// response's `configOptions`. `(empty, None)` when the adapter advertises no
+/// model selector.
+fn model_report_from_config_options(
+    options: &[SessionConfigOption],
+) -> (Vec<String>, Option<String>) {
     for opt in options {
         if !matches!(opt.category, Some(SessionConfigOptionCategory::Model)) {
             continue;
@@ -848,7 +995,7 @@ fn live_models_from_config_options(options: &[SessionConfigOption]) -> Vec<Strin
         let SessionConfigKind::Select(select) = &opt.kind else {
             continue;
         };
-        return match &select.options {
+        let models = match &select.options {
             SessionConfigSelectOptions::Ungrouped(list) => {
                 list.iter().map(|o| o.value.to_string()).collect()
             }
@@ -858,8 +1005,9 @@ fn live_models_from_config_options(options: &[SessionConfigOption]) -> Vec<Strin
                 .collect(),
             _ => Vec::new(),
         };
+        return (models, Some(select.current_value.to_string()));
     }
-    Vec::new()
+    (Vec::new(), None)
 }
 
 async fn do_load_session(
@@ -868,15 +1016,24 @@ async fn do_load_session(
     cwd: &Path,
     prior_session_id: &str,
     meta: Option<serde_json::Value>,
-) -> Result<(), AcpTransportError> {
+) -> Result<LoadSessionOutcome, AcpTransportError> {
     let req = LoadSessionRequest::new(prior_session_id.to_string(), cwd.to_path_buf())
         .meta(meta_map(meta));
-    cx.send_request(req)
+    let response = cx
+        .send_request(req)
         .block_task()
         .await
         .map_err(|e| AcpTransportError::SessionLoadFailed(e.to_string()))?;
     *shared.session_id.lock().unwrap() = Some(prior_session_id.to_string());
-    Ok(())
+    let (models, current_model) = response
+        .config_options
+        .as_deref()
+        .map(model_report_from_config_options)
+        .unwrap_or_default();
+    Ok(LoadSessionOutcome {
+        models,
+        current_model,
+    })
 }
 
 /// Sends `session/prompt` and waits for its response, enforcing an IDLE
@@ -1100,6 +1257,14 @@ async fn do_set_config_option(
 #[cfg(test)]
 mod wire_tests {
     use super::*;
+
+    /// No child of the daemon carries the tag (agent already gone): graceful
+    /// empty result, not a panic.
+    #[test]
+    fn snapshot_with_missing_root_pid_is_a_noop() {
+        assert!(snapshot_descendants("no-such-root-tag-0000").is_empty());
+        kill_descendants(&[]);
+    }
 
     /// ACP is camelCase on the wire. A snake_case `session_id` makes the agent
     /// reject `_session/steering`, which silently degrades steering to queueing.

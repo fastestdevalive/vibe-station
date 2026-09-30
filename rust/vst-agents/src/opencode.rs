@@ -541,6 +541,32 @@ impl AgentPlugin for OpencodePlugin {
         true
     }
 
+    /// `opencode acp` spawns `opencode serve --stdio` via `setsid()`, which
+    /// escapes the process group the transport kills on dispose, so every
+    /// disposed connection would otherwise orphan a live server.
+    fn reap_detached_descendants(&self) -> bool {
+        true
+    }
+
+    fn acp_initial_config_option(&self, model: &str) -> Option<(String, String)> {
+        // `OPENCODE_CONFIG`'s `model` key is only honoured if `opencode acp`
+        // has finished loading its config/providers before it creates the
+        // session. It sometimes hasn't (a startup race, ~50% of spawns in
+        // probes): the session is then created on the first available model
+        // (a free, rate-limited one) and stays there — `session/load`
+        // restores that stored model and ignores the config too, and `_meta`
+        // on `session/new` is ignored entirely. So the config-file write in
+        // `run_turn` is kept only as a backup; the authoritative channel is
+        // this explicit `session/set_config_option {configId: "model"}`,
+        // whose outcome the session layer checks against the model the
+        // session reports (and retries on a lost race). An empty model means
+        // "no preference" — never send an empty value.
+        if model.is_empty() {
+            return None;
+        }
+        Some(("model".to_string(), model.to_string()))
+    }
+
     fn format_skill_directive(
         &self,
         message: &str,
@@ -573,6 +599,7 @@ impl AgentPlugin for OpencodePlugin {
                     .collect(),
                     initialize_timeout_ms: None,
                     prompt_timeout_ms: None,
+                    reap_detached_descendants: OpencodePlugin.reap_detached_descendants(),
                 }
             }),
             enrich: None,

@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use vst_types::NormalizedEventKind;
 
+use super::model_race::{
+    establish_with_recovery, select_budget, setup_verdict, should_persist_session_id,
+    EstablishParams, ModelState, SetupVerdict,
+};
 use super::JsonAgentSession;
 use crate::{
     acp_connection::{AcpConnection, AcpLaunchSpec},
@@ -15,6 +19,9 @@ use crate::{
     context::{build_vst_env, BuildVstEnvOptions},
     normalize::AcpEnrichHook,
 };
+
+/// Extra setup rounds allowed when the desired model changed mid-setup.
+const MAX_MODEL_CHANGE_REDOS: usize = 2;
 
 impl JsonAgentSession {
     /// Get the live ACP connection, creating it if necessary.
@@ -66,11 +73,6 @@ impl JsonAgentSession {
             ..spec
         };
 
-        let conn = AcpConnection::new(spec_with_vst_env);
-
-        // Initialize the connection.
-        let init_outcome = conn.initialize().await?;
-
         // Reconnect id: prefer acpSessionId (Option B), fall back to agentChatId (Option A).
         let prior_acp_id = {
             let s = self.0.state.lock().unwrap();
@@ -80,74 +82,157 @@ impl JsonAgentSession {
                 .or_else(|| s.session.agent_chat_id.clone())
         };
 
-        // ACP meta for the agent adapter (forward model & options without branching on CLI id).
-        let active_model = {
-            let s = self.0.state.lock().unwrap();
-            s.session
-                .model_override
-                .clone()
-                .or_else(|| s.requested_model.clone())
-                .unwrap_or_else(|| self.0.plugin.default_model().to_string())
-        };
-        let acp_meta = self.0.plugin.acp_meta(&active_model);
+        // A model switch (`set_model`) made while setup is in flight finds no
+        // connection to dispose. So the final check — generation unchanged and
+        // desired model == the one we set up with — runs under the SAME lock
+        // acquisition that stores the connection, leaving no window for a
+        // switch to land between check and store. Bounded so a flapping
+        // selector cannot spin.
+        let mut rounds_left = MAX_MODEL_CHANGE_REDOS;
+        loop {
+            let (active_model, started_generation, last_unrecovered) = {
+                let s = self.0.state.lock().unwrap();
+                (
+                    self.desired_model_of(&s),
+                    s.model_generation,
+                    s.last_unrecovered_model.clone(),
+                )
+            };
+            // ACP meta for the agent adapter (forward model & options without branching on CLI id).
+            let acp_meta = self.0.plugin.acp_meta(&active_model);
 
-        let cwd = self.0.cwd.clone();
-        let mut used_fresh_session = true;
+            // Some adapters ignore `_meta` and only take a model through an
+            // explicit `session/set_config_option`, and some lose a startup race
+            // and silently pick another model — see `AgentPlugin::
+            // acp_initial_config_option` and `model_race`. A plugin returning
+            // `None` here is never checked or retried.
+            let model_option = self.0.plugin.acp_initial_config_option(&active_model);
+            let wanted = model_option.as_ref().map(|(_, v)| v.clone());
+            let budget = select_budget(last_unrecovered.as_deref(), wanted.as_deref());
 
-        if init_outcome.load_session_supported {
-            if let Some(prior_id) = prior_acp_id {
-                match conn.load_session(&cwd, &prior_id, acp_meta.clone()).await {
-                    Ok(()) => {
-                        used_fresh_session = false;
+            let cwd = self.0.cwd.clone();
+            let notify_retry = |wanted: &str, actual: &str| {
+                self.emit_status(&format!(
+                    "requested model \"{wanted}\" not loaded yet (got \"{actual}\"), retrying…"
+                ));
+            };
+            let params = EstablishParams {
+                cwd: &cwd,
+                prior_session_id: prior_acp_id.as_deref(),
+                acp_meta,
+                model_option,
+                on_first_retry: Some(&notify_retry),
+            };
+            let est = establish_with_recovery(
+                || {
+                    let spec = spec_with_vst_env.clone();
+                    async move {
+                        let conn = AcpConnection::new(spec);
+                        match conn.initialize().await {
+                            Ok(init) => Ok((conn, init)),
+                            Err(e) => {
+                                conn.dispose().await;
+                                Err(e)
+                            }
+                        }
                     }
-                    Err(AcpTransportError::SessionLoadFailed(_)) => {
-                        // Emit a status event noting the fallback to a fresh session.
-                        let mut ev = vst_types::NormalizedEvent::default();
-                        ev.text = Some(
-                            "resumed with a fresh agent session — prior context may not be visible to the CLI"
-                                .to_string(),
-                        );
-                        let mut ev = self.new_event(NormalizedEventKind::Status, &mut ev);
-                        self.persist_event(&mut ev);
-                        self.0.stream.emit_message(&ev);
+                },
+                &params,
+                budget,
+            )
+            .await?;
+            let conn = est.conn.clone();
+
+            // Final check + store under one lock. No awaits inside.
+            let mut stale_kept = false;
+            let stored = {
+                let mut s = self.0.state.lock().unwrap();
+                let verdict = setup_verdict(
+                    started_generation,
+                    s.model_generation,
+                    &self.desired_model_of(&s),
+                    &active_model,
+                );
+                if verdict == SetupVerdict::Redo && rounds_left > 0 {
+                    false
+                } else {
+                    stale_kept = verdict == SetupVerdict::Redo;
+                    match &est.model {
+                        ModelState::Mismatch { .. } => s.last_unrecovered_model = wanted.clone(),
+                        ModelState::Confirmed => s.last_unrecovered_model = None,
+                        ModelState::Unchecked => {}
                     }
-                    Err(e) => return Err(e),
+                    s.connection = Some(conn.clone());
+                    s.connection_first_turn_pending = true;
+                    true
                 }
+            };
+            if !stored {
+                // A discarded round never persists its session id (nothing to
+                // double-apply across redone rounds), nor emits statuses.
+                rounds_left -= 1;
+                conn.dispose().await;
+                continue;
             }
-        }
 
-        if used_fresh_session {
-            let acp_session_id = conn.new_session(&cwd, acp_meta).await?.session_id;
-            self.persist_acp_session_id(acp_session_id).await;
-        }
-
-        // Some adapters (e.g. openab's agy-acp) ignore `_meta` at
-        // `session/new`/`session/load` entirely and only accept a model via
-        // this explicit follow-up call — see `AgentPlugin::acp_initial_config_option`'s
-        // doc comment. Best-effort: most plugins return `None` here (they
-        // already carried the model via `acp_meta` above), and any failure
-        // (including method-not-found on an adapter that doesn't implement
-        // it) just means the turn proceeds with whatever the adapter already
-        // defaulted to — never fails the connection setup over this.
-        if let Some((config_id, value)) = self.0.plugin.acp_initial_config_option(&active_model) {
-            if let Err(e) = conn.set_config_option(&config_id, &value).await {
-                tracing::warn!(
-                    config_id = %config_id,
-                    value = %value,
-                    error = %e,
-                    "acp_initial_config_option: session/set_config_option failed (non-fatal)"
+            if stale_kept {
+                self.emit_status(&format!(
+                    "the model changed during startup; the agent is running on the earlier \
+                     selection \"{active_model}\" — re-select the model to switch"
+                ));
+            }
+            if est.load_fell_back {
+                self.emit_status(
+                    "resumed with a fresh agent session — prior context may not be visible to the CLI",
                 );
             }
-        }
 
-        // Store connection and set the first-turn-pending flag.
-        {
-            let mut s = self.0.state.lock().unwrap();
-            s.connection = Some(conn.clone());
-            s.connection_first_turn_pending = true;
-        }
+            if let ModelState::Mismatch { actual } = &est.model {
+                // Final failure: proceed rather than error. Erroring would make
+                // the session unusable for as long as the adapter keeps losing
+                // the race, whereas the user can still chat (and switch model,
+                // which respawns) — provided they are told, loudly, that it is
+                // not the model they asked for.
+                self.emit_status(&format!(
+                    "requested model \"{}\" was unavailable after {} attempts — \
+                     the agent is running on \"{actual}\" instead",
+                    wanted.as_deref().unwrap_or(&active_model),
+                    est.attempts,
+                ));
+            }
+            // Persisted only for the KEPT connection (after the store above),
+            // so a redone round's abandoned session id is never written. A
+            // fresh session's id is persisted even on a final mismatch: a
+            // wrong-model session can be repaired later (`session/load` +
+            // `set_config_option`), whereas dropping the id loses the
+            // conversation on the next respawn. A `set_model` landing after
+            // the store disposes this connection; the id still names the
+            // right conversation for its `session/load`.
+            if should_persist_session_id(est.resumed, &est.model) {
+                self.persist_acp_session_id(est.session_id).await;
+            }
 
-        Ok(conn)
+            return Ok(conn);
+        }
+    }
+
+    /// The model the session should currently run: override, else the
+    /// requested one, else the plugin default.
+    fn desired_model_of(&self, s: &super::State) -> String {
+        s.session
+            .model_override
+            .clone()
+            .or_else(|| s.requested_model.clone())
+            .unwrap_or_else(|| self.0.plugin.default_model().to_string())
+    }
+
+    /// Emit + persist a visible `status` event.
+    fn emit_status(&self, text: &str) {
+        let mut ev = vst_types::NormalizedEvent::default();
+        ev.text = Some(text.to_string());
+        let mut ev = self.new_event(NormalizedEventKind::Status, &mut ev);
+        self.persist_event(&mut ev);
+        self.0.stream.emit_message(&ev);
     }
 
     /// Decision 6 Option B: called once per connection, at the `result` event

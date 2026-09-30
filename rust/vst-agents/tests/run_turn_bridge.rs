@@ -45,6 +45,7 @@ fn spec_for(mode: &str) -> AcpLaunchSpec {
         env: HashMap::from([("FAKE_ACP_MODE".to_string(), mode.to_string())]),
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
+        reap_detached_descendants: false,
     }
 }
 
@@ -402,6 +403,7 @@ async fn stuck_turn_watchdog_recovers_when_adapter_abandons_the_turn() {
         // stuck-turn watchdog — not `do_send_prompt`'s hour-long idle net —
         // is what recovers this turn.
         prompt_timeout_ms: None,
+        reap_detached_descendants: false,
     };
     let (ctx, captured) = ctx_with_spec(spec.clone());
     let (tx, mut rx) = mpsc::unbounded_channel();

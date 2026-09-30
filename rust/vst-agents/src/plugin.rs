@@ -425,6 +425,20 @@ pub trait AgentPlugin: Send + Sync {
     fn acp_initial_config_option(&self, _model: &str) -> Option<(String, String)> {
         None
     }
+
+    /// Whether disposing this adapter's ACP connection must also SIGKILL its
+    /// descendant process tree, including children that `setsid()` out of the
+    /// process group the transport already kills.
+    ///
+    /// Return `true` ONLY for adapters known to leak their own detached helper
+    /// processes (opencode). The default is `false` because the tree walk
+    /// cannot tell an adapter-internal helper from a process the AGENT
+    /// deliberately detached (a `spawn({detached:true})` dev server, a
+    /// background shell) — killing those on every dispose, including every
+    /// model switch, would be a regression for adapters that don't leak.
+    fn reap_detached_descendants(&self) -> bool {
+        false
+    }
 }
 
 /// A short ISO8601-ish timestamp for event `ts`/`id` fields. Exact values are

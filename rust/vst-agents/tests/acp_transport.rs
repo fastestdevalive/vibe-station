@@ -42,6 +42,7 @@ fn make_connection(mode: &str) -> AcpConnection {
         env,
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
+        reap_detached_descendants: false,
     })
 }
 
@@ -77,6 +78,7 @@ async fn initialize_times_out_with_initialize_failed_not_indefinitely() {
         env,
         initialize_timeout_ms: Some(300),
         prompt_timeout_ms: None,
+        reap_detached_descendants: false,
     });
     let start = std::time::Instant::now();
     let err = conn.initialize().await.expect_err("should time out");
@@ -233,6 +235,7 @@ async fn prompt_times_out_with_clear_error_instead_of_hanging() {
         env,
         initialize_timeout_ms: None,
         prompt_timeout_ms: Some(200),
+        reap_detached_descendants: false,
     });
     conn.initialize().await.expect("initialize");
     let session_id = conn
@@ -281,6 +284,7 @@ async fn prompt_idle_timeout_resets_on_streamed_updates_then_fires_once_silent()
         // Shorter than the ~150ms it takes to stream all 5 updates: a flat
         // (non-idle) timeout would fire well before streaming finishes.
         prompt_timeout_ms: Some(100),
+        reap_detached_descendants: false,
     });
     conn.initialize().await.expect("initialize");
     let session_id = conn
@@ -351,6 +355,7 @@ async fn initialize_sends_fs_and_terminal_client_capabilities_on_the_wire() {
         env,
         initialize_timeout_ms: None,
         prompt_timeout_ms: None,
+        reap_detached_descendants: false,
     });
     conn.initialize().await.expect("initialize");
     conn.dispose().await;
@@ -435,4 +440,193 @@ async fn steer_on_disposed_connection_returns_unsupported() {
         .steer(vec![ContentBlock::Text(TextContent::new("steer me"))])
         .await;
     assert_eq!(outcome, SteerOutcome::Unsupported);
+}
+
+/// Both `session/new` and `session/load` report the model selector's list and
+/// `currentValue`.
+#[tokio::test]
+async fn new_and_load_session_report_current_model_and_list() {
+    let conn = make_connection("model_options");
+    conn.initialize().await.expect("initialize");
+    let new = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .expect("new_session");
+    assert_eq!(new.models, vec!["m-a", "m-b"]);
+    assert_eq!(new.current_model.as_deref(), Some("m-b"));
+    let load = conn
+        .load_session(&PathBuf::from("/tmp"), "prior", None)
+        .await
+        .expect("load_session");
+    assert_eq!(load.models, vec!["m-a", "m-b"]);
+    assert_eq!(load.current_model.as_deref(), Some("m-b"));
+    conn.dispose().await;
+
+    // An adapter without a model selector reports nothing.
+    let conn = make_connection("normal");
+    conn.initialize().await.unwrap();
+    let new = conn
+        .new_session(&PathBuf::from("/tmp"), None)
+        .await
+        .unwrap();
+    assert!(new.models.is_empty() && new.current_model.is_none());
+    conn.dispose().await;
+}
+
+#[cfg(target_os = "linux")]
+fn proc_running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map(|s| {
+            !s.rsplit(')')
+                .next()
+                .unwrap_or("")
+                .trim_start()
+                .starts_with('Z')
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+async fn read_pid(path: &std::path::Path) -> u32 {
+    for _ in 0..200 {
+        if let Some(p) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            return p;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("pid file {} never appeared", path.display());
+}
+
+/// A process the agent double-forked away (reparented to init) — i.e. one it
+/// deliberately detached — must survive `dispose()`, even though it descends
+/// from the agent by environment inheritance.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dispose_spares_deliberately_detached_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    // The inner subshell's child is orphaned when the subshell exits, so it
+    // reparents to init before dispose.
+    let script = format!(
+        "(setsid sh -c 'echo $$ > {}; exec sleep 300' &) ; sleep 300",
+        pid_file.display()
+    );
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), script],
+        cwd: dir.path().to_path_buf(),
+        env: HashMap::new(),
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+        reap_detached_descendants: false,
+    });
+    let pid = read_pid(&pid_file).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(proc_running(pid));
+    conn.dispose().await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let survived = proc_running(pid);
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
+    assert!(
+        survived,
+        "detached (reparented) process was killed by dispose()"
+    );
+}
+
+/// A descendant that `setsid()`s out of the agent's process group (as opencode's
+/// `serve --stdio` child does) must still die on `dispose()`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dispose_kills_descendants_that_escaped_the_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let script = format!(
+        "setsid sh -c 'echo $$ > {}; exec sleep 300' & wait",
+        pid_file.display()
+    );
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), script],
+        cwd: dir.path().to_path_buf(),
+        env: HashMap::new(),
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+        reap_detached_descendants: true,
+    });
+    let pid = loop {
+        if let Some(p) = std::fs::read_to_string(&pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            break p;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+    let running = |pid: u32| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| {
+                !s.rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start()
+                    .starts_with('Z')
+            })
+            .unwrap_or(false)
+    };
+    assert!(
+        running(pid),
+        "escaped descendant should be alive pre-dispose"
+    );
+    conn.dispose().await;
+    let mut gone = false;
+    for _ in 0..100 {
+        if !running(pid) {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !gone {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    assert!(gone, "setsid'd descendant survived dispose()");
+}
+
+/// Without the plugin opt-in, a `setsid`'d child of the agent is an
+/// agent-detached process (dev server, background shell) and must survive.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dispose_spares_setsid_child_when_reaping_not_opted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let script = format!(
+        "setsid sh -c 'echo $$ > {}; exec sleep 300' & wait",
+        pid_file.display()
+    );
+    let conn = AcpConnection::new(AcpLaunchSpec {
+        command: "sh".to_string(),
+        args: vec!["-c".to_string(), script],
+        cwd: dir.path().to_path_buf(),
+        env: HashMap::new(),
+        initialize_timeout_ms: None,
+        prompt_timeout_ms: None,
+        reap_detached_descendants: false,
+    });
+    let pid = read_pid(&pid_file).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(proc_running(pid));
+    conn.dispose().await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let survived = proc_running(pid);
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .status();
+    assert!(survived, "setsid'd child was killed with reaping disabled");
 }
