@@ -40,17 +40,21 @@ describe("CliDetectionPanel (3.T2)", () => {
     });
   });
 
-  it("renders 'Recreate 1' when 1 of 3 names is missing (2 of 3 seeded)", async () => {
+  it("renders 'Create starter modes' for a CLI even when OTHER CLIs already have modes", async () => {
+    // Per-CLI only: cursor having a mode must not hide claude's button (which
+    // has zero modes).
     testApi.__test.seedModes([
-      { id: "m-bugfix", name: "Bugfix", cli: "claude", context: "", presetId: "bug-fix-with-pr", icon: "claude" },
-      { id: "m-plan", name: "Plan", cli: "claude", context: "", presetId: "planning-no-pr", icon: "claude" },
+      { id: "m-plan", name: "Plan", cli: "cursor", context: "", presetId: "planning-no-pr", icon: "cursor" },
     ]);
     render(<CliDetectionPanel api={testApi} variant="oobe" />);
 
     const claudeRow = within(await screen.findByTestId("cli-row-claude"));
     await waitFor(() => {
-      expect(claudeRow.getByRole("button", { name: "Recreate 1" })).toBeInTheDocument();
+      expect(claudeRow.getByRole("button", { name: "Create starter modes" })).toBeInTheDocument();
     });
+    // cursor's mode means cursor already has its own slot (button never shows).
+    const cursorRow = within(await screen.findByTestId("cli-row-cursor"));
+    expect(cursorRow.queryByRole("button")).toBeNull();
   });
 
   it("renders the '✓ all created' confirmation (oobe only) when 0 are missing", async () => {
@@ -115,6 +119,53 @@ describe("CliDetectionPanel (3.T2)", () => {
       expect(claudeRow.queryByRole("button")).toBeNull();
       expect(claudeRow.getByTestId("cli-all-created-claude")).toHaveTextContent("✓ all created");
     });
+  });
+
+  it("uses the default border (never green) on the row and a borderless plain-text badge", async () => {
+    render(<CliDetectionPanel api={testApi} variant="oobe" />);
+    const row = await screen.findByTestId("cli-row-claude");
+    // claude is detected, but the row must NOT get the success/green border —
+    // it always uses var(--border-default).
+    expect(row.style.border).toContain("var(--border-width) solid var(--border-default)");
+    expect(row.style.border).not.toContain("var(--fg-success)");
+    expect(row.style.opacity).toBe("1");
+
+    const undetectedRow = screen.getByTestId("cli-row-opencode");
+    // Undetected keeps the same border plus dimming.
+    expect(undetectedRow.style.border).toContain("var(--border-default)");
+    expect(undetectedRow.style.border).not.toContain("var(--fg-success)");
+    expect(undetectedRow.style.opacity).toBe("0.6");
+
+    // Badge is plain text — no border/background, colour from fg tokens only.
+    const badge = screen.getByTestId("cli-detected-claude");
+    expect(badge.style.border).toBe("");
+    expect(badge.style.background).toBe("");
+    expect(badge.style.color).toContain("var(--fg-success)");
+    expect(screen.getByTestId("cli-detected-opencode").style.color).toContain("var(--fg-muted)");
+  });
+
+  it("mutex: button and default-channel dropdown are never rendered together for one CLI", async () => {
+    // With no claude mode yet: button only, no dropdown.
+    testApi.__test.seedModes([]);
+    const { unmount } = render(<CliDetectionPanel api={testApi} variant="settings" />);
+    const claudeRow = within(await screen.findByTestId("cli-row-claude"));
+    await waitFor(() => {
+      expect(claudeRow.getByRole("button", { name: "Create starter modes" })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("default-channel-claude")).toBeNull();
+    unmount();
+
+    // Once a claude mode exists: dropdown only, no button.
+    testApi.__test.seedModes([
+      { id: "m-bugfix", name: "Bugfix", cli: "claude", context: "", presetId: "bug-fix-with-pr", icon: "claude" },
+    ]);
+    render(<CliDetectionPanel api={testApi} variant="settings" />);
+    const claudeRow2 = within(await screen.findByTestId("cli-row-claude"));
+    await waitFor(() => {
+      expect(claudeRow2.getByTestId("default-channel-claude")).toBeInTheDocument();
+    });
+    // Dropdown only for claude — no button in the same row.
+    expect(claudeRow2.queryByRole("button", { name: "Create starter modes" })).toBeNull();
   });
 
   it("refetches getSupportedClis() when refreshSignal changes, picking up a sibling's detect-and-bundle result", async () => {
@@ -249,7 +300,11 @@ describe("CliDetectionPanel default-channel toggle (6.T4)", () => {
     });
   });
 
-  it("keeps a live override visible even if the CLI has zero modes (round-3 m5)", async () => {
+  it("with zero modes the settings variant shows the create button, never the dropdown (mutex)", async () => {
+    // round-3 m5's `|| cli.defaultChannelOverridden` clause is gone: for a
+    // detected CLI the button and the default-channel dropdown are mutually
+    // exclusive, and zero modes means the button wins regardless of an
+    // override flag.
     const overridden: SupportedCli = {
       id: "agy",
       defaultModel: "m",
@@ -267,8 +322,11 @@ describe("CliDetectionPanel default-channel toggle (6.T4)", () => {
     render(<CliDetectionPanel api={testApi} variant="settings" />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("default-channel-agy")).toBeInTheDocument();
+      expect(
+        within(screen.getByTestId("cli-row-agy")).getByRole("button", { name: "Create starter modes" }),
+      ).toBeInTheDocument();
     });
+    expect(screen.queryByTestId("default-channel-agy")).toBeNull();
   });
 
   it("shows an inline error and disables the select while a channel update is in flight (round-3 m3)", async () => {
