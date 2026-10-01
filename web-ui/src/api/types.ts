@@ -150,6 +150,10 @@ export interface Session {
   /** Project this session belongs to. null for global drafts (no project chosen yet). */
   projectId: string | null;
   modeId: string | null;
+  /** Icon key of the mode, snapshotted by the daemon at session creation so it
+   *  outlives the mode being edited or deleted. Absent on drafts and on sessions
+   *  whose mode was already gone before the snapshot existed. */
+  modeIcon?: string | null;
   type: SessionType;
   /** User-set display name. null/absent when using the computed default label
    *  — see `sessionLabel()` in `@/lib/sessionLabel`, which every renderer

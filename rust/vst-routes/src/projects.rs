@@ -58,7 +58,9 @@ use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
 
 use crate::file_serving::{read_file_response, FileServingError};
-use crate::modes::{find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id};
+use crate::modes::{
+    find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+};
 use crate::sessions::{serialize_session, spawn_session, SpawnSessionOpts};
 use crate::settings::load_default_channel_overrides;
 use crate::worktrees::{
@@ -865,6 +867,7 @@ impl ProjectRoutes {
                             sort_order: 0.0,
                             r#type: SessionType::Agent,
                             mode_id: Some(resolved_mode_id.clone()),
+                            mode_icon: mode_icon_for(&resolved_mode_id),
                             name: wt_name.clone(),
                             name_source: wt_name
                                 .as_ref()
@@ -1011,6 +1014,7 @@ impl ProjectRoutes {
                     sort_order: ms_now() as f64,
                     r#type: SessionType::Agent,
                     mode_id: Some(resolved_mode_id.clone()),
+                    mode_icon: mode_icon_for(&resolved_mode_id),
                     name: Some(session_name),
                     name_source: heuristic_name
                         .as_ref()

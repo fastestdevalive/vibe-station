@@ -211,7 +211,7 @@ function DashboardSessionItem({
   setActiveWorktree,
   navigate,
 }: DashboardSessionItemProps) {
-  const modeIconKey = useModeIcon(sessionModeId(s), api);
+  const modeIconKey = useModeIcon(sessionModeId(s), api, s.modeIcon);
   const status = sessionStatus(sessionStates[s.id] ?? s.state);
   const wt = s.worktreeId != null ? worktreeById.get(s.worktreeId) : undefined;
   const sessionPr = wt ? worktreePrById.get(wt.id) ?? null : null;
@@ -295,7 +295,11 @@ function DashboardWorktreePrItem({
 }) {
   const sessionsForWt = sessions.filter((s) => s.worktreeId === wt.id);
   const mainSession = prSessions.find((s) => s.isMain) ?? prSessions[0];
-  const modeIconKey = useModeIcon(mainSession ? sessionModeId(mainSession) : null, api);
+  const modeIconKey = useModeIcon(
+    mainSession ? sessionModeId(mainSession) : null,
+    api,
+    mainSession?.modeIcon,
+  );
   const liveState = mainSession ? (sessionStates[mainSession.id] ?? mainSession.state) : "idle";
   const status = sessionStatus(liveState);
   const pr = worktreePrById.get(wt.id) ?? null;

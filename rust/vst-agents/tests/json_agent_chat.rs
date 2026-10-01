@@ -66,6 +66,7 @@ fn make_session(id: &str) -> SessionRecord {
         sort_order: 0.0,
         r#type: SessionType::Agent,
         mode_id: Some("mode-1".into()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),

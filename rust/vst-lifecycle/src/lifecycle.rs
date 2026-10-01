@@ -291,6 +291,7 @@ mod should_skip_tests {
             sort_order: 0.0,
             r#type: SessionType::Terminal,
             mode_id: None,
+            mode_icon: None,
             name: None,
             name_source: None,
             tmux_name: "__direct__-proj-1-t-11112222".into(),

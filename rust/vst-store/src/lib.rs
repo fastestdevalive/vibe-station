@@ -392,7 +392,7 @@ fn pr_state_str(s: vst_types::PrState) -> &'static str {
 
 // --- SQL helpers (all invoked from within spawn_blocking) ---
 
-const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind";
+const SESSION_COLS: &str = "id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, draftPrompt, draftConfig, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, modeIcon";
 
 fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
     Ok(SessionRow {
@@ -431,6 +431,7 @@ fn session_from_row(r: &rusqlite::Row) -> rusqlite::Result<SessionRow> {
         pr_branch: r.get(32)?,
         pr_error: r.get(33)?,
         pr_error_kind: r.get(34)?,
+        mode_icon: r.get(35)?,
     })
 }
 
@@ -640,8 +641,8 @@ fn insert_session(
 ) -> StoreResult<()> {
     let row = session_to_row(s, project_id, worktree_id);
     conn.execute(
-        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)",
+        "INSERT INTO sessions (id, worktreeId, projectId, isMain, sortOrder, type, modeId, name, nameSource, tmuxName, useTmux, channel, state, reason, lastTransitionAt, transcriptKind, transcriptPath, agentChatId, acpSessionId, modelOverride, pinnedAt, initialPrompt, archivedAt, handoffSummary, spawnedFrom, supersededBy, prState, prNumber, prUrl, prCheckedAt, prBranch, prError, prErrorKind, draftPrompt, draftConfig, modeIcon)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
         params![
             row.id, row.worktree_id, row.project_id, row.is_main, row.sort_order, row.r#type, row.mode_id,
             row.name, row.name_source, row.tmux_name, row.use_tmux, row.channel, row.state, row.reason,
@@ -649,7 +650,7 @@ fn insert_session(
             row.acp_session_id, row.model_override, row.pinned_at, row.initial_prompt, row.archived_at,
             row.handoff_summary, row.spawned_from, row.superseded_by, row.pr_state, row.pr_number,
             row.pr_url, row.pr_checked_at, row.pr_branch, row.pr_error, row.pr_error_kind,
-            row.draft_prompt, row.draft_config
+            row.draft_prompt, row.draft_config, row.mode_icon
         ],
     )?;
     Ok(())

@@ -633,6 +633,7 @@ impl WorktreeRoutes {
 
         let prompt_clone = body.prompt.clone();
         let mode_id_clone = mode_id.clone();
+        let mode_icon_clone = mode.icon.clone();
         let source_agent_id = body.source_agent_id.clone();
         let project_id_clone = project.id.clone();
         let paths_clone = self.paths.clone();
@@ -686,6 +687,7 @@ impl WorktreeRoutes {
                         sort_order: 0.0,
                         r#type: SessionType::Agent,
                         mode_id: Some(mode_id_clone.clone()),
+                        mode_icon: mode_icon_clone.clone(),
                         name,
                         name_source,
                         tmux_name: main_tmux_name,

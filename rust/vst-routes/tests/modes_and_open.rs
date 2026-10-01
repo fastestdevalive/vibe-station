@@ -293,6 +293,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         sort_order: 1.0,
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: "sess-1".to_string(),
@@ -325,6 +326,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         sort_order: 2.0,
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: "sess-2".to_string(),
@@ -357,6 +359,7 @@ async fn test_modes_crud_lifecycle_and_events() {
         sort_order: 1.0,
         r#type: SessionType::Agent,
         mode_id: Some(created.id.clone()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: "sess-dir".to_string(),
@@ -1128,4 +1131,103 @@ async fn open_result_is_git_reflects_directory_state() {
         git_result.is_git,
         "git directory should report is_git = true"
     );
+}
+
+#[tokio::test]
+async fn test_backfill_session_mode_icons_stamps_live_modes_only() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    let vst_dir = home.join(".vibe-station");
+    std::fs::create_dir_all(&vst_dir).unwrap();
+    std::fs::write(
+        vst_dir.join("modes.json"),
+        serde_json::to_string(&vec![Mode {
+            id: "live-claude".to_string(),
+            name: "Live".to_string(),
+            cli: CliId::Claude,
+            context: "c".to_string(),
+            created_at: "t".to_string(),
+            model: None,
+            icon: Some("claude".to_string()),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let session = |id: &str, mode_id: &str, icon: Option<&str>| SessionRecord {
+        id: id.to_string(),
+        worktree_id: None,
+        project_id: "proj-bf".to_string(),
+        is_main: false,
+        sort_order: 1.0,
+        r#type: SessionType::Agent,
+        mode_id: Some(mode_id.to_string()),
+        mode_icon: icon.map(str::to_string),
+        name: None,
+        name_source: None,
+        tmux_name: id.to_string(),
+        use_tmux: false,
+        channel: Some(vst_types::domain::Channel::Json),
+        pinned_at: None,
+        archived_at: None,
+        handoff_summary: None,
+        parent_session_id: None,
+        superseded_by: None,
+        pr: None,
+        draft_prompt: None,
+        draft_config: None,
+        initial_prompt: None,
+        transcript_ref: None,
+        agent_chat_id: None,
+        acp_session_id: None,
+        model_override: None,
+        lifecycle: SessionLifecycle {
+            state: LifecycleState::Idle,
+            reason: None,
+            last_transition_at: "2026-09-15T00:00:00Z".to_string(),
+        },
+    };
+
+    let store = StoreHandle::open(dir.path().join("vibe-station.db")).unwrap();
+    store
+        .add_project(ProjectRecord {
+            id: "proj-bf".to_string(),
+            absolute_path: "/tmp/fake-bf".to_string(),
+            prefix: "bf".to_string(),
+            is_git: false,
+            default_branch: None,
+            created_at: "2026-09-15T00:00:00Z".to_string(),
+            hidden: None,
+            direct_sessions: vec![
+                session("needs-stamp", "live-claude", None),
+                session("already-stamped", "live-claude", Some("custom")),
+                session("mode-gone", "deleted-mode", None),
+            ],
+            direct_session_seq: Some(3),
+            worktrees: vec![],
+            next_worktree_num: Some(1),
+            lsp_enabled: None,
+            open_files: vec![],
+        })
+        .await
+        .unwrap();
+
+    let failures = {
+        let _guard = with_home(home.clone());
+        vst_routes::modes::backfill_session_mode_icons(&store).await
+    };
+    assert!(failures.is_empty(), "{failures:?}");
+
+    let icon_of = |p: &ProjectRecord, id: &str| {
+        p.direct_sessions
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .mode_icon
+            .clone()
+    };
+    let p = store.get_project("proj-bf").await.unwrap();
+    assert_eq!(icon_of(&p, "needs-stamp").as_deref(), Some("claude"));
+    assert_eq!(icon_of(&p, "already-stamped").as_deref(), Some("custom"));
+    assert_eq!(icon_of(&p, "mode-gone"), None);
 }

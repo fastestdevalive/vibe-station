@@ -49,6 +49,7 @@ fn project_with_session(project_id: &str, wt_id: &str, sess_id: &str) -> Project
             sort_order: 0.0,
             r#type: SessionType::Agent,
             mode_id: Some("m".into()),
+            mode_icon: None,
             name: None,
             name_source: None,
             tmux_name: format!("{sess_id}-pane"),

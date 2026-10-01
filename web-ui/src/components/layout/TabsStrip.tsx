@@ -112,14 +112,16 @@ function SortableTab({ id, children }: SortableTabProps) {
  */
 function AgentTabIcon({
   modeId,
+  modeIcon,
   channel,
   api,
 }: {
   modeId: string | null;
+  modeIcon?: string | null;
   channel?: Channel;
   api: ApiInstance;
 }) {
-  const iconKey = useModeIcon(modeId, api);
+  const iconKey = useModeIcon(modeId, api, modeIcon);
   // aria-hidden: the icon is decorative here — the tab's text label already
   // conveys the session, so the icon must not pollute the tab's accessible name.
   return (
@@ -911,7 +913,12 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                         ) : (
                           <>
                             {isAgent ? (
-                              <AgentTabIcon modeId={sessionModeId(s)} channel={s.channel} api={api} />
+                              <AgentTabIcon
+                                modeId={sessionModeId(s)}
+                                modeIcon={s.modeIcon}
+                                channel={s.channel}
+                                api={api}
+                              />
                             ) : null}
                             <span className="tab__label" title={label}>
                               {label}

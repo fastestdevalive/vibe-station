@@ -558,6 +558,9 @@ pub struct SessionRecord {
     pub sort_order: f64,
     pub r#type: SessionType,
     pub mode_id: Option<String>,
+    /// Icon key of the mode, snapshotted when the session was created so it
+    /// survives the mode being edited or deleted.
+    pub mode_icon: Option<String>,
     /// User-facing display name.
     pub name: Option<String>,
     /// How `name` was set.

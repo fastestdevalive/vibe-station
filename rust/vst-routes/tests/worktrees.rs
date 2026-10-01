@@ -93,6 +93,7 @@ fn make_sample_project(project_id: &str, wt_id: &str, wt_path: &Path) -> Project
         sort_order: 1.0,
         r#type: SessionType::Agent,
         mode_id: Some("mode-1".into()),
+        mode_icon: None,
         name: Some("Agent 1".into()),
         name_source: None,
         tmux_name: "vst-sess-1".into(),

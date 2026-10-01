@@ -363,6 +363,8 @@ pub struct SessionCreatedSnapshot {
     pub is_main: bool,
     pub r#type: crate::domain::SessionType,
     pub mode_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_icon: Option<String>,
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_source: Option<crate::domain::SessionNameSource>,
@@ -436,6 +438,7 @@ impl From<&crate::rest::shared::Session> for SessionCreatedSnapshot {
             is_main: s.is_main,
             r#type: s.r#type,
             mode_id: s.mode_id.clone(),
+            mode_icon: s.mode_icon.clone(),
             name: s.name.clone(),
             name_source: s.name_source,
             tmux_name: s.tmux_name.clone(),
@@ -470,6 +473,7 @@ impl From<&crate::rest::shared::GlobalDraft> for SessionCreatedSnapshot {
             is_main: s.is_main,
             r#type: s.r#type,
             mode_id: s.mode_id.clone(),
+            mode_icon: None,
             name: s.name.clone(),
             name_source: s.name_source,
             tmux_name: s.tmux_name.clone(),

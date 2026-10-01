@@ -316,6 +316,12 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         tracing::warn!("[vst] manifest migration failed (non-fatal): {e}");
     }
 
+    // Snapshot each existing session's mode icon so deleting a mode can't
+    // change it (idempotent; new sessions are stamped at creation).
+    for failure in vst_routes::modes::backfill_session_mode_icons(&store).await {
+        tracing::warn!("[vst] mode-icon backfill failed (non-fatal): {failure}");
+    }
+
     // ── Boot recovery ─────────────────────────────────────────────────────────
     let tmux = Tmux::new();
     let direct_pty = DirectPtyRegistry::new();

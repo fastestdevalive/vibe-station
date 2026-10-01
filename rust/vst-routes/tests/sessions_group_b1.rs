@@ -53,6 +53,7 @@ fn make_session(id: &str, project_id: &str) -> SessionRecord {
         sort_order: 1.0,
         r#type: SessionType::Agent,
         mode_id: Some("m".into()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),

@@ -23,6 +23,7 @@ fn session(id: &str, project_id: &str, worktree_id: Option<&str>) -> SessionReco
         sort_order: 0.0,
         r#type: SessionType::Agent,
         mode_id: Some("m".into()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("{id}-pane"),

@@ -249,6 +249,7 @@ fn session(id: &str, worktree: &str, is_main: bool, state: LifecycleState) -> Se
         is_main,
         r#type: SessionType::Agent,
         mode_id: None,
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("s-{id}"),
