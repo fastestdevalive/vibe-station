@@ -427,6 +427,20 @@ describe("Phase 4 — channel default follows the mode's CLI defaultChannel", ()
     expect(screen.getByRole("radio", { name: /Terminal/i })).not.toBeChecked();
   });
 
+  it("preselects settings.lastModeId when it still exists, else the first mode", async () => {
+    vi.spyOn(api, "getSettings").mockResolvedValue({ defaultProjectsDir: "/p", lastModeId: "m2" });
+    renderTier2([makeMode({ id: "m1", name: "One" }), makeMode({ id: "m2", name: "Two" })], [makeCli({ id: "claude" })]);
+    const select = await screen.findByRole("combobox", { name: "Mode" });
+    await waitFor(() => expect(select).toHaveValue("m2"));
+  });
+
+  it("falls back to the first mode when settings.lastModeId no longer exists", async () => {
+    vi.spyOn(api, "getSettings").mockResolvedValue({ defaultProjectsDir: "/p", lastModeId: "gone" });
+    renderTier2([makeMode({ id: "m1", name: "One" }), makeMode({ id: "m2", name: "Two" })], [makeCli({ id: "claude" })]);
+    const select = await screen.findByRole("combobox", { name: "Mode" });
+    await waitFor(() => expect(select).toHaveValue("m1"));
+  });
+
   it("4.T5 — scaffold draft with channel:json and no channelExplicit flips to Terminal for an agy mode (B1)", async () => {
     // LeftSidebar's scaffold `{ entryPoint, worktreeChoice, channel: "json" }`
     // carries channel but NOT channelExplicit — so the mode-follow effect must

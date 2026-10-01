@@ -160,6 +160,7 @@ async fn test_settings_get_patch_and_validation() {
 
     // GET with no config file -> defaults
     let s = routes.get_settings().await;
+    assert_eq!(s.last_mode_id, None);
     assert_eq!(s.default_projects_dir, Some(default_projects_dir()));
     assert_eq!(s.skill_paths, Some(default_skill_paths()));
     assert!(!s.home_dir.is_empty());
@@ -179,6 +180,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -200,6 +202,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -241,6 +244,7 @@ async fn test_settings_get_patch_and_validation() {
             search_case_sensitive: Some(true),
             search_regex: Some(true),
             search_whole_word: None,
+            last_mode_id: Some("mode-x".into()),
             default_channel_by_cli: None,
         })
         .await
@@ -254,6 +258,7 @@ async fn test_settings_get_patch_and_validation() {
         updated.skill_paths,
         Some(vec!["/path/one".into(), "/path/two".into()])
     );
+    assert_eq!(updated.last_mode_id, Some("mode-x".into()));
     assert_eq!(updated.pid, Some(12345));
     // Patched fields persist; the untouched one (wholeWord) stays default.
     assert_eq!(updated.search_case_sensitive, Some(true));
@@ -315,6 +320,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -370,6 +376,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -405,6 +412,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -445,6 +453,7 @@ async fn test_settings_theme_markdown_validation_and_broadcast() {
             search_case_sensitive: None,
             search_regex: None,
             search_whole_word: None,
+            last_mode_id: None,
             default_channel_by_cli: None,
         })
         .await
@@ -466,6 +475,7 @@ fn baseline_patch() -> PatchSettingsBody {
         search_case_sensitive: None,
         search_regex: None,
         search_whole_word: None,
+        last_mode_id: None,
         default_channel_by_cli: None,
     }
 }
@@ -481,6 +491,7 @@ async fn test_settings_default_channel_by_cli_merge_is_per_key() {
 
     routes
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([(CliId::Cursor, Some(Channel::Json))])),
             ..baseline_patch()
         })
@@ -488,6 +499,7 @@ async fn test_settings_default_channel_by_cli_merge_is_per_key() {
         .unwrap();
     routes
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
             ..baseline_patch()
         })
@@ -510,6 +522,7 @@ async fn test_settings_default_channel_by_cli_null_clears_one_key() {
 
     routes
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([
                 (CliId::Cursor, Some(Channel::Json)),
                 (CliId::Agy, Some(Channel::Json)),
@@ -521,6 +534,7 @@ async fn test_settings_default_channel_by_cli_null_clears_one_key() {
     // Clear agy with null.
     routes
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, None)])),
             ..baseline_patch()
         })
@@ -553,6 +567,7 @@ async fn test_supported_clis_reflects_default_channel_override() {
     // PATCH agy -> json.
     settings
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([(CliId::Agy, Some(Channel::Json))])),
             ..baseline_patch()
         })
@@ -584,6 +599,7 @@ async fn test_supported_clis_redundant_override_is_not_reported_as_overridden() 
     // claude's plugin default is Json — override it to Json too (redundant).
     settings
         .patch_settings(PatchSettingsBody {
+            last_mode_id: None,
             default_channel_by_cli: Some(BTreeMap::from([(CliId::Claude, Some(Channel::Json))])),
             ..baseline_patch()
         })

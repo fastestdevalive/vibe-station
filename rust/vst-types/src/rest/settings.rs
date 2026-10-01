@@ -36,6 +36,8 @@ pub struct Settings {
     /// helper (plan Requirement 11/12); the write side is
     /// `PatchSettingsBody::default_channel_by_cli` (Phase 6).
     pub default_channel_by_cli: Option<BTreeMap<CliId, Channel>>,
+    /// Mode last used to start a draft agent; preselected on the next draft.
+    pub last_mode_id: Option<String>,
 }
 
 /// `PATCH /settings` request body (all optional).
@@ -59,6 +61,7 @@ pub struct PatchSettingsBody {
     /// `{Tmux, Json}` — `Pty` is rejected; a `Json` override for a CLI that
     /// can't run Rich Chat is also rejected (Decision 7/8).
     pub default_channel_by_cli: Option<BTreeMap<CliId, Option<Channel>>>,
+    pub last_mode_id: Option<String>,
 }
 
 /// User-configurable Markdown overrides layered on top of the active theme's
