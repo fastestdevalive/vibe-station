@@ -67,6 +67,15 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
         ...prev,
         [cli.id]: e instanceof Error ? e.message : "Couldn't create the starter modes.",
       }));
+    }
+    // Refetch BEFORE clearing busy so the button can't reappear enabled (and be
+    // double-clicked) in the gap between create finishing and modes reloading.
+    try {
+      const [nextModes, nextClis] = await Promise.all([api.listModes(), api.getSupportedClis()]);
+      setModes(nextModes);
+      setSupportedClis(nextClis);
+    } catch {
+      // Keep the previous lists; the mode:* WS handlers will refresh them.
     } finally {
       setBundleBusy((prev) => {
         const next = new Set(prev);
@@ -74,9 +83,6 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
         return next;
       });
     }
-    const [nextModes, nextClis] = await Promise.all([api.listModes(), api.getSupportedClis()]);
-    setModes(nextModes);
-    setSupportedClis(nextClis);
   }
 
   return (
@@ -85,10 +91,6 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
       style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}
     >
       {supportedClis.map((cli) => {
-        const missingCount = cli.starterBundleNames.filter(
-          (name) => !modes.some((m) => m.cli === cli.id && m.name === name),
-        ).length;
-        const total = cli.starterBundleNames.length;
         const hasAnyMode = modes.some((m) => m.cli === cli.id);
         // Default-channel toggle state (settings variant only). The effective
         // `defaultChannel` is one of the two options; whichever one is the
@@ -130,9 +132,7 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
               gap: "var(--space-3)",
               padding: "var(--space-3)",
               borderRadius: "var(--radius-sm)",
-              border: cli.detected
-                ? "var(--border-width) solid var(--fg-success)"
-                : "var(--border-width) solid var(--border-default)",
+              border: "var(--border-width) solid var(--border-default)",
               opacity: cli.detected ? 1 : 0.6,
             }}
           >
@@ -158,12 +158,6 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                     style={{
                       fontSize: "11px",
                       fontWeight: "var(--font-weight-medium)",
-                      padding: "2px 6px",
-                      borderRadius: 4,
-                      background: cli.detected ? "var(--bg-input)" : "transparent",
-                      border: cli.detected
-                        ? "var(--border-width) solid var(--fg-success)"
-                        : "var(--border-width) solid var(--border-default)",
                       color: cli.detected ? "var(--fg-success)" : "var(--fg-muted)",
                     }}
                   >
@@ -188,44 +182,40 @@ export function CliDetectionPanel({ api, variant, refreshSignal }: CliDetectionP
                   display: "flex",
                   alignItems: "center",
                   flexShrink: 0,
-                  gap: "var(--space-3)",
                 }}
               >
-                {missingCount > 0 ? (
-                  <div style={{ display: "flex", alignItems: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => void createBundle(cli)}
-                      disabled={bundleBusy.has(cli.id)}
-                      style={{
-                        background: "var(--bg-input)",
-                        border: "var(--border-width) solid var(--border-default)",
-                        borderRadius: 6,
-                        padding: "6px 12px",
-                        cursor: bundleBusy.has(cli.id) ? "wait" : "pointer",
-                        fontSize: "13px",
-                        color: "var(--fg-primary)",
-                      }}
-                    >
-                      {bundleBusy.has(cli.id) ? "Creating…" : missingCount === total ? "Create starter modes" : `Recreate ${missingCount}`}
-                    </button>
-                  </div>
+                {!hasAnyMode ? (
+                  // No mode exists for THIS CLI yet — offer to create the
+                  // starter bundle. Mutually exclusive with the default-channel
+                  // select (other branch): once a mode exists, that slot carries the
+                  // dropdown instead (settings) or the confirmation label (oobe).
+                  <button
+                    type="button"
+                    onClick={() => void createBundle(cli)}
+                    disabled={bundleBusy.has(cli.id)}
+                    style={{
+                      background: "var(--bg-input)",
+                      border: "var(--border-width) solid var(--border-default)",
+                      borderRadius: 6,
+                      padding: "6px 12px",
+                      cursor: bundleBusy.has(cli.id) ? "wait" : "pointer",
+                      fontSize: "13px",
+                      color: "var(--fg-primary)",
+                    }}
+                  >
+                    {bundleBusy.has(cli.id) ? "Creating…" : "Create starter modes"}
+                  </button>
+                ) : variant === "oobe" ? (
+                  // OOBE has nothing else here once a mode exists, so it keeps
+                  // the confirmation label (round-3 m2 — dropping it removed
+                  // OOBE's only "it worked" feedback).
+                  <span
+                    data-testid={`cli-all-created-${cli.id}`}
+                    style={{ fontSize: "13px", color: "var(--fg-muted)" }}
+                  >
+                    ✓ all created
+                  </span>
                 ) : (
-                  // The settings variant's default-channel select already fills
-                  // this slot with a positive signal; OOBE has nothing else here
-                  // once bundling finishes, so it keeps the confirmation label
-                  // (round-3 m2 — dropping it for both variants removed OOBE's
-                  // only "it worked" feedback).
-                  variant === "oobe" && (
-                    <span
-                      data-testid={`cli-all-created-${cli.id}`}
-                      style={{ fontSize: "13px", color: "var(--fg-muted)" }}
-                    >
-                      ✓ all created
-                    </span>
-                  )
-                )}
-                {variant === "settings" && (hasAnyMode || cli.defaultChannelOverridden) && (
                   <div
                     data-testid={`default-channel-${cli.id}`}
                     style={{ display: "flex", flexDirection: "column", gap: 4 }}
