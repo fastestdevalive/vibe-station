@@ -130,7 +130,9 @@ export function apiFetch(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, {
     ...init,
     credentials: "include",
-    headers: { ...authHeaders, ...init?.headers },
+    // CSRF marker: the daemon refuses cookie-authenticated writes without it.
+    // A cross-site page can't add a custom header without a CORS preflight.
+    headers: { "X-VST-CSRF": "1", ...authHeaders, ...init?.headers },
   });
 }
 

@@ -236,6 +236,8 @@ pub enum MobileAuthRouteError {
     AlreadyEnabled { tunnel_url: String },
     #[error("Tunnel not enabled")]
     TunnelNotEnabled,
+    #[error("Network access disabled")]
+    NetworkAccessDisabled,
     #[error("No network interface found")]
     NoNetworkInterface,
     #[error("Rate limit exceeded")]
@@ -255,6 +257,7 @@ impl MobileAuthRouteError {
             Self::NoAuthMode => "conflict",
             Self::AlreadyEnabled { .. } => "conflict",
             Self::TunnelNotEnabled => "conflict",
+            Self::NetworkAccessDisabled => "conflict",
             Self::NoNetworkInterface => "unavailable",
             Self::RateLimitExceeded => "rate_limit_exceeded",
             Self::MissingCode => "missing_code",
@@ -271,6 +274,7 @@ pub struct MobileAuthRoutes {
     code_store: OneTimeCodeStore,
     port: u16,
     no_auth: bool,
+    network_access: bool,
     store: Option<StoreHandle>,
 }
 
@@ -286,8 +290,16 @@ impl MobileAuthRoutes {
             code_store,
             port,
             no_auth,
+            network_access: true,
             store: None,
         }
+    }
+
+    /// Whether the daemon listens beyond loopback. Defaults to true so callers
+    /// that don't care (tests) keep the old behavior.
+    pub fn with_network_access(mut self, on: bool) -> Self {
+        self.network_access = on;
+        self
     }
 
     pub fn with_store(mut self, store: StoreHandle) -> Self {
@@ -397,6 +409,9 @@ impl MobileAuthRoutes {
     pub async fn local_qr(&self, is_remote: bool) -> Result<LocalQrResult, MobileAuthRouteError> {
         if is_remote {
             return Err(MobileAuthRouteError::TunnelOnlyBlocked);
+        }
+        if !self.network_access {
+            return Err(MobileAuthRouteError::NetworkAccessDisabled);
         }
 
         // Pick best IP: Tailscale 100.64.0.0/10 first, then LAN IPv4
@@ -626,7 +641,7 @@ impl MobileAuthRoutes {
 
         let secure_attr = if secure_cookie { " Secure;" } else { "" };
         let cookie_header = format!(
-            "{}={}; HttpOnly;{} SameSite=Lax; Path=/; Max-Age={}",
+            "{}={}; HttpOnly;{} SameSite=Strict; Path=/; Max-Age={}",
             COOKIE_NAME, token_val, secure_attr, BROWSER_MAX_AGE_SECONDS
         );
 

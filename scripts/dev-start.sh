@@ -99,7 +99,7 @@ CLAUDE_ACP_ENTRY="$REPO_ROOT/vendor/claude-acp/node_modules/@agentclientprotocol
 # Don't exec — we need the shell alive to run the SIGTERM trap below.
 npx concurrently --kill-others-on-fail \
   "PORT=5180 pnpm --filter @vibestation/web dev" \
-  "VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
+  "VST_ALLOWED_ORIGINS=http://localhost:5180 VST_DIST_PATH='$REPO_ROOT/web-ui/dist' VST_CLI_BIN='$VST_CLI_BIN' VST_CLAUDE_ACP_ENTRY='$CLAUDE_ACP_ENTRY' AGY_ACP_BIN='$AGY_ACP_BIN' cargo run --manifest-path '$REPO_ROOT/rust/Cargo.toml' -p vst-daemon" &
 CONC_PID=$!
 
 trap '

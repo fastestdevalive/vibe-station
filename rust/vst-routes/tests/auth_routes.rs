@@ -444,7 +444,7 @@ async fn test_continue_redeem_success_is_redirect_with_non_secure_cookie() {
     let cookie = res.set_cookie.expect("expected a Set-Cookie header");
     assert!(cookie.contains(COOKIE_NAME));
     assert!(cookie.contains("HttpOnly"));
-    assert!(cookie.contains("SameSite=Lax"));
+    assert!(cookie.contains("SameSite=Strict"));
     assert!(
         !cookie.contains("Secure"),
         "continue-flow cookie must never be Secure — it's never reached over a tunnel: {cookie}"
@@ -580,4 +580,18 @@ async fn test_tailscale_routes() {
         up_err,
         Err(vst_routes::tailscale::TailscaleRouteError::DesktopOnly)
     ));
+}
+
+#[tokio::test]
+async fn local_qr_refused_while_network_access_is_off() {
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let code_store = OneTimeCodeStore::new();
+    let routes =
+        MobileAuthRoutes::new(Some(auth_state), code_store, 7421, false).with_network_access(false);
+
+    let err = routes.local_qr(false).await.unwrap_err();
+    assert_eq!(
+        err,
+        vst_routes::mobile_auth::MobileAuthRouteError::NetworkAccessDisabled
+    );
 }

@@ -41,6 +41,7 @@ fn make_opts_with_dist(
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
+        network_access: false,
         port: 0,
         auth_state,
         no_auth,
@@ -480,4 +481,216 @@ async fn daemon_stop_and_continue_mint_allow_a_cli_scoped_token() {
         StatusCode::OK,
         "a Cli-scoped token must pass the scope check and successfully mint a code"
     );
+}
+
+// ── Origin policy + CSRF header ───────────────────────────────────────────────
+
+fn cookie_request(
+    method: &str,
+    token: &str,
+    origin: Option<&str>,
+    csrf: bool,
+) -> Request<axum::body::Body> {
+    let mut b = Request::builder()
+        .uri("/api/sessions")
+        .method(method)
+        .header("host", "localhost:7421")
+        .header("cookie", format!("vst-session={token}"));
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    if csrf {
+        b = b.header("x-vst-csrf", "1");
+    }
+    b.body(axum::body::Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn cookie_request_from_other_localhost_port_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router
+        .oneshot(cookie_request(
+            "GET",
+            &token,
+            Some("http://localhost:3000"),
+            true,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cookie_request_from_own_origin_is_allowed() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router
+        .oneshot(cookie_request(
+            "GET",
+            &token,
+            Some("http://localhost:7421"),
+            false,
+        ))
+        .await
+        .unwrap();
+
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn cookie_post_without_csrf_header_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router
+        .oneshot(cookie_request(
+            "POST",
+            &token,
+            Some("http://localhost:7421"),
+            false,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cookie_post_with_csrf_header_passes_the_gate() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router
+        .oneshot(cookie_request(
+            "POST",
+            &token,
+            Some("http://localhost:7421"),
+            true,
+        ))
+        .await
+        .unwrap();
+
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn bearer_post_does_not_need_csrf_header() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let req = Request::builder()
+        .uri("/api/sessions")
+        .method("POST")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn null_origin_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let resp = router
+        .oneshot(cookie_request("GET", &token, Some("null"), true))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cookie_get_marked_same_site_is_forbidden_even_without_origin() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let mut req = cookie_request("GET", &token, None, false);
+    req.headers_mut()
+        .insert("sec-fetch-site", "same-site".parse().unwrap());
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    let mut req = cookie_request("GET", &token, None, false);
+    req.headers_mut()
+        .insert("sec-fetch-site", "same-origin".parse().unwrap());
+    let resp = router.oneshot(req).await.unwrap();
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn logout_from_hostile_origin_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let req = Request::builder()
+        .uri("/api/auth/logout")
+        .method("POST")
+        .header("host", "localhost:7421")
+        .header("origin", "http://localhost:3000")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cors_preflight_allows_csrf_header_only_for_trusted_origins() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let preflight = |origin: &str| {
+        Request::builder()
+            .uri("/api/sessions")
+            .method("OPTIONS")
+            .header("host", "localhost:7421")
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization,x-vst-csrf")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+
+    let ok = router
+        .clone()
+        .oneshot(preflight("tauri://localhost"))
+        .await
+        .unwrap();
+    assert_eq!(
+        ok.headers()
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
+        Some("tauri://localhost")
+    );
+    let bad = router
+        .oneshot(preflight("http://localhost:3000"))
+        .await
+        .unwrap();
+    assert!(bad.headers().get("access-control-allow-origin").is_none());
 }

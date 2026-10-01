@@ -111,6 +111,29 @@ pub fn resolve_no_auth() -> bool {
 pub const INSECURE_NO_AUTH_MARKER: &str =
     "INSECURE: VST_NO_AUTH=1 is active — authentication is DISABLED (insecure-no-auth feature)";
 
+/// Env var that opts the daemon into listening on all interfaces.
+pub const ALLOW_NETWORK_ENV: &str = "VST_ALLOW_NETWORK";
+
+/// Pick the listen address. Loopback by default — tunnels and `tailscale serve`
+/// dial 127.0.0.1, so only direct LAN/Tailscale-IP access (the "local QR" flow)
+/// needs more. That is opt-in via `VST_ALLOW_NETWORK=1` or `"allowNetworkAccess":
+/// true` in `config.json`. `VST_NO_AUTH_BIND_ALL` (Docker sandbox) is honored
+/// only in no-auth builds, as before.
+pub fn resolve_bind_host(no_auth: bool, config: &serde_json::Value) -> &'static str {
+    let env_on = |name: &str| matches!(std::env::var(name).as_deref(), Ok("1") | Ok("true"));
+    let allow = env_on(ALLOW_NETWORK_ENV)
+        || config
+            .get("allowNetworkAccess")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        || (no_auth && env_on("VST_NO_AUTH_BIND_ALL"));
+    if allow {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    }
+}
+
 // ─── config.json I/O ─────────────────────────────────────────────────────────
 
 /// Read `config.json` as a raw JSON object. Returns an empty object on any
@@ -498,7 +521,9 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let stop_requested = Arc::new(tokio::sync::Notify::new());
     let stop_requested_for_signal_task = stop_requested.clone();
 
+    let bind_host = resolve_bind_host(no_auth, &existing_config);
     let router = build_app(BuildServerOptions {
+        network_access: bind_host != "127.0.0.1",
         port,
         auth_state: Some(auth_state.clone()),
         no_auth,
@@ -553,18 +578,12 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     });
 
     // ── Bind and serve ────────────────────────────────────────────────────────
-    let bind_host = if no_auth {
-        if matches!(
-            std::env::var("VST_NO_AUTH_BIND_ALL").as_deref(),
-            Ok("1") | Ok("true")
-        ) {
-            "0.0.0.0"
-        } else {
-            "127.0.0.1"
-        }
-    } else {
-        "0.0.0.0"
-    };
+    if bind_host == "0.0.0.0" && !no_auth {
+        tracing::warn!(
+            "⚠  Network access is ON — the daemon listens on all interfaces. \
+             Anyone on this network who obtains a token can reach it."
+        );
+    }
     let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{port}"))
         .await
         .with_context(|| format!("bind {bind_host}:{port}"))?;
@@ -601,4 +620,26 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     // SIGINT/SIGTERM/stop-requested task above, before it notified
     // `shutdown` — `axum::serve` only returns after that already ran.
     Ok(())
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::resolve_bind_host;
+
+    #[test]
+    fn loopback_by_default_and_opt_in_via_config() {
+        // Env-var branches are not exercised here (process-global state).
+        assert_eq!(
+            resolve_bind_host(false, &serde_json::json!({})),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            resolve_bind_host(false, &serde_json::json!({ "allowNetworkAccess": true })),
+            "0.0.0.0"
+        );
+        assert_eq!(
+            resolve_bind_host(false, &serde_json::json!({ "allowNetworkAccess": "yes" })),
+            "127.0.0.1"
+        );
+    }
 }

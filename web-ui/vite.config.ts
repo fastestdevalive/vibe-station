@@ -20,20 +20,19 @@ export default defineConfig({
     proxy: {
       "/api": {
         target: "http://127.0.0.1:7421",
-        changeOrigin: true, // ensures Cookie / Set-Cookie headers flow correctly
+        // No changeOrigin: the daemon's origin policy compares Origin to Host, so
+        // Host must stay the browser-facing one (localhost:5173).
         xfwd: true, // forward real client IP in X-Forwarded-For
       },
       // QR mobile login — /mobile-auth is daemon-handled but not under /api,
       // so it needs its own proxy entry when the tunnel points at Vite.
       "/mobile-auth": {
         target: "http://127.0.0.1:7421",
-        changeOrigin: true,
         xfwd: true,
       },
       "/ws": {
         target: "ws://127.0.0.1:7421",
         ws: true,
-        changeOrigin: true,
         xfwd: true,
       },
     },

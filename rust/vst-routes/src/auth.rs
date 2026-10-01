@@ -400,7 +400,7 @@ impl AuthRoutes {
     /// `POST /auth/logout` -> clear session cookie (200).
     pub async fn logout(&self) -> (u16, String, OkResult) {
         let cookie_header = format!(
-            "{}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+            "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
             COOKIE_NAME
         );
         (200, cookie_header, OkResult { ok: true })
