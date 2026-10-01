@@ -788,7 +788,7 @@ describe("SearchPanel", () => {
           <SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />
         </TopRightInsetProvider>
       );
-      const controls = document.querySelector(".search-panel__controls") as HTMLElement;
+      const controls = document.querySelector(".search-panel__bar") as HTMLElement;
       expect(controls.style.paddingRight).toBe("168px"); // 68 + 100
     });
 
@@ -799,8 +799,9 @@ describe("SearchPanel", () => {
           <SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />
         </TopRightInsetProvider>
       );
-      const controls = document.querySelector(".search-panel__controls") as HTMLElement;
-      expect(controls.style.paddingRight).toBe("");
+      const controls = document.querySelector(".search-panel__bar") as HTMLElement;
+      // Side-by-side: no reserve for the floating buttons, just the normal bar padding.
+      expect(controls.style.paddingRight).toBe("var(--space-2)");
     });
   });
 });

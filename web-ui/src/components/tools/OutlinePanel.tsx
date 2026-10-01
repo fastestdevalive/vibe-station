@@ -10,7 +10,7 @@ import {
   type OutlineSymbol,
 } from "@/lib/lspApi";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
+import { useToolBarInsets } from "@/hooks/useToolBarInsets";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
@@ -224,7 +224,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[layoutKey] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
-  const outerInset = useTopRightInset();
+  const barInsets = useToolBarInsets(masterDetailVertical);
 
   const mode = useWorkspaceStore((s) => s.filesLeftPaneMode[worktreeId ?? "__none__"] ?? "tree");
   const pushJump = useWorkspaceStore((s) => s.pushJump);
@@ -438,6 +438,9 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   if (!isWorkingTreeView) {
     return (
       <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
+        <div className="outline-panel__header" style={barInsets}>
+          <span className="outline-panel__title">Outline</span>
+        </div>
         <div className="outline-panel__empty" data-testid="outline-unavailable">
           Outline unavailable
         </div>
@@ -449,6 +452,9 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   if (!path && !external) {
     return (
       <div className="outline-panel" tabIndex={0} role="region" aria-label="Outline panel">
+        <div className="outline-panel__header" style={barInsets}>
+          <span className="outline-panel__title">Outline</span>
+        </div>
         <div className="outline-panel__empty">No file open</div>
       </div>
     );
@@ -536,11 +542,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
       <div
         className="outline-panel__header"
         style={{
-          height: "32px",
-          minHeight: "32px",
-          maxHeight: "32px",
-          boxSizing: "border-box",
-          paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
+          ...barInsets,
         }}
       >
         <div className="outline-panel__filter-box">

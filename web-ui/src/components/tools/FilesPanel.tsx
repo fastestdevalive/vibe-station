@@ -379,9 +379,9 @@ export function FilesPanel({
           position: "absolute",
           top: 0,
           bottom: masterDetailVertical ? undefined : 0,
-          left: "var(--tools-rail-w, 36px)",
+          left: masterDetailVertical ? "var(--tools-rail-w, 36px)" : 0,
           right: masterDetailVertical ? 0 : undefined,
-          width: masterDetailVertical ? undefined : "var(--tools-rail-panel-w, 240px)",
+          width: masterDetailVertical ? undefined : "calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))",
           height: masterDetailVertical ? "var(--tools-rail-panel-h, 240px)" : undefined,
           zIndex: 20,
           background: "var(--bg-secondary)",
@@ -392,7 +392,7 @@ export function FilesPanel({
           overflow: "visible",
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden", marginLeft: masterDetailVertical ? undefined : "var(--tools-rail-w, 36px)" }}>
           <FilesLeftPane ref={leftPaneFocusHandle} api={api} worktreeId={worktreeId} scope={scope} />
         </div>
         <div
@@ -447,7 +447,7 @@ export function FilesPanel({
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          paddingLeft: !masterDetailVertical && isPanelOpen ? "calc(var(--tools-rail-w, 36px) + var(--tools-rail-panel-w, 240px))" : "0px",
+          paddingLeft: !masterDetailVertical && isPanelOpen ? "calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))" : "0px",
           paddingTop: masterDetailVertical && isPanelOpen ? "var(--tools-rail-panel-h, 240px)" : "0px",
           transition: isDragging || !animatePadding
             ? "none"
@@ -467,8 +467,20 @@ export function FilesPanel({
             boxSizing: "border-box",
             display: "flex",
             alignItems: "stretch",
-            paddingLeft: (!isPanelOpen || masterDetailVertical) ? "var(--tools-rail-w, 36px)" : "0px",
-            paddingRight: outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px",
+            // Closed: the bar is at the very top, so it must clear the rail AND the mobile
+            // toggle. Open + stacked: it sits below the tree panel, clear of the toggle
+            // (only the rail can still be beside it). Open + side-by-side: right of the panel.
+            paddingLeft: !isPanelOpen
+              ? "max(var(--tools-rail-w, 36px), var(--tools-toggle-w, 0px))"
+              : masterDetailVertical
+                ? "var(--tools-rail-w, 36px)"
+                : "0px",
+            // Only reserve room for the floating top-right buttons when the topbar
+            // actually sits at the top; in stacked mode with the tree open it is
+            // pushed below the tree panel, clear of them, so let it span the width.
+            paddingRight: masterDetailVertical && isPanelOpen
+              ? "0px"
+              : outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px",
           }}
         >
           {rightPaneTopbar}

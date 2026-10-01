@@ -439,12 +439,14 @@ describe("VcsPanel", () => {
     // "Loading commits…", while the refresh is in flight.
     expect(screen.getByText("commit #0")).toBeInTheDocument();
     expect(screen.queryByText("Loading commits…")).not.toBeInTheDocument();
-    // Requirement 2b: a visible syncing indicator is shown, distinct from
-    // the empty-state text.
-    expect(screen.getByText(/syncing/i)).toBeInTheDocument();
+    // Requirement 2b: the only in-flight cue is the refresh icon spinning in
+    // place — no separate "Syncing…" text.
+    const refreshBtn = screen.getByRole("button", { name: /refresh commits/i });
+    expect(refreshBtn.querySelector(".vcs-panel__spin")).not.toBeNull();
+    expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument();
 
     refreshDeferred.resolve(makeCommits(5));
-    await waitFor(() => expect(screen.queryByText(/syncing/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /refresh commits/i }).querySelector(".vcs-panel__spin")).toBeNull());
     expect(screen.getByText("commit #0")).toBeInTheDocument();
   });
 
@@ -487,7 +489,7 @@ describe("VcsPanel", () => {
   });
 
   describe("Phase 3 — project scope (direct sessions)", () => {
-    it("3.T1 — under scope='project', listCommits is called with the project id and getPr/listSubmodules never fire", async () => {
+    it("3.T1 — under scope='project', listCommits/listSubmodules are called with the project id and getPr never fires", async () => {
       const api = createMockApi();
       const listCommitsSpy = vi
         .spyOn(api, "listCommits")
@@ -500,7 +502,7 @@ describe("VcsPanel", () => {
 
       expect(listCommitsSpy).toHaveBeenCalledWith("proj-1", 51, "project");
       expect(getPrSpy).not.toHaveBeenCalled();
-      expect(listSubmodulesSpy).not.toHaveBeenCalled();
+      expect(listSubmodulesSpy).toHaveBeenCalledWith("proj-1", "project");
     });
 
     it("3.T2 — under scope='project', the Diff-from-base toggle is hidden and every fetched commit is shown (no isOnBranch filtering)", async () => {

@@ -600,6 +600,7 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/projects/:id/gutter/*path", get(handle_project_gutter))
         .route("/projects/:id/diff/*path", get(handle_project_diff))
         .route("/projects/:id/commits", get(handle_project_commits))
+        .route("/projects/:id/submodules", get(handle_project_submodules))
         .route("/projects/:id/lsp/status", get(handle_project_lsp_status))
         .route(
             "/projects/:id/lsp/statuses",
@@ -1840,6 +1841,18 @@ async fn handle_project_commits(
     state
         .project_routes
         .commits(&id, q.limit)
+        .await
+        .map(Json)
+        .map_err(project_err_to_response)
+}
+
+async fn handle_project_submodules(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<SubmodulesResult>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .project_routes
+        .submodules(&id)
         .await
         .map(Json)
         .map_err(project_err_to_response)

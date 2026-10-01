@@ -14,7 +14,7 @@ interface VcsPanelProps {
    *  project-scope/no-git callers (see ToolPanel/Workspace). */
   branch?: string;
   /** `"worktree"` (default) or `"project"` — which id namespace `worktreeId` indexes
-   *  into. Under project scope the branch diff toggle is hidden and PR/submodule
+   *  into. Under project scope the branch diff toggle is hidden and PR
    *  lookups (worktree-only concepts) never fire. */
   scope?: FileScope;
   /** PR status from the session store (branch-guarded). Used for the error row
@@ -388,9 +388,9 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
       mode === "initial" && !isProject ? api.getPr(worktreeId).catch(() => null) : Promise.resolve(undefined),
       // Submodules are also best-effort and initial-only, same reasoning as
       // the PR lookup above — a "Load more" page can't change the worktree's
-      // submodule set. Project scope has no submodules concept, so it must
-      // not fire at all.
-      mode === "initial" && !isProject ? api.listSubmodules(worktreeId).catch(() => []) : Promise.resolve(undefined),
+      // submodule set. Unlike the PR, project scope (direct sessions) has
+      // submodules too — they live in the project's own checkout.
+      mode === "initial" ? api.listSubmodules(worktreeId, scope).catch(() => []) : Promise.resolve(undefined),
     ])
       .then(([list, prInfo, submoduleList]) => {
         if (signal.aborted) return;
@@ -475,18 +475,33 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
 
   return (
     <div className="vcs-panel">
-      <div className="vcs-panel__bar">
-        <span className="vcs-panel__title-group">
-          <span className="vcs-panel__title">
+      {/* Same top bar as the commit view (`VcsCommitView`): `.files-topbar.vcs-topbar`
+          with the breadcrumb-style title on the left, refresh on the right. The
+          branch chip + "Diff from" toggle live in a row below, out of the bar. */}
+      <div className="files-topbar vcs-topbar">
+        <div className="files-topbar__breadcrumb">
+          <span className="diff-scope-selector__breadcrumb">
             Commits{pageCommits ? ` (${diffFromMainEff ? ownCommits.length : pageCommits.length})` : ""}
           </span>
+          <button
+            type="button"
+            className="tab tab--icon tool-bar-btn vcs-topbar__refresh"
+            aria-label="Refresh commits"
+            title="Refresh commits"
+            onClick={refresh}
+            disabled={loading}
+          >
+            <RefreshCw size={13} className={loading ? "vcs-panel__spin" : undefined} />
+          </button>
+        </div>
+      </div>
+      {branch || !isProject ? (
+        <div className="vcs-panel__meta">
           {branch ? (
             <span className="vcs-panel__branch-chip" title={branch}>
               {branch}
             </span>
           ) : null}
-        </span>
-        <div className="vcs-panel__bar-tail">
           {!isProject ? (
             <label className="vcs-panel__diff-toggle">
               <input
@@ -497,48 +512,8 @@ export function VcsPanel({ api, worktreeId, baseBranch, branch, scope = "worktre
               Diff from {baseBranch || "main"}
             </label>
           ) : null}
-          <div className="vcs-panel__bar-actions">
-          <button
-            type="button"
-            className="tab tab--icon tool-bar-btn"
-            aria-label="Refresh commits"
-            title="Refresh commits"
-            onClick={refresh}
-            disabled={loading}
-          >
-            <RefreshCw size={13} className={loading ? "vcs-panel__spin" : undefined} />
-          </button>
-          {/* Requirement 2b: a visible "syncing" indicator distinct from the
-              refresh button's spin animation, shown only while a refresh is
-              in flight over a commit list already on screen (never during
-              the true first load — Requirement 2c's "Loading commits…"
-              empty state covers that case instead).
-              Rendered UNCONDITIONALLY (only its text/icon content toggles) —
-              a `role="status"` live region needs to already exist in the DOM
-              before its content changes, or some screen readers won't
-              announce it. Paired with `aria-live="polite"` per the existing
-              convention in `TerminalPane.tsx`/`ConnectionStatus.tsx`. Sits
-              AFTER the refresh button (not before) and reserves its own
-              width via CSS (`visibility: hidden` when idle, not
-              `display: none`) so its appearance/disappearance never shifts
-              the button's position. */}
-          <span
-            className={`vcs-panel__syncing${loading && commits != null ? "" : " vcs-panel__syncing--idle"}`}
-            role="status"
-            aria-live="polite"
-          >
-            {loading && commits != null ? (
-              <>
-                <RefreshCw size={11} className="vcs-panel__spin" aria-hidden />
-                Syncing…
-              </>
-            ) : (
-              ""
-            )}
-          </span>
         </div>
-        </div>
-      </div>
+      ) : null}
       {pr ? <PrBanner pr={pr} /> : null}
       {!pr && prStatus?.errorKind && !prStatus?.url ? (
         <div className="vcs-pr-error">

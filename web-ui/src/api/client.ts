@@ -1115,9 +1115,8 @@ export function createClientApi() {
 
     /** Top-level `.gitmodules` submodules for the worktree, for the VCS tool
      *  tab's "Submodules" section. */
-    async listSubmodules(worktreeId: string): Promise<SubmoduleInfo[]> {
-      const root = baseUrl();
-      const res = await apiFetch(`${root}/worktrees/${encodeURIComponent(worktreeId)}/submodules`);
+    async listSubmodules(worktreeId: string, fileScope: FileScope = "worktree"): Promise<SubmoduleInfo[]> {
+      const res = await apiFetch(`${fileBase(fileScope, worktreeId)}/submodules`);
       const { submodules } = await parseJson<{ submodules: SubmoduleInfo[] }>(res);
       return submodules;
     },

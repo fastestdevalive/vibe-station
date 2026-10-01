@@ -1459,7 +1459,7 @@ export function LeftSidebar({
       {header}
       <div
         ref={scrollRef}
-        className="left-sidebar__scroll"
+        className={collapsed ? "left-sidebar__scroll" : "left-sidebar__scroll scroll-stable"}
         style={{ flex: 1, overflow: "auto", padding: collapsed ? "var(--space-1)" : "var(--space-2)" }}
       >
         <div className="left-sidebar__brand">

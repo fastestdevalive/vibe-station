@@ -439,6 +439,7 @@ export function FileTreeSidebar({ api, contextId, scope: fileScope = "worktree" 
     <div className="pane pane-stack">
       <FileTreeHeader contextId={activeWorktreeId} isProject={isProject} />
       <div
+        className="scroll-stable"
         style={{ flex: 1, overflow: "auto", padding: "var(--space-2)" }}
         role={diffMode ? undefined : "tree"}
         aria-label={
