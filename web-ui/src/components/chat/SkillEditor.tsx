@@ -57,6 +57,7 @@ import {
   SkillChipNode,
 } from "@/lexical/SkillChipNode";
 import { SkillPopover } from "./SkillPopover";
+import { useEventTargets } from "@/context/DemoEnv";
 
 /** Grow the editor up to this many lines of content, then scroll internally
  *  — enforced purely via CSS (`max-height` + `overflow-y: auto`) since a
@@ -638,6 +639,7 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
   },
   ref,
 ) {
+  const { doc } = useEventTargets();
   const editorRef = useRef<LexicalEditor | null>(null);
   // A fresh map per `editorKey` (new Lexical editor instance) — the
   // dependency is intentional even though the initializer doesn't read it.
@@ -702,9 +704,9 @@ export const SkillEditor = forwardRef<SkillEditorHandle, SkillEditorProps>(funct
     function onPointerDown(e: PointerEvent) {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) closePopover();
     }
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [popoverOpen, closePopover]);
+    doc.addEventListener("pointerdown", onPointerDown);
+    return () => doc.removeEventListener("pointerdown", onPointerDown);
+  }, [popoverOpen, closePopover, doc]);
 
   useImperativeHandle(
     ref,

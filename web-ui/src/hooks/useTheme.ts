@@ -16,6 +16,13 @@ const FONT_KEY = "vibestation:font";
 let booted = false;
 let bootOff: (() => void) | null = null;
 
+/** Demo hard-reset: a fresh mount boots the theme singleton again. */
+export function __resetForDemo(): void {
+  booted = false;
+  bootOff?.();
+  bootOff = null;
+}
+
 /** Read the localStorage first-paint cache, mapping legacy `"dark"|"light"` to
  *  the renamed `vibestation-dark`/`vibestation-light` ids. Returns null when
  *  there's nothing usable. */

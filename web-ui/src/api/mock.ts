@@ -78,7 +78,24 @@ const MOCK_FS_TREE: Record<string, string[]> = {
   "/home/user/work": ["cloned-repo"],
 };
 
-export function createMockApi() {
+/** Optional seed overrides for `createMockApi`. Any array/field present
+ *  replaces the built-in fake dataset; `simulateOutput` defaults to `true`.
+ *  Used by the website demos to drive the real web-ui against a scripted
+ *  in-memory dataset (see plan-hero-demos Decision 3). */
+export interface MockSeed {
+  projects?: Project[];
+  worktrees?: Worktree[];
+  modes?: Mode[];
+  sessions?: Session[];
+  oobeCompleted?: boolean;
+  simulateOutput?: boolean;
+  chat?: Record<string, NormalizedEvent[]>;
+  tree?: Record<string, Record<string, TreeEntry[]>>;
+  tunnel?: TunnelState;
+  settings?: { themeId?: string };
+}
+
+export function createMockApi(seed: MockSeed = {}) {
   /** Daemon-persisted ordered id lists, keyed by scopeKey (pinned-order-sync). */
   const orderedLists = new Map<string, { itemIds: string[]; updatedAt: string }>();
   /** In-memory settings mirror (themeId/markdownStyle) — persisted across
@@ -91,17 +108,22 @@ export function createMockApi() {
   } = {};
   let connState: ConnectionState = "online";
   const connListeners = new Set<(s: ConnectionState) => void>();
+  if (seed.settings?.themeId !== undefined) {
+    mockSettings.themeId = seed.settings.themeId;
+  }
+  /** In-memory tunnel status (seedable; default disabled, mirroring the daemon stub). */
+  let tunnelState: TunnelState = seed.tunnel ?? { enabled: false, tunnelUrl: null };
 
   /** In-memory OOBE onboarding state (Phase 3) — mirrored within a single mock
    *  instance so `getOobeState` reflects prior `confirmOobeStep1`/`completeOobe`. */
   const oobeState: OobeState = {
-    completed: false,
+    completed: seed.oobeCompleted ?? false,
     currentStep: 1,
     defaultProjectsDir: "/mock/projects",
     vstHome: "/mock/home/.vibe-station",
   };
 
-  const projects: Project[] = [
+  const projects: Project[] = seed.projects ?? [
     {
       id: "proj-a",
       name: "Proj A",
@@ -126,7 +148,7 @@ export function createMockApi() {
     },
   ];
 
-  const worktrees: Worktree[] = [
+  const worktrees: Worktree[] = seed.worktrees ?? [
     {
       id: "wt-1",
       projectId: "proj-a",
@@ -165,7 +187,7 @@ export function createMockApi() {
     },
   ];
 
-  const modes: Mode[] = [
+  const modes: Mode[] = seed.modes ?? [
     {
       id: "mode-1",
       name: "Bugfix",
@@ -184,7 +206,7 @@ export function createMockApi() {
     },
   ];
 
-  const sessions: Session[] = [
+  const sessions: Session[] = seed.sessions ?? [
     {
       id: "sess-main",
       worktreeId: "wt-1",
@@ -255,7 +277,7 @@ export function createMockApi() {
   ];
 
   /** Simulated file tree per worktree root path */
-  const treeStore: Record<string, Record<string, TreeEntry[]>> = {
+  const treeStore: Record<string, Record<string, TreeEntry[]>> = seed.tree ?? {
     "wt-1": {
       "": [
         { name: "src", path: "src", type: "dir" },
@@ -305,6 +327,7 @@ export function createMockApi() {
   }
 
   function startOutputSimulation(sessionId: string) {
+    if (seed.simulateOutput === false) return;
     if (outputTimers.has(sessionId)) return;
     let n = 0;
     const id = setInterval(() => {
@@ -337,6 +360,11 @@ export function createMockApi() {
 
   /** In-memory JSON-chat transcripts keyed by sessionId (replayed on openChat). */
   const chatTranscripts = new Map<string, NormalizedEvent[]>();
+  if (seed.chat) {
+    for (const [sessionId, events] of Object.entries(seed.chat)) {
+      chatTranscripts.set(sessionId, structuredClone(events));
+    }
+  }
   let mockTurnSeq = 0;
 
   const api = {
@@ -363,6 +391,19 @@ export function createMockApi() {
        *  from). Mirrors the server-recomputed mode list after a bundle call. */
       seedModes(next: Mode[]) {
         modes.splice(0, modes.length, ...next);
+      },
+      /** Add a session to the mock's own `sessions` array so `listSessions()`
+       *  keeps it (test + website-demo hook; no event is emitted). */
+      addSession(s: Session) {
+        sessions.push(structuredClone(s));
+        return s;
+      },
+      /** Remove a session from the mock's `sessions` array by id, together
+       *  with its chat transcript (no event). */
+      removeSession(id: string) {
+        const i = sessions.findIndex((x) => x.id === id);
+        if (i >= 0) sessions.splice(i, 1);
+        chatTranscripts.delete(id);
       },
     },
 
@@ -768,10 +809,22 @@ export function createMockApi() {
       if (s.lifecycleState !== "drafting") throw new ApiError("Session not in drafting state", 403);
       s.lifecycleState = "not_started";
       s.state = "not_started";
+      const cfg = body.draftConfig;
       s.draftPrompt = null;
       s.draftConfig = null;
       s.name = body.draftPrompt.trim().split(/\s+/).slice(0, 5).join(" ");
-      return { ok: true };
+      if (cfg?.modeId) s.modeId = cfg.modeId;
+      if (cfg?.channel) s.channel = cfg.channel;
+      // The daemon broadcasts the promoted record's name/channel/mode so every
+      // client's tab (TabsStrip keeps its own copy) relabels + re-icons.
+      emit({ type: "session:updated", sessionId: id, name: s.name, channel: s.channel, draftConfig: cfg });
+      // Mirror the daemon: a draft that already lives in a worktree (entryPoint
+      // "tab" / existing worktree) returns its `worktreeId` so the caller lands
+      // on `/worktree/:id` (AGENTS.md "Draft promotion" invariant), and the
+      // lifecycle leaves "drafting" via a `session:state` broadcast — without
+      // it the store copy stays "drafting" and the composer re-renders.
+      emit({ type: "session:state", sessionId: id, state: "not_started" });
+      return s.worktreeId ? { ok: true, worktreeId: s.worktreeId } : { ok: true };
     },
 
     async createDirectSession(body: CreateDirectSessionBody): Promise<Session> {
@@ -1962,7 +2015,7 @@ export function createMockApi() {
     async checkAuth(): Promise<boolean> { return true; },
 
     // Mobile / tunnel — stubs for mock mode
-    async getTunnelStatus(): Promise<TunnelState> { return { enabled: false, tunnelUrl: null }; },
+    async getTunnelStatus(): Promise<TunnelState> { return tunnelState; },
     async enableTunnel(): Promise<TunnelState & { tunnelUrl: string }> { return { enabled: true, tunnelUrl: "https://mock.trycloudflare.com" }; },
     async disableTunnel(): Promise<void> {},
     async getMobileQr(): Promise<MobileQrResponse> { return { qrUrl: "https://mock.trycloudflare.com/mobile-auth?code=mock", expiresAt: Date.now() + 30_000 }; },

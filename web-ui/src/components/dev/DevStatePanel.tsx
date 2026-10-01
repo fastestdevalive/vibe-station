@@ -1,3 +1,4 @@
+import { useEventTargets } from "@/context/DemoEnv";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useServerStore } from "@/hooks/useServerStore";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -33,6 +34,7 @@ const PR_STATES = ["(unset)", "none", "draft", "open", "merged", "closed"] as co
 type PrChoice = (typeof PR_STATES)[number];
 
 export function DevStatePanel(): ReactNode {
+  const { win } = useEventTargets();
   const devEnabled =
     import.meta.env.DEV || localStorage.getItem("vs:devpanel") === "1";
 
@@ -57,8 +59,8 @@ export function DevStatePanel(): ReactNode {
         setOpen((o) => !o);
       }
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    win.addEventListener("keydown", onKeyDown);
+    return () => win.removeEventListener("keydown", onKeyDown);
   }, [devEnabled]);
 
   useEffect(() => {

@@ -820,6 +820,12 @@ const initial = {
 
 let layoutTransitionTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Demo hard-reset: cancel a pending layout-transition hint timer. */
+export function __resetForDemo(): void {
+  if (layoutTransitionTimer) clearTimeout(layoutTransitionTimer);
+  layoutTransitionTimer = null;
+}
+
 export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => {

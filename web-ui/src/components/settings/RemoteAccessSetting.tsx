@@ -1,3 +1,4 @@
+import { usePortalRoot } from "../../context/DemoEnv";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import QRCode from "qrcode";
@@ -51,6 +52,7 @@ type ActiveQrType = {
 };
 
 function CopyLinkButton({ url, label = "Copy link" }: { url: string; label?: string }) {
+  const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -62,10 +64,10 @@ function CopyLinkButton({ url, label = "Copy link" }: { url: string; label?: str
       ta.value = text;
       ta.style.position = "fixed";
       ta.style.opacity = "0";
-      document.body.appendChild(ta);
+      portalRoot.appendChild(ta);
       ta.select();
       const ok = document.execCommand("copy");
-      document.body.removeChild(ta);
+      portalRoot.removeChild(ta);
       return ok;
     } catch {
       return false;
@@ -511,6 +513,7 @@ function TailscaleCard({
 }
 
 export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
+  const portalRoot = usePortalRoot();
   // ── Tunnel state ────────────────────────────────────────────────────────────
   const [tunnel, setTunnel] = useState<TunnelState>({ enabled: false, tunnelUrl: null });
   const [loading, setLoading] = useState(true);
@@ -972,7 +975,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           </button>
         </div>
       </div>,
-      document.body,
+      portalRoot,
     );
   }
 

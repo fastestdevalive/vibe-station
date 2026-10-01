@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DoctorCheckDto, DoctorCheckStatus } from "@/api/types";
 import { copyText } from "@/lib/copyText";
+import { usePortalRoot } from "../../context/DemoEnv";
 
 interface DoctorCheckListProps {
   checks: DoctorCheckDto[];
@@ -56,6 +57,7 @@ interface CheckRowProps {
 }
 
 function CheckRow({ check, hostname, hostOs }: CheckRowProps) {
+  const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
   const glyph = STATUS_GLYPH[check.status];
   const label = STATUS_LABEL[check.status];
@@ -63,7 +65,9 @@ function CheckRow({ check, hostname, hostOs }: CheckRowProps) {
 
   const handleCopy = () => {
     if (!check.installHint) return;
-    copyText(check.installHint);
+    // Normal app: identical single-argument call; the portal root is only passed inside a demo.
+    if (portalRoot !== document.body) copyText(check.installHint, portalRoot);
+    else copyText(check.installHint);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };

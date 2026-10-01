@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { createElement, useEffect } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -201,6 +202,7 @@ function renderProjectWorkspace(
   initialEntries: string[],
   navRef: { current: Nav | null },
   locRef?: { current: string | null },
+  env?: import("@/context/DemoEnv").DemoEnv,
 ) {
   function Harness() {
     const nav = useNavigate();
@@ -216,8 +218,11 @@ function renderProjectWorkspace(
     if (locRef) locRef.current = location.pathname;
     return null;
   }
+  const Wrap = ({ children }: { children: React.ReactNode }) =>
+    env ? <DemoEnvProvider value={env}>{children}</DemoEnvProvider> : <>{children}</>;
   return render(
     <MemoryRouter initialEntries={initialEntries}>
+      <Wrap>
       <Routes>
         <Route path="/" element={<Harness />} />
         <Route path="/project/:projectId" element={<Harness />} />
@@ -228,6 +233,7 @@ function renderProjectWorkspace(
         <Route path="/session/:directSessionId" element={<Harness />} />
         <Route path="/draft/:draftId" element={<DraftProbe />} />
       </Routes>
+      </Wrap>
     </MemoryRouter>,
   );
 }
@@ -695,4 +701,18 @@ describe("Workspace project workspace (Phase 5 sidebar wiring)", () => {
     });
     expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
   });
+
+  it("demo mode does not write document.title (non-demo does)", async () => {
+    document.title = "Original";
+    const demoEnv = { demo: true, viewport: null, scale: 1, portalRoot: null, eventRoot: null };
+    const { unmount } = renderProjectWorkspace(["/worktree/wt-1/sess-main"], { current: null }, undefined, demoEnv);
+    await waitFor(() => {
+      expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-main");
+    });
+    expect(document.title).toBe("Original");
+    unmount();
+    renderProjectWorkspace(["/worktree/wt-1/sess-main"], { current: null });
+    await waitFor(() => expect(document.title).toBe("wt-1 — Vibe Station"));
+  });
+
 });

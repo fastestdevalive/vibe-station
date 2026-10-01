@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { render, screen, act, within } from "@testing-library/react";
@@ -439,4 +440,49 @@ describe("SubagentRow — chip label ellipsis (verification bug 3)", () => {
       /@media \(max-width:\s*640px\)[\s\S]*--agent-surface-max-width:\s*8rem/,
     );
   });
+
+  it("portals the detach confirm popup into env.portalRoot", async () => {
+    const user = userEvent.setup();
+    const portalRoot = document.createElement("div");
+    document.body.appendChild(portalRoot);
+    const env = { demo: true, viewport: null, scale: 1, portalRoot, eventRoot: null };
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    render(
+      <DemoEnvProvider value={env}>
+        <SubagentRow session={parent} onOpen={vi.fn()} api={createMockApi()} />
+      </DemoEnvProvider>,
+    );
+    await user.click(screen.getByLabelText("Detach subagent"));
+    const popup = portalRoot.querySelector(".chat-subagent-row__confirm-popup");
+    expect(popup).toBeInTheDocument();
+    expect(document.body.querySelectorAll(".chat-subagent-row__confirm-popup")).toHaveLength(1);
+    portalRoot.remove();
+  });
+
+  it("the confirm popup closes on an outside pointerdown inside the env event root only", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const env = { demo: true, viewport: null, scale: 1, portalRoot: null, eventRoot: host };
+    const parent = makeSession({ id: "p1" });
+    const child = makeSession({ id: "c1", parentSessionId: "p1", name: "worker" });
+    seedSessions([parent, child]);
+    const user = userEvent.setup();
+    render(
+      <DemoEnvProvider value={env}>
+        <SubagentRow session={parent} onOpen={vi.fn()} api={createMockApi()} />
+      </DemoEnvProvider>,
+      { container: host },
+    );
+    await user.click(screen.getByLabelText("Detach subagent"));
+    expect(screen.getByText("Detach worker?")).toBeInTheDocument();
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(screen.getByText("Detach worker?")).toBeInTheDocument();
+    host.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    await act(async () => {});
+    expect(screen.queryByText("Detach worker?")).toBeNull();
+    host.remove();
+  });
+
 });

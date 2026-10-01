@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { getActiveDiffView } from "@/preview/diffViewRegistry";
 
@@ -31,6 +32,7 @@ export function useWorkspaceKeyboardShortcuts(
   onNewWorktree?: () => void,
   onNewAgent?: () => void,
 ) {
+  const { win } = useEventTargets();
   useEffect(() => {
     if (!enabled) return;
 
@@ -211,7 +213,7 @@ export function useWorkspaceKeyboardShortcuts(
       }
     };
 
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    win.addEventListener("keydown", onKey);
+    return () => win.removeEventListener("keydown", onKey);
   }, [setQuickOpen, enabled, canvasMode, onNewWorktree, onNewAgent]);
 }

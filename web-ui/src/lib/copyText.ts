@@ -4,7 +4,7 @@
  * http:// on a LAN IP, outside a secure context, so writeText may be absent).
  * Returns true when the copy succeeded, false otherwise.
  */
-export async function copyText(text: string): Promise<boolean> {
+export async function copyText(text: string, portalRoot?: HTMLElement): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -17,10 +17,10 @@ export async function copyText(text: string): Promise<boolean> {
     const ta = document.createElement("textarea");
     ta.value = text;
     ta.style.cssText = "position:fixed;opacity:0";
-    document.body.appendChild(ta);
+    (portalRoot ?? document.body).appendChild(ta);
     ta.select();
     const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
+    (portalRoot ?? document.body).removeChild(ta);
     return ok;
   } catch {
     return false;

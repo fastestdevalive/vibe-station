@@ -22,6 +22,7 @@ import { ConnectionStatus } from "@/components/layout/ConnectionStatus";
 import { Logo } from "@/components/shared/Logo";
 import { KeyboardShortcutsDialog } from "@/components/layout/KeyboardShortcutsDialog";
 import { ToolbarOutlet, WORKSPACE_CANVAS_TOOLBAR_KEY } from "@/components/layout/paneOutlets";
+import { useEventTargets } from "@/context/DemoEnv";
 
 function shortcutHints() {
   if (typeof navigator === "undefined") {
@@ -133,6 +134,7 @@ export function TopBar({
     !toolSplitOrientationUserSet && isMobile ? "vertical" : toolSplitOrientation;
   const project = projects.find((p) => p.id === activeProjectId);
 
+  const { doc } = useEventTargets();
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -149,14 +151,14 @@ export function TopBar({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOverflowOpen(false);
     };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
+    doc.addEventListener("mousedown", onDown as EventListener);
+    doc.addEventListener("keydown", onKey as EventListener);
     return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
+      doc.removeEventListener("mousedown", onDown as EventListener);
+      doc.removeEventListener("keydown", onKey as EventListener);
       cancelAnimationFrame(raf);
     };
-  }, [overflowOpen]);
+  }, [overflowOpen, doc]);
 
   const hints = shortcutHints();
 

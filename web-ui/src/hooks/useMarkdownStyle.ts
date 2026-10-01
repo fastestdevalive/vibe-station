@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { create } from "zustand";
+import { getStyleHost } from "@/lib/demoRoots";
 import { api } from "@/api";
 import type { MarkdownStyle } from "@/api/types";
 
@@ -101,7 +102,7 @@ interface MarkdownStyleStore {
   setDirty: (dirty: boolean) => void;
 }
 
-const useMarkdownStyleStore = create<MarkdownStyleStore>()((set) => ({
+export const useMarkdownStyleStore = create<MarkdownStyleStore>()((set) => ({
   style: {},
   dirty: false,
   setStyle: (style) => set({ style, dirty: true }),
@@ -112,12 +113,29 @@ let styleEl: HTMLStyleElement | null = null;
 
 function applyStyleCss(css: string): void {
   if (typeof document === "undefined") return;
-  if (!styleEl) {
+  // Recreated when a demo teardown removed it with its container (`!isConnected`).
+  if (!styleEl || !styleEl.isConnected) {
     styleEl = document.createElement("style");
     styleEl.setAttribute("data-vst-markdown-style", "");
-    document.head.appendChild(styleEl);
+    getStyleHost().appendChild(styleEl);
   }
-  styleEl.textContent = css;
+  // In a demo the `<style>` lives inside the demo root: a prelude-less `@scope` confines the rules to that root's
+  // subtree (the default selector is global and would restyle every other demo's markdown on the page).
+  styleEl.textContent = css && getStyleHost() !== document.head ? `@scope {\n${css}}\n` : css;
+}
+
+/** Re-applies the store's overrides to the (possibly new) style host — used after a demo remount. */
+export function reapplyMarkdownStyle(): void {
+  applyStyleCss(buildMarkdownStyleCss(useMarkdownStyleStore.getState().style));
+}
+
+/** Demo hard-reset: drop the boot singleton and the injected `<style>`. */
+export function __resetForDemo(): void {
+  booted = false;
+  bootOff?.();
+  bootOff = null;
+  styleEl?.remove();
+  styleEl = null;
 }
 
 // Keep the injected `<style>` in sync with the store's applied overrides.

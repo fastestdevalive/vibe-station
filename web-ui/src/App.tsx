@@ -1,3 +1,4 @@
+import { useDemoEnv } from "./context/DemoEnv";
 import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { useEffect } from "react";
 import { Workspace } from "./routes/Workspace";
@@ -40,6 +41,7 @@ export function resolveNavigateAction(opts: {
 }
 
 function AppShell() {
+  const env = useDemoEnv();
   const { authed, loading, onLoginSuccess } = useAuth();
   const oobe = useOobeGate(api, { enabled: authed });
   const navigate = useNavigate();
@@ -127,7 +129,7 @@ function AppShell() {
   if (loading) {
     // Minimal loading state — TopBar with login mode, blank content area
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: env.demo ? "100%" : "100dvh" }}>
         <TopBar
           layoutMode="login"
           projects={[]}
@@ -144,7 +146,7 @@ function AppShell() {
 
   if (!authed) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: env.demo ? "100%" : "100dvh" }}>
         <TopBar
           layoutMode="login"
           projects={[]}
@@ -164,7 +166,7 @@ function AppShell() {
     // Minimal loading shell while useOobeGate's own getOobeState() effect is in
     // flight — never calls getOobeState() a second time, just renders.
     return (
-      <div style={{ display: "flex", flexDirection: "column", height: "100dvh" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: env.demo ? "100%" : "100dvh" }}>
         <TopBar
           layoutMode="login"
           projects={[]}

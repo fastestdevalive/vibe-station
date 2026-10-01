@@ -1,3 +1,4 @@
+import { useViewportWidth, usePortalRoot, useEventTargets } from "../../context/DemoEnv";
 import { Plus, Home } from "lucide-react";
 import { ancestorIds } from "@/components/chat/SubagentRow";
 import { motion } from "framer-motion";
@@ -52,6 +53,11 @@ interface TabsStripProps {
  *  window — see the release comment below. Module-scoped so it survives a
  *  remount (StrictMode's double-effect is covered by the per-instance ref). */
 const autoCreateInFlight = new Set<string>();
+
+/** Demo hard-reset. */
+export function __resetForDemo(): void {
+  autoCreateInFlight.clear();
+}
 
 /** How long after a long-press OPENS the reset menu a subsequent `contextmenu`
  *  event (fired independently by the browser's own long-press detector on
@@ -132,6 +138,9 @@ function AgentTabIcon({
 }
 
 export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStripProps) {
+  const envWidth = useViewportWidth();
+  const portalRoot = usePortalRoot();
+  const { doc } = useEventTargets();
   const isAgent = kind === "agent";
   const isProject = scope === "project";
   const fsTarget: WorkspacePaneFullscreen = isAgent ? "agent" : "terminal";
@@ -205,11 +214,11 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setResetMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -1125,7 +1134,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                   8,
                   Math.min(
                     resetMenu.x,
-                    typeof window !== "undefined" ? window.innerWidth - 178 : 8,
+                    envWidth - 178,
                   ),
                 ),
                 minWidth: 150,
@@ -1162,7 +1171,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
                 Reset with handoff
               </button>
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
 

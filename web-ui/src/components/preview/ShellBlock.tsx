@@ -1,3 +1,4 @@
+import { usePortalRoot } from "../../context/DemoEnv";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { copyText } from "@/lib/copyText";
 
@@ -17,13 +18,14 @@ export function ShellBlock({
   lang?: string;
   actions?: ReactNode;
 }) {
+  const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => () => { if (timerRef.current !== null) window.clearTimeout(timerRef.current); }, []);
 
   const handleCopy = useCallback(async () => {
-    const ok = await copyText(command.replace(/\n$/, ""));
+    const ok = await copyText(command.replace(/\n$/, ""), portalRoot);
     if (!ok) return;
     setCopied(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);

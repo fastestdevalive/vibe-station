@@ -110,6 +110,15 @@ let sharedApi: ApiInstance | null = null;
 let sharedRefs = 0;
 let sharedOff: (() => void) | null = null;
 
+/** Demo hard-reset: drop the shared load + subscription singletons. */
+export function __resetForDemo(): void {
+  pendingLoad = null;
+  sharedOff?.();
+  sharedApi = null;
+  sharedRefs = 0;
+  sharedOff = null;
+}
+
 function retainSubscription(api: ApiInstance): () => void {
   if (sharedApi !== api) {
     sharedOff?.();

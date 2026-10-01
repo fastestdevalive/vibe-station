@@ -1,3 +1,4 @@
+import { usePortalRoot, useEventTargets } from "../../context/DemoEnv";
 import {
   useEffect,
   useId,
@@ -32,6 +33,8 @@ export function Dialog({
   overlayClassName,
   cardClassName,
 }: DialogProps) {
+  const portalRoot = usePortalRoot();
+  const { doc } = useEventTargets();
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   // Per-instance id by default — a hardcoded "dialog-title" would collide
@@ -88,10 +91,10 @@ export function Dialog({
       }
     };
 
-    document.addEventListener("keydown", handleKeyDown);
+    doc.addEventListener("keydown", handleKeyDown);
 
     return () => {
-      document.removeEventListener("keydown", handleKeyDown);
+      doc.removeEventListener("keydown", handleKeyDown);
       const idx = openDialogs.indexOf(closeFn);
       if (idx !== -1) {
         openDialogs.splice(idx, 1);
@@ -160,6 +163,6 @@ export function Dialog({
         {footer ? <div className="dialog-card__footer">{footer}</div> : null}
       </div>
     </div>,
-    document.body,
+    portalRoot,
   );
 }

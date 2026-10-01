@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import type { FileScope } from "@/api/types";
 import { getLspStatuses, type LspLanguageStatus, type LspSeverity } from "@/lib/lspApi";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
@@ -32,6 +33,7 @@ const SEVERITY_DOT_CLASS: Record<LspSeverity, string> = {
  * within one poll cycle rather than being instantaneously guaranteed equal.
  */
 export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusRowProps) {
+  const { doc } = useEventTargets();
   const { path } = usePreviewedPath(worktreeId, scope);
   const { status, language, displayName, label, severity, text, action, actionLabel, onClick } =
     useLspStatus(api, worktreeId, scope, path);
@@ -47,8 +49,8 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
         setOpen(false);
       }
     };
-    document.addEventListener("mousedown", onOutside);
-    return () => document.removeEventListener("mousedown", onOutside);
+    doc.addEventListener("mousedown", onOutside);
+    return () => doc.removeEventListener("mousedown", onOutside);
   }, [open]);
 
   // Close the popup whenever the underlying file/status changes out from

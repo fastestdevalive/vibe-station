@@ -289,4 +289,118 @@ describe("mock api contract", () => {
     expect(call?.[0]).toHaveProperty("pr");
     off();
   });
+
+  // Phase 3 — MockSeed + injectable api seams (plan-hero-demos)
+  it("3.4 seeded listProjects returns ONLY the seeded ids", async () => {
+    const api = createMockApi({
+      projects: [
+        {
+          id: "proj-vs",
+          name: "Vibe Station",
+          path: "/home/dev/vibe-station",
+          prefix: "vs",
+          isGit: true,
+          defaultBranch: "main",
+          createdAt: new Date().toISOString(),
+          hidden: false,
+          lspEnabled: false,
+        },
+      ],
+    });
+    const ps = await api.listProjects();
+    expect(ps.map((p) => p.id)).toEqual(["proj-vs"]);
+  });
+
+  it("3.4 oobeCompleted:true → getOobeState().completed is true", async () => {
+    const api = createMockApi({ oobeCompleted: true });
+    expect((await api.getOobeState()).completed).toBe(true);
+  });
+
+  it("3.4 simulateOutput:false + openSession emits no session:output in 1s (fake timers)", async () => {
+    const api = createMockApi({ simulateOutput: false });
+    const output = vi.fn();
+    const off = api.on("session:output", output);
+    api.subscribe(["sess-main"]);
+    vi.useFakeTimers();
+    try {
+      await api.openSession("sess-main", 80, 24);
+      await Promise.resolve();
+      vi.advanceTimersByTime(1000);
+      expect(output).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+    off();
+  });
+
+  it("3.4 __test.addSession then listSessions includes it", async () => {
+    const api = createMockApi();
+    api.__test.addSession({
+      id: "sess-new",
+      worktreeId: "wt-1",
+      projectId: "proj-a",
+      modeId: "mode-1",
+      type: "agent",
+      isMain: false,
+      state: "working",
+      lifecycleState: "working",
+      tmuxName: "sess-new",
+      createdAt: new Date().toISOString(),
+      sortOrder: 9,
+    });
+    const ss = await api.listSessions("wt-1");
+    expect(ss.some((s) => s.id === "sess-new")).toBe(true);
+    // removeSession splices it back out (no event)
+    api.__test.removeSession("sess-new");
+    expect((await api.listSessions("wt-1")).some((s) => s.id === "sess-new")).toBe(false);
+  });
+
+  it("startDraft on a worktree draft returns worktreeId and broadcasts state + promoted record", async () => {
+    const api = createMockApi();
+    const state = vi.fn();
+    const updated = vi.fn();
+    const offState = api.on("session:state", state);
+    const offUpdated = api.on("session:updated", updated);
+    const d = await api.createDraftSession({
+      target: "worktree",
+      worktreeId: "wt-1",
+      type: "agent",
+      draftConfig: { entryPoint: "tab" },
+    });
+    const res = await api.startDraft(d.id, {
+      draftPrompt: "Plan this feature with Claude today",
+      draftConfig: { entryPoint: "tab", modeId: "mode-1", channel: "tmux" },
+    });
+    expect(res.worktreeId).toBe("wt-1");
+    expect(state.mock.calls.some((c) => c[0]?.sessionId === d.id && c[0]?.state === "not_started")).toBe(true);
+    const ev = updated.mock.calls.find((c) => c[0]?.sessionId === d.id)?.[0];
+    expect(ev?.name).toBe("Plan this feature with Claude");
+    expect(ev?.channel).toBe("tmux");
+    const s = (await api.listSessions("wt-1")).find((x) => x.id === d.id);
+    expect(s?.modeId).toBe("mode-1");
+    offState();
+    offUpdated();
+  });
+
+  it("__test.removeSession also drops the session's chat transcript", async () => {
+    const api = createMockApi();
+    api.__test.pushChatEvent("sess-x", {
+      id: "e1",
+      sessionId: "sess-x",
+      ts: new Date().toISOString(),
+      provider: "opencode",
+      kind: "text",
+      role: "assistant",
+      text: "hi",
+    });
+    expect((await api.getTranscript("sess-x")).events).toHaveLength(1);
+    api.__test.removeSession("sess-x");
+    expect((await api.getTranscript("sess-x")).events).toHaveLength(0);
+  });
+
+  it("3.4 createMockApi() with no arg still lists proj-a (default behavior unchanged)", async () => {
+    const api = createMockApi();
+    const ps = await api.listProjects();
+    expect(ps.some((p) => p.id === "proj-a")).toBe(true);
+  });
 });

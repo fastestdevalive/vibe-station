@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { defaultThemeId, themeById } from "@/theme/registry";
+import { getThemeRoot } from "@/lib/demoRoots";
 
 export type ThemeAppearance = "dark" | "light";
 export type Font = "mono" | "sans";
@@ -40,13 +41,14 @@ export const useThemeStore = create<ThemeStore>()((set) => ({
   setThemeId: (id) => {
     const entry = themeById[id] ?? themeById[defaultThemeId]!;
     set({ themeId: entry.id, appearance: entry.appearance });
-    document.documentElement.dataset.theme = entry.id;
-    document.documentElement.dataset.appearance = entry.appearance;
+    const root = getThemeRoot();
+    root.dataset.theme = entry.id;
+    root.dataset.appearance = entry.appearance;
   },
 
   setFont: (font) => {
     set({ font });
     const fontVar = font === "mono" ? "var(--font-mono)" : "var(--font-sans)";
-    document.documentElement.style.setProperty("--font-family", fontVar);
+    getThemeRoot().style.setProperty("--font-family", fontVar);
   },
 }));

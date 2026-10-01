@@ -1,3 +1,4 @@
+import { useViewportWidth, usePortalRoot, useEventTargets } from "../../context/DemoEnv";
 import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
@@ -239,6 +240,9 @@ export function LeftSidebar({
   onOpenShortcuts,
   header,
 }: LeftSidebarProps) {
+  const envWidth = useViewportWidth();
+  const portalRoot = usePortalRoot();
+  const { doc } = useEventTargets();
   const location = useLocation();
   const navigate = useNavigate();
   const { toggleFont } = useTheme();
@@ -877,11 +881,11 @@ export function LeftSidebar({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setWtMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -902,11 +906,11 @@ export function LeftSidebar({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setSessMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -927,11 +931,11 @@ export function LeftSidebar({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setProjMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -953,11 +957,11 @@ export function LeftSidebar({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setPlusMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -978,11 +982,11 @@ export function LeftSidebar({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setFilterMenuRect(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -2996,7 +3000,7 @@ export function LeftSidebar({
                   8,
                   Math.min(
                     wtMenu.rect.right - 176,
-                    typeof window !== "undefined" ? window.innerWidth - 184 : 8,
+                    envWidth - 184,
                   ),
                 ),
                 minWidth: 140,
@@ -3088,7 +3092,7 @@ export function LeftSidebar({
                 Delete worktree…
               </button>
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
       {sessMenu
@@ -3105,7 +3109,7 @@ export function LeftSidebar({
                   8,
                   Math.min(
                     sessMenu.rect.right - 176,
-                    typeof window !== "undefined" ? window.innerWidth - 184 : 8,
+                    envWidth - 184,
                   ),
                 ),
                 minWidth: 150,
@@ -3173,7 +3177,7 @@ export function LeftSidebar({
                 Terminate
               </button>
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
       {projMenu
@@ -3190,7 +3194,7 @@ export function LeftSidebar({
                   8,
                   Math.min(
                     projMenu.rect.right - 176,
-                    typeof window !== "undefined" ? window.innerWidth - 184 : 8,
+                    envWidth - 184,
                   ),
                 ),
                 minWidth: 160,
@@ -3239,7 +3243,7 @@ export function LeftSidebar({
                 );
               })()}
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
       {filterMenuRect
@@ -3256,7 +3260,7 @@ export function LeftSidebar({
                   8,
                   Math.min(
                     filterMenuRect.right - 140,
-                    typeof window !== "undefined" ? window.innerWidth - 148 : 8,
+                    envWidth - 148,
                   ),
                 ),
                 minWidth: 140,
@@ -3276,7 +3280,7 @@ export function LeftSidebar({
                 Hide done
               </button>
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
     </div>

@@ -1,3 +1,4 @@
+import { useDemoEnv } from "../../context/DemoEnv";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from "react-resizable-panels";
 import { useLayout } from "@/hooks/useLayout";
@@ -63,6 +64,7 @@ export function Layout({
   mobileSidebarOpen,
   onMobileSidebarClose,
 }: LayoutProps) {
+  const env = useDemoEnv();
   const {
     toolPanelVisible,
     terminalDockVisible,
@@ -95,8 +97,10 @@ export function Layout({
     const startWidth = leftColumnPx;
     const prevUserSelect = document.body.style.userSelect;
     const prevCursor = document.body.style.cursor;
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
+    if (!env.demo) {
+      document.body.style.userSelect = 'none';
+      document.body.style.cursor = 'col-resize';
+    }
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
     function clamp(px: number) {
@@ -109,8 +113,10 @@ export function Layout({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
+      if (!env.demo) {
       document.body.style.userSelect = prevUserSelect;
       document.body.style.cursor = prevCursor;
+    }
       onLeftSidebarResize?.(clamp(startWidth + (ev.clientX - startX)));
       setDragWidth(null);
     }
@@ -190,8 +196,10 @@ export function Layout({
     const update = () => {
       const rect = el.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        const w = Math.round(rect.width);
-        const h = Math.round(rect.height);
+        // a demo stage is shown under a host `transform: scale(k)`: rects are scaled, CSS px are not
+        const k = env.demo && env.scale > 0 ? env.scale : 1;
+        const w = Math.round(rect.width / k);
+        const h = Math.round(rect.height / k);
         setFloatingInset((prev) => (prev.width !== w || prev.height !== h ? { width: w, height: h } : prev));
       }
     };
@@ -199,7 +207,7 @@ export function Layout({
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [classic]);
+  }, [classic, env.demo, env.scale]);
 
   const isCanvasUnderTopRight = !paneFullscreen && classic && paneLayoutMode === "workspace";
   const isToolsUnderTopRight =

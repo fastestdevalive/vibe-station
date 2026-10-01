@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { copyText } from "@/lib/copyText";
+import { usePortalRoot } from "../../context/DemoEnv";
 
 interface CodeElementProps {
   className?: string;
@@ -38,6 +39,7 @@ function languageFromClassName(className: string | undefined): string | null {
 }
 
 export function CodeBlock({ children }: { children?: ReactNode }) {
+  const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<number | null>(null);
 
@@ -50,7 +52,7 @@ export function CodeBlock({ children }: { children?: ReactNode }) {
 
   const handleCopy = useCallback(async () => {
     const text = rawText.replace(/\n$/, "");
-    const ok = await copyText(text);
+    const ok = await copyText(text, portalRoot);
     if (!ok) return;
     setCopied(true);
     if (timerRef.current !== null) window.clearTimeout(timerRef.current);

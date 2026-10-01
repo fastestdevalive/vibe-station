@@ -1,3 +1,4 @@
+import { useDemoEnv } from "../../context/DemoEnv";
 import { ArrowUpRight, FileText, List, ListTree, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiInstance } from "@/api";
@@ -69,6 +70,7 @@ export function FilesPanel({
   onWidthDrag,
   onHeightDrag,
 }: FilesPanelProps) {
+  const env = useDemoEnv();
   const wt = worktreeId ?? "__none__";
 
   const openTabs = useWorkspaceStore((s) => s.openFileTabsByWorktree[wt] ?? NO_TABS);
@@ -154,8 +156,10 @@ export function FilesPanel({
       const startDim = masterDetailVertical ? activeHeight : activeWidth;
       const prevUserSelect = document.body.style.userSelect;
       const prevCursor = document.body.style.cursor;
-      document.body.style.userSelect = "none";
-      document.body.style.cursor = masterDetailVertical ? "row-resize" : "col-resize";
+      if (!env.demo) {
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = masterDetailVertical ? 'row-resize' : 'col-resize';
+      }
       setIsDragging(true);
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
@@ -181,8 +185,10 @@ export function FilesPanel({
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
+        if (!env.demo) {
         document.body.style.userSelect = prevUserSelect;
         document.body.style.cursor = prevCursor;
+      }
         cleanupDragRef.current = null;
       }
 

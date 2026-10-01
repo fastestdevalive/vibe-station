@@ -49,6 +49,14 @@ let inFlightPinnedOrderSync: Promise<void> | null = null;
  */
 let orderedListWriteInFlight: Promise<unknown> | null = null;
 
+/** Demo hard-reset: forget every in-flight dedupe marker of the previous mount. */
+export function __resetForDemo(): void {
+  inFlightRefresh = null;
+  sessionsAnnouncedDuringRefresh = new Map<string, Session>();
+  inFlightPinnedOrderSync = null;
+  orderedListWriteInFlight = null;
+}
+
 export function markOrderedListWrite(p: Promise<unknown>): void {
   orderedListWriteInFlight = p;
 }

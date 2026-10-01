@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -110,4 +111,16 @@ describe("Dialog", () => {
     await user.keyboard("{Escape}"); // latest onClose → n += 100
     await waitFor(() => expect(screen.getByText(/count 101/)).toBeInTheDocument());
   });
+
+  it('portals into env root', () => {
+    const root = document.createElement('div');
+    const env = { demo: true, viewport: null, scale: 1, portalRoot: root, eventRoot: null };
+    render(
+      <DemoEnvProvider value={env}>
+        <Dialog title="Test" open={true} onClose={() => {}}>Content</Dialog>
+      </DemoEnvProvider>
+    );
+    expect(root.querySelector('.dialog-overlay')).toBeTruthy();
+  });
+
 });

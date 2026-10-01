@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -157,6 +158,7 @@ export function CodeView({
   etag,
   retryDelayMs,
 }: CodeViewProps) {
+  const { win } = useEventTargets();
   const { theme, themeId } = useTheme();
   const mode = themeMode ?? theme;
   const overridden = themeMode !== undefined && themeMode !== theme;
@@ -600,9 +602,9 @@ export function CodeView({
       }
       setHoverTooltip(null);
     };
-    window.addEventListener("pointerdown", handlePointerDown);
+    win.addEventListener("pointerdown", handlePointerDown);
     return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
+      win.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [hoverTooltip]);
 
@@ -748,13 +750,13 @@ export function CodeView({
       clearHoveredSymbol();
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onBlur);
+    win.addEventListener("keydown", onKeyDown);
+    win.addEventListener("keyup", onKeyUp);
+    win.addEventListener("blur", onBlur);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onBlur);
+      win.removeEventListener("keydown", onKeyDown);
+      win.removeEventListener("keyup", onKeyUp);
+      win.removeEventListener("blur", onBlur);
     };
   }, [pickerState, triggerGoToDef, handleSelectPickerLocation]);
 

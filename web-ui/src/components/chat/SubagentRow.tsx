@@ -1,3 +1,5 @@
+import { usePortalRoot } from "../../context/DemoEnv";
+import { useEventTargets } from "@/context/DemoEnv";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Unlink } from "lucide-react";
@@ -60,6 +62,7 @@ function DetachConfirmPopup({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const portalRoot = usePortalRoot();
   return createPortal(
     <div
       className="chat-subagent-row__confirm-popup"
@@ -88,7 +91,7 @@ function DetachConfirmPopup({
         Cancel
       </button>
     </div>,
-    document.body,
+    portalRoot,
   );
 }
 
@@ -151,6 +154,7 @@ export interface SubagentRowProps {
  * them. Nothing renders when there is nothing to show.
  */
 export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
+  const { win } = useEventTargets();
   const allSessions = useServerStore((s) => s.sessions);
   const sessionStates = useWorkspaceStore((s) => s.sessionStates);
   // `rect` is the chip's bounding box, captured at click time — anchors the
@@ -189,11 +193,11 @@ export function SubagentRow({ session, onOpen, api }: SubagentRowProps) {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setConfirmDelink(null);
     };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
+    win.addEventListener("pointerdown", onPointerDown);
+    win.addEventListener("keydown", onKeyDown);
     return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
+      win.removeEventListener("pointerdown", onPointerDown);
+      win.removeEventListener("keydown", onKeyDown);
     };
   }, [confirmDelink]);
 

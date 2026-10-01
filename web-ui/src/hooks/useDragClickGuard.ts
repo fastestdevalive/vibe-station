@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 
 /** How long after a drag ends a trailing `click` is still treated as part of
  *  that drag. dnd-kit's own internal suppression window is 50ms; we allow more
@@ -47,6 +48,7 @@ const DRAG_CLICK_WINDOW_MS = 250;
  * own, so a missing trailing click cannot poison later clicks.
  */
 export function useDragClickGuard(): () => void {
+  const { win } = useEventTargets();
   const draggedAtRef = useRef(0);
 
   const markDrag = useCallback(() => {
@@ -72,8 +74,8 @@ export function useDragClickGuard(): () => void {
       e.preventDefault();
       e.stopPropagation();
     }
-    window.addEventListener("click", onClickCapture, true);
-    return () => window.removeEventListener("click", onClickCapture, true);
+    win.addEventListener("click", onClickCapture, true);
+    return () => win.removeEventListener("click", onClickCapture, true);
   }, [consumeDragClick]);
 
   /** Wire into every `DndContext`'s `onDragStart`, `onDragEnd` AND

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ApiInstance } from "@/api";
 import type { LspLanguageSurveyEntry } from "@/api/types";
 import { copyText } from "@/lib/copyText";
+import { usePortalRoot } from "../../context/DemoEnv";
 import { SectionHeader } from "./SectionHeader";
 
 interface LspSettingProps {
@@ -9,13 +10,14 @@ interface LspSettingProps {
 }
 
 function LspRow({ entry }: { entry: LspLanguageSurveyEntry }) {
+  const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
 
   const missing = !entry.installedOnHost;
 
   function handleCopy() {
     if (!entry.installCommand) return;
-    void copyText(entry.installCommand).then((ok) => {
+    void copyText(entry.installCommand, portalRoot).then((ok) => {
       if (!ok) return;
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);

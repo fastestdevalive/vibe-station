@@ -1,3 +1,4 @@
+import { useViewportWidth, usePortalRoot } from "../../context/DemoEnv";
 import { createPortal } from "react-dom";
 import { FolderGit, Play } from "lucide-react";
 import type { Project } from "@/api/types";
@@ -22,6 +23,8 @@ export function ProjectPlusMenu({
   onDirectAgent,
   onClose,
 }: ProjectPlusMenuProps) {
+  const envWidth = useViewportWidth();
+  const portalRoot = usePortalRoot();
   return createPortal(
     <div
       className="menu-pop project-plus-menu"
@@ -35,7 +38,7 @@ export function ProjectPlusMenu({
           8,
           Math.min(
             rect.right - 180,
-            typeof window !== "undefined" ? window.innerWidth - 188 : 8,
+            envWidth - 188,
           ),
         ),
         zIndex: 1000,
@@ -68,6 +71,6 @@ export function ProjectPlusMenu({
         <span>Agent in project dir</span>
       </button>
     </div>,
-    document.body,
+    portalRoot,
   );
 }

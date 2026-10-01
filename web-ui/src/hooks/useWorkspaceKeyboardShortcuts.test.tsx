@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -199,5 +200,36 @@ describe("diff-view-shortcuts: Alt+D / Alt+Shift+D / Alt+H", () => {
 
     fireEvent.keyDown(window, { code: "KeyD", altKey: true });
     expect(useWorkspaceStore.getState().diffScopeByWorktree[WT]).toBe("local");
+  });
+
+});
+
+describe("useWorkspaceKeyboardShortcuts - DemoEnv event root", () => {
+  beforeEach(() => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: null,
+      activeDirectContextId: "proj-1",
+      layoutByWorktree: { "proj-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" } },
+      filesLeftPaneMode: {},
+      searchFocusSeq: {},
+    });
+  });
+
+  it("4.4 — with a DemoEnv eventRoot, window keydown is ignored and keydown on the root is handled", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const env = { demo: true, viewport: null, scale: 1, portalRoot: null, eventRoot: host };
+    render(
+      <DemoEnvProvider value={env}>
+        <Harness />
+      </DemoEnvProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: "F", metaKey: true, shiftKey: true });
+    expect(useWorkspaceStore.getState().searchFocusSeq["proj-1"]).toBeUndefined();
+
+    fireEvent.keyDown(host, { key: "F", metaKey: true, shiftKey: true });
+    expect(useWorkspaceStore.getState().searchFocusSeq["proj-1"]).toBe(1);
+    host.remove();
   });
 });

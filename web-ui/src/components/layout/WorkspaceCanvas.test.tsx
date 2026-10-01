@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { act, fireEvent } from "@testing-library/react";
@@ -537,5 +538,62 @@ describe("WorkspaceCanvas - fullscreen reconciliation", () => {
     expect(screen.queryByTitle("Click to exit fullscreen")).not.toBeInTheDocument();
     const tileBAfter = screen.getByText("agent").closest(".workspace-canvas__tile") as HTMLElement;
     expect(tileBAfter.style.display).not.toBe("none");
+  });
+});
+
+describe("WorkspaceCanvas - DemoEnv event root and portal root", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [W1]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          scratchCanvas: { mode: "free", tiles: [], tree: null, freeRects: {} },
+        },
+      },
+      workspaceDocs: {},
+    });
+  });
+
+  function renderInEnv(host: HTMLElement, portalRoot: HTMLElement | null) {
+    const env = { demo: true, viewport: null, scale: 1, portalRoot, eventRoot: host };
+    return render(
+      <MemoryRouter>
+        <DemoEnvProvider value={env}>
+          <PaneOutletProvider>
+            <WorkspaceCanvas
+              worktreeId={W1}
+              agentSessions={[]}
+              terminalSessions={[]}
+              hasTools
+              toolPanelVisible
+              terminalDockVisible
+              allSessions={[]}
+              worktrees={[]}
+              projects={[]}
+              canvasToolbarVisible
+            />
+          </PaneOutletProvider>
+        </DemoEnvProvider>
+      </MemoryRouter>,
+      { container: host },
+    );
+  }
+
+  it("the Windows picker ignores clicks on document and closes on a click inside the event root", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const user = userEvent.setup();
+    const { container } = renderInEnv(host, null);
+    await user.click(screen.getByText("Windows"));
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+    // Outside the env root: the listener is bound to the root, so nothing happens.
+    fireEvent.click(document.body);
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeTruthy();
+    // Inside the env root (but outside the panel): closes.
+    await user.click(host);
+    expect(container.querySelector("[data-workspace-canvas-picker-panel]")).toBeFalsy();
+    host.remove();
   });
 });

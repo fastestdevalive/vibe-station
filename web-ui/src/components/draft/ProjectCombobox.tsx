@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, useId } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import type { ApiInstance } from "@/api";
 import type { Project, Settings } from "@/api/types";
 import { Input } from "../ui/Input";
@@ -33,6 +34,7 @@ export function ProjectCombobox({
   onAddPath,
   onClear,
 }: ProjectComboboxProps) {
+  const { doc } = useEventTargets();
   const projectFieldId = useId();
   const projectListboxId = useId();
   const dirFieldId = useId();
@@ -108,8 +110,8 @@ export function ProjectCombobox({
         setPopupOpen(false);
       }
     }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
+    doc.addEventListener("mousedown", onDocMouseDown);
+    return () => doc.removeEventListener("mousedown", onDocMouseDown);
   }, [popupOpen]);
 
   useEffect(() => {
@@ -119,8 +121,8 @@ export function ProjectCombobox({
         setDirPopupOpen(false);
       }
     }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
+    doc.addEventListener("mousedown", onDocMouseDown);
+    return () => doc.removeEventListener("mousedown", onDocMouseDown);
   }, [dirPopupOpen]);
 
   // Cleanup the debounce timer on unmount.

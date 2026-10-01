@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import { Check, Palette } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import { useThemeStore } from "@/hooks/useThemeStore";
@@ -21,6 +22,7 @@ import { themes, themeById } from "@/theme/registry";
  * inside its footer, which is itself hidden entirely on the collapsed rail).
  */
 export function ThemeQuickPicker() {
+  const { doc } = useEventTargets();
   const { themeId, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
   // Tracks the real committed themeId while the popover is closed; frozen
@@ -46,11 +48,11 @@ export function ThemeQuickPicker() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") revertAndClose();
     };
-    document.addEventListener("mousedown", onDocPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    doc.addEventListener("mousedown", onDocPointerDown);
+    doc.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("mousedown", onDocPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      doc.removeEventListener("mousedown", onDocPointerDown);
+      doc.removeEventListener("keydown", onKeyDown);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, committedId]);

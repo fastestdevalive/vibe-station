@@ -1,3 +1,4 @@
+import { useViewportWidth, usePortalRoot, useEventTargets } from "../../context/DemoEnv";
 import "@/styles/workspace-canvas.css";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -186,6 +187,9 @@ export function WorkspaceCanvas({
   detachedWorkspaceId,
   canvasToolbarVisible,
 }: WorkspaceCanvasProps) {
+  const envWidth = useViewportWidth();
+  const portalRoot = usePortalRoot();
+  const { doc, win } = useEventTargets();
   const layoutByWorktree = useWorkspaceStore((s) => s.layoutByWorktree);
   const workspaceDocs = useWorkspaceStore((s) => s.workspaceDocs);
   const showAgentStatusBorders = useWorkspaceStore((s) => s.showAgentStatusBorders);
@@ -256,8 +260,8 @@ export function WorkspaceCanvas({
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setFullscreenTileId(null);
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    win.addEventListener("keydown", onKeyDown);
+    return () => win.removeEventListener("keydown", onKeyDown);
   }, [fullscreenTileId]);
 
   /** Close-on-outside must attach after the opening click finishes (same tap
@@ -275,11 +279,11 @@ export function WorkspaceCanvas({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setPickerOpen(false);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -312,11 +316,11 @@ export function WorkspaceCanvas({
       function onKey(ev: KeyboardEvent) {
         if (ev.key === "Escape") setTileMenu(null);
       }
-      document.addEventListener("click", onDocClick);
-      document.addEventListener("keydown", onKey);
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
       removeListeners = () => {
-        document.removeEventListener("click", onDocClick);
-        document.removeEventListener("keydown", onKey);
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
       };
     }, 0);
     return () => {
@@ -1563,7 +1567,7 @@ export function WorkspaceCanvas({
                 top: tileMenu.y + 6,
                 left: Math.max(
                   8,
-                  Math.min(tileMenu.x, typeof window !== "undefined" ? window.innerWidth - 178 : 8),
+                  Math.min(tileMenu.x, envWidth - 178),
                 ),
                 minWidth: 150,
                 zIndex: 4000,
@@ -1608,7 +1612,7 @@ export function WorkspaceCanvas({
                 Terminate
               </button>
             </div>,
-            document.body,
+            portalRoot,
           )
         : null}
       <ConfirmDialog

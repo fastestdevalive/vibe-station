@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import { createPortal } from "react-dom";
 import { ZoomableMedia } from "./ZoomableMedia";
+import { useDemoEnv, usePortalRoot } from "../../context/DemoEnv";
 
 interface ImageZoomOverlayProps {
   /** Image URL to show fullscreen; when null the overlay is closed. */
@@ -18,6 +20,9 @@ interface ImageZoomOverlayProps {
  * `TerminalPane`), so there is no React-tree-position invariant to preserve.
  */
 export function ImageZoomOverlay({ src, alt, onClose }: ImageZoomOverlayProps) {
+  const { win } = useEventTargets();
+  const env = useDemoEnv();
+  const portalRoot = usePortalRoot();
   const open = src != null;
   const [resetCount, setResetCount] = useState(0);
 
@@ -26,14 +31,14 @@ export function ImageZoomOverlay({ src, alt, onClose }: ImageZoomOverlayProps) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    window.addEventListener("keydown", onKey);
+    win.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    if (!env.demo) document.body.style.overflow = "hidden";
     return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prev;
+      win.removeEventListener("keydown", onKey);
+      if (!env.demo) document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, onClose, env.demo]);
 
   if (!open || !src) return null;
 
@@ -66,6 +71,6 @@ export function ImageZoomOverlay({ src, alt, onClose }: ImageZoomOverlayProps) {
       </div>
       <ZoomableMedia src={src} alt={alt} fullscreen resetTrigger={resetCount} onTap={onClose} />
     </div>,
-    document.body,
+    portalRoot,
   );
 }

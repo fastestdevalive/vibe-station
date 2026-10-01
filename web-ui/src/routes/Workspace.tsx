@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useDemoEnv } from "../context/DemoEnv";
 import { api } from "@/api";
 import { Layout } from "@/components/layout/Layout";
 import { GlobalStatusBar } from "@/components/layout/GlobalStatusBar";
@@ -29,6 +30,7 @@ import { QuickOpen } from "@/components/dialogs/QuickOpen";
 import { DraftComposer } from "@/components/draft/DraftComposer";
 
 export function Workspace() {
+  const env = useDemoEnv();
   const location = useLocation();
   const navigate = useNavigate();
   const params = useParams<{ projectId?: string; sessionId?: string; directSessionId?: string; workspaceId?: string; draftSessionId?: string }>();
@@ -343,21 +345,22 @@ export function Workspace() {
   // Update browser tab title to reflect current context
   useEffect(() => {
     if (isSettings) {
-      document.title = "Settings — Vibe Station";
+      if (!env.demo) document.title = "Settings — Vibe Station";
     } else if (isWorkspaceView && viewedWorkspace) {
-      document.title = `${viewedWorkspace.name} — Vibe Station`;
+      if (!env.demo) document.title = `${viewedWorkspace.name} — Vibe Station`;
     } else if (isProjectView) {
       // Project workspace — title shows the project's name regardless of which
       // tab (Project or a direct agent) is active (R3).
       const proj = projects.find((p) => p.id === projectId);
-      document.title = proj ? `${proj.name} — Vibe Station` : "Vibe Station";
+      if (!env.demo) document.title = proj ? `${proj.name} — Vibe Station` : "Vibe Station";
     } else if (isDashboard || !activeWorktreeId) {
-      document.title = "Vibe Station";
+      if (!env.demo) document.title = "Vibe Station";
     } else {
       const wt = worktrees.find((w) => w.id === activeWorktreeId);
-      document.title = wt ? `${wt.branch} — Vibe Station` : "Vibe Station";
+      if (!env.demo) document.title = wt ? `${wt.branch} — Vibe Station` : "Vibe Station";
     }
   }, [
+    env.demo,
     activeWorktreeId,
     worktrees,
     isDashboard,

@@ -34,3 +34,8 @@ export function getActiveDiffView(): DiffViewController | null {
   }
   return active.size === 1 ? [...active][0]! : null;
 }
+
+/** Demo hard-reset: drop every registered controller. */
+export function __resetForDemo(): void {
+  active.clear();
+}

@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { createElement } from "react";
 import { render, screen, waitFor, fireEvent, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -2617,5 +2618,54 @@ describe("LeftSidebar - global Workspaces section", () => {
       expect(useWorkspaceStore.getState().activeWorktreeId).toBe("wt-1");
       expect(useWorkspaceStore.getState().activeSessionId).toBe("sess-agent2");
     });
+  });
+
+
+});
+
+describe("LeftSidebar - DemoEnv portal root and event root", () => {
+  async function openWtMenu(host: HTMLElement, portalRoot: HTMLElement | null) {
+    const localApi = createMockApi();
+    const user = userEvent.setup();
+    const env = { demo: true, viewport: null, scale: 1, portalRoot, eventRoot: host };
+    render(
+      <MemoryRouter>
+        <DemoEnvProvider value={env}>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </DemoEnvProvider>
+      </MemoryRouter>,
+      { container: host },
+    );
+    await screen.findByRole("link", { name: /Open worktree wt-1/i });
+    const wtRow = screen.getByRole("link", { name: /Open worktree wt-1/i }).closest(".tree-row")!;
+    await user.click(wtRow.querySelector("[data-wt-menu-trigger]")! as HTMLElement);
+    return { user, item: await screen.findByRole("menuitem", { name: /^hide$/i }) };
+  }
+
+  it("renders the worktree menu into env.portalRoot, not document.body", async () => {
+    const host = document.createElement("div");
+    const portalRoot = document.createElement("div");
+    document.body.append(host, portalRoot);
+    const { item } = await openWtMenu(host, portalRoot);
+    expect(portalRoot.contains(item)).toBe(true);
+    host.remove();
+    portalRoot.remove();
+  });
+
+  it("closes the menu on a click inside the event root but ignores clicks on document", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const { user } = await openWtMenu(host, null);
+    // Let the listener's own setTimeout(0) install.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    fireEvent.click(document.body);
+    expect(screen.getByRole("menuitem", { name: /^hide$/i })).toBeInTheDocument();
+    await user.click(host);
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: /^hide$/i })).toBeNull());
+    host.remove();
   });
 });

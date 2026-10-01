@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useEventTargets } from "@/context/DemoEnv";
 import type { ApiInstance } from "@/api";
 import type { CliId } from "@/api/types";
 
@@ -19,6 +20,7 @@ interface ModelSwitchProps {
  * entry clears the per-session override.
  */
 export function ModelSwitch({ api, sessionId, cli, model }: ModelSwitchProps) {
+  const { doc } = useEventTargets();
   const [open, setOpen] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,8 +64,8 @@ export function ModelSwitch({ api, sessionId, cli, model }: ModelSwitchProps) {
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    doc.addEventListener("mousedown", onDown);
+    return () => doc.removeEventListener("mousedown", onDown);
   }, [open]);
 
   const shown = optimistic ?? model ?? "(default)";

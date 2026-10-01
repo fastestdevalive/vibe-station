@@ -1,3 +1,4 @@
+import { DemoEnvProvider } from "@/context/DemoEnv";
 import { createElement, StrictMode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -1735,4 +1736,55 @@ describe("TabsStrip", () => {
     });
     useModesStore.getState()._reset();
   });
+
+  it("portals the reset menu into the env portal root", async () => {
+    const portalRoot = document.createElement("div");
+    document.body.appendChild(portalRoot);
+    const env = { demo: true, viewport: null, scale: 1, portalRoot, eventRoot: null };
+    render(
+      <MemoryRouter>
+        <DemoEnvProvider value={env}>
+          <TabsStrip api={createMockApi()} worktreeId="wt-1" kind="agent" />
+        </DemoEnvProvider>
+      </MemoryRouter>,
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
+    const item = await screen.findByRole("menuitem", { name: /^Reset$/i });
+    expect(portalRoot.contains(item)).toBe(true);
+    portalRoot.remove();
+  });
+
+  it("click-outside closes the menu only for clicks inside the env eventRoot", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const env = { demo: true, viewport: null, scale: 1, portalRoot: null, eventRoot: host };
+    render(
+      <MemoryRouter>
+        <DemoEnvProvider value={env}>
+          <TabsStrip api={createMockApi()} worktreeId="wt-1" kind="agent" />
+        </DemoEnvProvider>
+      </MemoryRouter>,
+      { container: host },
+    );
+    const tab = await screen.findByRole("tab", { name: /agent-2/i });
+    vi.useFakeTimers();
+    try {
+      fireEvent.contextMenu(tab, { clientX: 50, clientY: 20 });
+      act(() => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      // A click on the real document (outside the env root) is ignored.
+      fireEvent.click(document.body);
+      expect(screen.getByRole("menuitem", { name: /^Reset$/i })).toBeInTheDocument();
+      // A click inside the env root (outside the menu) closes it.
+      fireEvent.click(host);
+      expect(screen.queryByRole("menuitem", { name: /^Reset$/i })).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      host.remove();
+    }
+  });
+
 });
