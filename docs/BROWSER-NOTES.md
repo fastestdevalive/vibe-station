@@ -101,4 +101,4 @@ WebSocket auth works the same way: the browser sends the cookie on the WS upgrad
 
 ## CORS
 
-The daemon registers `fastify-cors` with `origin: true` (reflect request origin). This is intentional — CSRF protection lives at the cookie layer (`SameSite=Strict` + HMAC), so the origin allowlist would block legitimate LAN / Tailscale access without adding real security.
+The daemon only allows an `Origin` that is same-origin with the `Host` it was reached on (port included), plus `tauri://localhost` and `VST_ALLOWED_ORIGINS`. Cookie-authenticated requests also need `X-VST-CSRF` on writes and must not be `Sec-Fetch-Site: same-site`/`cross-site`. See `docs/AUTH.md`. The Vite proxy therefore must not set `changeOrigin`.

@@ -14,6 +14,8 @@ use std::time::Instant;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
+
+use crate::origin_policy::OriginPolicy;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
@@ -114,6 +116,8 @@ pub struct BuildServerOptions {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
+    /// Daemon listens beyond loopback (`VST_ALLOW_NETWORK`); gates the LAN QR flow.
+    pub network_access: bool,
     /// Notified by `POST /api/daemon/stop` to trigger the same graceful
     /// shutdown sequence a SIGINT/SIGTERM does (see `run.rs`'s signal task).
     pub stop_requested: Arc<tokio::sync::Notify>,
@@ -134,6 +138,7 @@ pub struct AppState {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
+    pub origin_policy: OriginPolicy,
     /// See `BuildServerOptions::stop_requested` doc comment.
     pub stop_requested: Arc<tokio::sync::Notify>,
     pub dist_path: Option<PathBuf>,
@@ -458,6 +463,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.port,
         opts.no_auth,
     )
+    .with_network_access(opts.network_access)
     .with_store(opts.store.clone());
 
     let tailscale_routes = TailscaleRoutes::new(code_store.clone(), opts.port);
@@ -508,6 +514,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
+        origin_policy: OriginPolicy::from_env(),
         stop_requested: opts.stop_requested,
         dist_path: opts
             .dist_path
@@ -549,10 +556,13 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
     let state = build_state(opts);
 
     // CORS configuration: allow allowed origins, allow headers and methods
+    let cors_policy = state.origin_policy.clone();
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin: &HeaderValue, _| {
-            is_allowed_origin_header(origin)
-        }))
+        .allow_origin(AllowOrigin::predicate(
+            move |origin: &HeaderValue, parts: &axum::http::request::Parts| {
+                origin_header_allowed(&cors_policy, origin, &parts.headers)
+            },
+        ))
         .allow_credentials(true)
         .allow_methods([
             Method::GET,
@@ -563,7 +573,11 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::AUTHORIZATION,
+            HeaderName::from_static(CSRF_HEADER),
+        ]);
 
     // All REST API routes live under /api so every client — Tauri (absolute
     // URL), browser via Vite proxy (no rewrite needed), Tailscale/LAN/prod
@@ -862,77 +876,42 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
 // Auth Middleware & Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Validate whether an `Origin` matches the allowlist (P3):
-/// - localhost / 127.0.0.1 / [::1] (any port, http or https)
-/// - tauri://localhost, http://tauri.localhost, https://tauri.localhost
-/// - *.trycloudflare.com
-/// - *.ts.net
-/// - Private / LAN IP addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10)
-pub fn is_allowed_origin(origin: &str) -> bool {
-    let Some((scheme, rest)) = origin.split_once("://") else {
-        return false;
-    };
-    if scheme == "tauri" {
-        return rest == "localhost" || rest.starts_with("localhost/");
-    }
-    if scheme != "http" && scheme != "https" {
-        return false;
-    }
-    let host = if rest.starts_with('[') {
-        if let Some(end) = rest.find(']') {
-            &rest[1..end]
-        } else {
-            return false;
-        }
-    } else {
-        rest.split(':').next().unwrap_or("")
-    };
-    let host = host.split('/').next().unwrap_or("");
+/// Header the web UI adds to every state-changing request. Cookie-authenticated
+/// requests without it are refused (see `csrf_blocked`): a cross-site page cannot
+/// set a custom header without a CORS preflight, which `origin_policy` denies.
+pub const CSRF_HEADER: &str = "x-vst-csrf";
 
-    if host == "localhost" || host == "tauri.localhost" {
-        return true;
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if ip.is_loopback() {
-            return true;
-        }
-        match ip {
-            std::net::IpAddr::V4(ipv4) => {
-                let octets = ipv4.octets();
-                // 10.0.0.0/8
-                if octets[0] == 10 {
-                    return true;
-                }
-                // 172.16.0.0/12
-                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
-                    return true;
-                }
-                // 192.168.0.0/16
-                if octets[0] == 192 && octets[1] == 168 {
-                    return true;
-                }
-                // 100.64.0.0/10 (CGNAT / Tailscale)
-                if octets[0] == 100 && (64..=127).contains(&octets[1]) {
-                    return true;
-                }
-            }
-            std::net::IpAddr::V6(ipv6) => {
-                let segments = ipv6.segments();
-                // Unique local (fc00::/7) or Link-local (fe80::/10)
-                if (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80 {
-                    return true;
-                }
-            }
-        }
-    }
-    if host.ends_with(".trycloudflare.com") || host.ends_with(".ts.net") {
-        return true;
-    }
-    false
+fn origin_header_allowed(policy: &OriginPolicy, origin: &HeaderValue, headers: &HeaderMap) -> bool {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    origin
+        .to_str()
+        .map(|o| policy.origin_allowed(o, host))
+        .unwrap_or(false)
 }
 
-pub fn is_allowed_origin_header(val: &HeaderValue) -> bool {
-    val.to_str().map(is_allowed_origin).unwrap_or(false)
+/// True when a cookie-authenticated request (no `Authorization: Bearer`) is
+/// cross-/same-site per `Sec-Fetch-Site`, or is state-changing without the CSRF header. Bearer callers
+/// (desktop, CLI) carry credentials a browser never attaches on its own.
+fn csrf_blocked(method: &Method, headers: &HeaderMap) -> bool {
+    let has_bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|t| !t.trim().is_empty());
+    if has_bearer {
+        return false;
+    }
+    // Any method: a browser that says the request came from another site —
+    // `same-site` includes another port on localhost, which `SameSite` cannot
+    // separate — must not ride the cookie, even for no-cors GETs (<img>,
+    // <script>) that carry no `Origin`. Absent header (old browsers, non-browser
+    // clients) falls through to the header check below.
+    let fetch_site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if matches!(fetch_site, Some("cross-site" | "same-site")) {
+        return true;
+    }
+    !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+        && !headers.contains_key(CSRF_HEADER)
 }
 
 /// Check if an origin is local (tauri:// or localhost/loopback).
@@ -1085,6 +1064,19 @@ async fn auth_middleware(
     };
 
     if is_exempt {
+        // Exempt routes skip authentication, not the origin policy: a hostile
+        // page must not be able to e.g. POST logout.
+        if method == Method::POST {
+            if let Some(origin_val) = headers.get(header::ORIGIN) {
+                if !origin_header_allowed(&state.origin_policy, origin_val, &headers) {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({ "error": "Forbidden." })),
+                    )
+                        .into_response();
+                }
+            }
+        }
         return next.run(req).await;
     }
 
@@ -1106,7 +1098,7 @@ async fn auth_middleware(
 
     // Origin allowlist check: if Origin is present, must match allowlist (P3)
     if let Some(origin_val) = headers.get(header::ORIGIN) {
-        if !is_allowed_origin_header(origin_val) {
+        if !origin_header_allowed(&state.origin_policy, origin_val, &headers) {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({ "error": "Forbidden." })),
@@ -1129,6 +1121,11 @@ async fn auth_middleware(
     };
 
     match verify_token(&raw_token, auth_state) {
+        VerifyResult::Ok { .. } if csrf_blocked(&method, &headers) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Missing CSRF header." })),
+        )
+            .into_response(),
         VerifyResult::Ok { payload } => {
             req.extensions_mut().insert(payload);
             next.run(req).await
@@ -1156,9 +1153,18 @@ async fn handle_ws_upgrade(
     Query(query): Query<WsQuery>,
     headers: HeaderMap,
 ) -> Response {
-    // Origin allowlist check: reject hostile Origin before upgrade (P3)
+    // Origin allowlist check: reject hostile Origin before upgrade (P3).
+    // No-auth sandbox builds (Vite rewrites Host, no token to fall back on) get
+    // the host-name-only test: any port on a known host, never a random website.
     if let Some(origin_val) = headers.get(header::ORIGIN) {
-        if !is_allowed_origin_header(origin_val) {
+        let allowed = if state.no_auth {
+            origin_val
+                .to_str()
+                .is_ok_and(|o| state.origin_policy.origin_host_allowed(o))
+        } else {
+            origin_header_allowed(&state.origin_policy, origin_val, &headers)
+        };
+        if !allowed {
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({ "error": "Forbidden." })),
@@ -3817,7 +3823,7 @@ async fn handle_auth_logout(
     use axum::http::header::SET_COOKIE;
     if state.no_auth || state.auth_routes.is_none() {
         let cookie = format!(
-            "{}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0",
+            "{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
             COOKIE_NAME
         );
         return (
@@ -4156,6 +4162,13 @@ fn mobile_auth_err_to_response(err: MobileAuthRouteError) -> (StatusCode, Json<s
         MobileAuthRouteError::TunnelNotEnabled => (
             StatusCode::CONFLICT,
             Json(serde_json::json!({ "error": "Tunnel not enabled" })),
+        ),
+        MobileAuthRouteError::NetworkAccessDisabled => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Network access is off. Restart the daemon with VST_ALLOW_NETWORK=1 \
+                          (or \"allowNetworkAccess\": true in config.json) to pair over LAN/Tailscale IP."
+            })),
         ),
         MobileAuthRouteError::NoNetworkInterface => (
             StatusCode::SERVICE_UNAVAILABLE,

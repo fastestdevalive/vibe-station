@@ -38,6 +38,7 @@ fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServe
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
+        network_access: false,
         port: 0,
         auth_state,
         no_auth: false,
@@ -271,4 +272,65 @@ async fn stale_cookie_does_not_shadow_valid_query_token() {
         }
         other => panic!("expected a pong reply (open socket), got {other:?}"),
     }
+}
+
+async fn serve_no_auth(tmp: &std::path::Path) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let mut opts = make_opts(tmp, None);
+    opts.no_auth = true;
+    let router = build_app(opts);
+    tokio::spawn(async move {
+        axum::serve(listener, router.into_make_service())
+            .await
+            .unwrap();
+    });
+    format!("ws://{addr}/ws")
+}
+
+async fn connect_with_origin(url: &str, query: &str, origin: &str) -> Result<(), u16> {
+    let mut req = format!("{url}{query}").into_client_request().unwrap();
+    req.headers_mut().insert(
+        axum::http::header::ORIGIN,
+        HeaderValue::from_str(origin).unwrap(),
+    );
+    match connect_async(req).await {
+        Ok(_) => Ok(()),
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => Err(resp.status().as_u16()),
+        Err(e) => panic!("unexpected error: {e:?}"),
+    }
+}
+
+#[tokio::test]
+async fn own_origin_allowed_but_other_localhost_port_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve(tmp.path(), auth_state.clone()).await;
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let authority = base.trim_start_matches("ws://").trim_end_matches("/ws");
+
+    let own = format!("http://{authority}");
+    assert_eq!(
+        connect_with_origin(&base, &format!("?token={token}"), &own).await,
+        Ok(())
+    );
+    assert_eq!(
+        connect_with_origin(&base, &format!("?token={token}"), "http://localhost:3000").await,
+        Err(403)
+    );
+}
+
+#[tokio::test]
+async fn no_auth_sandbox_still_refuses_foreign_websites_on_ws() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = serve_no_auth(tmp.path()).await;
+
+    assert_eq!(
+        connect_with_origin(&base, "", "https://evil.com").await,
+        Err(403)
+    );
+    assert_eq!(
+        connect_with_origin(&base, "", "http://localhost:5174").await,
+        Ok(())
+    );
 }

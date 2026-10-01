@@ -29,6 +29,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
+        network_access: false,
         port: 0,
         auth_state: None,
         no_auth: true,

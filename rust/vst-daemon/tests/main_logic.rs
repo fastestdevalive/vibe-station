@@ -187,6 +187,7 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
     let broadcaster = Broadcaster::new(16);
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     BuildServerOptions {
+        network_access: false,
         port: 0,
         auth_state: None,
         no_auth: true,
