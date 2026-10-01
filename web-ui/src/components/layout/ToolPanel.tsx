@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Columns2, Rows2, X } from "lucide-react";
+import { Columns2, PanelTopClose, PanelTopOpen, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope, PrStatus } from "@/api/types";
 import type { ToolTab } from "@/hooks/useStore";
@@ -13,9 +13,9 @@ import { ArtifactsPanel } from "@/components/tools/ArtifactsPanel";
 import { VcsPanel } from "@/components/tools/VcsPanel";
 import { ToolFullscreenButton } from "@/components/tools/ToolFullscreenButton";
 import { FilesLeftRail } from "@/components/layout/FilesLeftRail";
-import { LspStatusRow } from "@/components/layout/LspStatusRow";
 import { ToolsInsetProvider } from "@/context/ToolsInsetContext";
 import { useTopRightInset } from "@/context/TopRightInsetContext";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 
 interface ToolPanelProps {
   api: ApiInstance;
@@ -43,6 +43,7 @@ interface ToolPanelProps {
 }
 
 export const RAIL_WIDTH = 36;
+const TOP_BAR_HEIGHT = 35;
 export const FILES_LEFT_PANE_DEFAULT_WIDTH = 240;
 export const FILES_LEFT_PANE_MIN_WIDTH = 160;
 export const FILES_LEFT_PANE_MAX_WIDTH = 600;
@@ -73,6 +74,12 @@ export function ToolPanel({
   const { toolPanelTab, setToolPanelTab, activeWorktreeId, activeDirectContextId } = useLayout();
 
   const filesWt = worktreeId ?? "__none__";
+  // Mobile only: the tools rail can be slid out of the way (upward) to reclaim space.
+  const isMobile = useMediaQuery("(max-width: 768px)");
+  const railHidden = useWorkspaceStore((s) => s.toolsRailHidden);
+  const setRailHidden = useWorkspaceStore((s) => s.setToolsRailHidden);
+  const railCollapsed = isMobile && railHidden;
+  const railWidth = railCollapsed ? 0 : RAIL_WIDTH;
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[filesWt] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
@@ -112,7 +119,6 @@ export function ToolPanel({
 
   const isPanelOpen = effectiveTab === "files" && fileTreeVisible;
   const panelWidth = isPanelOpen ? activePanelWidth : 0;
-  const leftInset = RAIL_WIDTH + panelWidth;
 
   const insetContextValue = useMemo(
     () => ({
@@ -183,10 +189,11 @@ export function ToolPanel({
               height: "100%",
               display: "flex",
               flexDirection: "column",
-              "--tools-rail-w": `${RAIL_WIDTH}px`,
+              "--tools-rail-w": `${railWidth}px`,
+              "--tools-rail-full-w": `${RAIL_WIDTH}px`,
+              "--tools-toggle-w": isMobile ? `${RAIL_WIDTH}px` : "0px",
               "--tools-rail-panel-w": `${activePanelWidth}px`,
               "--tools-rail-panel-h": `${activePanelHeight}px`,
-              "--tools-left-inset": `${leftInset}px`,
               "--tools-top-right-inset": `${outerInset.width}px`,
             } as React.CSSProperties
           }
@@ -197,19 +204,47 @@ export function ToolPanel({
               the rail background/border stops partway down and preview content
               shows through the column below the last icon. */}
           <div
+            className="tool-panel__rail"
+            aria-hidden={railCollapsed || undefined}
             style={{
               position: "absolute",
-              top: 0,
-              bottom: 0,
+              top: isMobile ? `${TOP_BAR_HEIGHT}px` : 0,
               left: 0,
               width: `${RAIL_WIDTH}px`,
-              zIndex: 10,
+              // Files lets content run beneath the rail's last icon; the other tabs
+              // keep a 36px content offset, so the rail column runs the full height
+              // there instead of leaving a bare strip under the icons.
+              ...(effectiveTab !== "files"
+                ? {
+                    bottom: 0,
+                    background: "var(--bg-secondary)",
+                    borderRight: "var(--border-width) solid var(--border-default)",
+                  }
+                : { maxHeight: isMobile ? `calc(100% - ${TOP_BAR_HEIGHT}px)` : "100%" }),
+              zIndex: 21,
               display: "flex",
               flexDirection: "column",
+              transform: railCollapsed ? "translateY(-100%)" : undefined,
+              visibility: railCollapsed ? "hidden" : undefined,
+              transition: "transform 0.15s ease, visibility 0.15s",
             }}
           >
             <FilesLeftRail worktreeId={filesWt} />
           </div>
+
+          {/* Mobile only: show/hide toggle in the top bar's left slot, directly above the rail. */}
+          {isMobile ? (
+            <button
+              type="button"
+              className="tool-panel__rail-toggle"
+              aria-label="Tools bar"
+              aria-pressed={!railHidden}
+              title={railHidden ? "Show tools bar" : "Hide tools bar"}
+              onClick={() => setRailHidden(!railHidden)}
+            >
+              {railHidden ? <PanelTopOpen size={14} strokeWidth={2} aria-hidden /> : <PanelTopClose size={14} strokeWidth={2} aria-hidden />}
+            </button>
+          ) : null}
 
           {/* Relocated top-right action: orientation toggle + ToolFullscreenButton or canvas Close button */}
           <div
@@ -262,7 +297,7 @@ export function ToolPanel({
             flex: 1,
             minWidth: 0,
             minHeight: 0,
-            paddingLeft: effectiveTab === "files" ? 0 : `${RAIL_WIDTH}px`,
+            paddingLeft: effectiveTab === "files" ? 0 : `${railWidth}px`,
             display: "flex",
             flexDirection: "column",
             position: "relative",
@@ -299,11 +334,6 @@ export function ToolPanel({
             </>
           )}
         </div>
-        {worktreeId != null ? (
-          <div style={{ paddingLeft: `${RAIL_WIDTH}px` }}>
-            <LspStatusRow api={api} worktreeId={worktreeId} scope={scope} />
-          </div>
-        ) : null}
       </div>
     </ToolsInsetProvider>
   );

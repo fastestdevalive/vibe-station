@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createMockApi } from "@/api/mock";
 import { ToolPanel } from "./ToolPanel";
 import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
@@ -184,19 +184,67 @@ describe("ToolPanel", () => {
     expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
   });
 
-  it("rail wrapper is a flex container sized to fill so the rail stretches full height", () => {
+  it("rail wrapper height-fits the rail so it ends after the last button", () => {
     const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
     const rail = container.querySelector(".files-left-rail") as HTMLElement;
     expect(rail).not.toBeNull();
     const wrapper = rail?.parentElement;
-    // The absolute wrapper hosting the rail must be a flex column sized
-    // top:0/bottom:0 so the rail (flex:1) stretches to the pane's full height
-    // instead of stopping at its icon content (the rail-full-height bug).
+    // The absolute wrapper hosting the rail is anchored at top:0 with no bottom,
+    // so the column ends after the last icon and content below can use the width.
     const wrapperStyle = wrapper?.style;
     expect(wrapperStyle?.position).toBe("absolute");
     expect(wrapperStyle?.top).toBe("0px");
-    expect(wrapperStyle?.bottom).toBe("0px");
+    expect(wrapperStyle?.bottom).toBe("");
     expect(wrapperStyle?.display).toBe("flex");
     expect(wrapperStyle?.flexDirection).toBe("column");
+  });
+
+  describe("mobile rail toggle", () => {
+    const mockMobile = (matches: boolean) =>
+      vi.spyOn(window, "matchMedia").mockImplementation(
+        (query: string) =>
+          ({
+            matches: query.includes("max-width: 768px") ? matches : false,
+            media: query,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            addListener: () => {},
+            removeListener: () => {},
+            dispatchEvent: () => false,
+            onchange: null,
+          }) as MediaQueryList,
+      );
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      useWorkspaceStore.setState({ toolsRailHidden: false });
+    });
+
+    it("is not rendered on desktop, and the rail starts at the top", () => {
+      mockMobile(false);
+      const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+      expect(screen.queryByRole("button", { name: "Tools bar" })).not.toBeInTheDocument();
+      const rail = container.querySelector(".tool-panel__rail") as HTMLElement;
+      expect(rail.style.top).toBe("0px");
+    });
+
+    it("on mobile the rail sits below the toggle; toggling hides it and zeroes --tools-rail-w (shared store state)", async () => {
+      mockMobile(true);
+      const user = userEvent.setup();
+      const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+      const toggle = screen.getByRole("button", { name: "Tools bar" });
+      const rail = container.querySelector(".tool-panel__rail") as HTMLElement;
+      const root = container.querySelector(".tool-panel") as HTMLElement;
+      expect(rail.style.top).toBe("35px");
+      expect(root.style.getPropertyValue("--tools-rail-w")).toBe("36px");
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+      await user.click(toggle);
+      expect(useWorkspaceStore.getState().toolsRailHidden).toBe(true);
+      expect(root.style.getPropertyValue("--tools-rail-w")).toBe("0px");
+      // The overlay keeps its full footprint so the preview does not shift.
+      expect(root.style.getPropertyValue("--tools-rail-full-w")).toBe("36px");
+      expect(rail.style.visibility).toBe("hidden");
+    });
   });
 });

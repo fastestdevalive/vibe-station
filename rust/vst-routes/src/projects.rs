@@ -29,7 +29,7 @@ use vst_git::branch_validator::validate_branch;
 use vst_git::direct_pty::PtyKill;
 use vst_git::git::{
     detect_default_branch, is_git_available, is_git_repo, list_branches, list_commits,
-    resolve_parent_sha, rev_parse, worktree_add, worktree_remove,
+    list_submodules, resolve_parent_sha, rev_parse, worktree_add, worktree_remove,
 };
 use vst_git::naming::slugify_prompt;
 use vst_git::paths::Paths;
@@ -53,6 +53,7 @@ use vst_types::rest::projects::{
 use vst_types::rest::shared::Project;
 use vst_types::rest::worktrees::{
     ChangedPath, CommitLogEntry, CommitsResult, FileListResult, GutterResult, SearchResult,
+    SubmodulesResult,
 };
 use vst_ws::services::file_list::FileList;
 use vst_ws::services::ignore_filter::build_ignore_matcher;
@@ -1968,6 +1969,27 @@ impl ProjectRoutes {
             .collect();
 
         Ok(CommitsResult { commits: mapped })
+    }
+
+    // ── 14. GET /projects/:projectId/submodules ───────────────────────────
+    /// Top-level submodules of the project's own checkout (direct sessions have
+    /// no worktree, so the worktree route can't serve them).
+    pub async fn submodules(
+        &self,
+        project_id: &str,
+    ) -> Result<SubmodulesResult, ProjectRouteError> {
+        let project = self.store.get_project(project_id).await.ok_or_else(|| {
+            ProjectRouteError::NotFound(format!("Project '{project_id}' not found"))
+        })?;
+
+        if !project.is_git {
+            return Ok(SubmodulesResult { submodules: vec![] });
+        }
+
+        let subs = list_submodules(&project.absolute_path).await;
+        Ok(SubmodulesResult {
+            submodules: crate::worktrees::map_submodules(subs),
+        })
     }
 }
 

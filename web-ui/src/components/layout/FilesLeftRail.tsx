@@ -1,6 +1,6 @@
 import {
-  FolderTree,
-  GitBranch,
+  Files,
+  GitGraph,
   List,
   ListTree,
   MonitorSmartphone,
@@ -18,11 +18,11 @@ interface FilesLeftRailProps {
 interface FileModeItem {
   mode: FilesLeftPaneMode;
   label: string;
-  icon: typeof FolderTree;
+  icon: typeof Files;
 }
 
 const FILE_MODES: FileModeItem[] = [
-  { mode: "tree", label: "Switch to file tree", icon: FolderTree },
+  { mode: "tree", label: "Switch to file tree", icon: Files },
   { mode: "search", label: "Search files", icon: Search },
   { mode: "outline", label: "Outline", icon: ListTree },
   { mode: "references", label: "References", icon: List },
@@ -157,7 +157,7 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
           className={`files-left-rail__btn${vcsPressed ? " files-left-rail__btn--active" : ""}`}
           onClick={handleVcsClick}
         >
-          <GitBranch size={16} />
+          <GitGraph size={16} />
         </button>
       </div>
     </div>

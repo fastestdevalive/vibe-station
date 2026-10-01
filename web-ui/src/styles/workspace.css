@@ -1,4 +1,5 @@
 .app-shell {
+  --global-status-bar-h: 24px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -32,12 +33,6 @@
   flex: 1;
   min-height: 0;
   width: 100%;
-}
-
-.layout-main[data-mode="dashboard"] > .pane-dashboard {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
 }
 
 /* Terminal left (default): sidebar | terminal+tabs | preview | tree */
@@ -138,7 +133,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-  padding-right: 28px;
+  padding-right: var(--space-2);
 }
 
 .file-tree-sidebar-header__tail {
@@ -153,20 +148,30 @@
 .file-tree-scope-slot {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   min-width: 108px;
   height: 28px;
+}
+
+/* Δ marker left of the local/branch chips: signals the chips choose what the
+   git delta is shown against. */
+.file-tree-scope-delta {
+  display: inline-flex;
+  margin-right: var(--space-1);
+  color: var(--fg-secondary);
+  user-select: none;
 }
 
 .file-tree-diff-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
+  height: 22px;
+  padding: 0 var(--space-2);
   border: none;
   border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-family: inherit;
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
@@ -275,6 +280,9 @@
 .sidebar-backdrop {
   position: absolute;
   inset: 0;
+  /* Mobile: the full-width global status bar sits just below `.layout-main`;
+     extend over it so the overlay covers the bar too. */
+  bottom: calc(-1 * var(--global-status-bar-h, 24px));
   z-index: 40;
   margin: 0;
   padding: 0;
@@ -294,7 +302,8 @@
 .pane-left--mobile {
   position: absolute;
   top: 0;
-  bottom: 0;
+  /* Extend over the global status bar below `.layout-main` (see .sidebar-backdrop). */
+  bottom: calc(-1 * var(--global-status-bar-h, 24px));
   left: 0;
   width: min(320px, 88vw);
   z-index: 50;
@@ -492,7 +501,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 30px;
+  height: 24px;
+  min-height: 24px;
   padding: 0 var(--space-1);
   border-top: var(--border-width) solid var(--border-default);
   flex-shrink: 0;
@@ -3518,12 +3528,14 @@
 .references-panel__header {
   display: flex;
   align-items: center;
-  padding: 0 32px 0 12px;
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
   box-sizing: border-box;
-  min-height: 32px;
+  /* Shared 35px top-bar height across all tools-pane side panels. */
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
 }
 
 .references-panel__title-bar {
@@ -3691,12 +3703,14 @@
 .outline-panel__header {
   display: flex;
   align-items: center;
-  padding: 0 32px 0 12px;
   border-bottom: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
   flex-shrink: 0;
   box-sizing: border-box;
-  min-height: 32px;
+  /* Shared 35px top-bar height across all tools-pane side panels. */
+  height: 35px;
+  min-height: 35px;
+  max-height: 35px;
 }
 
 .outline-panel__filter-box {
@@ -5951,7 +5965,7 @@ button.dashboard-card {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  height: 24px;
+  height: var(--global-status-bar-h, 24px);
   padding: 0 var(--space-2);
   border-top: var(--border-width) solid var(--border-default);
   background: var(--bg-secondary);
@@ -6361,12 +6375,32 @@ button.dashboard-card {
   overflow: hidden;
 }
 
+/* Search's top bar: same 35px bar as the other side panels. Negative margins
+   bleed it across `.search-panel`'s own padding so it spans the full width. */
+.search-panel__bar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  height: 35px;
+  min-height: 35px;
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0;
+  border-bottom: var(--border-width) solid var(--border-default);
+  background: var(--bg-secondary);
+}
+
 .search-panel__controls {
   display: flex;
   align-items: center;
   gap: var(--space-1) var(--space-2);
   flex-shrink: 0;
   flex-wrap: wrap;
+}
+
+.search-panel__title,
+.outline-panel__title {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
 }
 
 .search-panel__input,
@@ -6628,43 +6662,6 @@ button.dashboard-card {
   background: var(--bg-sidebar-secondary);
 }
 
-.vcs-panel__bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  height: 35px;
-  min-height: 35px;
-  max-height: 35px;
-  box-sizing: border-box;
-  padding: 0 var(--space-3);
-  /* Right inset so the bar's content never sits under the floating top-right
-     fullscreen/orientation buttons (ToolPanel's `.tool-panel__top-actions`)
-     plus the outer floating actions widget inset. */
-  padding-right: calc(68px + var(--tools-top-right-inset, 0px));
-  border-bottom: var(--border-width) solid var(--border-default);
-  flex-shrink: 0;
-}
-
-.vcs-panel__bar-tail {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.vcs-panel__title {
-  font-size: var(--font-size-sm);
-  color: var(--fg-secondary);
-}
-
-.vcs-panel__title-group {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
 .vcs-panel__branch-chip {
   display: inline-flex;
   align-items: center;
@@ -6679,18 +6676,6 @@ button.dashboard-card {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.vcs-panel__bar-actions {
-  display: flex;
-  align-items: center;
-  /* Fixed-height single row (the bar is 32px) — never wrap onto a second row
-     that would overflow the bar into the commit list. Let the left title
-     group shrink instead (it has min-width:0) while these actions keep their
-     intrinsic width. */
-  flex-shrink: 0;
-  gap: var(--space-3);
-  min-width: 0;
 }
 
 .vcs-panel__diff-toggle {
@@ -6709,28 +6694,6 @@ button.dashboard-card {
 
 .vcs-panel__spin {
   animation: vcs-spin 0.8s linear infinite;
-}
-
-/* Requirement 2b: a visible "syncing" affordance while a refresh is in
-   flight over an already-loaded commit list — distinct from the bare
-   spinning refresh-button icon, which is easy to miss.
-   Rendered unconditionally in the DOM (see VcsPanel.tsx) so it always
-   reserves its own width — `visibility: hidden` (not `display: none`) when
-   idle keeps the refresh button from jumping sideways as syncing starts and
-   stops. */
-.vcs-panel__syncing {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 4.5em;
-  font-size: var(--font-size-xs);
-  color: var(--fg-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.vcs-panel__syncing--idle {
-  visibility: hidden;
 }
 
 @keyframes vcs-spin {
@@ -7336,10 +7299,12 @@ button.dashboard-card {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  flex: 1;
+  /* Height-fits its buttons (no flex:1) so the column ends after the last
+   * icon and content below it can use the full width. */
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
-  width: var(--tools-rail-w, 36px);
+  width: 36px;
   padding: 0 0 var(--space-1);
   background: var(--bg-secondary);
   border-right: var(--border-width) solid var(--border-default);
@@ -7390,6 +7355,31 @@ button.dashboard-card {
 .files-left-rail__btn--disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Mobile-only rail show/hide toggle: the top bar's left slot, above the rail. */
+.tool-panel__rail-toggle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 31;
+  width: var(--tools-toggle-w, 36px);
+  height: 35px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--bg-secondary);
+  border: none;
+  border-right: var(--border-width) solid var(--border-default);
+  border-bottom: var(--border-width) solid var(--border-default);
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.tool-panel__rail-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-primary);
 }
 
 .files-left-pane {
@@ -7506,7 +7496,28 @@ button.dashboard-card {
   min-height: 35px;
   max-height: 35px;
   box-sizing: border-box;
-  padding-right: calc(68px + var(--tools-top-right-inset, 0px));
+  /* The VCS tab's only floating control is fullscreen (the orientation toggle is
+     Files-only), so reserve just that. Left: clear the mobile rail toggle once the
+     rail is hidden (the body's own rail offset is gone then). */
+  padding-left: max(0px, calc(var(--tools-toggle-w, 0px) - var(--tools-rail-w, 36px)));
+  padding-right: calc(40px + var(--tools-top-right-inset, 0px));
+}
+
+.vcs-topbar__refresh {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Row under the VCS home top bar: branch chip + "Diff from <base>" toggle. */
+.vcs-panel__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: var(--border-width) solid var(--border-default);
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 /* Item 9 — "Commits › commit #x" breadcrumb, `VcsCommitView`'s `topbarExtra`. */
@@ -8159,4 +8170,35 @@ body[data-tauri-os="macos"] .sidebar-header {
   border-radius: 50%;
   background: var(--fg-muted, #aaa);
   pointer-events: none;
+}
+
+/* Scrollbars must never shift content. The 6px classic scrollbar (tokens.css)
+ * takes layout width, so content jumps left the moment a list starts to
+ * overflow. Reserve the gutter up front on the app's vertical list scrollers
+ * instead (applied selectively -- a blanket `*` rule would also add empty
+ * strips to overflow:hidden containers, terminals and editors). */
+.scroll-stable,
+.changed-file-list,
+.references-panel__list,
+.outline-panel__content,
+.search-panel__results-list,
+.quick-open-list,
+.vcs-panel__body,
+.artifacts-list,
+.dashboard-panel,
+.project-home-scroll,
+.lsp-definition-picker__list,
+.folder-chooser__list-container,
+.settings-content {
+  scrollbar-gutter: stable;
+}
+
+/* The tools rail is a fixed icon column: hide its scrollbar entirely (it still
+ * scrolls) so the icons never shift sideways when it overflows. */
+.files-left-rail {
+  scrollbar-width: none;
+}
+
+.files-left-rail::-webkit-scrollbar {
+  display: none;
 }

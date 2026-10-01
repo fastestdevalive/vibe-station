@@ -470,18 +470,18 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       expect(useWorkspaceStore.getState().filesLeftPaneWidthByWorktree["wt-1"]).toBe(240);
     });
 
-    it("§4b — overlay has left at rail width, and content / topbar padding reflects open/closed state", async () => {
+    it("§4b — side-by-side overlay starts at 0 (rail overlays it), and content / topbar padding reflects open/closed state", async () => {
       const { container, rerender } = render(<FilesPanel api={api} worktreeId="wt-1" />);
       await screen.findByText("README.md");
 
       const overlay = container.querySelector(".files-left-pane-overlay") as HTMLElement;
-      expect(overlay.style.left).toBe("var(--tools-rail-w, 36px)");
+      expect(overlay.style.left).toBe("0px");
 
       const content = container.querySelector(".files-panel__content") as HTMLElement;
       const topbar = container.querySelector(".files-topbar") as HTMLElement;
 
       // Open state: content padded by rail + panel, topbar padded 0
-      expect(content.style.paddingLeft).toBe("calc(var(--tools-rail-w, 36px) + var(--tools-rail-panel-w, 240px))");
+      expect(content.style.paddingLeft).toBe("calc(var(--tools-rail-full-w, 36px) + var(--tools-rail-panel-w, 240px))");
       expect(topbar.style.paddingLeft).toBe("0px");
 
       // Close panel
@@ -492,7 +492,7 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
 
       // Closed state: content padded 0 (preview full width under rail), topbar padded 36px (tabs avoid rail)
       expect(content.style.paddingLeft).toBe("0px");
-      expect(topbar.style.paddingLeft).toBe("var(--tools-rail-w, 36px)");
+      expect(topbar.style.paddingLeft).toBe("max(var(--tools-rail-w, 36px), var(--tools-toggle-w, 0px))");
     });
 
     it("stacked orientation: sets top overlay, height handle, padding-top on content, and rail-offset on topbar", async () => {
@@ -519,7 +519,8 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       expect(content.style.paddingLeft).toBe("0px");
       expect(content.style.paddingTop).toBe("var(--tools-rail-panel-h, 240px)");
       expect(topbar.style.paddingLeft).toBe("var(--tools-rail-w, 36px)");
-      expect(topbar.style.paddingRight).toBe("68px");
+      // Stacked + open: topbar sits below the tree panel, clear of the floating buttons.
+      expect(topbar.style.paddingRight).toBe("0px");
     });
 
     it("stacked orientation: dragging clamps to min (100) and max (600)", async () => {

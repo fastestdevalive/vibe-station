@@ -1808,23 +1808,7 @@ impl WorktreeRoutes {
         let wt_path = self.paths.worktree_path(&project.id, wt_id);
         let wt_str = wt_path.to_string_lossy().to_string();
 
-        let subs = list_submodules(&wt_str).await;
-        let mapped = subs
-            .into_iter()
-            .map(|s| SubmoduleInfo {
-                path: s.path,
-                sha: s.sha,
-                short_sha: s.short_sha,
-                branch: s.branch,
-                subject: s.subject,
-                status: match s.status {
-                    vst_git::git::SubmoduleStatus::Clean => SubmoduleStatus::Clean,
-                    vst_git::git::SubmoduleStatus::Modified => SubmoduleStatus::Modified,
-                    vst_git::git::SubmoduleStatus::OutOfDate => SubmoduleStatus::OutOfDate,
-                    vst_git::git::SubmoduleStatus::Uninitialized => SubmoduleStatus::Uninitialized,
-                },
-            })
-            .collect();
+        let mapped = map_submodules(list_submodules(&wt_str).await);
 
         Ok(SubmodulesResult { submodules: mapped })
     }
@@ -2404,4 +2388,24 @@ async fn dir_disk_usage(path: &Path) -> i64 {
     } else {
         num
     }
+}
+
+/// Map git-layer submodule info to the REST shape. Shared by the worktree and
+/// project (direct session) `/submodules` routes.
+pub fn map_submodules(subs: Vec<vst_git::git::SubmoduleInfo>) -> Vec<SubmoduleInfo> {
+    subs.into_iter()
+        .map(|s| SubmoduleInfo {
+            path: s.path,
+            sha: s.sha,
+            short_sha: s.short_sha,
+            branch: s.branch,
+            subject: s.subject,
+            status: match s.status {
+                vst_git::git::SubmoduleStatus::Clean => SubmoduleStatus::Clean,
+                vst_git::git::SubmoduleStatus::Modified => SubmoduleStatus::Modified,
+                vst_git::git::SubmoduleStatus::OutOfDate => SubmoduleStatus::OutOfDate,
+                vst_git::git::SubmoduleStatus::Uninitialized => SubmoduleStatus::Uninitialized,
+            },
+        })
+        .collect()
 }

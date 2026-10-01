@@ -1276,7 +1276,8 @@ export function createMockApi(seed: MockSeed = {}) {
       return null;
     },
 
-    async listSubmodules(worktreeId: string): Promise<SubmoduleInfo[]> {
+    async listSubmodules(worktreeId: string, fileScope: FileScope = "worktree"): Promise<SubmoduleInfo[]> {
+      if (fileScope === "project") return [];
       if (!worktrees.find((w) => w.id === worktreeId)) throw new ApiError("not found", 404);
       if (worktreeId === "wt-1") {
         return [

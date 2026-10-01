@@ -306,6 +306,10 @@ export interface WorkspaceState {
   previewFontScaleByWorktree: Record<string, number>;
   /** Whether the Files tool shows its file-tree column (persisted, view pref). */
   fileTreeVisible: boolean;
+  /** Mobile only: the tools rail is slid out of the way (shared by every ToolPanel
+   *  instance — docked, fullscreen, canvas tiles — so they can't disagree). */
+  toolsRailHidden: boolean;
+  setToolsRailHidden: (hidden: boolean) => void;
   terminalFontScale: number;
   leftSidebarCollapsed: boolean;
   /** Desktop left sidebar width in px when expanded (persisted, drag-resizable). */
@@ -803,6 +807,7 @@ const initial = {
   previewFontScale: 1,
   previewFontScaleByWorktree: {} as Record<string, number>,
   fileTreeVisible: true,
+  toolsRailHidden: false,
   terminalFontScale: 1,
   leftSidebarCollapsed: false,
   leftSidebarWidthPx: 220,
@@ -1627,6 +1632,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               },
             });
           }),
+        setToolsRailHidden: (hidden) => set({ toolsRailHidden: hidden }),
         toggleFileTree: () =>
           set((s) => withTransitionHint("files", { fileTreeVisible: !s.fileTreeVisible })),
         bumpTerminalFont: (delta) =>

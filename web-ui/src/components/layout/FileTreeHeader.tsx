@@ -1,8 +1,8 @@
-import { GitCompare } from "lucide-react";
+import { Triangle } from "lucide-react";
 import type { DiffScope } from "@/api/types";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { DiffScopeSelector } from "@/components/layout/DiffScopeSelector";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
+import { useToolBarInsets } from "@/hooks/useToolBarInsets";
 
 interface FileTreeHeaderProps {
   /** Browsing context id (worktree id, or project id for direct sessions) —
@@ -94,7 +94,7 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
     }
   }
 
-  const outerInset = useTopRightInset();
+  const barInsets = useToolBarInsets(masterDetailVertical);
 
   return (
     <div
@@ -104,19 +104,26 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
         minHeight: "35px",
         maxHeight: "35px",
         boxSizing: "border-box",
-        paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
+        ...barInsets,
       }}
     >
+      {/* One scope selector, always visible in the Files header — not
+          gated on diff mode — working in both plain-tree and Changes-list
+          mode (Task A.2). Git-only; hidden for project (direct-session)
+          scope, same as the diff-view toggle below. */}
+      {!isProject ? (
+        <div className="file-tree-scope-slot">
+          <span
+            className="file-tree-scope-delta"
+            title="Git changes compared against: local (HEAD) or branch (base branch)"
+            aria-hidden
+          >
+            <Triangle size={11} strokeWidth={2.25} />
+          </span>
+          <DiffScopeSelector scope={effectiveTreeScope} onChange={handleTreeScopeChipChange} />
+        </div>
+      ) : null}
       <div className="file-tree-sidebar-header__tail">
-        {/* One scope selector, always visible in the Files header — not
-            gated on diff mode — working in both plain-tree and Changes-list
-            mode (Task A.2). Git-only; hidden for project (direct-session)
-            scope, same as the diff-view toggle below. */}
-        {!isProject ? (
-          <div className="file-tree-scope-slot">
-            <DiffScopeSelector scope={effectiveTreeScope} onChange={handleTreeScopeChipChange} />
-          </div>
-        ) : null}
         {/* Diff view works for project scope too — it's always local scope
             there (no branch concept), so only the chip selector above is
             gated on isProject, not this toggle. */}
@@ -128,7 +135,7 @@ export function FileTreeHeader({ contextId, isProject = false }: FileTreeHeaderP
           title="Toggle diff view"
           onClick={toggleDiffMode}
         >
-          <GitCompare size={15} strokeWidth={2} />
+          Diff
         </button>
       </div>
     </div>

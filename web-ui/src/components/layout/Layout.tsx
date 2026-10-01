@@ -279,6 +279,18 @@ export function Layout({
     </>
   );
 
+  // On desktop the sidebar runs the full height to the screen edge and the global
+  // status bar sits under the main column only (to its right). The wrapper is
+  // rendered in both modes so the main column keeps one tree position when the
+  // viewport crosses the mobile breakpoint; on mobile the bar stays full-width
+  // below everything (the sidebar there is an overlay).
+  const mainWithStatusBar = (main: ReactNode) => (
+    <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {main}
+      {!isMobile ? globalStatusBar : null}
+    </div>
+  );
+
   if (dashboardPane != null) {
     return (
       <div className="app-shell">
@@ -290,15 +302,17 @@ export function Layout({
           style={{ position: "relative" }}
         >
           {isMobile ? sidebarMobile : sidebarDesktop}
-          <div
-            className="pane pane-dashboard"
-            style={{ overflow: "hidden", background: "var(--bg-primary)" }}
-          >
-            {dashboardPane}
-          </div>
+          {mainWithStatusBar(
+            <div
+              className="pane pane-dashboard"
+              style={{ overflow: "hidden", background: "var(--bg-primary)", flex: 1, minHeight: 0 }}
+            >
+              {dashboardPane}
+            </div>,
+          )}
         </div>
         {paneHostLayer}
-        {globalStatusBar}
+        {isMobile ? globalStatusBar : null}
       </div>
     );
   }
@@ -527,11 +541,11 @@ export function Layout({
         style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "row", position: "relative" }}
       >
         {isMobile ? sidebarMobile : sidebarDesktop}
-        {mainColumn}
+        {mainWithStatusBar(mainColumn)}
       </div>
       {fullscreenOverlay}
       {paneHostLayer}
-      {globalStatusBar}
+      {isMobile ? globalStatusBar : null}
     </div>
   );
 }

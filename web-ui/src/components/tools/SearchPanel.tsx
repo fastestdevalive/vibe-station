@@ -6,7 +6,7 @@ import type { FileScope, SearchResult } from "@/api/types";
 import { ApiError } from "@/api/errors";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useRovingListNav, type RovingRow } from "@/hooks/useRovingListNav";
-import { useTopRightInset } from "@/context/TopRightInsetContext";
+import { useToolBarInsets } from "@/hooks/useToolBarInsets";
 
 interface SearchPanelProps {
   api: ApiInstance;
@@ -77,7 +77,7 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[worktreeId ?? ""] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
-  const outerInset = useTopRightInset();
+  const barInsets = useToolBarInsets(masterDetailVertical);
 
   const [query, setQuery] = useState("");
   const [caseCheck, setCaseCheck] = useState(false);
@@ -435,14 +435,10 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
 
   return (
     <div className="search-panel pane pane-stack">
-      <div
-        className="search-panel__controls"
-        style={{
-          minHeight: masterDetailVertical ? "35px" : "32px",
-          boxSizing: "border-box",
-          paddingRight: masterDetailVertical ? (outerInset.width > 0 ? `${68 + outerInset.width}px` : "68px") : undefined,
-        }}
-      >
+      <div className="search-panel__bar" style={barInsets}>
+        <span className="search-panel__title">Search</span>
+      </div>
+      <div className="search-panel__controls">
         <div className="search-panel__input-wrap">
         <input
           type="text"

@@ -26,11 +26,7 @@ const SEVERITY_DOT_CLASS: Record<LspSeverity, string> = {
 
 /**
  * Global, VS Code-style status-bar row for the LSP status of whatever file
- * is currently previewed. Rendered at the bottom of `ToolPanel`'s
- * `.tool-panel__body` (docked tool panel / side panel) and again by
- * `GlobalStatusBar` (bottom bar) — same component/hook in both places, each
- * with its own independent 5s poll, so the two converge to the same status
- * within one poll cycle rather than being instantaneously guaranteed equal.
+ * is currently previewed. Rendered by `GlobalStatusBar` (the bottom bar).
  */
 export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusRowProps) {
   const { doc } = useEventTargets();
