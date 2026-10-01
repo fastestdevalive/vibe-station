@@ -144,14 +144,21 @@ function resolveIcon(modes: Map<string, Mode>, modeId: string | null | undefined
 /**
  * Reactive hook: resolve `modeId` → icon key, re-rendering the caller when the
  * mode arrives/updates/deletes in the store. When `api` is provided it lazily
- * ensures the store is loaded and shares a single live subscription. Returns `null`
- * (fallback) when the mode is unknown.
+ * ensures the store is loaded and shares a single live subscription.
+ *
+ * `snapshot` is the session's own `modeIcon` (stamped by the daemon at creation).
+ * It wins over the live mode lookup, so a session keeps the icon it started
+ * with after its mode is edited or deleted; the live lookup only covers records
+ * without a snapshot (drafts, legacy rows). Returns `null` (fallback) when
+ * neither resolves.
  */
 export function useModeIcon(
   modeId: string | null | undefined,
   api?: ApiInstance,
+  snapshot?: string | null,
 ): string | null {
-  const icon = useModesStore((s) => resolveIcon(s.modes, modeId));
+  const live = useModesStore((s) => resolveIcon(s.modes, modeId));
+  const icon = snapshot ?? live;
   useEffect(() => {
     if (!api) return;
     void ensureLoaded(api);

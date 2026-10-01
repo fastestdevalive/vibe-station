@@ -25,6 +25,7 @@ pub struct Session {
     pub is_main: bool,
     pub r#type: SessionType,
     pub mode_id: Option<String>,
+    pub mode_icon: Option<String>,
     pub name: Option<String>,
     pub name_source: Option<SessionNameSource>,
     pub tmux_name: String,

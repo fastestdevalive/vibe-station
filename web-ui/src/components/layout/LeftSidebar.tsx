@@ -209,7 +209,7 @@ function SidebarSessionModeIcon({
   session: Session;
   api?: ApiInstance;
 }) {
-  const iconKey = useModeIcon(sessionModeId(session), api);
+  const iconKey = useModeIcon(sessionModeId(session), api, session.modeIcon);
   return (
     <span className="direct-session__mode-icon" aria-hidden="true">
       <ModeIcon iconKey={iconKey} channel={session.channel} size={13} />

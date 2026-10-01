@@ -156,6 +156,7 @@ fn make_session(id: &str, tmux_name: &str, use_tmux: bool) -> SessionRecord {
         sort_order: 0.0,
         r#type: SessionType::Agent,
         mode_id: None,
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: tmux_name.into(),

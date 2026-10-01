@@ -16,6 +16,7 @@ pub fn make_session(id: &str) -> SessionRecord {
         sort_order: 0.0,
         r#type: SessionType::Agent,
         mode_id: None,
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("vst-{id}"),

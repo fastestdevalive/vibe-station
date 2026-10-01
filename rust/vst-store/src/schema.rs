@@ -134,6 +134,7 @@ pub fn ensure_schema(db: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(db, "sessions", "acpSessionId", "TEXT")?;
     add_column_if_missing(db, "sessions", "draftPrompt", "TEXT")?;
     add_column_if_missing(db, "sessions", "draftConfig", "TEXT")?;
+    add_column_if_missing(db, "sessions", "modeIcon", "TEXT")?;
 
     Ok(())
 }

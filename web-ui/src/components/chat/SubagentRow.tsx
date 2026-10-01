@@ -99,7 +99,7 @@ function DetachConfirmPopup({
  * When no `api` is supplied the icon degrades to the generic fallback glyph.
  */
 function ChipIcon({ session, api }: { session: Session; api?: ApiInstance }) {
-  const iconKey = useModeIcon(sessionModeId(session), api);
+  const iconKey = useModeIcon(sessionModeId(session), api, session.modeIcon);
   // aria-hidden: decorative — the chip's text label conveys the session name.
   return (
     <span aria-hidden="true">

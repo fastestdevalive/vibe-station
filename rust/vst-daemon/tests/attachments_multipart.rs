@@ -64,6 +64,7 @@ fn agent_session(id: &str) -> SessionRecord {
         sort_order: 1.0,
         r#type: SessionType::Agent,
         mode_id: Some("mode-1".into()),
+        mode_icon: None,
         name: Some("Agent".into()),
         name_source: None,
         tmux_name: "tmux-1".into(),

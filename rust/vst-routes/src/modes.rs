@@ -158,6 +158,63 @@ pub fn find_mode(mode_id: &str) -> Option<Mode> {
     load_modes().into_iter().find(|m| m.id == mode_id)
 }
 
+/// Icon key of the mode `mode_id` (derived if the mode row predates icons), or
+/// `None` when the mode doesn't exist. Sessions snapshot this at creation so
+/// their icon outlives later edits/deletes of the mode.
+pub fn mode_icon_for(mode_id: &str) -> Option<String> {
+    find_mode(mode_id).and_then(|m| m.icon)
+}
+
+/// One-shot boot backfill: stamp `mode_icon` onto agent sessions that predate
+/// the snapshot (and whose mode still exists), so a later mode delete can't
+/// change their icon. Sessions whose mode is already gone are left alone —
+/// there is nothing left to snapshot. Idempotent; best-effort per project —
+/// returns one message per project that failed so the caller can log them.
+pub async fn backfill_session_mode_icons(store: &StoreHandle) -> Vec<String> {
+    let mut failures = Vec::new();
+    let icons: BTreeMap<String, String> = load_modes()
+        .into_iter()
+        .filter_map(|m| m.icon.map(|i| (m.id, i)))
+        .collect();
+    if icons.is_empty() {
+        return failures;
+    }
+    for project in store.get_all_projects().await {
+        let needs = |s: &vst_types::SessionRecord| {
+            s.mode_icon.is_none() && s.mode_id.as_ref().is_some_and(|id| icons.contains_key(id))
+        };
+        let stale = project
+            .worktrees
+            .iter()
+            .flat_map(|w| &w.sessions)
+            .chain(&project.direct_sessions)
+            .any(needs);
+        if !stale {
+            continue;
+        }
+        let icons = icons.clone();
+        let result = store
+            .mutate_project(&project.id, move |p| {
+                let stamp = |s: &mut vst_types::SessionRecord| {
+                    if s.mode_icon.is_none() {
+                        s.mode_icon = s.mode_id.as_ref().and_then(|id| icons.get(id)).cloned();
+                    }
+                };
+                p.worktrees
+                    .iter_mut()
+                    .flat_map(|w| w.sessions.iter_mut())
+                    .chain(p.direct_sessions.iter_mut())
+                    .for_each(stamp);
+                Ok(p.clone())
+            })
+            .await;
+        if let Err(e) = result {
+            failures.push(format!("{}: {e}", project.id));
+        }
+    }
+    failures
+}
+
 /// Errors surfaced by mode route handlers.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ModeRouteError {

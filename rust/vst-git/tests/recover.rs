@@ -52,6 +52,7 @@ fn session(
         sort_order: 0.0,
         r#type: SessionType::Agent,
         mode_id: Some("mode".into()),
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: tmux_name.into(),

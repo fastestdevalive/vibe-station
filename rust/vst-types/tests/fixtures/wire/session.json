@@ -5,6 +5,7 @@
   "isMain": true,
   "type": "agent",
   "modeId": "mode-1785649772352-dlzo2",
+  "modeIcon": "opencode",
   "name": "port daemon",
   "nameSource": "auto",
   "tmuxName": "vs-141-a1",

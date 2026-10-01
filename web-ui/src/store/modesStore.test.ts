@@ -1,10 +1,12 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
 import { createMockApi } from "@/api/mock";
 import {
   useModesStore,
   ensureLoaded,
   subscribeModes,
   iconForMode,
+  useModeIcon,
 } from "./modesStore";
 import type { Mode } from "@/api/types";
 
@@ -71,5 +73,26 @@ describe("modesStore (2.T2 — created/updated/deleted events)", () => {
     const spy = vi.spyOn(api, "listModes");
     await Promise.all([ensureLoaded(api), ensureLoaded(api), ensureLoaded(api)]);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("useModeIcon prefers the session's snapshot, so it survives the mode being deleted", async () => {
+    const api = createMockApi();
+    subscribeModes(api);
+    const created = await api.createMode({ name: "New", cli: "claude", context: "c", icon: "claude" });
+    const { result, rerender } = renderHook(() => useModeIcon(created.id, undefined, "claude"));
+    expect(result.current).toBe("claude");
+    await api.deleteMode(created.id);
+    rerender();
+    expect(result.current).toBe("claude");
+  });
+
+  it("useModeIcon falls back to the live mode without a snapshot, then to null once deleted", async () => {
+    const api = createMockApi();
+    subscribeModes(api);
+    const created = await api.createMode({ name: "New", cli: "claude", context: "c", icon: "claude" });
+    const { result } = renderHook(() => useModeIcon(created.id));
+    expect(result.current).toBe("claude");
+    await api.deleteMode(created.id);
+    await vi.waitFor(() => expect(result.current).toBeNull());
   });
 });

@@ -95,7 +95,9 @@ use vst_ws::handlers::session_open::DirectStreamRegistry;
 use vst_ws::state::attachment_registry::AttachmentRegistry;
 use vst_ws::streams::pty_stream::PtySessionStream;
 
-use crate::modes::{find_mode, resolve_effective_default_channel, resolve_mode, resolve_mode_id};
+use crate::modes::{
+    find_mode, mode_icon_for, resolve_effective_default_channel, resolve_mode, resolve_mode_id,
+};
 use crate::settings::load_default_channel_overrides;
 use crate::worktrees::{ensure_git_project, GitGateError};
 
@@ -182,6 +184,7 @@ pub fn serialize_session(
         is_main: s.is_main,
         r#type: s.r#type,
         mode_id: s.mode_id.clone(),
+        mode_icon: s.mode_icon.clone(),
         name: s.name.clone(),
         name_source: s.name_source,
         tmux_name: s.tmux_name.clone(),
@@ -804,6 +807,11 @@ impl SessionRoutes {
             } else {
                 None
             },
+            mode_icon: if r#type == SessionType::Agent {
+                mode_id.as_deref().and_then(mode_icon_for)
+            } else {
+                None
+            },
             name: Some(session_name),
             name_source,
             tmux_name,
@@ -957,6 +965,11 @@ impl SessionRoutes {
             r#type,
             mode_id: if r#type == SessionType::Agent {
                 mode_id.clone()
+            } else {
+                None
+            },
+            mode_icon: if r#type == SessionType::Agent {
+                mode_id.as_deref().and_then(mode_icon_for)
             } else {
                 None
             },
@@ -2255,6 +2268,7 @@ impl SessionRoutes {
             sort_order: session.sort_order,
             r#type: session.r#type,
             mode_id: Some(mode_id.to_string()),
+            mode_icon: mode_icon_for(mode_id).or_else(|| session.mode_icon.clone()),
             name: session.name.clone(),
             name_source: session.name_source,
             tmux_name: new_tmux_name.to_string(),
@@ -3033,6 +3047,7 @@ impl SessionRoutes {
             sort_order: session.sort_order,
             r#type: SessionType::Agent,
             mode_id: Some(effective_mode_id.clone()),
+            mode_icon: mode_icon_for(&effective_mode_id).or_else(|| session.mode_icon.clone()),
             name: Some(new_name),
             name_source: if body.prompt.is_some() {
                 Some(SessionNameSource::Auto)
@@ -4698,6 +4713,7 @@ fn draft_session_record(
         sort_order: ms_now() as f64,
         r#type,
         mode_id: None,
+        mode_icon: None,
         name: None,
         name_source: None,
         tmux_name: format!("__draft__-{session_id}"),
