@@ -197,6 +197,7 @@ impl OobeRoutes {
                 search_case_sensitive: None,
                 search_regex: None,
                 search_whole_word: None,
+                last_mode_id: None,
                 default_channel_by_cli: None,
             })
             .await

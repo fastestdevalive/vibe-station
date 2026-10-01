@@ -196,6 +196,7 @@ function DraftComposerInner({
   const [newProjectParentDir, setNewProjectParentDir] = useState("");
   const [newProjectAbsPath, setNewProjectAbsPath] = useState("");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const { skillCommands, editorSeq, editorReady } = useSkillCommands(true, api);
 
@@ -224,7 +225,6 @@ function DraftComposerInner({
       const [ms, cs] = await Promise.all([api.listModes(), api.getSupportedClis()]);
       setModes(ms);
       setClis(cs);
-      if (ms[0] && !modeId) setModeId(ms[0].id);
     })().catch(() => {});
     void api
       .listProjects()
@@ -234,8 +234,21 @@ function DraftComposerInner({
   }, [api]);
 
   useEffect(() => {
-    void api.getSettings().then(setSettings).catch(() => {});
+    void api
+      .getSettings()
+      .then(setSettings)
+      .catch(() => {})
+      .finally(() => setSettingsLoaded(true));
   }, [api]);
+
+  // Mode fallback once BOTH modes and settings have loaded (so there is no flash
+  // of modes[0]): saved draft config wins (already in state), then the last-used
+  // mode if it still exists, then the first mode.
+  useEffect(() => {
+    if (modeId || !settingsLoaded || modes.length === 0) return;
+    const last = modes.find((m) => m.id === settings?.lastModeId);
+    setModeId((last ?? modes[0])?.id ?? "");
+  }, [modeId, modes, settings, settingsLoaded]);
 
   // ── Load per-entry-point data (worktrees / branches). ─────────────────────
   const projectId = isTier1 ? (session?.projectId ?? null) : (selectedProject?.id ?? null);
@@ -767,6 +780,8 @@ function DraftComposerInner({
   }
 
   async function handleStart() {
+    // Remember the mode for the next draft (fire-and-forget).
+    if (modeId) void api.updateSettings({ lastModeId: modeId }).catch(() => {});
     // A global Tier 1 draft (server-backed but no project yet) cannot be started
     // directly — it must first acquire a project the same way Tier 2 does.
     if (isTier1 && session?.projectId) return startTier1();

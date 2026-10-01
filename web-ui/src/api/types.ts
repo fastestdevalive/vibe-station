@@ -1095,6 +1095,8 @@ export interface Settings {
   searchCaseSensitive?: boolean;
   searchRegex?: boolean;
   searchWholeWord?: boolean;
+  /** Mode last used to start a draft agent; preselected on the next draft. */
+  lastModeId?: string;
 }
 
 /** A directory-scanned skill catalog entry from GET /skills (Settings panel only). */
