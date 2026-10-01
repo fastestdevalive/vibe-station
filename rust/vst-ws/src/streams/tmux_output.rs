@@ -307,16 +307,11 @@ impl SessionStream for TmuxOutputStream {
                 // would otherwise silently hit the broken path).
                 argv.push("-u".to_string());
                 argv.push("attach-session".to_string());
-                // -d: force-detach any other client already attached to this
-                // session. Our own close/detach path SIGHUPs the previous
-                // client but deliberately doesn't wait for it to exit (see
-                // `detach()` below), so a fast-enough close+open (worktree
-                // switch, rapid remounts) can otherwise attach a second live
-                // client before the first is gone — tmux would then mirror
-                // output to both, doubling every echoed keystroke. `-d` makes
-                // tmux itself enforce "at most one client" regardless of that
-                // timing.
-                argv.push("-d".to_string());
+                // Deliberately NO `-d`: it force-detaches every other client on
+                // the session, which breaks using one session from several
+                // devices at once (the older device shows "[detached]").
+                // Same-connection duplicate clients are prevented by the
+                // session lock and by `detach()` killing the old client.
                 argv.push("-t".to_string());
                 argv.push(tmux_name);
                 cmd.args(&argv);
