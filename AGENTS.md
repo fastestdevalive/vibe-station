@@ -248,6 +248,7 @@ The lock is scoped to one `WSConnection`. Two browser tabs legitimately hold two
 - **New open/close-like handlers:** any handler that calls `stream.attach()` or `stream.detach()` must be wrapped with `conn.withSessionLock`.
 - **Don't move attach outside the lock:** the race occurs precisely because `attach` is an async park point. Splitting into "register then attach" outside the lock recreates the bug.
 - **Symptom if violated:** `tmux list-clients -t <session>` shows >1 client for a single browser → duplicated ("double") echo that a page refresh temporarily clears.
+- **Multiple devices are legitimate:** `tmux attach-session` deliberately has no `-d`, so >1 client on a session is normal when several connections (devices/tabs) are open; `-d` force-detached the other device ("[detached]"). The "one stream" rule below is per connection only.
 - **Invariant:** for any `(conn, sessionId)`, at most one `TmuxOutputStream` should be live (i.e., have a non-killed PTY) at any moment. The stale-stream teardown in `sessionOpen.ts` reinforces this but only works reliably once the lock prevents interleaving across the attach await.
 
 ---
