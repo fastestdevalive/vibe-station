@@ -1,22 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Search, Code, Box, Layers, Component, List, Package, Hash, Tag, FileCode } from "lucide-react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import type { FileScope } from "@/api/types";
 import {
   getExternalFile,
   getOutline,
   getWorkspaceFile,
+  failureHeadline,
+  isDependencyFailure,
+  isLspDisabled,
   isLspNotReady,
+  lspFailureFromError,
+  type LspFailure,
   type LspFileRef,
   type OutlineSymbol,
 } from "@/lib/lspApi";
 import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useToolBarInsets } from "@/hooks/useToolBarInsets";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
+import { useLspStatus } from "@/hooks/useLspStatus";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { languageForFilePath } from "../preview/codeHighlight";
 import { pickShikiLang } from "../preview/previewLang";
 import { colorKey, resolveSymbolColors } from "./outlineSymbolColors";
+import { LspInstallCommand, LspRemediationActions, LspServerOutput } from "../layout/LspRemediation";
+
+/** How long a row click's own programmatic scroll is ignored by scroll-sync. */
+const SCROLL_SYNC_SUPPRESS_MS = 400;
 
 export interface OutlinePanelProps {
   api: unknown;
@@ -25,15 +35,19 @@ export interface OutlinePanelProps {
 }
 
 /**
- * Finds the innermost OutlineSymbol whose [line, endLine] range contains targetLine
- * (depth-first descent into children).
+ * Finds the innermost OutlineSymbol whose FULL range [rangeStartLine, endLine]
+ * contains targetLine (depth-first descent into children). `line` is the
+ * symbol's NAME (selectionRange) — doc comments and attributes above it still
+ * belong to the symbol for scroll-sync, so containment starts at
+ * `rangeStartLine` (falling back to `line` for daemons that don't send it).
  */
 export function findInnermostSymbol(
   symbols: OutlineSymbol[],
   targetLine: number
 ): OutlineSymbol | null {
   for (const sym of symbols) {
-    if (targetLine >= sym.line && targetLine <= sym.endLine) {
+    const start = Math.min(sym.rangeStartLine ?? sym.line, sym.line);
+    if (targetLine >= start && targetLine <= sym.endLine) {
       if (sym.children && sym.children.length > 0) {
         const childMatch = findInnermostSymbol(sym.children, targetLine);
         if (childMatch) {
@@ -125,37 +139,40 @@ function getSymbolKindClass(kind: string): string | null {
   }
 }
 
-function getSymbolIcon(kind: string, kindClass: string | null, resolvedColor: string | undefined) {
-  const iconClassName = `outline-panel__symbol-icon${kindClass ? ` outline-panel__symbol-icon--${kindClass}` : ""}`;
-  // Inline style (when the code viewer's own tokenizer resolved an exact
-  // color for this symbol) always wins over the static per-kind CSS class —
-  // no specificity juggling needed. Falls back to the class's color when
-  // resolution failed (see the color-resolution effect's catch branch).
-  const style = resolvedColor ? { color: resolvedColor } : undefined;
+export function symbolKindToChip(
+  kind: string,
+  language?: string | null,
+): { label: string; kindKey: string } {
   switch (kind) {
+    case "object":
+      // rust-analyzer reports `impl X` blocks as SymbolKind 19 (Object).
+      return { label: language === "rust" ? "impl" : "obj", kindKey: "neutral" };
     case "function":
-    case "method":
     case "constructor":
-      return <Code size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: "fn", kindKey: "fn" };
+    case "method":
+      return { label: "method", kindKey: "method" };
     case "class":
-      return <Box size={13} className={iconClassName} style={style} aria-hidden />;
-    case "interface":
-      return <Layers size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: "class", kindKey: "class" };
     case "struct":
-      return <Component size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: "struct", kindKey: "struct" };
     case "enum":
-      return <List size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: "enum", kindKey: "enum" };
+    case "interface":
+      return { label: "iface", kindKey: "iface" };
+    case "variable":
+      return { label: "var", kindKey: "var" };
+    case "constant":
+      return { label: "const", kindKey: "const" };
+    case "property":
+    case "field":
+      return { label: "prop", kindKey: "prop" };
     case "module":
     case "namespace":
     case "package":
-      return <Package size={13} className={iconClassName} style={style} aria-hidden />;
-    case "variable":
-    case "constant":
-    case "property":
-    case "field":
-      return <Hash size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: "mod", kindKey: "mod" };
     default:
-      return <Tag size={13} className={iconClassName} style={style} aria-hidden />;
+      return { label: kind, kindKey: "neutral" };
   }
 }
 
@@ -236,9 +253,21 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   // silently landing on the indistinguishable "No symbols" empty state.
   const [starting, setStarting] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
+  // Why the fetch failed — never rendered as "No symbols in this file".
+  // `failure`: the daemon's latched server failure (503 LSP_SERVER_FAILED);
+  // `loadError`: anything else (raw text, behind a Details disclosure).
+  const [failure, setFailure] = useState<LspFailure | null>(null);
+  const [loadError, setLoadError] = useState<{ title: string; message: string | null } | null>(null);
+  // Bumped to re-fetch after Retry, or when a failed server recovers.
+  const [reloadSeq, setReloadSeq] = useState(0);
   const [filterText, setFilterText] = useState("");
   const [collapsedPaths, setCollapsedPaths] = useState<Record<string, boolean>>({});
   const [activeLine, setActiveLine] = useState<number | null>(null);
+  // A row click's own jump scrolls the code (`scrollIntoView` centres the
+  // target), which fires the scroll listener below — and that would overwrite
+  // the clicked row's highlight with whatever symbol contains the TOP of the
+  // viewport (usually the previous one). Ignore scroll-sync until then.
+  const suppressScrollSyncUntilRef = useRef(0);
   const [symbolColors, setSymbolColors] = useState<Map<string, string>>(new Map());
 
   // Same theme/language resolution CodeView.tsx uses, so tokenizing here
@@ -262,6 +291,8 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
     setLoading(true);
     setStarting(false);
     setUnsupported(false);
+    setFailure(null);
+    setLoadError(null);
 
     const fileRef: LspFileRef = external
       ? { kind: "external", token: external.token }
@@ -302,6 +333,19 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
             await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
             continue;
           }
+          const serverFailure = lspFailureFromError(err);
+          if (serverFailure) {
+            setFailure(serverFailure);
+          } else if (isLspDisabled(err)) {
+            setLoadError({ title: "Outline unavailable — code navigation is off.", message: null });
+          } else if (isLspNotReady(err)) {
+            setLoadError({ title: "Couldn't load outline.", message: "The language server is still starting." });
+          } else {
+            setLoadError({
+              title: "Couldn't load outline.",
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
           setSymbols([]);
           setStarting(false);
           setLoading(false);
@@ -313,7 +357,23 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
     return () => {
       cancelled = true;
     };
-  }, [api, mode, isWorkingTreeView, changeKey, worktreeId, fileScope, external?.token, path]);
+  }, [api, mode, isWorkingTreeView, changeKey, worktreeId, fileScope, external?.token, path, reloadSeq]);
+
+  // Polled only while failed: drives Retry (needs the server's language)
+  // and picks up the daemon's own recovery (e.g. after `npm i typescript`).
+  // Re-fetch only on an observed error → non-error transition, so a status
+  // poll that disagrees with the outline route can't spin a fetch loop.
+  const lsp = useLspStatus(api, worktreeId, fileScope, failure ? path : null);
+  const prevLspStatusRef = useRef(lsp.status);
+  useEffect(() => {
+    const prev = prevLspStatusRef.current;
+    prevLspStatusRef.current = lsp.status;
+    if (failure && prev === "error" && lsp.status && lsp.status !== "error") setReloadSeq((n) => n + 1);
+  }, [failure, lsp.status]);
+  const retryServer = async () => {
+    await lsp.retry();
+    setReloadSeq((n) => n + 1);
+  };
 
   // Resolve each symbol's declaration-line color by tokenizing the real file
   // content with the code viewer's own Shiki theme/language — separate from
@@ -361,6 +421,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
       document.querySelector<HTMLElement>(".workspace-code");
 
     const handleScroll = () => {
+      if (performance.now() < suppressScrollSyncUntilRef.current) return;
       const container = findContainer();
       if (!container) return;
       const topmost = findTopmostVisibleLine(container);
@@ -396,12 +457,19 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
       // scroll happened to fire a scroll event — setting it directly here
       // makes the row highlight immediate and click-driven, not incidental).
       setActiveLine(sym.line + 1);
+      suppressScrollSyncUntilRef.current = performance.now() + SCROLL_SYNC_SUPPRESS_MS;
+      // `sym.line`/`sym.character` are the symbol NAME (selectionRange), so
+      // the jump lands on — and marks — the name, not a doc comment above it.
+      // No endColumn: a display name like "impl Foo" doesn't spell the source
+      // text, so CodeView marks the identifier starting at `column` instead.
+      const column = sym.character;
       if (external) {
         pushJump({
           worktreeId: layoutKey,
           path: external.displayPath,
           line: sym.line + 1,
           matchText: null,
+          column,
           source: "outline",
           external: {
             token: external.token,
@@ -414,6 +482,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
           path,
           line: sym.line + 1,
           matchText: null,
+          column,
           source: "outline",
         });
       }
@@ -464,7 +533,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
   const extMatch = displayPath.match(/\.[^./\\]+$/);
   const fileExt = extMatch ? extMatch[0] : "";
 
-  const renderTree = (items: OutlineSymbol[], parentId = "") => {
+  const renderTree = (items: OutlineSymbol[], parentId = "", depth = 0) => {
     return (
       <ul className="outline-panel__list" role="tree">
         {items.map((sym, idx) => {
@@ -472,6 +541,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
           const isCollapsed = Boolean(collapsedPaths[symId]);
           const hasChildren = sym.children && sym.children.length > 0;
           const kindClass = getSymbolKindClass(sym.kind);
+          const chip = symbolKindToChip(sym.kind, outlineLanguage);
           const isHighlighted =
             highlightedSymbol !== null &&
             highlightedSymbol.name === sym.name &&
@@ -488,6 +558,7 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
             >
               <div
                 className={`outline-panel__row${isHighlighted ? " outline-panel__row--highlighted" : ""}`}
+                style={{ paddingLeft: `${8 + depth * 12}px` }}
                 data-highlighted={isHighlighted ? "true" : undefined}
                 onClick={() => handleRowClick(sym)}
                 role="button"
@@ -514,22 +585,28 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
                 ) : (
                   <span className="outline-panel__toggle-spacer" />
                 )}
-                {getSymbolIcon(sym.kind, kindClass, symbolColors.get(colorKey(sym.line, sym.name)))}
-                <span
-                  className={`outline-panel__symbol-name${kindClass ? ` outline-panel__symbol-name--${kindClass}` : ""}`}
-                  style={
-                    symbolColors.has(colorKey(sym.line, sym.name))
-                      ? { color: symbolColors.get(colorKey(sym.line, sym.name)) }
-                      : undefined
-                  }
-                  title={sym.name}
-                >
-                  {sym.name}
-                </span>
-                <span className="outline-panel__symbol-kind">{sym.kind}</span>
+                <>
+                  <span
+                    className={`outline-panel__symbol-name${kindClass ? ` outline-panel__symbol-name--${kindClass}` : ""}`}
+                    style={
+                      symbolColors.has(colorKey(sym.line, sym.name))
+                        ? { color: symbolColors.get(colorKey(sym.line, sym.name)) }
+                        : undefined
+                    }
+                    title={sym.name}
+                  >
+                    {sym.name}
+                  </span>
+                  <span
+                    className={`outline-panel__chip outline-panel__chip--${chip.kindKey}`}
+                    title={sym.kind}
+                  >
+                    {chip.label}
+                  </span>
+                </>
                 <span className="outline-panel__line-num">{sym.line + 1}</span>
               </div>
-              {hasChildren && !isCollapsed && renderTree(sym.children, symId)}
+              {hasChildren && !isCollapsed && renderTree(sym.children, symId, depth + 1)}
             </li>
           );
         })}
@@ -563,6 +640,34 @@ export function OutlinePanel({ api, worktreeId, scope = "worktree" }: OutlinePan
           <div className="outline-panel__loading">Starting language server…</div>
         ) : loading ? (
           <div className="outline-panel__loading">Loading symbols…</div>
+        ) : failure ? (
+          <div className="outline-panel__failure" role="status" data-testid="outline-failure">
+            <div className="outline-panel__failure-title">Outline unavailable — {failureHeadline(failure)}.</div>
+            {isDependencyFailure(failure) && (
+              <LspInstallCommand failure={failure} className="outline-panel__failure-command" />
+            )}
+            {failure.remediation.length > 0 && (
+              <div className="outline-panel__failure-actions">
+                <LspRemediationActions
+                  failure={failure}
+                  onRetry={retryServer}
+                  buttonClassName="references-panel__btn"
+                  primaryClassName="references-panel__btn--primary"
+                />
+              </div>
+            )}
+            <LspServerOutput failure={failure} className="outline-panel__failure-details" />
+          </div>
+        ) : loadError ? (
+          <div className="outline-panel__failure" role="status" data-testid="outline-error">
+            <div className="outline-panel__failure-title">{loadError.title}</div>
+            {loadError.message && (
+              <details className="outline-panel__failure-details">
+                <summary>Details</summary>
+                <pre>{loadError.message}</pre>
+              </details>
+            )}
+          </div>
         ) : unsupported ? (
           <div className="outline-panel__empty">
             Outline not available for {fileExt || "this file"}

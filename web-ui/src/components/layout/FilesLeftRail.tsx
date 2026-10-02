@@ -7,7 +7,7 @@ import {
   Package,
   Search,
 } from "lucide-react";
-import { useWorkspaceStore, type FilesLeftPaneMode } from "@/hooks/useStore";
+import { isFilesLeftPaneOpen, useWorkspaceStore, type FilesLeftPaneMode } from "@/hooks/useStore";
 import { useLayout } from "@/hooks/useLayout";
 
 interface FilesLeftRailProps {
@@ -43,6 +43,7 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
   const setFilesLeftPaneMode = useWorkspaceStore((s) => s.setFilesLeftPaneMode);
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
   const toggleFileTree = useWorkspaceStore((s) => s.toggleFileTree);
+  const closeFilesLeftPane = useWorkspaceStore((s) => s.closeFilesLeftPane);
   // VCS rail-icon toggle state (Revision 4): scoped to "a commit is open + its
   // changed-file sidebar is visible", independent of the Files rail-mode state.
   const vcsSelectedCommitSha = useWorkspaceStore((s) => s.vcsSelectedCommitByWorktree[worktreeId] ?? null);
@@ -59,9 +60,9 @@ export function FilesLeftRail({ worktreeId }: FilesLeftRailProps) {
       return;
     }
 
-    if (fileTreeVisible && mode === clickedMode) {
+    if (isFilesLeftPaneOpen(fileTreeVisible, mode) && mode === clickedMode) {
       // Press active icon again to close
-      toggleFileTree();
+      closeFilesLeftPane(worktreeId);
     } else {
       // Open if closed or switch mode
       if (!fileTreeVisible) {

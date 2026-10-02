@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import type { Session, Worktree } from "@/api/types";
-import { useWorkspaceStore } from "@/hooks/useStore";
+import { reconcileActiveFileForContext, useWorkspaceStore } from "@/hooks/useStore";
 
 /**
  * One-shot: apply :wtId/:sessionId from URL path when bundle is ready.
@@ -72,11 +72,13 @@ export function useWorkspaceUrlSync(ready: boolean, worktrees: Worktree[], sessi
             null;
         }
 
-        useWorkspaceStore.setState({
+        useWorkspaceStore.setState((st) => ({
           activeProjectId: w.projectId,
           activeWorktreeId: w.id,
           activeSessionId: pickedSessionId,
-        });
+          // Don't carry another context's open file into this worktree (L7).
+          ...reconcileActiveFileForContext(st, w.id),
+        }));
       }
     }
   }, [ready, worktrees, sessions, params.wtId, params.sessionId, navigate, location.search, location.pathname]);

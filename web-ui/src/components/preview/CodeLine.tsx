@@ -1,59 +1,22 @@
 import { memo, useCallback, type ReactNode } from "react";
+import { markRangeInElement } from "@/lib/markRange";
+import type { GutterMarkKind } from "./CodeView";
 
 export interface CodeLineProps {
   line: string;
   lineNum: number;
   /** Pre-rendered Shiki HTML for this line; `undefined` → escapeHtml fallback. */
   html: string | undefined;
-  /** Git gutter modifier class fragment: `added`/`modified`/`deleted`. */
-  gutterMark: "added" | "modified" | "deleted" | undefined;
+  /** Git gutter kinds for this line — each becomes a `workspace-code-line--{kind}` modifier. */
+  gutterMark: ReadonlySet<GutterMarkKind> | undefined;
   isTarget: boolean;
-  matchText: string | undefined;
+  /** `[markStart, markEnd)` column span to mark on the target line (see
+   *  `targetMatchSpan`). Primitives, not an object, so `memo` stays effective. */
+  markStart?: number;
+  markEnd?: number;
   noGutter?: boolean;
   /** Gutter width in `ch` units (digits of the last line number). */
   gutterWidth: number;
-}
-
-/** Wrap the first occurrence of `matchText` inside `el` with one or more
- *  `<mark class="workspace-code-match">` elements, preserving Shiki's
- *  syntax-highlighting spans instead of dropping them. */
-function markMatchInElement(el: HTMLElement, matchText: string): void {
-  if (!matchText) return;
-  // Idempotent: already marked (e.g. ref re-ran on re-render) → don't nest.
-  if (el.querySelector("mark.workspace-code-match")) return;
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let concatenated = "";
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const t = node as Text;
-    textNodes.push(t);
-    concatenated += t.data;
-  }
-  const startIdx = concatenated.indexOf(matchText);
-  if (startIdx < 0) return;
-  const endIdx = startIdx + matchText.length;
-
-  let pos = 0;
-  for (const t of textNodes) {
-    const len = t.data.length;
-    const nodeStart = pos;
-    const nodeEnd = pos + len;
-    pos += len;
-    const overlapStart = Math.max(startIdx, nodeStart);
-    const overlapEnd = Math.min(endIdx, nodeEnd);
-    if (overlapStart >= overlapEnd) continue;
-
-    const localStart = overlapStart - nodeStart;
-    const localEnd = overlapEnd - nodeStart;
-    let target: Text = t;
-    if (localStart > 0) target = target.splitText(localStart);
-    if (localEnd - localStart < target.data.length) target.splitText(localEnd - localStart);
-
-    const mark = document.createElement("mark");
-    mark.className = "workspace-code-match";
-    target.replaceWith(mark);
-    mark.appendChild(target);
-  }
 }
 
 /**
@@ -67,43 +30,46 @@ export const CodeLine = memo(function CodeLine({
   html,
   gutterMark,
   isTarget,
-  matchText,
+  markStart,
+  markEnd,
   noGutter,
   gutterWidth,
 }: CodeLineProps) {
-  const modifierClass = `${gutterMark ? ` workspace-code-line--${gutterMark}` : ""}${isTarget ? " workspace-code-line--target" : ""}`;
-  const wantsMatchMark = isTarget && !!matchText;
-  // Stable per matchText so React doesn't detach/re-attach the ref each render.
+  let gutterClass = "";
+  if (gutterMark) {
+    for (const kind of gutterMark) gutterClass += ` workspace-code-line--${kind}`;
+  }
+  const modifierClass = `${gutterClass}${isTarget ? " workspace-code-line--target" : ""}`;
+  const wantsMatchMark = isTarget && markStart != null && markEnd != null && markEnd > markStart;
+  // Stable per span so React doesn't detach/re-attach the ref each render.
   const markRef = useCallback(
     (el: HTMLElement | null) => {
-      if (el && matchText) markMatchInElement(el, matchText);
+      if (el && markStart != null && markEnd != null) {
+        markRangeInElement(el, markStart, markEnd - markStart, "workspace-code-match");
+      }
     },
     // `html` so a re-rendered innerHTML (approximate → exact pass) re-marks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [matchText, html],
+    [markStart, markEnd, html],
   );
   let content: ReactNode;
   if (html !== undefined) {
     content = (
       <span
-        key={wantsMatchMark ? `shiki-marked-${matchText}` : "shiki"}
+        key={wantsMatchMark ? `shiki-marked-${markStart}-${markEnd}` : "shiki"}
         className="workspace-code-content workspace-code-content--shiki"
         dangerouslySetInnerHTML={{ __html: html }}
         ref={wantsMatchMark ? markRef : undefined}
       />
     );
   } else if (wantsMatchMark) {
-    const matchIdx = line.indexOf(matchText!);
-    content =
-      matchIdx >= 0 ? (
-        <span className="workspace-code-content">
-          {line.slice(0, matchIdx)}
-          <mark className="workspace-code-match">{matchText}</mark>
-          {line.slice(matchIdx + matchText!.length)}
-        </span>
-      ) : (
-        <span className="workspace-code-content">{line}</span>
-      );
+    content = (
+      <span className="workspace-code-content">
+        {line.slice(0, markStart)}
+        <mark className="workspace-code-match">{line.slice(markStart, markEnd)}</mark>
+        {line.slice(markEnd)}
+      </span>
+    );
   } else {
     content = <span className="workspace-code-content">{line}</span>;
   }

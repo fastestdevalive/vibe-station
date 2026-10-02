@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, beforeEach } from "vitest";
 import { FilesLeftRail } from "./FilesLeftRail";
-import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT, isFilesLeftPaneOpen } from "@/hooks/useStore";
 
 const WT = "wt-1";
 
@@ -222,6 +222,39 @@ describe("FilesLeftRail", () => {
 
       expect(useWorkspaceStore.getState().filesLeftPaneMode[WT]).toBe("references");
       expect(screen.getByRole("button", { name: "References" })).toHaveAttribute("aria-pressed", "true");
+    });
+  });
+  describe("References revealed with the file tree hidden", () => {
+    const paneOpen = () => {
+      const s = useWorkspaceStore.getState();
+      return isFilesLeftPaneOpen(s.fileTreeVisible, s.filesLeftPaneMode[WT] ?? "tree");
+    };
+
+    it("pressing the active References icon closes the pane (no stuck-open state)", async () => {
+      const user = userEvent.setup();
+      useWorkspaceStore.getState().revealReferences(WT, {
+        worktreeId: WT,
+        path: "a.ts",
+        line: 0,
+        character: 0,
+        symbol: "x",
+      });
+      useWorkspaceStore.setState({ fileTreeVisible: false });
+      expect(paneOpen()).toBe(true);
+      render(<FilesLeftRail worktreeId={WT} />);
+      await user.click(screen.getByRole("button", { name: "References" }));
+      expect(paneOpen()).toBe(false);
+      // …and it re-opens on the next press.
+      await user.click(screen.getByRole("button", { name: "References" }));
+      expect(paneOpen()).toBe(true);
+    });
+
+    it("revealTextSearch from a references-only pane keeps the pane open in search mode", () => {
+      useWorkspaceStore.setState({ fileTreeVisible: false, filesLeftPaneMode: { [WT]: "references" } });
+      useWorkspaceStore.getState().revealTextSearch(WT, "needle");
+      const s = useWorkspaceStore.getState();
+      expect(s.filesLeftPaneMode[WT]).toBe("search");
+      expect(paneOpen()).toBe(true);
     });
   });
 });

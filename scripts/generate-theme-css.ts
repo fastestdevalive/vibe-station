@@ -87,6 +87,18 @@ const THEMES: RosterEntry[] = [
       "--pr-merged": "#8250df",
       "--pr-draft": "#8a8a8a",
       "--pr-closed": "#6b6b6b",
+      "--ref-match-bg": "rgba(234, 179, 8, 0.3)",
+      "--kind-fn": "#a78bfa",
+      "--kind-method": "#60a5fa",
+      "--kind-class": "#4ade80",
+      "--kind-struct": "#2dd4bf",
+      "--kind-enum": "#fbbf24",
+      "--kind-iface": "#38bdf8",
+      "--kind-var": "#94a3b8",
+      "--kind-const": "#facc15",
+      "--kind-prop": "#c084fc",
+      "--kind-mod": "#f472b6",
+      "--kind-neutral": "#a3a3a3",
       "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.3)",
       "--shadow-md": "0 4px 12px rgba(0, 0, 0, 0.4)",
       "--shadow-lg": "0 8px 24px rgba(0, 0, 0, 0.5)",
@@ -156,6 +168,18 @@ const THEMES: RosterEntry[] = [
       "--pr-merged": "#6e40c9",
       "--pr-draft": "#737373",
       "--pr-closed": "#737373",
+      "--ref-match-bg": "rgba(202, 138, 4, 0.25)",
+      "--kind-fn": "#7c3aed",
+      "--kind-method": "#2563eb",
+      "--kind-class": "#16a34a",
+      "--kind-struct": "#0d9488",
+      "--kind-enum": "#d97706",
+      "--kind-iface": "#0284c7",
+      "--kind-var": "#64748b",
+      "--kind-const": "#a16207",
+      "--kind-prop": "#9333ea",
+      "--kind-mod": "#db2777",
+      "--kind-neutral": "#737373",
       "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.05)",
       "--shadow-md": "0 4px 12px rgba(0, 0, 0, 0.08)",
       "--shadow-lg": "0 8px 24px rgba(0, 0, 0, 0.12)",
@@ -408,8 +432,68 @@ function deriveChrome(theme: ShikiTheme, appearance: Appearance): Record<string,
     "--pr-merged": c["terminal.ansiMagenta"] ?? "#8250df",
     "--pr-draft": c["terminal.ansiBrightBlack"] ?? c["descriptionForeground"] ?? fgMuted,
     "--pr-closed": c["terminal.ansiBlack"] ?? fgMuted,
+    // Match-highlight background derived from the theme's own warning color,
+    // so light third-party themes don't inherit the dark palette's alpha.
+    "--ref-match-bg": isDark
+      ? "color-mix(in srgb, var(--warning) 30%, transparent)"
+      : "color-mix(in srgb, var(--warning) 25%, transparent)",
+    // Per-kind chip colors derived from the theme's own terminal palette —
+    // the dark palette's #facc15/#fbbf24 fail contrast on a light background,
+    // so each theme gets chip colors that read on its own ground.
+    "--kind-fn": kindColor(c, "terminal.ansiMagenta", isDark, bg, fg, "#a78bfa", "#7c3aed"),
+    "--kind-method": kindColor(c, "terminal.ansiBlue", isDark, bg, fg, "#60a5fa", "#2563eb"),
+    "--kind-class": kindColor(c, "terminal.ansiGreen", isDark, bg, fg, "#4ade80", "#16a34a"),
+    "--kind-struct": kindColor(c, "terminal.ansiCyan", isDark, bg, fg, "#2dd4bf", "#0d9488"),
+    "--kind-enum": kindColor(c, "terminal.ansiYellow", isDark, bg, fg, "#fbbf24", "#d97706"),
+    "--kind-iface": kindColor(c, "terminal.ansiBlue", isDark, bg, fg, "#38bdf8", "#0284c7"),
+    "--kind-var": kindColor(c, "terminal.ansiWhite", isDark, bg, fg, "#94a3b8", "#64748b"),
+    "--kind-const": kindColor(c, "terminal.ansiYellow", isDark, bg, fg, "#facc15", "#a16207"),
+    "--kind-prop": kindColor(c, "terminal.ansiMagenta", isDark, bg, fg, "#c084fc", "#9333ea"),
+    "--kind-mod": kindColor(c, "terminal.ansiBrightMagenta", isDark, bg, fg, "#f472b6", "#db2777"),
+    "--kind-neutral": kindColor(c, "terminal.ansiBrightBlack", isDark, bg, fg, "#a3a3a3", "#737373"),
     ...shadows,
   };
+}
+
+/** Minimum contrast for 10px chip text on the theme's own background. */
+const KIND_MIN_CONTRAST = 3;
+
+function relLuminance(hex: string): number {
+  const lin = (v: number) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [relLuminance(a), relLuminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Theme terminal color, or an appearance-appropriate fallback when the
+ *  borrowed theme doesn't define the key. Terminal palettes are not designed
+ *  as text-on-editor colors (solarized-dark's ansiBrightBlack IS its
+ *  background), so a color that fails KIND_MIN_CONTRAST against `bg` is pulled
+ *  toward `fg` — keeping its hue — until it reads. */
+function kindColor(
+  c: Record<string, unknown>,
+  ansiKey: string,
+  isDark: boolean,
+  bg: string,
+  fg: string,
+  dark: string,
+  light: string,
+): string {
+  const v = c[ansiKey];
+  const base = typeof v === "string" && v ? v : isDark ? dark : light;
+  if (contrastRatio(base, bg) >= KIND_MIN_CONTRAST) return base;
+  for (let pct = 0.1; pct <= 1; pct += 0.1) {
+    const m = mix(base, fg, pct);
+    if (contrastRatio(m, bg) >= KIND_MIN_CONTRAST) return m;
+  }
+  return fg;
 }
 
 /* ── Theme-invariant Markdown defaults (matching today's workspace.css) ────── */

@@ -54,6 +54,23 @@ describe("SearchPanel", () => {
     vi.clearAllTimers();
   });
 
+  // Round 2 Bug 1: the References panel's "Text search" action hands a
+  // symbol to this context's Search panel (read-once).
+  it("runs a pending text search addressed to this context and clears it", async () => {
+    const clear = vi.fn();
+    mockStoreState.pendingTextSearch = { contextId: "wt-1", text: "oneshot" };
+    mockStoreState.clearPendingTextSearch = clear;
+    mockApi.search.mockResolvedValue({ files: [], truncated: false, totalMatches: 0 });
+    try {
+      render(<SearchPanel api={mockApi} worktreeId="wt-1" scope="worktree" />);
+      expect(screen.getByPlaceholderText("Search content...")).toHaveValue("oneshot");
+      expect(clear).toHaveBeenCalled();
+      await waitFor(() => expect(mockApi.search).toHaveBeenCalled());
+    } finally {
+      mockStoreState.pendingTextSearch = null;
+    }
+  });
+
   // ── 3.T1: Unit test for debounce ──
   describe("3.T1: Debounce", () => {
     it("debounces API calls at 200ms", async () => {

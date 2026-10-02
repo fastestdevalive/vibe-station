@@ -23,7 +23,59 @@ export type LspSeverity = "ok" | "warn" | "error" | "neutral";
  *  `null` (not clickable) is expressed at each use site as `LspAction | null`,
  *  mirroring Rust's `Option<LspAction>` rather than folding `null` into the
  *  action type itself. */
-export type LspAction = "enable" | "resume";
+export type LspAction = "enable" | "resume" | "retry";
+
+/** Why a language server is not up (`vst_types::rest::lsp::LspFailureKind`).
+ *  `missing_dependency`/`incompatible_dependency` are user-fixable setup
+ *  facts ("Setup needed"); the rest are malfunctions ("Error"). */
+export type LspFailureKind =
+  | "missing_dependency"
+  | "incompatible_dependency"
+  | "init_failed"
+  | "exited_on_start"
+  | "init_timeout"
+  | "crashed"
+  | "spawn_failed";
+
+/** One remediation button. Dispatch on `kind` — `label` is display text only. */
+export type LspRemediation = {
+  kind: "copy_command" | "retry" | "view_log";
+  label: string;
+  /** Only for `copy_command`: the daemon-authored install command. */
+  command?: string | null;
+};
+
+/** A latched server failure — set on status responses only while the server
+ *  is not up (`status === "error"`); never together with `degraded`. */
+export type LspFailure = {
+  kind: LspFailureKind;
+  /** Short daemon-authored sentence (== `detail` while failed). */
+  summary: string;
+  /** Raw server text (init error / stderr tail), ≤2 KB, may be multi-line. */
+  message: string | null;
+  exitCode?: number | null;
+  remediation: LspRemediation[];
+  /** The daemon will retry on its own (crash backoff / dependency re-probe). */
+  autoRetry: boolean;
+};
+
+/** Dependency kinds read as "Setup needed" (warn), not "Error". */
+export function isDependencyFailure(failure: LspFailure | null | undefined): boolean {
+  return failure?.kind === "missing_dependency" || failure?.kind === "incompatible_dependency";
+}
+
+/**
+ * The failure summary's lead clause, for places that need a short phrase
+ * rather than the full sentence (picker header, chip tooltip, banners):
+ * "TypeScript isn't installed for this project — code navigation needs it."
+ * → "TypeScript isn't installed for this project". Pure text trimming of the
+ * daemon's own words — never a re-derivation from `kind`.
+ */
+export function failureHeadline(failure: LspFailure): string {
+  const firstSentence = failure.summary.split(/(?<=\.)\s/)[0] ?? failure.summary;
+  const lead = firstSentence.split(/ — |: /)[0] ?? firstSentence;
+  return lead.trim().replace(/[.…]+$/, "");
+}
 
 /**
  * Presentation fields computed once, server-side, in `vst_lsp::status::describe`
@@ -42,11 +94,31 @@ export type LspStatusPresentation = {
 export type LspStatusResponse = {
   status: LspStatus;
   language: string | null;
+  /** Server is up but reported a health warning/error (rust-analyzer
+   *  `experimental/serverStatus`, e.g. "cargo metadata failed") — results may
+   *  be incomplete. Absent/null when healthy or the server never reports it. */
+  degraded?: LspDegraded | null;
+  /** Why the server is not up (only with `status === "error"`). */
+  failure?: LspFailure | null;
 } & LspStatusPresentation;
+
+/** `level: "info"` is a note (e.g. "Using TypeScript 5.9.3 (global)…"), not a
+ *  warning — it must not turn any chip yellow. Absent ≡ `"warning"`. */
+export type LspDegraded = { message: string; level?: "warning" | "info" };
+
+/** Why the daemon substituted a ripgrep text search for the language server.
+ *  Present on definition/references responses ONLY when it did. */
+export type LspFallbackReason = "disabled" | "starting" | "not_found" | "unsupported" | "server_failed";
+export type LspFallback = { reason: LspFallbackReason };
 
 export type Location = {
   line: number;
+  /** UTF-16 column of the match start within `preview`. */
   character: number;
+  /** UTF-16 exclusive end column — set only for single-line ranges. */
+  endCharacter?: number | null;
+  /** The RAW source line (untrimmed; only the line terminator is stripped) —
+   *  `character`/`endCharacter` index into it. Trim for display only. */
   preview: string;
   confidence: "lsp" | "text";
 } & (
@@ -56,6 +128,7 @@ export type Location = {
 
 export type LspDefinitionResponse = {
   locations: Location[];
+  fallback?: LspFallback | null;
 };
 
 export async function getLspStatus(
@@ -76,6 +149,7 @@ export async function getLspStatus(
 export type LspLanguageStatus = {
   language: string;
   status: LspStatus;
+  failure?: LspFailure | null;
 } & LspStatusPresentation;
 
 export type LspStatusesResponse = {
@@ -100,6 +174,30 @@ export async function getLspStatuses(
   }
   const res = await apiFetch(url);
   return (await parseJson<LspStatusesResponse>(res)).statuses;
+}
+
+/**
+ * Retry a failed language server: clears the daemon's latched failure and
+ * respawns now (`POST …/lsp/restart`). Returns the fresh status.
+ */
+export async function restartLsp(
+  api: unknown,
+  scope: FileScope,
+  id: string,
+  language: string
+): Promise<LspStatusResponse> {
+  const url = `${fileBase(scope, id)}/lsp/restart`;
+  const init: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language }),
+  };
+  if (api && typeof (api as { apiFetch?: typeof apiFetch }).apiFetch === "function") {
+    const res = await (api as { apiFetch: typeof apiFetch }).apiFetch(url, init);
+    return parseJson<LspStatusResponse>(res);
+  }
+  const res = await apiFetch(url, init);
+  return parseJson<LspStatusResponse>(res);
 }
 
 export async function getDefinition(
@@ -130,7 +228,11 @@ export type LspHoverResponse =
 
 export type ReferenceEntry = {
   line: number;
+  /** UTF-16 column of the reference start within `preview`. */
   character: number;
+  /** UTF-16 exclusive end column — set only for single-line ranges. */
+  endCharacter?: number | null;
+  /** The RAW source line (untrimmed) — `character`/`endCharacter` index into it. */
   preview: string;
   isDeclaration: boolean;
   confidence: "lsp" | "text";
@@ -148,6 +250,7 @@ export type LspReferencesResponse = {
   references: ReferenceGroup[];
   hasMore: boolean;
   cursor: string | null;
+  fallback?: LspFallback | null;
 };
 
 export async function getHover(
@@ -198,8 +301,14 @@ export async function getReferences(
 export type OutlineSymbol = {
   name: string;
   kind: string;
+  /** Position of the symbol's NAME (LSP `selectionRange.start`) — where a
+   *  click should land. */
   line: number;
   character: number;
+  /** First line of the symbol's FULL range (doc comments, attributes,
+   *  decorators included) — used with `endLine` for scroll-sync containment.
+   *  Optional for daemons predating it; fall back to `line`. */
+  rangeStartLine?: number;
   endLine: number;
   children: OutlineSymbol[];
 };
@@ -302,6 +411,76 @@ export async function getWorkspaceFile(
   return res.text();
 }
 
+function extractErrorCode(err: unknown): string | null {
+  if (err && typeof err === "object") {
+    if ("code" in err && typeof (err as { code: unknown }).code === "string") {
+      return (err as { code: string }).code;
+    }
+  }
+  if (err instanceof Error) {
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed && typeof parsed.code === "string") {
+        return parsed.code;
+      }
+    } catch {
+      // not JSON
+    }
+  }
+  return null;
+}
+
+function isLspFailure(v: unknown): v is LspFailure {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as { kind?: unknown }).kind === "string" &&
+    typeof (v as { summary?: unknown }).summary === "string"
+  );
+}
+
+/**
+ * The latched failure carried by a `503 LSP_SERVER_FAILED` route error
+ * (`{ error, code: "LSP_SERVER_FAILED", failure }`), or `null` for any other
+ * error. Accepts an `ApiError` whose message is the raw JSON body (what
+ * `parseJson` throws) or an already-parsed body object.
+ */
+export function lspFailureFromError(err: unknown): LspFailure | null {
+  let body: unknown = null;
+  if (err && typeof err === "object" && "failure" in err) {
+    body = err;
+  } else if (err instanceof Error) {
+    try {
+      body = JSON.parse(err.message);
+    } catch {
+      return null;
+    }
+  }
+  if (!body || typeof body !== "object") return null;
+  const { code, failure } = body as { code?: unknown; failure?: unknown };
+  if (code !== undefined && code !== "LSP_SERVER_FAILED") return null;
+  return isLspFailure(failure) ? { ...failure, remediation: failure.remediation ?? [] } : null;
+}
+
+export function isLspDisabled(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (code === "LSP_DISABLED") return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  if (msg.includes("LSP_DISABLED") || msg.toLowerCase().includes("code navigation is disabled")) {
+    return true;
+  }
+  return false;
+}
+
+export function isLspUnsupported(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (code === "LSP_UNSUPPORTED") return true;
+  if (err instanceof ApiError && err.status === 422) return true;
+  if (err && typeof err === "object" && "status" in err && (err as { status: unknown }).status === 422) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return msg.includes("LSP_UNSUPPORTED");
+}
+
 /**
  * True when `err` is the daemon's `409 LSP_NOT_READY` — the language server
  * process was just spawned (spawn-on-first-use) and hasn't finished its
@@ -310,15 +489,29 @@ export async function getWorkspaceFile(
  * (an LSP route's `NotReady` maps to this exact status/code — see
  * `LspRouteError::NotReady` in `rust/vst-routes/src/lsp.rs`).
  *
+ * Excludes `LSP_DISABLED` (which is also 409 but non-retryable) and `LSP_UNSUPPORTED`.
+ *
  * Shared by CodeView.tsx's go-to-definition retry and OutlinePanel.tsx's
  * outline-fetch retry — keep both in sync with this one check.
  */
 export function isLspNotReady(err: unknown): boolean {
-  return (
-    (err instanceof ApiError && err.status === 409) ||
-    (err instanceof Error &&
-      (err.message.includes("409") ||
-        err.message.includes("LSP_NOT_READY") ||
-        (err as { code?: string }).code === "LSP_NOT_READY"))
-  );
+  if (isLspDisabled(err)) return false;
+  if (isLspUnsupported(err)) return false;
+  const code = extractErrorCode(err);
+  if (code === "LSP_NOT_READY") return true;
+  if (code && code !== "LSP_NOT_READY") return false;
+
+  if (err instanceof ApiError) {
+    return err.status === 409;
+  }
+  if (err && typeof err === "object" && "status" in err && (err as { status: unknown }).status === 409) {
+    return true;
+  }
+  if (err instanceof Error) {
+    return (
+      err.message.includes("409") ||
+      err.message.includes("LSP_NOT_READY")
+    );
+  }
+  return false;
 }

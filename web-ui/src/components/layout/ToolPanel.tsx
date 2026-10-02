@@ -3,7 +3,7 @@ import { Columns2, PanelTopClose, PanelTopOpen, Rows2, X } from "lucide-react";
 import type { ApiInstance } from "@/api";
 import type { FileScope, PrStatus } from "@/api/types";
 import type { ToolTab } from "@/hooks/useStore";
-import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT } from "@/hooks/useStore";
+import { useWorkspaceStore, DEFAULT_WORKTREE_LAYOUT, isFilesLeftPaneOpen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
 import { worktreePrStatus } from "@/lib/statusColor";
 import { useLayout } from "@/hooks/useLayout";
@@ -81,6 +81,9 @@ export function ToolPanel({
   const railCollapsed = isMobile && railHidden;
   const railWidth = railCollapsed ? 0 : RAIL_WIDTH;
   const fileTreeVisible = useWorkspaceStore((s) => s.fileTreeVisible);
+  // References mode reveals the files left pane without flipping the persisted
+  // `fileTreeVisible` preference (see `revealReferences`).
+  const filesLeftPaneMode = useWorkspaceStore((s) => s.filesLeftPaneMode[filesWt] ?? "tree");
   const masterDetailVertical = useWorkspaceStore(
     (s) => !!(s.layoutByWorktree[filesWt] ?? DEFAULT_WORKTREE_LAYOUT).masterDetailVertical,
   );
@@ -117,7 +120,7 @@ export function ToolPanel({
     }
   }, [toolPanelTab, worktreeId, activeWorktreeId, activeDirectContextId, setToolPanelTab]);
 
-  const isPanelOpen = effectiveTab === "files" && fileTreeVisible;
+  const isPanelOpen = effectiveTab === "files" && isFilesLeftPaneOpen(fileTreeVisible, filesLeftPaneMode);
   const panelWidth = isPanelOpen ? activePanelWidth : 0;
 
   const insetContextValue = useMemo(
@@ -141,6 +144,10 @@ export function ToolPanel({
   // container listener rather than a window one, multiple tools tiles can each
   // mount one without the two cancelling each other.
   const escPaneRef = useRef<HTMLDivElement>(null);
+  const filesWtRef = useRef(filesWt);
+  useEffect(() => {
+    filesWtRef.current = filesWt;
+  }, [filesWt]);
   useEffect(() => {
     const el = escPaneRef.current;
     if (!el) return;
@@ -154,10 +161,12 @@ export function ToolPanel({
       const key = s.activeWorktreeId ?? s.activeDirectContextId;
       const layout = s.layoutByWorktree[key ?? ""] ?? DEFAULT_WORKTREE_LAYOUT;
       const effectiveTabForEsc = layout.toolPanelTab === "search" ? "files" : layout.toolPanelTab;
-      const panelOpen = effectiveTabForEsc === "files" && s.fileTreeVisible;
+      const wt = filesWtRef.current;
+      const panelOpen =
+        effectiveTabForEsc === "files" && isFilesLeftPaneOpen(s.fileTreeVisible, s.filesLeftPaneMode[wt] ?? "tree");
       if (panelOpen) {
         e.stopPropagation();
-        s.toggleFileTree();
+        s.closeFilesLeftPane(wt);
       } else if (s.workspacePaneFullscreen === "tools") {
         e.stopPropagation();
         s.setWorkspacePaneFullscreen(null);

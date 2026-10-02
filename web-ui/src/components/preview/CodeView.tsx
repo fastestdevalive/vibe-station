@@ -22,18 +22,60 @@ import { useChunkedHighlight } from "./useChunkedHighlight";
 import {
   getDefinition,
   getHover,
+  getLspStatus,
   isLspNotReady,
+  lspFailureFromError,
   type Location,
   type LspDefinitionResponse,
+  type LspFailure,
+  type LspFallbackReason,
   type LspFileRef,
   type LspHoverResponse,
 } from "@/lib/lspApi";
 import { resolveClickPosition, resolveOffsetInLine } from "@/lib/lspPosition";
+import { markRangeInElement } from "@/lib/markRange";
+import { fallbackReasonText } from "../tools/referencesPanelState";
 import type { FileScope } from "@/api/types";
 
 /** Minimum line count above which `CodeView` windows its rows through the
  *  virtualizer (Decision 6). Below it, every line renders in normal flow. */
 const VIRTUALIZE_MIN_LINES = 2000;
+
+/**
+ * Creates a DOM Range covering character offsets [start, end) within the
+ * child text nodes of contentEl without splitting or mutating any nodes.
+ */
+function createRangeForOffsets(contentEl: HTMLElement, start: number, end: number): Range | null {
+  const range = document.createRange();
+  let currentOffset = 0;
+  let startSet = false;
+  let endSet = false;
+
+  function traverse(node: Node): boolean {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const len = (node.textContent ?? "").length;
+      if (!startSet && currentOffset + len >= start) {
+        range.setStart(node, Math.max(0, start - currentOffset));
+        startSet = true;
+      }
+      if (!endSet && currentOffset + len >= end) {
+        range.setEnd(node, Math.min(len, end - currentOffset));
+        endSet = true;
+        return true;
+      }
+      currentOffset += len;
+    } else {
+      for (let i = 0; i < node.childNodes.length; i++) {
+        const child = node.childNodes[i];
+        if (child && traverse(child)) return true;
+      }
+    }
+    return false;
+  }
+
+  traverse(contentEl);
+  return startSet && endSet ? range : null;
+}
 
 /** Identifier word boundaries at `character` within `lineText`, or null if
  *  the position doesn't land on/next to a word character. Shared by
@@ -95,6 +137,9 @@ function isSelfDefinitionClick(
   return loc.character >= clickedRange.start && loc.character < clickedRange.end;
 }
 
+/** A single line's gutter annotation kind. */
+export type GutterMarkKind = "added" | "modified" | "deleted" | "deleted-top";
+
 interface CodeViewProps {
   code: string;
   language?: string;
@@ -104,11 +149,15 @@ interface CodeViewProps {
   /** When true, renders without gutter (e.g. inside a markdown code block) */
   noGutter?: boolean;
   /** Git gutter marks: added/modified/deleted line annotations. No-op when noGutter is true. */
-  gutterMarks?: Map<number, "added" | "modified" | "deleted">;
+  gutterMarks?: Map<number, ReadonlySet<GutterMarkKind>>;
   /** 1-based line number to highlight (search jump-to-line / peek target). */
   highlightLine?: number | null;
   /** Matched substring within `highlightLine` to additionally mark, if found. */
   highlightMatchText?: string | null;
+  /** 0-based UTF-16 column range on `highlightLine` to mark — wins over
+   *  `highlightMatchText` (which can only find the FIRST occurrence). */
+  highlightColumn?: number | null;
+  highlightEndColumn?: number | null;
 
   // LSP props (Phase 3)
   api?: unknown;
@@ -125,6 +174,52 @@ interface CodeViewProps {
   /** Called once `highlightLine`'s row is in the DOM and scrolled to (virtual
    *  mode) — lets the owner re-run its highlight effect against a mounted row. */
   onRevealReady?: () => void;
+}
+
+/**
+ * The `[start, end)` span to mark on the jump-target line. A column-pinned
+ * target (definition/references/outline jumps) marks exactly the range the
+ * language server pointed at — `endColumn` when known, else the identifier
+ * starting at `column`. Only a column-less target (search) falls back to the
+ * first `indexOf` of `matchText`.
+ */
+export function targetMatchSpan(
+  lineText: string,
+  column: number | null | undefined,
+  endColumn: number | null | undefined,
+  matchText: string | null | undefined,
+): { start: number; end: number } | null {
+  if (column != null && column >= 0 && column < lineText.length) {
+    if (endColumn != null && endColumn > column && endColumn <= lineText.length) {
+      return { start: column, end: endColumn };
+    }
+    const word = wordRangeAtPosition(lineText, column);
+    if (word && word.start === column) return word;
+    return { start: column, end: column + 1 };
+  }
+  if (matchText) {
+    const idx = lineText.indexOf(matchText);
+    if (idx >= 0) return { start: idx, end: idx + matchText.length };
+  }
+  return null;
+}
+
+interface ActiveCue {
+  line: number;
+  start: number;
+  end: number;
+  word: string;
+  rects: DOMRect[];
+}
+
+/** True when the browser supports the CSS Custom Highlight API (the preferred
+ *  hover-cue mechanism — it doesn't mutate the DOM). */
+function supportsCustomHighlight(): boolean {
+  return (
+    typeof CSS !== "undefined" &&
+    "highlights" in CSS &&
+    typeof (globalThis as unknown as { Highlight?: unknown }).Highlight === "function"
+  );
 }
 
 /** Imperative handle for the code viewer, letting the owner (FilePreviewPane)
@@ -148,6 +243,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
     gutterMarks,
     highlightLine,
     highlightMatchText,
+    highlightColumn,
+    highlightEndColumn,
     api,
     worktreeId,
     scope = "worktree",
@@ -173,6 +270,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
   const shikiLang = language ? pickShikiLang(filePath, language) : "plaintext";
 
   const lines = useMemo(() => code.split("\n"), [code]);
+  const targetSpanFor = (lineText: string) =>
+    targetMatchSpan(lineText, highlightColumn, highlightEndColumn, highlightMatchText);
   const gutterWidth = String(lines.length).length;
 
   const [highlightedLines, setHighlightedLines] = useState<string[] | null>(null);
@@ -369,6 +468,10 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
     y: number;
     locations: Location[];
     selectedIndex: number;
+    /** Set when the daemon answered from its text-search fallback. */
+    fallback: LspFallbackReason | null;
+    /** The server's latched failure, for a `server_failed` fallback. */
+    failure: LspFailure | null;
   } | null>(null);
 
   // 5.4, 5.5, 5.7: Hover tooltip state
@@ -391,14 +494,79 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
   const hoverPendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverTooltipRef = useRef<HTMLDivElement | null>(null);
 
-  // Local-only (no LSP round-trip), IntelliJ/Android-Studio-style hover cue: while
-  // armed, the specific identifier under the pointer gets wrapped in a real DOM span
-  // so it can be underlined + recolored via CSS. Actual navigability is still only
-  // confirmed on click (PRD resolved question 7) — this just marks which token a
-  // click would target, same principle as the crosshair cursor it replaces, just
-  // more precise.
-  const hoveredSymbolWrapperRef = useRef<HTMLElement | null>(null);
-  const hoveredSymbolRangeRef = useRef<{ node: Text; start: number; end: number } | null>(null);
+  const activeCueRef = useRef<ActiveCue | null>(null);
+  const pinnedRef = useRef<boolean>(false);
+  const isArmedRef = useRef<boolean>(false);
+  const overlayRef = useRef<HTMLSpanElement | null>(null);
+
+  const applyCue = useCallback((range: Range, line: number, start: number, end: number, word: string) => {
+    const rects = typeof range.getClientRects === "function" ? Array.from(range.getClientRects()) : [];
+    activeCueRef.current = { line, start, end, word, rects };
+
+    // The CSS Custom Highlight API is the preferred cue (no DOM mutation).
+    // The absolute overlay is only a fallback for browsers without it —
+    // drawing it on top of a Highlight-API cue would render the word twice.
+    let highlightApplied = false;
+    if (supportsCustomHighlight()) {
+      try {
+        const HighlightClass = (globalThis as unknown as { Highlight: new (...ranges: Range[]) => unknown }).Highlight;
+        const highlight = new HighlightClass(range);
+        (CSS.highlights as unknown as { set: (name: string, hl: unknown) => void }).set("lsp-cue", highlight);
+        highlightApplied = true;
+      } catch {
+        // Fallback to overlay
+      }
+    }
+
+    const overlay = overlayRef.current;
+    if (overlay && !highlightApplied) {
+      overlay.textContent = word;
+      overlay.style.display = "inline";
+      const bRect = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : null;
+      const cRect = containerRef.current?.getBoundingClientRect();
+      if (bRect && cRect) {
+        overlay.style.position = "absolute";
+        overlay.style.left = `${bRect.left - cRect.left + (containerRef.current?.scrollLeft ?? 0)}px`;
+        overlay.style.top = `${bRect.top - cRect.top + (containerRef.current?.scrollTop ?? 0)}px`;
+        overlay.style.width = `${bRect.width}px`;
+        overlay.style.height = `${bRect.height}px`;
+        overlay.style.pointerEvents = "none";
+      }
+    }
+  }, []);
+
+  const clearHoveredSymbol = useCallback(() => {
+    if (pinnedRef.current) return;
+
+    if (supportsCustomHighlight()) {
+      try {
+        (CSS.highlights as unknown as { delete: (name: string) => void }).delete("lsp-cue");
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (overlayRef.current) {
+      overlayRef.current.style.display = "none";
+      overlayRef.current.textContent = "";
+    }
+    activeCueRef.current = null;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (activeCueRef.current && containerRef.current) {
+      const { line, start, end, word } = activeCueRef.current;
+      const contentEl = containerRef.current.querySelector<HTMLElement>(
+        `[data-line="${line + 1}"] .workspace-code-content`
+      );
+      if (contentEl) {
+        const range = createRangeForOffsets(contentEl, start, end);
+        if (range) {
+          applyCue(range, line, start, end, word);
+        }
+      }
+    }
+  });
 
   // Bump generation on file navigation/switch
   useEffect(() => {
@@ -416,12 +584,9 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
       clearTimeout(hoverPendingTimerRef.current);
       hoverPendingTimerRef.current = null;
     }
-    // The DOM node our hover wrapper pointed at is about to be replaced by a
-    // fresh dangerouslySetInnerHTML render — just drop the stale reference,
-    // no unwrap needed (there's nothing valid left to unwrap into).
-    hoveredSymbolWrapperRef.current = null;
-    hoveredSymbolRangeRef.current = null;
-  }, [filePath, lspFileRef]);
+    pinnedRef.current = false;
+    clearHoveredSymbol();
+  }, [filePath, lspFileRef, clearHoveredSymbol]);
 
   // Whole-document highlight for small files. Virtualized files use
   // `useChunkedHighlight` above instead (Decision 12); they never reach this.
@@ -451,12 +616,17 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
   // view for the same reason: there's nowhere more "definition-y" left to
   // navigate to.
   const triggerFindReferences = useCallback(
-    (line: number, character: number, symbol: string) => {
+    (
+      line: number,
+      character: number,
+      symbol: string,
+      intent: "references" | "no-definition" = "references",
+      failure: LspFailure | null = null,
+    ) => {
       const store = useWorkspaceStore.getState();
       const layoutKey =
         worktreeId ?? store.activeWorktreeId ?? store.activeDirectContextId ?? "";
-      store.setFilesLeftPaneMode(layoutKey, "references");
-      store.setPendingReferencesQuery({
+      store.revealReferences(layoutKey, {
         worktreeId: layoutKey,
         path: lspFileRef && lspFileRef.kind === "workspace" ? lspFileRef.path : (filePath ?? ""),
         line,
@@ -466,14 +636,56 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
           lspFileRef && lspFileRef.kind === "external"
             ? { token: lspFileRef.token, displayPath: filePath ?? "" }
             : undefined,
+        intent,
+        ...(failure ? { failure } : {}),
       });
     },
     [worktreeId, lspFileRef, filePath],
   );
 
+  // A `server_failed` text fallback doesn't repeat the failure (the polled
+  // status carries it) — read it once so the picker/panel can name the
+  // missing thing. Best-effort: null leaves the generic reason text.
+  const fetchLatchedFailure = useCallback(async (): Promise<LspFailure | null> => {
+    if (!api || !worktreeId || !lspFileRef || lspFileRef.kind !== "workspace") return null;
+    try {
+      return (await getLspStatus(api, scope, worktreeId, lspFileRef.path)).failure ?? null;
+    } catch {
+      return null;
+    }
+  }, [api, worktreeId, scope, lspFileRef]);
+
+  // Go-to-definition request failed outright. A 503 LSP_SERVER_FAILED means
+  // the server never ran → the panel's S17 directly (no references fetch,
+  // which would fail the same way); anything else → a references query.
+  const openReferencesAfterError = useCallback(
+    (err: unknown, line: number, character: number, symbol: string) => {
+      if (!symbol) return;
+      const failure = lspFailureFromError(err);
+      if (failure) {
+        triggerFindReferences(line, character, symbol, "no-definition", failure);
+      } else {
+        triggerFindReferences(line, character, symbol);
+      }
+    },
+    [triggerFindReferences],
+  );
+
   const triggerGoToDef = useCallback(
     async (line: number, character: number, anchorPos: { x: number; y: number }) => {
-      if (!api || !worktreeId || !lspFileRef) return;
+      const clickedRange = wordRangeAtPosition(lines[line] ?? "", character);
+      const symbol = clickedRange
+        ? (lines[line] ?? "").slice(clickedRange.start, clickedRange.end)
+        : "";
+
+      if (!api || !worktreeId || !lspFileRef) {
+        pinnedRef.current = false;
+        if (!isArmedRef.current) clearHoveredSymbol();
+        if (symbol) {
+          triggerFindReferences(line, character, symbol);
+        }
+        return;
+      }
 
       const gen = ++requestGenRef.current;
       const capturedCode = code;
@@ -513,17 +725,19 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
 
             try {
               res = await getDefinition(api, scope, worktreeId, lspFileRef, line, character);
-            } catch {
+            } catch (retryErr: unknown) {
               clearTimeout(pendingTimer);
+              // Superseded (newer click / file switch): its cue and panel win.
+              if (requestGenRef.current !== gen) return;
               setPendingCue(null);
-              if (requestGenRef.current === gen) {
-                setMessageCue({ ...anchorPos, text: "still starting — click again" });
-              }
+              openReferencesAfterError(retryErr, line, character, symbol);
               return;
             }
           } else {
             clearTimeout(pendingTimer);
+            if (requestGenRef.current !== gen) return;
             setPendingCue(null);
+            openReferencesAfterError(err, line, character, symbol);
             return;
           }
         }
@@ -536,10 +750,39 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
         if (requestGenRef.current !== gen) return;
         if (codeRef.current !== capturedCode || (etag != null && etagRef.current !== capturedEtag)) return;
 
-        const locations = res.locations ?? [];
+        const fallback = res.fallback?.reason ?? null;
+        const currentPath = lspFileRef.kind === "workspace" ? lspFileRef.path : undefined;
+        const currentExternalToken = lspFileRef.kind === "external" ? lspFileRef.token : undefined;
+        // A text-search fallback can include the clicked occurrence itself —
+        // never offer "jump to where you already are".
+        const locations = (res.locations ?? []).filter(
+          (loc) =>
+            !fallback ||
+            !isSelfDefinitionClick(loc, line, clickedRange, currentPath, currentExternalToken),
+        );
 
-        // 3.8 Zero results (server answered, no match) -> silent no-op
+        // 3.8 Zero results (server answered, nothing resolved) -> the panel's
+        // "Couldn't resolve" state (with the server's degraded reason when it
+        // has one, plus Text search). NOT a references query: references of
+        // an unresolved symbol are empty too, which used to surface as a
+        // misleading "No references found" (round-2 Bug 1). Only the
+        // self-definition case below turns into references.
+        // The failed server's own summary names the missing thing — for the
+        // picker header and, with zero hits, the panel's S17 (the server never
+        // ran, so "found no definition" would be false).
+        const failure = fallback === "server_failed" ? await fetchLatchedFailure() : null;
+        if (requestGenRef.current !== gen) return;
+
         if (locations.length === 0) {
+          if (!symbol) return;
+          if (fallback && fallback !== "server_failed") {
+            // The server was never asked (starting / disabled / not_found /
+            // unsupported) — "{server} found no definition" would be false.
+            // A references query reports the same fallback reason honestly.
+            triggerFindReferences(line, character, symbol);
+          } else {
+            triggerFindReferences(line, character, symbol, "no-definition", failure);
+          }
           return;
         }
 
@@ -548,15 +791,17 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
         // erroring, which would otherwise "navigate" you to exactly where
         // you already are. Natural editor behavior: usage → jump to
         // definition, definition → show references instead.
+        // Text-search fallback (Bug 6): grep hits aren't trustworthy enough
+        // for a silent jump — always show the picker, with the reason in its
+        // header, even for a single hit.
+        if (fallback) {
+          setPickerState({ ...anchorPos, locations, selectedIndex: 0, fallback, failure });
+          return;
+        }
+
         if (locations.length === 1) {
           const loc = locations[0]!;
-          const currentPath = lspFileRef.kind === "workspace" ? lspFileRef.path : undefined;
-          const currentExternalToken = lspFileRef.kind === "external" ? lspFileRef.token : undefined;
-          const clickedRange = wordRangeAtPosition(lines[line] ?? "", character);
           if (isSelfDefinitionClick(loc, line, clickedRange, currentPath, currentExternalToken)) {
-            const symbol = clickedRange
-              ? (lines[line] ?? "").slice(clickedRange.start, clickedRange.end)
-              : "";
             if (symbol) {
               triggerFindReferences(line, character, symbol);
             }
@@ -575,6 +820,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
             path: loc.path!,
             line: loc.line + 1,
             matchText: null,
+            column: loc.character,
+            endColumn: loc.endCharacter ?? null,
             source: "definition",
           });
           return;
@@ -612,13 +859,38 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
           ...anchorPos,
           locations,
           selectedIndex: 0,
+          fallback: null,
+          failure: null,
         });
       } catch {
+        // Unexpected failure while handling the answer — we know nothing
+        // resolved, so say that rather than claiming "no references".
         clearTimeout(pendingTimer);
         setPendingCue(null);
+        if (symbol) {
+          triggerFindReferences(line, character, symbol, "no-definition");
+        }
+      } finally {
+        pinnedRef.current = false;
+        if (!isArmedRef.current) {
+          clearHoveredSymbol();
+        }
       }
     },
-    [api, worktreeId, scope, lspFileRef, code, etag, retryDelayMs, lines, triggerFindReferences],
+    [
+      api,
+      worktreeId,
+      scope,
+      lspFileRef,
+      code,
+      etag,
+      retryDelayMs,
+      lines,
+      triggerFindReferences,
+      clearHoveredSymbol,
+      fetchLatchedFailure,
+      openReferencesAfterError,
+    ],
   );
 
   const handleSelectPickerLocation = useCallback(
@@ -637,6 +909,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
             path: loc.displayPath ?? "",
             line: loc.line + 1,
             matchText: null,
+            column: loc.character,
+            endColumn: loc.endCharacter ?? null,
             source: "definition",
             external: {
               token: loc.token,
@@ -658,6 +932,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
           path: loc.path!,
           line: loc.line + 1,
           matchText: null,
+          column: loc.character,
+          endColumn: loc.endCharacter ?? null,
           source: "definition",
         });
       }
@@ -946,12 +1222,16 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
 
     const onKeyUp = (e: KeyboardEvent) => {
       if (!e.ctrlKey && !e.metaKey) {
+        pinnedRef.current = false;
+        isArmedRef.current = false;
         setIsArmed(false);
         clearHoveredSymbol();
       }
     };
 
     const onBlur = () => {
+      pinnedRef.current = false;
+      isArmedRef.current = false;
       setIsArmed(false);
       clearHoveredSymbol();
     };
@@ -964,117 +1244,110 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
       win.removeEventListener("keyup", onKeyUp);
       win.removeEventListener("blur", onBlur);
     };
-  }, [pickerState, triggerGoToDef, handleSelectPickerLocation, virtualized, selectNodeContents]);
+  }, [pickerState, triggerGoToDef, handleSelectPickerLocation, virtualized, selectNodeContents, clearHoveredSymbol]);
 
   const handlePointerEnter = (e: React.PointerEvent) => {
     pointerOverRef.current = true;
-    if (e.ctrlKey || e.metaKey) setIsArmed(true);
+    if (e.ctrlKey || e.metaKey) {
+      isArmedRef.current = true;
+      setIsArmed(true);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     pointerOverRef.current = true;
     const shouldArm = e.ctrlKey || e.metaKey;
-    if (shouldArm !== isArmed) setIsArmed(shouldArm);
+    if (shouldArm !== isArmedRef.current) {
+      isArmedRef.current = shouldArm;
+      setIsArmed(shouldArm);
+    }
     scheduleHoverRest(e.clientX, e.clientY, e.ctrlKey, e.metaKey, e.target);
   };
 
   const handlePointerLeave = () => {
     pointerOverRef.current = false;
-    setIsArmed(false);
-    clearHoveredSymbol();
+    if (!pinnedRef.current) {
+      isArmedRef.current = false;
+      setIsArmed(false);
+      clearHoveredSymbol();
+    }
     if (hoverRestTimerRef.current) {
       clearTimeout(hoverRestTimerRef.current);
       hoverRestTimerRef.current = null;
     }
   };
 
-  // Word-character set for the local hover-highlight (identifiers only —
-  // matches every language this feature currently supports well enough for
-  // a purely visual cue; the actual click still resolves position via the
-  // real DOM hit-test, this only decides what to underline).
-  const isWordChar = (ch: string) => /[A-Za-z0-9_$]/.test(ch);
+  const updateHoveredSymbolAt = useCallback((clientX: number, clientY: number) => {
+    if (pinnedRef.current) return;
 
-  const clearHoveredSymbol = () => {
-    const wrapper = hoveredSymbolWrapperRef.current;
-    if (wrapper && wrapper.parentNode) {
-      const parent = wrapper.parentNode;
-      while (wrapper.firstChild) {
-        parent.insertBefore(wrapper.firstChild, wrapper);
-      }
-      parent.removeChild(wrapper);
-      parent.normalize();
-    }
-    hoveredSymbolWrapperRef.current = null;
-    hoveredSymbolRangeRef.current = null;
-  };
-
-  const updateHoveredSymbolAt = (clientX: number, clientY: number) => {
-    const doc = document as unknown as {
-      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-      caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    };
-    let node: Node | null = null;
-    let offset = 0;
-    if (typeof doc.caretPositionFromPoint === "function") {
-      const pos = doc.caretPositionFromPoint(clientX, clientY);
-      if (pos) {
-        node = pos.offsetNode;
-        offset = pos.offset;
-      }
-    } else if (typeof doc.caretRangeFromPoint === "function") {
-      const range = doc.caretRangeFromPoint(clientX, clientY);
-      if (range) {
-        node = range.startContainer;
-        offset = range.startOffset;
+    // Hysteresis: keep cue while pointer stays inside the word's client rects (+2px margin for jitter)
+    if (activeCueRef.current && activeCueRef.current.rects.length > 0) {
+      const isInside = activeCueRef.current.rects.some(
+        (r) =>
+          clientX >= r.left - 2 &&
+          clientX <= r.right + 2 &&
+          clientY >= r.top - 2 &&
+          clientY <= r.bottom + 2
+      );
+      if (isInside) {
+        return;
       }
     }
 
+    const container = containerRef.current;
+    if (!container) {
+      clearHoveredSymbol();
+      return;
+    }
+
+    let pos = resolveClickPosition(clientX, clientY, container);
+    if (!pos && typeof document.elementFromPoint === "function") {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (el instanceof Node && container.contains(el)) {
+        pos = resolveOffsetInLine(el, 0);
+      }
+    }
+
+    if (!pos || pos.line < 0 || pos.line >= lines.length) {
+      clearHoveredSymbol();
+      return;
+    }
+
+    const lineText = lines[pos.line] ?? "";
+    const rangeInfo = wordRangeAtPosition(lineText, pos.character);
+    if (!rangeInfo) {
+      clearHoveredSymbol();
+      return;
+    }
+
+    const { start, end } = rangeInfo;
+    // Compare ranges by line + column, not by node identity
     if (
-      !node ||
-      node.nodeType !== Node.TEXT_NODE ||
-      !containerRef.current?.contains(node) ||
-      (node instanceof Element ? node : node.parentElement)?.closest(".workspace-code-gutter")
+      activeCueRef.current &&
+      activeCueRef.current.line === pos.line &&
+      activeCueRef.current.start === start &&
+      activeCueRef.current.end === end
     ) {
+      return; // Same word as last move
+    }
+
+    const contentEl = container.querySelector<HTMLElement>(
+      `[data-line="${pos.line + 1}"] .workspace-code-content`
+    );
+    if (!contentEl) {
       clearHoveredSymbol();
       return;
     }
 
-    const textNode = node as Text;
-    const text = textNode.textContent ?? "";
-    // Offset can land exactly on a boundary (e.g. end of text node) — clamp.
-    const at = Math.min(offset, Math.max(text.length - 1, 0));
-    if (!text[at] || !isWordChar(text[at])) {
+    const range = createRangeForOffsets(contentEl, start, end);
+    if (!range) {
       clearHoveredSymbol();
       return;
     }
 
-    let start = at;
-    while (start > 0 && isWordChar(text[start - 1] ?? "")) start--;
-    let end = at + 1;
-    while (end < text.length && isWordChar(text[end] ?? "")) end++;
-
-    const current = hoveredSymbolRangeRef.current;
-    if (current && current.node === textNode && current.start === start && current.end === end) {
-      return; // Same word as last move — avoid needless DOM churn/flicker.
-    }
-
-    clearHoveredSymbol();
-
-    try {
-      const range = document.createRange();
-      range.setStart(textNode, start);
-      range.setEnd(textNode, end);
-      const span = document.createElement("span");
-      span.className = "workspace-code-symbol-hover";
-      range.surroundContents(span);
-      hoveredSymbolWrapperRef.current = span;
-      hoveredSymbolRangeRef.current = { node: textNode, start, end };
-    } catch {
-      // A word that (rarely) spans a syntax-highlighting span boundary can't
-      // be wrapped this way — just skip the visual cue for this move, the
-      // cursor + click behavior are unaffected either way.
-    }
-  };
+    const word = lineText.slice(start, end);
+    applyCue(range, pos.line, start, end, word);
+  }, [lines, applyCue, clearHoveredSymbol]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     mousedownCoordsRef.current = { x: e.clientX, y: e.clientY };
@@ -1083,6 +1356,9 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
     if (hoverRestTimerRef.current) {
       clearTimeout(hoverRestTimerRef.current);
       hoverRestTimerRef.current = null;
+    }
+    if ((e.ctrlKey || e.metaKey || isArmedRef.current) && activeCueRef.current) {
+      pinnedRef.current = true;
     }
   };
 
@@ -1094,9 +1370,11 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
         dragDetectedRef.current = true;
       }
     }
-    if ((e.ctrlKey || e.metaKey) && !dragDetectedRef.current) {
+    // Do not clear on transient metaKey=false moves if already armed or pinned
+    const isModifierActive = e.ctrlKey || e.metaKey || isArmedRef.current;
+    if (isModifierActive && !dragDetectedRef.current) {
       updateHoveredSymbolAt(e.clientX, e.clientY);
-    } else {
+    } else if (!pinnedRef.current && !isArmedRef.current) {
       clearHoveredSymbol();
     }
     scheduleHoverRest(e.clientX, e.clientY, e.ctrlKey, e.metaKey, e.target);
@@ -1108,6 +1386,9 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
       const dy = e.clientY - mousedownCoordsRef.current.y;
       if (Math.hypot(dx, dy) > 5) {
         dragDetectedRef.current = true;
+        // A drag is a selection, not a click — drop the pin so the cue
+        // doesn't freeze on the old word while the modifier is still held.
+        pinnedRef.current = false;
       }
     }
   };
@@ -1120,32 +1401,34 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
 
     // Drag/selection guard (3.T1): coordinates moved >5px
     if (dragDetectedRef.current) {
+      pinnedRef.current = false;
       return;
     }
     if (mousedownCoordsRef.current) {
       const dx = e.clientX - mousedownCoordsRef.current.x;
       const dy = e.clientY - mousedownCoordsRef.current.y;
       if (Math.hypot(dx, dy) > 5) {
+        pinnedRef.current = false;
         return;
       }
     }
 
     e.preventDefault();
     e.stopPropagation();
-    // Deliberately NOT clearing the hover-cue underline here — it should
-    // persist through the click (the async go-to-def/references request is
-    // still resolving, or the click is a silent no-op with zero results;
-    // either way, yanking the underline the instant you click was jarring).
-    // It's cleared naturally when the modifier releases (onKeyUp/onBlur),
-    // the pointer leaves the code view (handlePointerLeave), the pointer
-    // moves to a different word (handleMouseMove), or the file navigates
-    // away (the file-switch effect resets the ref for a fresh DOM anyway).
+    if (activeCueRef.current) {
+      pinnedRef.current = true;
+    }
 
     let pos = resolveClickPosition(e.clientX, e.clientY, containerRef.current);
     if (!pos && e.target instanceof Node && containerRef.current?.contains(e.target)) {
       pos = resolveOffsetInLine(e.target, 0);
     }
-    if (!pos) return;
+    if (!pos) {
+      // Unpin so a pinned cue can't get stuck when the click never reaches
+      // `triggerGoToDef`'s `finally` (which is what normally clears the pin).
+      pinnedRef.current = false;
+      return;
+    }
 
     void triggerGoToDef(pos.line, pos.character, { x: e.clientX, y: e.clientY + 4 });
   };
@@ -1183,6 +1466,7 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
               const lineNum = v.index + 1;
               const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
               const isTarget = highlightLine === lineNum;
+              const span = isTarget ? targetSpanFor(lines[v.index] ?? "") : null;
               return (
                 <div
                   key={v.key}
@@ -1197,7 +1481,8 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
                     html={chunkedLines[v.index]}
                     gutterMark={gutterMark}
                     isTarget={isTarget}
-                    matchText={isTarget ? highlightMatchText ?? undefined : undefined}
+                    markStart={span?.start}
+                    markEnd={span?.end}
                     noGutter={noGutter}
                     gutterWidth={gutterWidth}
                   />
@@ -1210,6 +1495,7 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
             const lineNum = i + 1;
             const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
             const isTarget = highlightLine === lineNum;
+            const span = isTarget ? targetSpanFor(line) : null;
             return (
               <CodeLine
                 key={i}
@@ -1218,13 +1504,15 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
                 html={highlightedLines?.[i]}
                 gutterMark={gutterMark}
                 isTarget={isTarget}
-                matchText={isTarget ? highlightMatchText ?? undefined : undefined}
+                markStart={span?.start}
+                markEnd={span?.end}
                 noGutter={noGutter}
                 gutterWidth={gutterWidth}
               />
             );
           })
         )}
+        <span ref={overlayRef} className="workspace-code-symbol-hover" style={{ display: "none" }} />
       </pre>
 
       {pendingCue && (
@@ -1268,12 +1556,26 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
             aria-label="Go to definition"
           >
             <div className="lsp-definition-picker__header">
-              Go to definition ({pickerState.locations.length})
+              <div className="lsp-definition-picker__title">
+                Go to definition · {pickerState.locations.length}
+              </div>
+              {pickerState.fallback && (
+                <div className="lsp-definition-picker__reason" data-testid="lsp-picker-reason">
+                  {fallbackReasonText(pickerState.fallback, null, pickerState.failure)} — text matches
+                </div>
+              )}
             </div>
             <div className="lsp-definition-picker__list" role="listbox">
               {pickerState.locations.map((loc, idx) => {
                 const isSelected = pickerState.selectedIndex === idx;
                 const display = loc.external ? (loc.displayPath ?? "external") : loc.path;
+                // The header already says "text matches" when every row is one.
+                const showTextBadge =
+                  loc.confidence === "text" &&
+                  !pickerState.fallback &&
+                  !pickerState.locations.every((l) => l.confidence === "text");
+                // `preview` is the RAW source line — trim for display only.
+                const preview = loc.preview?.trim();
                 return (
                   <div
                     key={idx}
@@ -1288,12 +1590,12 @@ export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeV
                       <span className="lsp-definition-picker__item-target">
                         {display}:{loc.line + 1}
                       </span>
-                      {loc.confidence === "text" && (
+                      {showTextBadge && (
                         <span className="lsp-definition-picker__item-badge">(text match)</span>
                       )}
                     </div>
-                    {loc.preview && (
-                      <span className="lsp-definition-picker__item-preview">{loc.preview}</span>
+                    {preview && (
+                      <span className="lsp-definition-picker__item-preview">{preview}</span>
                     )}
                   </div>
                 );

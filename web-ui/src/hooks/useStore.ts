@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { api } from "@/api";
 import type { DiffScope, FileScope, Session, SessionState } from "@/api/types";
+import type { LspFailure } from "@/lib/lspApi";
 import { findLeafId, insertPane, removePane, type LayoutNode } from "@/lib/tiling";
 import { randomId } from "@/lib/uuid";
 
@@ -36,11 +37,54 @@ export type LayoutTransitionHint = "split" | "files";
  *  lapses mid-animation. */
 export const LAYOUT_TRANSITION_HINT_MS = 300;
 
-export type PeekFileValue = {
+/**
+ * A jump-to-line target. `column`/`endColumn` (0-based UTF-16, end exclusive)
+ * pin the exact range a definition/reference points at, so CodeView marks THAT
+ * occurrence (not the first `indexOf` of `matchText`) and scrolls it into view
+ * horizontally. `seq` is a per-jump nonce: re-clicking the same row after
+ * scrolling away is a NEW jump and must re-scroll, even though path+line are
+ * unchanged.
+ */
+export type LineTarget = {
   worktreeId: string;
   path: string;
   line: number;
   matchText: string | null;
+  column?: number | null;
+  endColumn?: number | null;
+  seq?: number;
+};
+
+/**
+ * `activeFilePath` is a single global slot, but tabs are per context. When a
+ * context becomes active while the slot still holds a file that is NOT one
+ * of that context's tabs (left behind by another project/worktree), return
+ * the patch that restores the context's own active tab — else null (L7:
+ * otherwise the preview shows "File not found" and polls a path that doesn't
+ * exist there).
+ */
+export function reconcileActiveFileForContext(
+  s: Pick<WorkspaceState, "activeFilePath" | "openFileTabsByWorktree" | "activeFileTabIdxByWorktree">,
+  contextId: string,
+): Pick<WorkspaceState, "activeFilePath" | "peekFile" | "pendingLineTarget"> | null {
+  const ownTabs = s.openFileTabsByWorktree[contextId] ?? [];
+  if (s.activeFilePath == null || ownTabs.includes(s.activeFilePath)) return null;
+  const ownIdx = s.activeFileTabIdxByWorktree[contextId] ?? -1;
+  return {
+    activeFilePath: ownIdx >= 0 ? (ownTabs[ownIdx] ?? null) : null,
+    peekFile: null,
+    pendingLineTarget: null,
+  };
+}
+
+let jumpSeq = 0;
+/** Monotonic nonce for `LineTarget.seq`. */
+export function nextJumpSeq(): number {
+  jumpSeq += 1;
+  return jumpSeq;
+}
+
+export type PeekFileValue = LineTarget & {
   source: "search" | "definition" | "references" | "outline";
   external?: { token: string; displayPath: string };
 };
@@ -176,6 +220,14 @@ export function clampLeftSidebarWidth(px: number): number {
 
 export type FilesLeftPaneMode = "tree" | "search" | "outline" | "references";
 
+/** Whether the tools pane's files left pane is open. References mode shows it
+ *  even with the file tree hidden (`revealReferences` doesn't flip the
+ *  persisted `fileTreeVisible`), so every open/close site must use this one
+ *  predicate — and `closeFilesLeftPane` — or the panel can't be closed. */
+export function isFilesLeftPaneOpen(fileTreeVisible: boolean, mode: FilesLeftPaneMode): boolean {
+  return fileTreeVisible || mode === "references";
+}
+
 export type PendingReferencesQuery = {
   worktreeId: string;
   path: string;
@@ -187,7 +239,20 @@ export type PendingReferencesQuery = {
    *  fetch must build an `LspFileRef { kind: "external", token }` instead of a
    *  workspace-path request (which path-confinement would rightly reject). */
   external?: { token: string; displayPath: string };
+  /** Why the panel is being opened. `"no-definition"`: go-to-definition
+   *  resolved nothing — the panel shows "Couldn't resolve" (with a
+   *  degraded-server reason when known) and does NOT auto-fetch references,
+   *  which would only report a misleading "no references". Default
+   *  `"references"`. */
+  intent?: "references" | "no-definition";
+  /** The language server's latched failure, when go-to-definition already
+   *  knows the server never ran — the panel opens straight in S17 instead
+   *  of "{server} found no definition" (which would be false). */
+  failure?: LspFailure | null;
 };
+
+/** A one-shot request to run a text search in a context's Search panel. */
+export type PendingTextSearch = { contextId: string; text: string };
 
 export interface WorkspaceState {
   /** Per-worktree layout state. Falls back to DEFAULT_WORKTREE_LAYOUT. */
@@ -217,7 +282,7 @@ export interface WorkspaceState {
    * `peekFile` (B1), so an unrelated later navigation can't resurrect a stale
    * highlight. Single global slot, not per-worktree, same as `peekFile`.
    */
-  pendingLineTarget: { worktreeId: string; path: string; line: number; matchText: string | null } | null;
+  pendingLineTarget: LineTarget | null;
   /**
    * Live "peek" preview state — a file/line the user has arrowed onto in a search
    * results list but NOT committed to a tab. Distinct from `activeFilePath`/
@@ -291,6 +356,8 @@ export interface WorkspaceState {
   filesLeftPaneHeightByWorktree: Record<string, number>;
   /** Pending references query handed from hover tooltip's "Find references" button to ReferencesPanel */
   pendingReferencesQuery: PendingReferencesQuery | null;
+  /** Consumed (read-once) by the matching context's SearchPanel. */
+  pendingTextSearch: PendingTextSearch | null;
   /** Monotonic "focus the search query input" request counter, PER resolved
    *  context id (worktree id or direct-session project id) — a canvas can
    *  have multiple tools tiles (and so multiple mounted SearchPanels) open
@@ -405,6 +472,9 @@ export interface WorkspaceState {
     path: string;
     line: number;
     matchText: string | null;
+    /** 0-based UTF-16 column range of the target token on `line`. */
+    column?: number | null;
+    endColumn?: number | null;
     source: "search" | "definition" | "references" | "outline";
     external?: { token: string; displayPath: string };
     coalesce?: boolean;
@@ -430,14 +500,24 @@ export interface WorkspaceState {
   setTreeScopeForWorktree: (worktreeId: string, scope: "local" | "branch") => void;
   /** Set the Files tool's left-pane mode for the given resolved context id. */
   setFilesLeftPaneMode: (worktreeId: string, mode: FilesLeftPaneMode) => void;
+  /** Close the files left pane: hide the tree and leave references mode (see
+   *  `isFilesLeftPaneOpen`). */
+  closeFilesLeftPane: (worktreeId: string) => void;
   /** Set the Files tool's left-pane overlay width (in pixels) for the given resolved context id. */
   setFilesLeftPaneWidth: (worktreeId: string, width: number) => void;
   /** Set the Files tool's left-pane stacked overlay height (in pixels) for the given resolved context id. */
   setFilesLeftPaneHeight: (worktreeId: string, height: number) => void;
   /** Set or clear the pending references query */
   setPendingReferencesQuery: (query: PendingReferencesQuery | null) => void;
+  /** Reveal the References panel: sets toolPanelVisible, toolPanelTab="files",
+   *  fileTreeVisible=true, filesLeftPaneMode="references", and sets pendingReferencesQuery.
+   *  Respects workspace canvas layout mode. */
+  revealReferences: (layoutKey: string, query: PendingReferencesQuery) => void;
   /** Bump `searchFocusSeq` for one context id, to request that context's search query input be focused. */
   requestSearchFocus: (contextId: string) => void;
+  /** Switch a context's files rail to Search and run a text search for `text`. */
+  revealTextSearch: (contextId: string, text: string) => void;
+  clearPendingTextSearch: () => void;
   bumpPreviewFont: (delta: number) => void;
   /** Bump the preview font scale for a specific worktree's tools pane. */
   bumpPreviewFontForWorktree: (worktreeId: string, delta: number) => void;
@@ -788,7 +868,7 @@ const initial = {
   activeSessionId: null as string | null,
   activeTerminalSessionId: null as string | null,
   activeFilePath: null as string | null,
-  pendingLineTarget: null as { worktreeId: string; path: string; line: number; matchText: string | null } | null,
+  pendingLineTarget: null as LineTarget | null,
   peekFile: null as PeekFileValue | null,
   backStack: {} as Record<string, PeekEntry[]>,
   forwardStack: {} as Record<string, PeekEntry[]>,
@@ -811,6 +891,7 @@ const initial = {
   filesLeftPaneWidthByWorktree: {} as Record<string, number>,
   filesLeftPaneHeightByWorktree: {} as Record<string, number>,
   pendingReferencesQuery: null as PendingReferencesQuery | null,
+  pendingTextSearch: null as PendingTextSearch | null,
   searchFocusSeq: {} as Record<string, number>,
   previewFontScale: 1,
   previewFontScaleByWorktree: {} as Record<string, number>,
@@ -1006,8 +1087,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         setActiveWorktree: (projectId, worktreeId, sessions) => {
           set((s) => {
             // Idempotency: if re-tapping the same worktree with an active session, no-op
+            // — EXCEPT that a global `activeFilePath` left behind by another
+            // context (e.g. a project/direct view opened since, with this
+            // worktree id still persisted as active) must not leak in: if it
+            // isn't one of THIS worktree's tabs, restore this worktree's own
+            // active tab instead (L7 — otherwise the preview shows "File not
+            // found" and the gutter poll 404s forever).
             if (worktreeId === s.activeWorktreeId && s.activeSessionId != null) {
-              return s;
+              return reconcileActiveFileForContext(s, worktreeId) ?? s;
             }
 
             // Compute default agent session: lastSessionByWorktree → main slot → first agent → null.
@@ -1315,7 +1402,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             const history = worktreeId ? recordHistoryEntry(s, worktreeId) : {};
             const tabs = s.openFileTabsByWorktree[worktreeId] ?? [];
             const existingIdx = tabs.indexOf(path);
-            const target = { worktreeId, path, line, matchText: matchText ?? null };
+            const target: LineTarget = { worktreeId, path, line, matchText: matchText ?? null, seq: nextJumpSeq() };
             if (existingIdx >= 0) {
               return {
                 ...history,
@@ -1355,11 +1442,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         pushJump: (next) =>
           set((s) => {
             const key = next.worktreeId || layoutKey(s) || "";
+            const column = next.column ?? null;
+            const endColumn = next.endColumn ?? null;
+            const seq = nextJumpSeq();
             const peekValue: PeekFileValue = {
               worktreeId: next.worktreeId,
               path: next.path,
               line: next.line,
               matchText: next.matchText,
+              column,
+              endColumn,
+              seq,
               source: next.source,
               ...(next.external ? { external: next.external } : {}),
             };
@@ -1376,11 +1469,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             if (!next.external && tabs.includes(next.path)) {
               const history = key ? recordHistoryEntry(s, key) : {};
               const existingIdx = tabs.indexOf(next.path);
-              const target = {
+              const target: LineTarget = {
                 worktreeId: next.worktreeId,
                 path: next.path,
                 line: next.line,
                 matchText: next.matchText ?? null,
+                column,
+                endColumn,
+                seq,
               };
               return {
                 ...history,
@@ -1411,7 +1507,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 activeFilePath: next.path,
                 activeFileTabIdxByWorktree: { ...s.activeFileTabIdxByWorktree, [next.worktreeId]: nextTabs.length - 1 },
                 lastFileByWorktree: { ...s.lastFileByWorktree, [next.worktreeId]: next.path },
-                pendingLineTarget: { worktreeId: next.worktreeId, path: next.path, line: next.line, matchText: next.matchText ?? null },
+                pendingLineTarget: {
+                  worktreeId: next.worktreeId,
+                  path: next.path,
+                  line: next.line,
+                  matchText: next.matchText ?? null,
+                  column,
+                  endColumn,
+                  seq,
+                },
                 peekFile: null,
               };
             }
@@ -1460,6 +1564,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   path: popped.path,
                   line: popped.line,
                   matchText: null,
+                  seq: nextJumpSeq(),
                 },
               });
             }
@@ -1505,6 +1610,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                   path: popped.path,
                   line: popped.line,
                   matchText: null,
+                  seq: nextJumpSeq(),
                 },
               });
             }
@@ -1598,6 +1704,17 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           set((s) => ({
             treeScopeByWorktree: { ...s.treeScopeByWorktree, [worktreeId]: scope },
           })),
+        closeFilesLeftPane: (worktreeId) =>
+          set((s) => {
+            const mode = s.filesLeftPaneMode[worktreeId] ?? "tree";
+            if (!isFilesLeftPaneOpen(s.fileTreeVisible, mode)) return {};
+            return withTransitionHint("files", {
+              fileTreeVisible: false,
+              ...(mode === "references"
+                ? { filesLeftPaneMode: { ...s.filesLeftPaneMode, [worktreeId]: "tree" } }
+                : {}),
+            });
+          }),
         setFilesLeftPaneMode: (worktreeId, mode) =>
           set((s) => ({
             filesLeftPaneMode: { ...s.filesLeftPaneMode, [worktreeId]: mode },
@@ -1612,10 +1729,76 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           })),
         setPendingReferencesQuery: (query) =>
           set({ pendingReferencesQuery: query }),
+        revealReferences: (layoutKey, query) =>
+          set((s) => {
+            const key = layoutKey || s.activeWorktreeId || s.activeDirectContextId;
+            const cur = key
+              ? (s.layoutByWorktree[key] ?? DEFAULT_WORKTREE_LAYOUT)
+              : DEFAULT_WORKTREE_LAYOUT;
+
+            const nextLayout: WorktreeLayout = {
+              ...cur,
+              toolPanelVisible: true,
+              toolPanelTab: "files",
+            };
+
+            if (cur.layoutMode === "workspace" && cur.scratchCanvas) {
+              const hasTile = cur.scratchCanvas.tiles.some(
+                (t) => t.kind === "tools" && (t.worktreeId ?? key) === key,
+              );
+              if (!hasTile && key) {
+                nextLayout.scratchCanvas = insertTileIntoCanvas(
+                  cur.scratchCanvas,
+                  "tools",
+                  undefined,
+                  key,
+                  key,
+                );
+              }
+            }
+
+            const nextLayoutMap = key
+              ? { ...s.layoutByWorktree, [key]: nextLayout }
+              : s.layoutByWorktree;
+
+            const nextFilesMode = key
+              ? { ...s.filesLeftPaneMode, [key]: "references" as FilesLeftPaneMode }
+              : s.filesLeftPaneMode;
+
+            const basePatch: Partial<WorkspaceState> = {
+              layoutByWorktree: nextLayoutMap,
+              // Reveal without flipping the persisted `fileTreeVisible`
+              // preference: ToolPanel shows the files left pane for
+              // references mode even when the file tree is hidden.
+              filesLeftPaneMode: nextFilesMode,
+              pendingReferencesQuery: query,
+              // The reveal is only useful if the tools pane is actually on
+              // screen — drop any pane fullscreen (terminal / agent) that
+              // would cover the references panel. A fullscreen tools pane
+              // already shows it (cmd+click comes from inside it), so keep it.
+              workspacePaneFullscreen:
+                s.workspacePaneFullscreen === "tools" ? "tools" : null,
+            };
+
+            if (cur.layoutMode !== "workspace" && !cur.toolPanelVisible) {
+              return withTransitionHint("split", basePatch);
+            }
+            return basePatch;
+          }),
         requestSearchFocus: (contextId) =>
           set((s) => ({
             searchFocusSeq: { ...s.searchFocusSeq, [contextId]: (s.searchFocusSeq[contextId] ?? 0) + 1 },
           })),
+        revealTextSearch: (contextId, text) =>
+          set((s) => ({
+            // Search mode (unlike references) needs the tree pane open — the
+            // caller may be a references panel revealed with the tree hidden.
+            ...(s.fileTreeVisible ? {} : withTransitionHint("files", { fileTreeVisible: true })),
+            filesLeftPaneMode: { ...s.filesLeftPaneMode, [contextId]: "search" },
+            pendingTextSearch: { contextId, text },
+            searchFocusSeq: { ...s.searchFocusSeq, [contextId]: (s.searchFocusSeq[contextId] ?? 0) + 1 },
+          })),
+        clearPendingTextSearch: () => set({ pendingTextSearch: null }),
         bumpPreviewFont: (delta) =>
           set((s) => ({
             previewFontScale: Math.min(1.5, Math.max(0.75, Math.round((s.previewFontScale + delta) * 100) / 100)),

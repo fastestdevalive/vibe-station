@@ -139,13 +139,13 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
         useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "search");
       });
       rerender(<FilesPanel api={api} worktreeId="wt-1" />);
-      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
+      expect(useWorkspaceStore.getState().peekFile).toMatchObject({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
 
       act(() => {
         useWorkspaceStore.getState().setFilesLeftPaneMode("wt-1", "tree");
       });
       rerender(<FilesPanel api={api} worktreeId="wt-1" />);
-      expect(useWorkspaceStore.getState().peekFile).toEqual({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
+      expect(useWorkspaceStore.getState().peekFile).toMatchObject({ worktreeId: "wt-1", path: "src/App.tsx", line: 42, matchText: null, source: "search" });
     });
   });
 
@@ -269,7 +269,7 @@ describe("FilesPanel (post-MasterDetailShell extraction)", () => {
       });
 
       expect(useWorkspaceStore.getState().peekFile).toBeNull();
-      expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+      expect(useWorkspaceStore.getState().pendingLineTarget).toMatchObject({
         worktreeId: "wt-1",
         path: "src/main.tsx",
         line: 12,

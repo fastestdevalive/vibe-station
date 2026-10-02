@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { LspStatusRow } from "./LspStatusRow";
 import { useWorkspaceStore } from "@/hooks/useStore";
@@ -71,6 +71,15 @@ function mockStatus(status: LspStatus, language: string | null): LspStatusRespon
 
 function mockLangStatus(status: LspStatus, language: string): LspLanguageStatus {
   return { status, language, ...presentationFor(status, language) };
+}
+
+/** Wait for the trigger, then flush pending passive effects before clicking:
+ *  the row's `setOpen(false)` on `[path, status]` change can otherwise land
+ *  after the click under a loaded runner and close the popup again (flake). */
+async function openSetupNeededPopup() {
+  const trigger = await screen.findByRole("button", { name: /Setup needed/ });
+  await act(async () => {});
+  fireEvent.click(trigger);
 }
 
 describe("LspStatusRow", () => {
@@ -204,5 +213,94 @@ describe("LspStatusRow", () => {
 
     resolveStatuses([mockLangStatus("ready", "rust")]);
     await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+  });
+
+  describe("latched failure (missing dependency)", () => {
+    const command = 'npm i -D "typescript@<7"';
+    const failure: lspApi.LspFailure = {
+      kind: "missing_dependency",
+      summary: "TypeScript isn't installed for this project — code navigation needs it.",
+      message: "Request initialize failed with message: Could not find a valid TypeScript installation.",
+      remediation: [
+        { kind: "copy_command", label: "Copy install command", command },
+        { kind: "retry", label: "Retry" },
+      ],
+      autoRetry: true,
+    };
+    const failed: LspStatusResponse = {
+      status: "error",
+      language: "typescript",
+      label: "Setup needed",
+      displayName: "TypeScript / JavaScript",
+      severity: "warn",
+      detail: failure.summary,
+      action: "retry",
+      actionLabel: "Retry",
+      failure,
+    };
+
+    beforeEach(() => {
+      useWorkspaceStore.setState({ activeFilePath: "src/a.ts" });
+      vi.spyOn(lspApi, "getLspStatuses").mockResolvedValue([
+        { ...failed, language: "typescript" } as LspLanguageStatus,
+      ]);
+    });
+
+    it("renders Setup needed with a yellow dot and the summary as tooltip", async () => {
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failed);
+      const { container } = render(<LspStatusRow api={{}} worktreeId="wt-1" />);
+      const trigger = await screen.findByRole("button", { name: /TypeScript \/ JavaScript LSP: Setup needed/ });
+      expect(trigger).toHaveAttribute("title", failure.summary);
+      expect(container.querySelector(".lsp-status-row__trigger .lsp-status-row__dot--yellow")).toBeInTheDocument();
+    });
+
+    it("popup: detail, inline command, Copy/Retry in order, Server output disclosure — no duplicate action button", async () => {
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failed);
+      render(<LspStatusRow api={{}} worktreeId="wt-1" />);
+      await openSetupNeededPopup();
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent(failure.summary);
+      expect(dialog.querySelector("code")).toHaveTextContent(command);
+      const actions = Array.from(dialog.querySelectorAll(".lsp-status-row__popup-actions button")).map(
+        (b) => b.textContent,
+      );
+      expect(actions).toEqual(["Copy install command", "Retry"]);
+      expect(screen.getByText("Server output")).toBeInTheDocument();
+      expect(dialog.querySelector("pre")).toHaveTextContent("Could not find a valid TypeScript installation");
+      await waitFor(() => expect(dialog).toHaveTextContent("TypeScript / JavaScript: Setup needed"));
+    });
+
+    it("Copy install command writes the daemon's command and reads Copied", async () => {
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failed);
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      render(<LspStatusRow api={{}} worktreeId="wt-1" />);
+      await openSetupNeededPopup();
+      fireEvent.click(await screen.findByRole("button", { name: "Copy install command" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(command));
+      expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+    });
+
+    it("Retry calls the restart route for the server's language", async () => {
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failed);
+      const restart = vi.spyOn(lspApi, "restartLsp").mockResolvedValue({ ...failed, failure: null });
+      render(<LspStatusRow api={{}} worktreeId="wt-1" />);
+      await openSetupNeededPopup();
+      fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(restart).toHaveBeenCalledWith({}, "worktree", "wt-1", "typescript"));
+    });
+
+    it("an info-level note stays green and appears only in tooltip/popup", async () => {
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue({
+        ...mockStatus("ready", "typescript"),
+        degraded: { message: "Using TypeScript 5.9.3 (global) — workspace TypeScript 7.0.2 has no tsserver.", level: "info" },
+      });
+      const { container } = render(<LspStatusRow api={{}} worktreeId="wt-1" />);
+      const trigger = await screen.findByRole("button", { name: /LSP: Ready/ });
+      expect(trigger.getAttribute("title")).toContain("Using TypeScript 5.9.3 (global)");
+      expect(container.querySelector(".lsp-status-row__trigger .lsp-status-row__dot--green")).toBeInTheDocument();
+      fireEvent.click(trigger);
+      expect(await screen.findByRole("dialog")).toHaveTextContent("Using TypeScript 5.9.3 (global)");
+    });
   });
 });

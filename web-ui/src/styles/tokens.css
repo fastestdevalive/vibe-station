@@ -76,6 +76,19 @@
   --fg-secondary: #a3a3a3;
   --fg-muted: #6b6b6b;
   --border-default: #262626;
+  --ref-match-bg: rgba(234, 179, 8, 0.3);
+
+  --kind-fn: #a78bfa;
+  --kind-method: #60a5fa;
+  --kind-class: #4ade80;
+  --kind-struct: #2dd4bf;
+  --kind-enum: #fbbf24;
+  --kind-iface: #38bdf8;
+  --kind-var: #94a3b8;
+  --kind-const: #facc15;
+  --kind-prop: #c084fc;
+  --kind-mod: #f472b6;
+  --kind-neutral: #a3a3a3;
 }
 
 [data-theme="vibestation-dark"] {
@@ -140,6 +153,19 @@
   --pr-merged: #8250df;
   --pr-draft: #8a8a8a;
   --pr-closed: #6b6b6b;
+  --ref-match-bg: rgba(234, 179, 8, 0.3);
+
+  --kind-fn: #a78bfa;
+  --kind-method: #60a5fa;
+  --kind-class: #4ade80;
+  --kind-struct: #2dd4bf;
+  --kind-enum: #fbbf24;
+  --kind-iface: #38bdf8;
+  --kind-var: #94a3b8;
+  --kind-const: #facc15;
+  --kind-prop: #c084fc;
+  --kind-mod: #f472b6;
+  --kind-neutral: #a3a3a3;
 
   /* Theme-invariant Markdown defaults (matching the generated themes.generated.css
      set — color props reference this block's own chrome tokens). */
@@ -224,6 +250,19 @@
   --pr-merged: #6e40c9;
   --pr-draft: #737373;
   --pr-closed: #737373;
+  --ref-match-bg: rgba(202, 138, 4, 0.25);
+
+  --kind-fn: #7c3aed;
+  --kind-method: #2563eb;
+  --kind-class: #16a34a;
+  --kind-struct: #0d9488;
+  --kind-enum: #d97706;
+  --kind-iface: #0284c7;
+  --kind-var: #64748b;
+  --kind-const: #ca8a04;
+  --kind-prop: #9333ea;
+  --kind-mod: #db2777;
+  --kind-neutral: #737373;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
