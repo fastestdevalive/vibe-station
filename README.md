@@ -329,7 +329,7 @@ Turn on **Settings → Remote Access**, then scan the QR code with your phone. T
 
 Disabling the tunnel invalidates only tunnel-minted codes; a local QR shown at the same time keeps working.
 
-> The daemon binds `127.0.0.1` by default. Local-network mode needs it to listen on your LAN/tailnet address: start it with `VST_ALLOW_NETWORK=1` (or set `"allowNetworkAccess": true` in `~/.vibe-station/config.json`), or forward the port yourself (e.g. `tailscale serve`) — the Cloudflare tunnel does this for you.
+> The daemon binds `127.0.0.1` by default. Toggle network access live in **Settings → Remote access → Same network** (no restart needed — it persists `"allowNetworkAccess"` in `~/.vibe-station/config.json`). To set the initial state at boot instead, start it with `VST_ALLOW_NETWORK=1`. Or forward the port yourself (e.g. `tailscale serve`) — the Cloudflare tunnel does this for you.
 
 <p align="center">
   <img alt="Mobile dashboard — stacked working / idle / finished list" src="docs/screenshots/02-dashboard-mobile.png" width="320" />

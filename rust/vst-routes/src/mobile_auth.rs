@@ -4,6 +4,7 @@
 //! Includes in-memory 20 attempts/min rate limiter and 60s stale-code background janitor.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -274,7 +275,7 @@ pub struct MobileAuthRoutes {
     code_store: OneTimeCodeStore,
     port: u16,
     no_auth: bool,
-    network_access: bool,
+    network_access: Arc<AtomicBool>,
     store: Option<StoreHandle>,
 }
 
@@ -290,15 +291,24 @@ impl MobileAuthRoutes {
             code_store,
             port,
             no_auth,
-            network_access: true,
+            network_access: Arc::new(AtomicBool::new(true)),
             store: None,
         }
     }
 
     /// Whether the daemon listens beyond loopback. Defaults to true so callers
-    /// that don't care (tests) keep the old behavior.
+    /// that don't care (tests) keep the old behavior. Wrapper creating a fresh
+    /// `Arc` from a plain bool.
     pub fn with_network_access(mut self, on: bool) -> Self {
-        self.network_access = on;
+        self.network_access = Arc::new(AtomicBool::new(on));
+        self
+    }
+
+    /// Share the daemon's LIVE network flag (a single `Arc<AtomicBool>` owned by
+    /// `NetworkControl`), so `local_qr` reads the current toggle, not a startup
+    /// constant.
+    pub fn with_network_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.network_access = flag;
         self
     }
 
@@ -410,7 +420,7 @@ impl MobileAuthRoutes {
         if is_remote {
             return Err(MobileAuthRouteError::TunnelOnlyBlocked);
         }
-        if !self.network_access {
+        if !self.network_access.load(Ordering::SeqCst) {
             return Err(MobileAuthRouteError::NetworkAccessDisabled);
         }
 

@@ -4,7 +4,7 @@
 //! Ports `daemon/src/server.ts` and `daemon/src/ws/server.ts`.
 
 use std::future::Future;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
@@ -22,7 +22,7 @@ use axum::{Json, Router};
 use futures::{SinkExt, StreamExt};
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use vst_agents::json_agent_registry::JsonAgentRegistry;
@@ -116,8 +116,9 @@ pub struct BuildServerOptions {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
-    /// Daemon listens beyond loopback (`VST_ALLOW_NETWORK`); gates the LAN QR flow.
-    pub network_access: bool,
+    /// Live network-access state: gates the LAN QR flow and (Phase 3) the
+    /// peer-gate middleware + WebSocket cut-off when a disable lands.
+    pub network: crate::network::NetworkControl,
     /// Notified by `POST /api/daemon/stop` to trigger the same graceful
     /// shutdown sequence a SIGINT/SIGTERM does (see `run.rs`'s signal task).
     pub stop_requested: Arc<tokio::sync::Notify>,
@@ -138,6 +139,8 @@ pub struct AppState {
     pub port: u16,
     pub auth_state: Option<AuthState>,
     pub no_auth: bool,
+    /// Live network-access state (see `BuildServerOptions::network`).
+    pub network: crate::network::NetworkControl,
     pub origin_policy: OriginPolicy,
     /// See `BuildServerOptions::stop_requested` doc comment.
     pub stop_requested: Arc<tokio::sync::Notify>,
@@ -463,7 +466,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         opts.port,
         opts.no_auth,
     )
-    .with_network_access(opts.network_access)
+    .with_network_flag(opts.network.flag())
     .with_store(opts.store.clone());
 
     let tailscale_routes = TailscaleRoutes::new(code_store.clone(), opts.port);
@@ -514,6 +517,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         port: opts.port,
         auth_state: opts.auth_state,
         no_auth: opts.no_auth,
+        network: opts.network,
         origin_policy: OriginPolicy::from_env(),
         stop_requested: opts.stop_requested,
         dist_path: opts
@@ -839,6 +843,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/auth/tunnel/disable", post(handle_auth_tunnel_disable))
         .route("/auth/tunnel/status", get(handle_auth_tunnel_status))
         .route("/auth/local-qr", post(handle_auth_local_qr))
+        .route(
+            "/auth/network",
+            get(handle_auth_network_get).put(handle_auth_network_put),
+        )
         .route("/auth/mobile-qr", post(handle_auth_mobile_qr))
         .route("/auth/continue/mint", post(handle_auth_continue_mint))
         // Tailscale
@@ -869,6 +877,12 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
             auth_middleware,
         ))
         .layer(cors)
+        // Outermost: refuse non-loopback peers while network access is off
+        // (Decision 2) — covers keep-alive HTTP that survives a listener swap.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            network_peer_gate,
+        ))
         .with_state(state)
 }
 
@@ -1009,6 +1023,30 @@ pub fn authenticate(headers: &HeaderMap, query_token: Option<&str>) -> Option<St
     None
 }
 
+/// Outermost layer: while network access is off, any request from a known
+/// non-loopback peer is refused with 403. Aborting the accept loop on a disable
+/// doesn't close already-accepted sockets, so this is what actually cuts
+/// lingering LAN HTTP keep-alive connections (Decision 2). A missing
+/// `ConnectInfo` means loopback/test — allow, matching `is_remote_request`.
+async fn network_peer_gate(
+    State(state): State<AppState>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    if crate::network::should_cut(peer, state.network.is_enabled(), state.no_auth) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Network access is off." })),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
 async fn auth_middleware(
     State(state): State<AppState>,
     req: Request,
@@ -1046,6 +1084,22 @@ async fn auth_middleware(
     let headers = req.headers().clone();
 
     if state.no_auth || state.auth_state.is_none() {
+        // No-auth sandbox: same host-only origin test as the WebSocket (any port
+        // on loopback/LAN/tailnet/tunnel hosts, never an arbitrary website).
+        if state.no_auth {
+            if let Some(origin_val) = headers.get(header::ORIGIN) {
+                let allowed = origin_val
+                    .to_str()
+                    .is_ok_and(|o| state.origin_policy.origin_host_allowed(o));
+                if !allowed {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(serde_json::json!({ "error": "Forbidden." })),
+                    )
+                        .into_response();
+                }
+            }
+        }
         return next.run(req).await;
     }
 
@@ -1152,6 +1206,7 @@ async fn handle_ws_upgrade(
     State(state): State<AppState>,
     Query(query): Query<WsQuery>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Response {
     // Origin allowlist check: reject hostile Origin before upgrade (P3).
     // No-auth sandbox builds (Vite rewrites Host, no token to fall back on) get
@@ -1210,6 +1265,13 @@ async fn handle_ws_upgrade(
     let dispatch_ctx = state.dispatch_ctx.clone();
     let open_routes = state.open_routes.clone();
 
+    // The accepted socket's peer address (None = loopback/test) and the live
+    // network flag, so `handle_socket` can close non-loopback peers the moment
+    // a disable lands (Decision 2 — aborting the accept loop doesn't close
+    // already-accepted WebSockets).
+    let peer = connect_info.map(|ci| ci.0.ip());
+    let network_rx = state.network.subscribe();
+
     ws.on_upgrade(move |socket| {
         handle_socket(
             socket,
@@ -1220,6 +1282,9 @@ async fn handle_ws_upgrade(
             token_issued_at,
             token_expires_at,
             auth_rejected,
+            peer,
+            network_rx,
+            no_auth,
         )
     })
 }
@@ -1325,6 +1390,9 @@ async fn handle_socket(
     token_issued_at: Option<i64>,
     token_expires_at: Option<i64>,
     auth_rejected: bool,
+    peer: Option<IpAddr>,
+    mut network_rx: watch::Receiver<bool>,
+    no_auth: bool,
 ) {
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsCommand>();
@@ -1355,6 +1423,34 @@ async fn handle_socket(
     if auth_rejected {
         close_auth_expired(&conn);
     }
+
+    // While network access is off, a non-loopback peer that still reaches the
+    // upgrade handler (e.g. a socket accepted before a disable landed) is cut
+    // at connect with 4403 — it must never be handed a live stream. Loopback
+    // (and no-auth sandboxes) are never cut (`should_cut`).
+    if crate::network::should_cut(peer, *network_rx.borrow(), no_auth) {
+        conn.sink().close(4403, "network access disabled");
+    }
+
+    // Watcher: when a disable lands after this connection was established, close
+    // any non-loopback peer's socket with 4403 so the client stops reconnecting
+    // (web-ui maps 4403 to offline rather than scheduling a reconnect). Aborted
+    // in teardown so it can't outlive the connection.
+    let net_watcher_conn = conn.clone();
+    let net_watcher = tokio::spawn(async move {
+        // Loopback (and no-auth) connections are never cut — nothing to watch.
+        if no_auth || peer.map_or(true, |ip| ip.is_loopback()) {
+            return;
+        }
+        while network_rx.changed().await.is_ok() {
+            if crate::network::should_cut(peer, *network_rx.borrow(), no_auth) {
+                net_watcher_conn
+                    .sink()
+                    .close(4403, "network access disabled");
+                break;
+            }
+        }
+    });
 
     // Replay pending navigate event if any
     if let Some(project_id) = open_routes.replay_navigate() {
@@ -1560,6 +1656,7 @@ async fn handle_socket(
     release_connection_tree_watches(&conn, &dispatch_ctx.watchers, &dispatch_ctx.file_search).await;
     conn.cleanup().await;
     ready_state.store(3, Ordering::SeqCst);
+    net_watcher.abort();
     let _ = forwarder_handle.await;
 }
 
@@ -4014,6 +4111,86 @@ async fn handle_auth_mobile_qr(
         .await
         .map(Json)
         .map_err(mobile_auth_err_to_response)
+}
+
+#[derive(Deserialize)]
+struct NetworkBody {
+    enabled: bool,
+}
+
+/// `GET /api/auth/network` — report the live network-access flag. Local-only
+/// (Decision 3): a phone paired via tunnel/QR must not learn or widen exposure,
+/// so a remote caller is refused with the same 403 the tunnel controls use.
+async fn handle_auth_network_get(
+    State(state): State<AppState>,
+    req: Request,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if is_remote_request(&req) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Forbidden." })),
+        ));
+    }
+    Ok(Json(
+        serde_json::json!({ "enabled": state.network.is_enabled() }),
+    ))
+}
+
+/// `PUT /api/auth/network` — flip network access live. Local-only; refuses a
+/// remote caller (a tunnel/QR phone must not widen exposure). In `no_auth`
+/// builds the flag is fixed on (Risks #3 — the Docker sandbox port-forward
+/// must never be killable), so a toggle is refused with 409. On a bind/persist
+/// failure the supervisor rolls the listener back and `NetworkControl::set`
+/// leaves the flag unchanged; we report 500 with the message.
+async fn handle_auth_network_put(
+    State(state): State<AppState>,
+    req: Request,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    if is_remote_request(&req) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Forbidden." })),
+        ));
+    }
+    if state.no_auth {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "Network access is fixed in no-auth mode." })),
+        ));
+    }
+    // Parse the `{ enabled: bool }` body. `Request` (needed for the remote
+    // check above) can't share the extractor list with `Json`, so read the
+    // body here; a missing/malformed body is a 400.
+    let (_, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(b) => b,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid body" })),
+            ))
+        }
+    };
+    let body: NetworkBody = match serde_json::from_slice(&bytes) {
+        Ok(b) => b,
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid body" })),
+            ))
+        }
+    };
+    state
+        .network
+        .set(body.enabled)
+        .await
+        .map(|_| Json(serde_json::json!({ "enabled": state.network.is_enabled() })))
+        .map_err(|msg| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": msg })),
+            )
+        })
 }
 
 #[derive(Deserialize)]

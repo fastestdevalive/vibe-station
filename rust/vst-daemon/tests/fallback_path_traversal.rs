@@ -21,6 +21,7 @@ use vst_routes::auth::AuthState;
 use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
 
+use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
@@ -30,7 +31,7 @@ fn make_opts(tmp: &Path, dist_path: std::path::PathBuf) -> BuildServerOptions {
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state: Some(AuthState::new("super-secret-token", 0)),
         no_auth: false,

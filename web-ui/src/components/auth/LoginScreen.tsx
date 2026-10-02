@@ -13,7 +13,7 @@ export function LoginScreen(_props: LoginScreenProps) {
         <div className="login-card__brand">Vibe Station</div>
         <div className="login-card__divider" />
         <p style={{ textAlign: "center", color: "var(--fg-muted)", fontSize: "var(--font-size-sm)", lineHeight: 1.5 }}>
-          Open the desktop app → <strong>Settings</strong> → <strong>Remote Access</strong> → <strong>Show QR</strong> and scan it with your phone.
+          Open the desktop app → <strong>Settings</strong> → <strong>Remote Access</strong> → <strong>Show QR</strong> and scan it with your phone (turn on <strong>Allow other devices on my network</strong> first if you want to pair over your local network).
         </p>
       </div>
     </div>

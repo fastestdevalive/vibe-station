@@ -34,6 +34,7 @@ import type {
   GutterResult,
   HealthResponse,
   Mode,
+  NetworkAccess,
   Project,
   ProjectBranchesResponse,
   SearchResult,
@@ -112,7 +113,10 @@ export function createMockApi(seed: MockSeed = {}) {
     mockSettings.themeId = seed.settings.themeId;
   }
   /** In-memory tunnel status (seedable; default disabled, mirroring the daemon stub). */
-  let tunnelState: TunnelState = seed.tunnel ?? { enabled: false, tunnelUrl: null };
+  const tunnelState: TunnelState = seed.tunnel ?? { enabled: false, tunnelUrl: null };
+
+  /** In-memory network access flag (default disabled). */
+  let mockNetworkAccess = false;
 
   /** In-memory OOBE onboarding state (Phase 3) — mirrored within a single mock
    *  instance so `getOobeState` reflects prior `confirmOobeStep1`/`completeOobe`. */
@@ -2021,6 +2025,8 @@ export function createMockApi(seed: MockSeed = {}) {
     async disableTunnel(): Promise<void> {},
     async getMobileQr(): Promise<MobileQrResponse> { return { qrUrl: "https://mock.trycloudflare.com/mobile-auth?code=mock", expiresAt: Date.now() + 30_000 }; },
     async getLocalQr(): Promise<LocalQrResponse> { return { qrUrl: "http://192.168.1.42:7421/mobile-auth?code=mock-local", expiresAt: Date.now() + 30_000, connectionType: "lan" }; },
+    async getNetworkAccess(): Promise<NetworkAccess> { return { enabled: mockNetworkAccess }; },
+    async setNetworkAccess(enabled: boolean): Promise<NetworkAccess> { mockNetworkAccess = enabled; return { enabled }; },
     async revokeAllBrowserSessions(): Promise<{ ok: boolean; browserEpoch: number }> { return { ok: true, browserEpoch: 0 }; },
     async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string; currentTokenId?: string }> { return { sessions: [], isDesktop: true, currentScope: "tauri", currentTokenId: undefined }; },
     async revokeAuthSession(_tokenId: string): Promise<void> {},

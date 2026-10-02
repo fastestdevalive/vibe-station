@@ -6,7 +6,9 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode};
+use std::net::SocketAddr;
 use tempfile::tempdir;
 use tower::ServiceExt;
 
@@ -19,6 +21,7 @@ use vst_store::StoreHandle;
 use vst_types::domain::TokenScope;
 use vst_types::events::Broadcaster;
 
+use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(
@@ -41,7 +44,7 @@ fn make_opts_with_dist(
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state,
         no_auth,
@@ -693,4 +696,430 @@ async fn cors_preflight_allows_csrf_header_only_for_trusted_origins() {
         .await
         .unwrap();
     assert!(bad.headers().get("access-control-allow-origin").is_none());
+}
+
+// ── Network peer gate (Phase 1) ─────────────────────────────────────────────
+
+/// Build a GET request carrying a `ConnectInfo` peer extension, which is how the
+/// peer-gate middleware learns the source IP (no `cf-connecting-ip` header).
+fn peer_get(peer: SocketAddr) -> Request<axum::body::Body> {
+    Request::builder()
+        .uri("/api/sessions")
+        .method("GET")
+        .extension(ConnectInfo(peer))
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn network_gate_refuses_lan_peer_when_disabled() {
+    let tmp = tempdir().unwrap();
+    // `fixed(false)` = network access off, auth on.
+    let router = build_app(make_opts(tmp.path(), Some(AuthState::new("s", 0)), false));
+
+    let resp = router
+        .oneshot(peer_get(SocketAddr::from(([192, 168, 1, 9], 5000))))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn network_gate_allows_lan_peer_when_enabled() {
+    let tmp = tempdir().unwrap();
+    // `fixed(true)` = network access on — LAN peer must NOT be cut.
+    let mut opts = make_opts(tmp.path(), Some(AuthState::new("s", 0)), false);
+    opts.network = NetworkControl::fixed(true);
+    let router = build_app(opts);
+
+    let resp = router
+        .oneshot(peer_get(SocketAddr::from(([192, 168, 1, 9], 5000))))
+        .await
+        .unwrap();
+
+    // Not the peer gate's 403. (Auth would 401 the unauthenticated request.)
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn network_gate_never_cuts_loopback_or_absent_peer() {
+    let tmp = tempdir().unwrap();
+    let router = build_app(make_opts(tmp.path(), Some(AuthState::new("s", 0)), false));
+
+    // Loopback peer (explicit ConnectInfo) — not cut.
+    let loopback = router
+        .clone()
+        .oneshot(peer_get(SocketAddr::from(([127, 0, 0, 1], 5000))))
+        .await
+        .unwrap();
+    assert_ne!(loopback.status(), StatusCode::FORBIDDEN);
+
+    // No ConnectInfo extension (as in `ws_auth_gate.rs`'s tests) — never cut.
+    let absent = router.oneshot(remote_get("/api/sessions")).await.unwrap();
+    assert_ne!(absent.status(), StatusCode::FORBIDDEN);
+}
+
+// ── Network toggle routes (Phase 3) ─────────────────────────────────────────
+
+/// A loopback PUT to `/api/auth/network` carrying `{ enabled }`. No
+/// `cf-connecting-ip` and no remote origin, so `is_remote_request` is false.
+fn network_put(enabled: bool) -> Request<axum::body::Body> {
+    Request::builder()
+        .uri("/api/auth/network")
+        .method("PUT")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::json!({ "enabled": enabled }).to_string(),
+        ))
+        .unwrap()
+}
+
+/// A loopback GET to `/api/auth/network` with a bearer token.
+fn network_get_bearer(token: &str) -> Request<axum::body::Body> {
+    Request::builder()
+        .uri("/api/auth/network")
+        .method("GET")
+        .header("authorization", format!("Bearer {token}"))
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn network_put_with_cli_token_flips_flag_and_get_reports_it() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // `fixed(false)` → network off; a loopback CLI PUT must flip it live.
+    let put_resp = router
+        .clone()
+        .oneshot(network_put_bearer(&token, true))
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(put_resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(val["enabled"], serde_json::json!(true));
+
+    let get_resp = router.oneshot(network_get_bearer(&token)).await.unwrap();
+    assert_eq!(get_resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(get_resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(val["enabled"], serde_json::json!(true));
+}
+
+/// A loopback PUT with a bearer token.
+fn network_put_bearer(token: &str, enabled: bool) -> Request<axum::body::Body> {
+    let mut req = network_put(enabled);
+    req.headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    req
+}
+
+#[tokio::test]
+async fn network_put_with_cookie_without_csrf_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Browser, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // A cookie-authenticated write without `X-VST-CSRF` must be refused.
+    let mut req = network_put(true);
+    req.headers_mut()
+        .insert("host", "localhost:7421".parse().unwrap());
+    req.headers_mut()
+        .insert("origin", "http://localhost:7421".parse().unwrap());
+    req.headers_mut()
+        .insert("cookie", format!("vst-session={token}").parse().unwrap());
+    let resp = router.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn network_routes_refuse_a_remote_caller() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // GET from a `cf-connecting-ip` (tunnel/phone) caller → 403.
+    let get_resp = router
+        .clone()
+        .oneshot(remote_get_with_auth("/api/auth/network", &token))
+        .await
+        .unwrap();
+    assert_eq!(get_resp.status(), StatusCode::FORBIDDEN);
+
+    // PUT from a `cf-connecting-ip` caller → 403.
+    let mut req = network_put(true);
+    req.headers_mut()
+        .insert("cf-connecting-ip", "1.2.3.4".parse().unwrap());
+    req.headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    let put_resp = router.oneshot(req).await.unwrap();
+    assert_eq!(put_resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn network_put_is_refused_in_no_auth_build() {
+    let tmp = tempdir().unwrap();
+    // no_auth build — the sandbox port-forward must never be killable.
+    let router = build_app(make_opts(tmp.path(), None, true));
+
+    let resp = router.oneshot(network_put(true)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+// ── Matrix coverage (docs/AUTH.md "Origin / CORS decision matrix") ────────────
+
+fn bearer_request(
+    method: &str,
+    token: &str,
+    host: &str,
+    origin: Option<&str>,
+) -> Request<axum::body::Body> {
+    let mut b = Request::builder()
+        .uri("/api/sessions")
+        .method(method)
+        .header("host", host)
+        .header("authorization", format!("Bearer {token}"));
+    if let Some(o) = origin {
+        b = b.header("origin", o);
+    }
+    b.body(axum::body::Body::empty()).unwrap()
+}
+
+fn cli_router(tmp: &std::path::Path) -> (axum::Router, String) {
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Cli, &auth_state, None);
+    (build_app(make_opts(tmp, Some(auth_state), false)), token)
+}
+
+#[tokio::test]
+async fn row1_127_host_with_own_origin_is_allowed() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let resp = router
+        .oneshot(bearer_request(
+            "GET",
+            &token,
+            "127.0.0.1:7421",
+            Some("http://127.0.0.1:7421"),
+        ))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn row3_localhost_origin_against_127_host_is_forbidden() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let resp = router
+        .oneshot(bearer_request(
+            "GET",
+            &token,
+            "127.0.0.1:7421",
+            Some("http://localhost:7421"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn row6_zero_addr_write_forbidden_but_originless_get_reaches_auth() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let post = router
+        .clone()
+        .oneshot(bearer_request(
+            "POST",
+            &token,
+            "0.0.0.0:7421",
+            Some("http://0.0.0.0:7421"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(post.status(), StatusCode::FORBIDDEN);
+    let get = router
+        .oneshot(bearer_request("GET", &token, "0.0.0.0:7421", None))
+        .await
+        .unwrap();
+    assert_ne!(get.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn row7_lan_same_origin_allowed_when_network_on_and_cut_when_off() {
+    let peer: SocketAddr = "192.168.1.5:50000".parse().unwrap();
+    for (on, expect_forbidden) in [(true, false), (false, true)] {
+        let tmp = tempdir().unwrap();
+        let auth_state = AuthState::new("super-secret-token", 0);
+        let token = mint_token(TokenScope::Browser, &auth_state, None);
+        let mut opts = make_opts(tmp.path(), Some(auth_state), false);
+        opts.network = vst_daemon::network::NetworkControl::fixed(on);
+        let router = build_app(opts);
+        let req = Request::builder()
+            .uri("/api/sessions")
+            .method("POST")
+            .header("host", "192.168.1.5:7421")
+            .header("origin", "http://192.168.1.5:7421")
+            .header("cookie", format!("vst-session={token}"))
+            .header("x-vst-csrf", "1")
+            .extension(ConnectInfo(peer))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status() == StatusCode::FORBIDDEN, expect_forbidden);
+    }
+}
+
+#[tokio::test]
+async fn rows8_9_tunnel_and_tailscale_hosts_via_loopback_pass_while_network_off() {
+    let loopback: SocketAddr = "127.0.0.1:50000".parse().unwrap();
+    for host in ["abc.trycloudflare.com", "box.tail1.ts.net"] {
+        let tmp = tempdir().unwrap();
+        let auth_state = AuthState::new("super-secret-token", 0);
+        let token = mint_token(TokenScope::Browser, &auth_state, None);
+        let mut opts = make_opts(tmp.path(), Some(auth_state), false);
+        opts.network = vst_daemon::network::NetworkControl::fixed(false);
+        let router = build_app(opts);
+        let req = Request::builder()
+            .uri("/api/sessions")
+            .method("POST")
+            .header("host", host)
+            .header("origin", format!("https://{host}"))
+            .header("cf-connecting-ip", "1.2.3.4")
+            .header("cookie", format!("vst-session={token}"))
+            .header("x-vst-csrf", "1")
+            .extension(ConnectInfo(loopback))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_ne!(resp.status(), StatusCode::FORBIDDEN, "{host}");
+    }
+}
+
+#[tokio::test]
+async fn row10_foreign_origin_forbidden_even_with_bearer() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let resp = router
+        .oneshot(bearer_request(
+            "POST",
+            &token,
+            "localhost:7421",
+            Some("https://evil.com"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn row11_rebinding_host_forbidden_with_origin_and_unauthenticated_without() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let post = router
+        .clone()
+        .oneshot(bearer_request(
+            "POST",
+            &token,
+            "evil.com:7421",
+            Some("http://evil.com:7421"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(post.status(), StatusCode::FORBIDDEN);
+    let get = Request::builder()
+        .uri("/api/sessions")
+        .method("GET")
+        .header("host", "evil.com:7421")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        router.oneshot(get).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn row12_custom_domain_origin_forbidden() {
+    let tmp = tempdir().unwrap();
+    let (router, token) = cli_router(tmp.path());
+    let resp = router
+        .oneshot(bearer_request(
+            "POST",
+            &token,
+            "my.example.com",
+            Some("https://my.example.com"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn row14_cross_site_cookie_forbidden_but_bearer_cross_site_allowed() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let browser = mint_token(TokenScope::Browser, &auth_state, None);
+    let cli = mint_token(TokenScope::Cli, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    let mut cookie = cookie_request("GET", &browser, None, false);
+    cookie
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    assert_eq!(
+        router.clone().oneshot(cookie).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let mut bearer = bearer_request("GET", &cli, "localhost:7421", None);
+    bearer
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    assert_ne!(
+        router.oneshot(bearer).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn no_auth_rest_refuses_foreign_websites_but_not_known_hosts() {
+    let tmp = tempdir().unwrap();
+    let router = build_app(make_opts(tmp.path(), None, true));
+    let post = |origin: &str| {
+        Request::builder()
+            .uri("/api/sessions")
+            .method("POST")
+            .header("origin", origin)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        router
+            .clone()
+            .oneshot(post("https://evil.com"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_ne!(
+        router
+            .oneshot(post("http://localhost:5174"))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
 }

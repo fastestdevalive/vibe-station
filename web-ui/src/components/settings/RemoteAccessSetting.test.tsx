@@ -216,4 +216,42 @@ describe("RemoteAccessSetting", () => {
     await user.click(refresh);
     await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(callsBefore));
   });
+
+  // ── Same network card ─────────────────────────────────────────────────────────
+
+  it("card is blurred when getNetworkAccess returns enabled:false — enable button in overlay", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    vi.spyOn(api, "getNetworkAccess").mockResolvedValue({ enabled: false });
+    render(<RemoteAccessSetting api={api} />);
+
+    const button = await screen.findByRole("button", { name: "Allow other devices on my network" });
+    expect(button).toBeInTheDocument();
+    expect(screen.queryByText("Turn off")).not.toBeInTheDocument();
+    expect(screen.queryByText("Only changeable from this computer")).not.toBeInTheDocument();
+  });
+
+  it("clicking the enable button then confirming calls setNetworkAccess(true)", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    vi.spyOn(api, "getNetworkAccess").mockResolvedValue({ enabled: false });
+    const setSpy = vi.spyOn(api, "setNetworkAccess").mockResolvedValue({ enabled: true });
+    const user = userEvent.setup({ delay: null });
+    render(<RemoteAccessSetting api={api} />);
+
+    await user.click(await screen.findByRole("button", { name: "Allow other devices on my network" }));
+    expect(await screen.findByText("Allow network access?")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(setSpy).toHaveBeenCalledWith(true));
+  });
+
+  it("a 403 from getNetworkAccess renders 'Only changeable from this computer'", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
+    vi.spyOn(api, "getNetworkAccess").mockRejectedValue(new ApiError("Forbidden.", 403));
+    render(<RemoteAccessSetting api={api} />);
+
+    expect(await screen.findByText("Only changeable from this computer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allow other devices on my network" })).not.toBeInTheDocument();
+  });
 });
