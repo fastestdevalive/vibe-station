@@ -38,7 +38,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -276,6 +276,8 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+pub const DEFAULT_HANDOFF_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// Runtime handles the route handlers need.
 pub struct SessionRoutes {
     pub store: StoreHandle,
@@ -307,6 +309,8 @@ pub struct SessionRoutes {
     pub attachment_registry: AttachmentRegistry,
     /// Live model catalog shared with `ModeRoutes` (validates `PATCH …/model`).
     pub model_catalog: crate::model_catalog::ModelCatalog,
+    /// Bounded timeout for a handoff turn before giving up (default 120s).
+    pub handoff_timeout: Duration,
 }
 
 impl std::fmt::Debug for SessionRoutes {
@@ -343,11 +347,18 @@ impl Clone for SessionRoutes {
             subagent_notify: self.subagent_notify.clone(),
             attachment_registry: self.attachment_registry.clone(),
             model_catalog: self.model_catalog.clone(),
+            handoff_timeout: self.handoff_timeout,
         }
     }
 }
 
 impl SessionRoutes {
+    /// Override the handoff timeout (default 120s) for testing.
+    pub fn with_handoff_timeout(mut self, timeout: Duration) -> Self {
+        self.handoff_timeout = timeout;
+        self
+    }
+
     /// `GET /sessions` — filter by worktree, project, or all (worktree +
     /// direct + global drafts).
     pub async fn list_sessions(
@@ -2945,43 +2956,45 @@ impl SessionRoutes {
         if session.archived_at.is_some() {
             return Err(ResetError::Archived("Session already archived".to_string()));
         }
-        // A session whose mode was deleted must fail loudly here, not silently
-        // archive the old session with no replacement ever spawned.
-        let mode_id = session
-            .mode_id
-            .clone()
-            .ok_or_else(|| ResetError::NoMode("Session has no mode; cannot reset".to_string()))?;
-        find_mode(&mode_id)
-            .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{mode_id}' not found")))?;
-
         // reset-with-mode-switch: resolve + validate the REQUESTED mode (id or
         // name) before any teardown — a typo'd mode must not archive the old
         // session with nothing to replace it.
-        let mut effective_mode_id = mode_id;
-        if let Some(req) = &body.mode_id {
-            let resolved = resolve_mode_id(req)
-                .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
-            find_mode(&resolved)
-                .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
-            effective_mode_id = resolved;
-        }
+        let requested_mode_id = match &body.mode_id {
+            Some(req) => {
+                let resolved = resolve_mode_id(req)
+                    .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
+                find_mode(&resolved)
+                    .ok_or_else(|| ResetError::ModeNotFound(format!("Mode '{req}' not found")))?;
+                Some(resolved)
+            }
+            None => None,
+        };
+        // A session whose mode was deleted must fail loudly here, not silently
+        // archive the old session with no replacement ever spawned — unless the
+        // caller supplied a replacement mode (the UI's "pick a new mode" retry),
+        // in which case the old mode is never used.
+        let effective_mode_id = match requested_mode_id {
+            Some(m) => m,
+            None => {
+                let mode_id = session.mode_id.clone().ok_or_else(|| {
+                    ResetError::NoMode("Session has no mode; cannot reset".to_string())
+                })?;
+                find_mode(&mode_id).ok_or_else(|| {
+                    ResetError::ModeNotFound(format!("Mode '{mode_id}' not found"))
+                })?;
+                mode_id
+            }
+        };
 
-        // Direct delivery bypasses paste+poll; otherwise run the bounded
-        // paste-then-poll handoff turn.
+        // Direct delivery bypasses handoff; otherwise run the bounded
+        // handoff turn (chat turn on json, paste-then-poll on tmux/pty).
         let mut handoff_text: Option<String> = body.handoff_text.clone();
         if handoff_text.is_none() && body.handoff.unwrap_or(false) {
             let handoff_path = handoff_path_for(&session.id);
-            let channel = session_channel(session.channel, Some(session.use_tmux));
             let instruction = handoff_instruction(&handoff_path);
-            match run_handoff_turn(&session.tmux_name, channel, &handoff_path, &instruction).await {
-                Ok(true) => {
-                    handoff_text = read_handoff_file_or_null(&handoff_path)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                _ => handoff_text = None,
-            }
+            handoff_text = self
+                .run_handoff(&session, &handoff_path, &instruction)
+                .await;
         }
 
         // Kill the process/pane BEFORE the archive. (forceCloseSessionStreams
@@ -3100,19 +3113,33 @@ impl SessionRoutes {
         let handoff_text_c = handoff_text.clone();
         self.store
             .mutate_project(&project_id, move |p| {
-                let archive = |s: &mut SessionRecord| {
+                // Re-check inside the locked mutation: a handoff can hold this reset
+                // open for up to `handoff_timeout`, so a concurrent reset/terminate
+                // may have archived or removed the row since it was read — never
+                // archive twice or push a second replacement.
+                let archive = |s: &mut SessionRecord| -> Result<(), StoreError> {
+                    if s.archived_at.is_some() {
+                        return Err(StoreError::Mutation("Session already archived".to_string()));
+                    }
                     s.archived_at = Some(archived_at_c.clone());
                     s.handoff_summary = handoff_text_c.clone();
                     s.is_main = false;
                     s.superseded_by = Some(new_id_c.clone());
+                    Ok(())
                 };
+                let missing = || StoreError::Mutation("Session already archived".to_string());
                 if let Some(wt_id) = &wt_id_opt {
                     for w in &mut p.worktrees {
                         if w.id == *wt_id {
+                            let mut found = false;
                             for s in &mut w.sessions {
                                 if s.id == old_id_c {
-                                    archive(s);
+                                    archive(s)?;
+                                    found = true;
                                 }
+                            }
+                            if !found {
+                                return Err(missing());
                             }
                             w.sessions.push(new_rec.clone());
                             return Ok(p.clone());
@@ -3122,20 +3149,49 @@ impl SessionRoutes {
                         "worktree '{wt_id}' not found"
                     )));
                 }
+                let mut found = false;
                 for s in &mut p.direct_sessions {
                     if s.id == old_id_c {
-                        archive(s);
+                        archive(s)?;
+                        found = true;
                     }
+                }
+                if !found {
+                    return Err(missing());
                 }
                 p.direct_sessions.push(new_rec.clone());
                 Ok(p.clone())
             })
             .await
-            .map_err(|e| ResetError::Internal(e.to_string()))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("Session already archived") {
+                    ResetError::Archived("Session already archived".to_string())
+                } else {
+                    ResetError::Internal(msg)
+                }
+            })?;
 
         self.subagent_notify.forget_subagent_notify(&old_id);
 
         let wt_id_for_serialize = worktree.as_ref().map(|w| w.id.clone());
+        // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
+        // (the former cross-part gap noted here is closed — see the field's
+        // doc comment in `vst-types/src/events.rs`).
+        let new_session_serialized =
+            serialize_session(wt_id_for_serialize.as_deref(), &project.id, &new_session);
+        self.broadcaster.send(ServerEvent::SessionCreated {
+            session_id: new_id.clone(),
+            worktree_id: wt_id_for_serialize,
+            project_id: Some(project.id.clone()),
+            session_type: "agent".to_string(),
+            mode: Some(new_session.mode_id.clone().unwrap_or_default()),
+            snapshot: Some((&new_session_serialized).into()),
+            parent_session_id: new_session.parent_session_id.clone(),
+        });
+        // Superseded-by AFTER the replacement is announced: clients follow the
+        // active selection to `superseded_by` on this event, so the new id must
+        // already be in their session list or they fall back to the project home.
         self.broadcaster.send(ServerEvent::SessionUpdated {
             session_id: old_id.clone(),
             pinned_at: None,
@@ -3150,20 +3206,6 @@ impl SessionRoutes {
             worktree_id: None,
             draft_prompt: None,
             draft_config: None,
-        });
-        // `ServerEvent::SessionCreated` now carries `snapshot`/`parentSessionId`
-        // (the former cross-part gap noted here is closed — see the field's
-        // doc comment in `vst-types/src/events.rs`).
-        let new_session_serialized =
-            serialize_session(wt_id_for_serialize.as_deref(), &project.id, &new_session);
-        self.broadcaster.send(ServerEvent::SessionCreated {
-            session_id: new_id.clone(),
-            worktree_id: wt_id_for_serialize,
-            project_id: Some(project.id.clone()),
-            session_type: "agent".to_string(),
-            mode: Some(new_session.mode_id.clone().unwrap_or_default()),
-            snapshot: Some((&new_session_serialized).into()),
-            parent_session_id: new_session.parent_session_id.clone(),
         });
 
         // Spawn the replacement through the SAME channel-aware, guarded helper
@@ -3191,8 +3233,9 @@ impl SessionRoutes {
 
     /// `POST /sessions/:id/handoff` — write-only: runs the handoff turn but
     /// does NOT archive or respawn (unlike reset's `--handoff` option). No
-    /// archivedAt guard (a standalone handoff summary is meaningful even after
-    /// a session is archived).
+    /// archivedAt guard for terminal sessions (a standalone handoff summary is
+    /// meaningful even after a session is archived); an archived Rich Chat
+    /// session returns no summary without being run, so no runtime is revived.
     pub async fn handoff_session(&self, id: &str) -> Result<HandoffResult, HandoffRouteError> {
         let ctx = find_session_context(&self.store, id)
             .await
@@ -3215,26 +3258,84 @@ impl SessionRoutes {
         }
 
         let handoff_path = handoff_path_for(&session.id);
-        let channel = session_channel(session.channel, Some(session.use_tmux));
         let instruction = handoff_instruction(&handoff_path);
-        let summary = match run_handoff_turn(
-            &session.tmux_name,
-            channel,
-            &handoff_path,
-            &instruction,
-        )
-        .await
-        {
-            Ok(true) => read_handoff_file_or_null(&handoff_path)
-                .await
-                .ok()
-                .flatten(),
-            _ => None,
-        };
+        let summary = self.run_handoff(session, &handoff_path, &instruction).await;
         Ok(HandoffResult {
             ok: true,
             handoff_summary: summary,
         })
+    }
+
+    /// Run a bounded handoff turn for a session, returning the summary text if written.
+    ///
+    /// For Rich Chat (`Channel::Json`), delivers the handoff instruction as a chat turn
+    /// and waits for the session to settle (up to `self.handoff_timeout`).
+    /// For terminal sessions (tmux/pty), pastes to tmux or writes to pty and polls for the file.
+    async fn run_handoff(
+        &self,
+        session: &SessionRecord,
+        path: &Path,
+        instruction: &str,
+    ) -> Option<String> {
+        let channel = session_channel(session.channel, Some(session.use_tmux));
+        match channel {
+            Channel::Json => self.run_json_handoff_turn(session, path, instruction).await,
+            _ => match run_handoff_turn(&session.tmux_name, channel, path, instruction).await {
+                Ok(true) => read_handoff_file_or_null(path).await.ok().flatten(),
+                _ => None,
+            },
+        }
+    }
+
+    async fn run_json_handoff_turn(
+        &self,
+        session: &SessionRecord,
+        path: &Path,
+        instruction: &str,
+    ) -> Option<String> {
+        // An archived session must not get a live runtime spun back up for it
+        // (`resolve_json_agent` re-creates released agents).
+        if session.archived_at.is_some() {
+            return None;
+        }
+        if path.exists() {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+
+        let opts = EnqueueChatTurnOpts {
+            session_id: session.id.clone(),
+            message: instruction.to_string(),
+            attachments: vec![],
+            daemon_port: self.daemon_port,
+            // FIFO, never steer: the instruction waits behind any running turn.
+            // (A UI reset on a busy agent therefore waits for that turn, bounded
+            // by `handoff_timeout`.)
+            steer: Some(false),
+            store: self.store.clone(),
+            broadcaster: self.broadcaster.clone(),
+        };
+
+        if let Err(e) = enqueue_chat_turn(opts, &self.json_registry).await {
+            eprintln!("handoff: {}: {:?}", session.id, e);
+            return None;
+        }
+
+        let agent = self.json_registry.get(&session.id)?;
+        // Note on timeout: if it hits, the turn may still be queued. In
+        // reset_session it dies with release_session_runtime; in handoff_session
+        // it may run later and write an unread temp file (accepted).
+        let summary = wait_for_handoff_file(
+            path,
+            self.handoff_timeout,
+            HANDOFF_IDLE_GRACE,
+            || agent.is_settled(),
+            || agent.settled(),
+        )
+        .await;
+        if summary.is_none() {
+            eprintln!("handoff: {}: no summary written", session.id);
+        }
+        summary
     }
 
     // -----------------------------------------------------------------------
@@ -4800,6 +4901,65 @@ fn provider_to_cli(p: NormalizedEventProvider) -> CliId {
     }
 }
 
+/// Grace before an idle queue is read as "the turn ended without writing the
+/// file" — covers the window between enqueue and the drain actually starting.
+const HANDOFF_IDLE_GRACE: Duration = Duration::from_secs(3);
+
+/// Wait for a json-channel handoff turn to produce `path`.
+///
+/// - File appears → wait (bounded) for the turn to finish so a multi-step write
+///   is complete, then return its (non-empty) content.
+/// - Queue goes idle first (agent refused/errored/never started) → return `None`
+///   right away instead of burning the whole timeout.
+/// - Deadline → `None`.
+///
+/// `is_settled`/`wait_settled` are injected so this is testable without an agent.
+pub async fn wait_for_handoff_file<S, W, Fut>(
+    path: &Path,
+    timeout: Duration,
+    idle_grace: Duration,
+    is_settled: S,
+    wait_settled: W,
+) -> Option<String>
+where
+    S: Fn() -> bool,
+    W: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    async fn read_non_empty(path: &Path) -> Option<String> {
+        read_handoff_file_or_null(path)
+            .await
+            .ok()
+            .flatten()
+            .filter(|t| !t.trim().is_empty())
+    }
+    let start = tokio::time::Instant::now();
+    let deadline = start + timeout;
+    let mut seen_busy = false;
+    loop {
+        if path.exists() {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let _ = tokio::time::timeout(remaining, wait_settled()).await;
+            return read_non_empty(path).await;
+        }
+        if !is_settled() {
+            seen_busy = true;
+        } else if seen_busy || start.elapsed() >= idle_grace {
+            // Re-check: the file may have landed between the check above and idle.
+            return if path.exists() {
+                read_non_empty(path).await
+            } else {
+                None
+            };
+        }
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(250).min(deadline - now)).await;
+    }
+}
+
 /// A fresh one-off handoff path for a call (Decision 3) — the pasted
 /// instruction and the poll loop must name the same path.
 fn handoff_path_for(session_id: &str) -> PathBuf {
@@ -4814,7 +4974,10 @@ fn handoff_path_for(session_id: &str) -> PathBuf {
 /// summary to (mirrors `handoffInstruction` in services/handoff.ts).
 fn handoff_instruction(path: &std::path::Path) -> String {
     format!(
-        "Before this session ends, write a concise handoff summary of the current state, remaining work, and anything the next session should know to `{}`, then reply once done.",
+        "Before this session ends, write a concise handoff summary for the next session to `{}`. \
+         Include what the user asked for and any facts, names, values or decisions they shared \
+         in this conversation (quote exact values verbatim), the current state of the work, \
+         the remaining work, and anything else the next session should know. Then reply once done.",
         path.display()
     )
 }

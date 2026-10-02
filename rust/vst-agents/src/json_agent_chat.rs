@@ -378,6 +378,9 @@ pub async fn enqueue_chat_turn(
 // Auto-enqueue turn 1 at create time
 // ---------------------------------------------------------------------------
 
+/// `reason` on the `waiting_for_human` transition of a prompt-less json session.
+pub const READY_REASON: &str = "ready";
+
 /// Options for `start_json_create_turn`.
 pub struct StartJsonCreateTurnOpts {
     pub session_id: String,
@@ -394,7 +397,35 @@ pub async fn start_json_create_turn(
 ) {
     let prompt = match opts.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
         Some(p) => p.to_string(),
-        None => return,
+        None => {
+            // No turn 1 (e.g. a plain reset of a Rich Chat agent): nothing will
+            // ever move the session off `not_started`, and the UI shows a
+            // "Starting…" placeholder with no composer for that state — the
+            // agent would be stuck forever. Mark it ready for the user's first
+            // message instead.
+            if let Some(ctx) = find_json_session_context(&opts.store, &opts.session_id).await {
+                if ctx.session.lifecycle.state == LifecycleState::NotStarted {
+                    // reason "ready": a never-prompted session being idle is not
+                    // "a subagent finished" — the subagent-notify listener skips it
+                    // so a reset/prompt-less child doesn't wake its parent.
+                    let lifecycle = SessionLifecycle {
+                        state: LifecycleState::WaitingForHuman,
+                        reason: Some(READY_REASON.to_string()),
+                        last_transition_at: now_iso_8601(),
+                    };
+                    let _ = opts
+                        .store
+                        .update_session_lifecycle(&ctx.project.id, &ctx.session.id, lifecycle)
+                        .await;
+                    opts.broadcaster.send(ServerEvent::SessionState {
+                        session_id: ctx.session.id.clone(),
+                        state: LifecycleState::WaitingForHuman,
+                        reason: Some(READY_REASON.to_string()),
+                    });
+                }
+            }
+            return;
+        }
     };
 
     // Guard: skip if the session was already marked done.

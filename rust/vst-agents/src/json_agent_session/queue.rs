@@ -428,11 +428,17 @@ impl JsonAgentSession {
             // Atomically mark running=true BEFORE spawning (no race between check
             // and spawn where a second caller could also spawn).
             s.running = true;
+            // Signal not-idle while still holding the `state` lock, so a draining
+            // loop's final idle signal (which checks `running` under the same lock)
+            // can never overwrite this with a stale "idle". `send_replace`, not
+            // `send`: `watch::Sender::send` is a no-op when no receiver is
+            // subscribed (the common case — nobody calls `settled()` until later),
+            // which left the value stuck at "idle" and made `settled()` return
+            // immediately.
+            self.0.drain_tx.send_replace(false);
             true
         };
         if should_start {
-            // Signal not-idle to any settled() waiter.
-            let _ = self.0.drain_tx.send(false);
             let this = self.clone();
             tokio::spawn(async move {
                 this.drain_loop().await;

@@ -1,0 +1,23 @@
+feature: rich-chat-reset-handoff
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-221
+created: 2026-10-02T00:00:00Z
+
+master:
+  prd: skipped
+  plan: complete # opus review round 1 (2 blockers, 3 should-fix) incorporated
+
+current_subfeature: root
+
+subfeatures:
+  - id: root
+    origin: planned
+    spawned_from: null
+    mode: done
+    last_completed: null
+    awaiting_phase: null
+    awaiting_artifact: null
+    phase_chain: [plan]
+    superseded_reason: null
+    parked_reason: null
+    handoff: {next_item: null, returned_at: null, verified_by: null}
+    commit: null
