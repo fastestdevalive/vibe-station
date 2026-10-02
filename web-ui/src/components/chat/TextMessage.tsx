@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Attachment } from "@/api/types";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
@@ -22,7 +23,7 @@ interface TextMessageProps {
  * plain-text bubble; assistant messages render GFM markdown (streaming-tolerant,
  * raw-HTML off — Decision 9).
  */
-export function TextMessage({ role, text, attachments, pending, api, worktreeId, scope }: TextMessageProps) {
+export const TextMessage = memo(function TextMessage({ role, text, attachments, pending, api, worktreeId, scope }: TextMessageProps) {
   const isUser = role === "user";
   return (
     <div
@@ -70,4 +71,4 @@ export function TextMessage({ role, text, attachments, pending, api, worktreeId,
       </div>
     </div>
   );
-}
+});

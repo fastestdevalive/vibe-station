@@ -362,6 +362,9 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Chrome's native scroll anchoring would double up with the manual prepend /
+     resize corrections the chat applies — disable it. */
+  overflow-anchor: none;
 }
 
 .chat-pane__state {
@@ -398,6 +401,35 @@
   padding: var(--space-4);
   min-width: 0;
 }
+
+/* Virtualized chat (≥ VIRTUALIZE_MIN_ITEMS): rows are absolutely positioned
+   inside the sizer, so the flex `gap` is irrelevant — drop it so it never
+   double-spaces alongside each `.chat-vrow`'s own `padding-bottom`. */
+.chat-message-list--virtual {
+  gap: 0;
+}
+
+/* A single rendered row. Virtualized rows are `position: absolute` inside the
+   sizer and are shifted with `transform: translateY(...)` (set inline from the
+   virtual item's start); `left/right: 0` keeps `max-width: 80%` bubbles
+   resolving against the full row width. `.chat-vrow--flow` is the in-flow
+   variant used below `VIRTUALIZE_MIN_ITEMS`, where the list's own `gap`
+   provides the spacing. */
+.chat-vrow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--space-3);
+}
+.chat-message-list > .chat-vrow--flow {
+  position: static;
+  padding-bottom: 0;
+}
+/* Never put `position`, `transform` or `contain` on `.chat-message-list`
+   itself — the jump button uses `.chat-pane__viewport` as its containing block. */
 
 /* Floating jump-to-bottom button (Decision 5). `position: absolute` here
    resolves its containing block to `.chat-pane__viewport` — the non-scrolling
@@ -446,13 +478,14 @@
 }
 /* A user message that is NOT wrapped in `.chat-user-turn` — an optimistic
    in-flight/queued turn, or one being fork-edited — is a direct child of the
-   COLUMN flex `.chat-message-list`. `justify-content` above only right-aligns
-   the bubble INSIDE this box; the box itself is now width-capped at 80%, so
+   COLUMN flex `.chat-vrow`. `justify-content` above only right-aligns the
+   bubble INSIDE this box; the box itself is now width-capped at 80%, so
    without this it stretch-defaults to the start (left) and every user bubble
    shifts left by the leftover 20% the moment a turn goes in flight. The cap
-   still resolves against the list's content box, so the measured width is
-   unchanged — only the box's own placement is. */
-.chat-message-list > .chat-msg--user {
+   still resolves against the row's content box, so the measured width is
+   unchanged — only the box's own placement is. (Re-targeted from
+   `.chat-message-list > .chat-msg--user` to the `.chat-vrow` wrapper in 2.4.) */
+.chat-vrow > .chat-msg--user {
   align-self: flex-end;
 }
 .chat-msg--assistant {

@@ -1,11 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { useEventTargets } from "@/context/DemoEnv";
 import { useTheme } from "@/hooks/useTheme";
 import { themeById } from "@/theme/registry";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import { languageForFilePath } from "./codeHighlight";
 import { pickShikiLang } from "./previewLang";
-import { escapeHtml, highlightDocumentLines } from "./shikiHighlighter";
+import { highlightDocumentLines } from "./shikiHighlighter";
+import { CodeLine } from "./CodeLine";
+import { useCodeVirtualizer } from "./useCodeVirtualizer";
+import { useChunkedHighlight } from "./useChunkedHighlight";
 import {
   getDefinition,
   getHover,
@@ -17,6 +30,10 @@ import {
 } from "@/lib/lspApi";
 import { resolveClickPosition, resolveOffsetInLine } from "@/lib/lspPosition";
 import type { FileScope } from "@/api/types";
+
+/** Minimum line count above which `CodeView` windows its rows through the
+ *  virtualizer (Decision 6). Below it, every line renders in normal flow. */
+const VIRTUALIZE_MIN_LINES = 2000;
 
 /** Identifier word boundaries at `character` within `lineText`, or null if
  *  the position doesn't land on/next to a word character. Shared by
@@ -100,64 +117,48 @@ interface CodeViewProps {
   lspFileRef?: LspFileRef;
   etag?: string;
   retryDelayMs?: number;
+
+  /** Optional scroller element (the file preview body). When provided, large
+   *  files window their rows against it. Resolved in a layout effect as
+   *  `scrollElRef?.current ?? containerRef.current?.parentElement`. */
+  scrollElRef?: RefObject<HTMLElement | null>;
+  /** Called once `highlightLine`'s row is in the DOM and scrolled to (virtual
+   *  mode) — lets the owner re-run its highlight effect against a mounted row. */
+  onRevealReady?: () => void;
 }
 
-/** Wrap the first occurrence of `matchText` inside `el` with one or more
- *  `<mark class="workspace-code-match">` elements, preserving Shiki's
- *  syntax-highlighting spans instead of dropping them. */
-function markMatchInElement(el: HTMLElement, matchText: string): void {
-  if (!matchText) return;
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const textNodes: Text[] = [];
-  let concatenated = "";
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const t = node as Text;
-    textNodes.push(t);
-    concatenated += t.data;
-  }
-  const startIdx = concatenated.indexOf(matchText);
-  if (startIdx < 0) return;
-  const endIdx = startIdx + matchText.length;
-
-  let pos = 0;
-  for (const t of textNodes) {
-    const len = t.data.length;
-    const nodeStart = pos;
-    const nodeEnd = pos + len;
-    pos += len;
-    const overlapStart = Math.max(startIdx, nodeStart);
-    const overlapEnd = Math.min(endIdx, nodeEnd);
-    if (overlapStart >= overlapEnd) continue;
-
-    const localStart = overlapStart - nodeStart;
-    const localEnd = overlapEnd - nodeStart;
-    let target: Text = t;
-    if (localStart > 0) target = target.splitText(localStart);
-    if (localEnd - localStart < target.data.length) target.splitText(localEnd - localStart);
-
-    const mark = document.createElement("mark");
-    mark.className = "workspace-code-match";
-    target.replaceWith(mark);
-    mark.appendChild(target);
-  }
+/** Imperative handle for the code viewer, letting the owner (FilePreviewPane)
+ *  save/restore scroll position by line index in virtual mode, where pixel
+ *  scrollTop is meaningless before rows are measured. */
+export interface CodeViewHandle {
+  isVirtualized: () => boolean;
+  /** 0-indexed first visible virtual row, or null when not virtualized. */
+  getFirstVisibleLine: () => { lineIndex: number; offsetInRow: number } | null;
+  /** Scroll so the given 0-indexed line sits `offsetInRow` px from the top. */
+  scrollToLine: (lineIndex: number, offsetInRow?: number) => void;
 }
 
-export function CodeView({
-  code,
-  language: languageProp,
-  filePath,
-  themeMode,
-  noGutter,
-  gutterMarks,
-  highlightLine,
-  highlightMatchText,
-  api,
-  worktreeId,
-  scope = "worktree",
-  lspFileRef,
-  etag,
-  retryDelayMs,
-}: CodeViewProps) {
+export const CodeView = forwardRef<CodeViewHandle, CodeViewProps>(function CodeView(
+  {
+    code,
+    language: languageProp,
+    filePath,
+    themeMode,
+    noGutter,
+    gutterMarks,
+    highlightLine,
+    highlightMatchText,
+    api,
+    worktreeId,
+    scope = "worktree",
+    lspFileRef,
+    etag,
+    retryDelayMs,
+    scrollElRef,
+    onRevealReady,
+  }: CodeViewProps,
+  ref,
+) {
   const { win } = useEventTargets();
   const { theme, themeId } = useTheme();
   const mode = themeMode ?? theme;
@@ -176,8 +177,181 @@ export function CodeView({
 
   const [highlightedLines, setHighlightedLines] = useState<string[] | null>(null);
 
-  // LSP interactive state
+  // Declared before the virtualization block below, which reads
+  // `containerRef.current?.parentElement` as the scroller fallback.
   const containerRef = useRef<HTMLPreElement | null>(null);
+
+  // ── Virtualization (Phase 3, Decisions 6–9) ─────────────────────────────
+  // Virtual mode is decided by line count ONLY — never by whether a scroller
+  // ref is attached. Below `VIRTUALIZE_MIN_LINES` today's whole-document
+  // highlight + full row render is used unchanged.
+  const virtualized = lines.length >= VIRTUALIZE_MIN_LINES;
+
+  // Resolve the scroller synchronously. `FilePreviewPane` passes a ref object
+  // whose identity changes whenever the underlying element changes (state-
+  // backed, Decision 9), so this re-renders with a non-null scroller
+  // immediately and the virtualizer initialises with a non-zero size on the
+  // same commit — avoiding the first-mount range-null race.
+  const scroller = scrollElRef?.current ?? containerRef.current?.parentElement ?? null;
+
+  const { virtualizer, scrollMargin, sizerRef, measureRef } = useCodeVirtualizer({
+    lines,
+    scrollEl: scroller,
+    enabled: virtualized,
+    highlightLine: highlightLine ?? null,
+    tabSize: 4,
+  });
+
+  // Chunked highlight for virtualized files (Decision 12); whole-document
+  // highlight for small files via the existing effect below.
+  const visibleRange: [number, number] | null = useMemo(() => {
+    if (!virtualized) return null;
+    const items = virtualizer.getVirtualItems();
+    if (items.length === 0) return null;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!first || !last) return null;
+    return [first.index, last.index];
+    // Recompute each render: getVirtualItems() reflects the live scroll range.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualized, virtualizer.getVirtualItems()]);
+  const chunkedLines = useChunkedHighlight({
+    code,
+    lang: shikiLang,
+    themeId: shikiThemeId,
+    enabled: virtualized && !!language,
+    visibleRange,
+  });
+
+  // LSP hover reset (Risk 5): when the first visible virtual row changes, only
+  // clear the hovered-symbol wrapper — NEVER the file-switch reset (which
+  // bumps `requestGenRef` and cancels in-flight go-to-def requests).
+  const firstVisibleIndexRef = useRef(-1);
+  useLayoutEffect(() => {
+    if (!virtualized) return;
+    const first = virtualizer.getVirtualItems()[0];
+    const idx = first ? first.index : -1;
+    if (firstVisibleIndexRef.current !== idx) {
+      firstVisibleIndexRef.current = idx;
+      clearHoveredSymbol();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualized, virtualizer.getVirtualItems()]);
+
+  // Jump-to-line (Decision 9): once `highlightLine`'s index is in the rendered
+  // range (the `rangeExtractor` in useCodeVirtualizer unions it in), scroll it
+  // to center and signal the owner, which then applies the highlight class and
+  // persists the scroll position. Fires once per `highlightLine`.
+  const revealedLineRef = useRef<number | null>(null);
+  const revealedPathRef = useRef(filePath);
+  useLayoutEffect(() => {
+    if (!virtualized) return;
+    // Switching to a different file re-arms the reveal. A reload of the SAME
+    // file (watcher refetch) must not: the owner never clears `highlightLine`,
+    // so re-firing would yank the user back to the target on every save.
+    if (revealedPathRef.current !== filePath) {
+      revealedPathRef.current = filePath;
+      revealedLineRef.current = null;
+    }
+    // Clearing the target (or switching files) re-arms the reveal so a repeat
+    // jump to the same line isn't silently dropped.
+    if (highlightLine == null) {
+      revealedLineRef.current = null;
+      return;
+    }
+    const target = highlightLine - 1;
+    const inRange = virtualizer.getVirtualItems().some((v) => v.index === target);
+    if (inRange && revealedLineRef.current !== highlightLine) {
+      revealedLineRef.current = highlightLine;
+      virtualizer.scrollToIndex(target, { align: "center" });
+      onRevealReady?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [virtualized, highlightLine, virtualizer.getVirtualItems()]);
+
+  // Select-all in virtual mode (Risk 3): native Ctrl+A only sees mounted rows.
+  // Intercept it, select the full `<pre>` contents, and make `onCopy` emit the
+  // complete source.
+  const selectAllRef = useRef(false);
+  const scrollGenRef = useRef(0);
+  // Invalidate any pending scrollToLine re-apply when the file changes.
+  useEffect(() => {
+    scrollGenRef.current++;
+  }, [filePath, code]);
+  const selectNodeContents = useCallback((pre: HTMLPreElement) => {
+    const range = document.createRange();
+    range.selectNodeContents(pre);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }, []);
+  useEffect(() => {
+    const onSelectionChange = () => {
+      // selectNodeContents fires an (async) non-collapsed selectionchange;
+      // only a collapse means the select-all was dropped.
+      if (selectAllRef.current && window.getSelection()?.isCollapsed) selectAllRef.current = false;
+    };
+    // Shift+Arrow etc. shrink the selection without collapsing it; any key other
+    // than the Ctrl/Cmd chords (A to select, C to copy) disarms select-all.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!selectAllRef.current) return;
+      if (e.key === "Control" || e.key === "Meta") return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A" || e.key === "c" || e.key === "C")) return;
+      selectAllRef.current = false;
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, []);
+  const handleCopy = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (selectAllRef.current) {
+        e.preventDefault();
+        e.clipboardData.setData("text/plain", code);
+        selectAllRef.current = false;
+      }
+    },
+    [code],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      isVirtualized: () => virtualized,
+      getFirstVisibleLine: () => {
+        if (!virtualized || !scroller) return null;
+        // getVirtualItems() includes overscan rows; pick the first row that
+        // actually ends below the scroll offset.
+        const top = scroller.scrollTop;
+        const first = virtualizer.getVirtualItems().find((it) => it.end > top);
+        if (!first) return null;
+        return { lineIndex: first.index, offsetInRow: top - first.start };
+      },
+      scrollToLine: (lineIndex: number, offsetInRow = 0) => {
+        if (!virtualized || !scroller) return;
+        const apply = () => {
+          const [off] = virtualizer.getOffsetForIndex(lineIndex, "start") ?? [scroller.scrollTop];
+          scroller.scrollTop = off + offsetInRow;
+        };
+        apply();
+        // Row heights/metrics refine after the first paint (measureElement,
+        // font metrics); re-apply once so a restore lands on the same line —
+        // unless the file changed or another scroll request superseded this one.
+        const gen = ++scrollGenRef.current;
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (gen === scrollGenRef.current) apply();
+          }),
+        );
+      },
+    }),
+    [virtualized, virtualizer, scroller],
+  );
+
+  // LSP interactive state
   const [isArmed, setIsArmed] = useState(false);
   const pointerOverRef = useRef(false);
   const mousedownCoordsRef = useRef<{ x: number; y: number } | null>(null);
@@ -249,7 +423,10 @@ export function CodeView({
     hoveredSymbolRangeRef.current = null;
   }, [filePath, lspFileRef]);
 
+  // Whole-document highlight for small files. Virtualized files use
+  // `useChunkedHighlight` above instead (Decision 12); they never reach this.
   useEffect(() => {
+    if (virtualized) return;
     if (!language) {
       setHighlightedLines(null);
       return;
@@ -266,7 +443,7 @@ export function CodeView({
     return () => {
       cancelled = true;
     };
-  }, [code, language, shikiLang, shikiThemeId]);
+  }, [code, language, shikiLang, shikiThemeId, virtualized]);
 
   // Shared by the hover tooltip's "Find references" button AND a cmd/ctrl
   // click that lands on a symbol's own definition (see `isSelfDefinitionClick`
@@ -663,6 +840,35 @@ export function CodeView({
         setIsArmed(true);
       }
 
+      // 3.6: Ctrl/Cmd+A select-all in virtual mode. Native Ctrl+A only selects
+      // mounted rows, so in virtual mode select the whole `<pre>` and let
+      // `onCopy` emit the complete source. Intercepted only when focus/pointer
+      // is inside the viewer.
+      if (
+        virtualized &&
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        (e.key === "a" || e.key === "A")
+      ) {
+        const pre = containerRef.current;
+        const activeInViewer =
+          pre &&
+          (pointerOverRef.current ||
+            (document.activeElement && pre.contains(document.activeElement)) ||
+            (() => {
+              const sel = window.getSelection();
+              return !!sel?.anchorNode && pre.contains(sel.anchorNode);
+            })());
+        if (activeInViewer) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectAllRef.current = true;
+          selectNodeContents(pre);
+          return;
+        }
+      }
+
       // Escape dismisses cues, picker, and hover tooltip
       if (e.key === "Escape") {
         setPickerState(null);
@@ -758,7 +964,7 @@ export function CodeView({
       win.removeEventListener("keyup", onKeyUp);
       win.removeEventListener("blur", onBlur);
     };
-  }, [pickerState, triggerGoToDef, handleSelectPickerLocation]);
+  }, [pickerState, triggerGoToDef, handleSelectPickerLocation, virtualized, selectNodeContents]);
 
   const handlePointerEnter = (e: React.PointerEvent) => {
     pointerOverRef.current = true;
@@ -873,6 +1079,7 @@ export function CodeView({
   const handleMouseDown = (e: React.MouseEvent) => {
     mousedownCoordsRef.current = { x: e.clientX, y: e.clientY };
     dragDetectedRef.current = false;
+    selectAllRef.current = false;
     if (hoverRestTimerRef.current) {
       clearTimeout(hoverRestTimerRef.current);
       hoverRestTimerRef.current = null;
@@ -947,7 +1154,9 @@ export function CodeView({
     <>
       <pre
         ref={containerRef}
-        className="workspace-code-viewer workspace-code-viewer--shiki"
+        className={`workspace-code-viewer workspace-code-viewer--shiki${
+          virtualized ? " workspace-code-viewer--virtual" : ""
+        }`}
         data-lsp-armed={isArmed ? "true" : undefined}
         onPointerEnter={handlePointerEnter}
         onPointerMove={handlePointerMove}
@@ -956,55 +1165,66 @@ export function CodeView({
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onClick={handleClick}
+        onCopy={handleCopy}
       >
-        {lines.map((line, i) => {
-          const lineNum = i + 1;
-          const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
-          const isTarget = highlightLine === lineNum;
-          const modifierClass = `${gutterMark ? ` workspace-code-line--${gutterMark}` : ""}${isTarget ? " workspace-code-line--target" : ""}`;
-          const wantsMatchMark = isTarget && !!highlightMatchText;
-          let content: ReactNode;
-          if (highlightedLines) {
-            content = (
-              <span
-                key={wantsMatchMark ? `shiki-marked-${highlightMatchText}` : "shiki"}
-                className="workspace-code-content workspace-code-content--shiki"
-                dangerouslySetInnerHTML={{ __html: highlightedLines[i] ?? escapeHtml(line) }}
-                ref={
-                  wantsMatchMark
-                    ? (el) => {
-                        if (el) markMatchInElement(el, highlightMatchText!);
-                      }
-                    : undefined
-                }
+        {/* Hidden one-line measure span (observes LH + char width) — virtual mode
+         *  only, so it never lands inside the `<pre>` of a normal file's copy /
+         *  click-position surface. */}
+        {virtualized ? (
+          <span ref={measureRef} aria-hidden="true" className="workspace-code-measure">0</span>
+        ) : null}
+        {virtualized ? (
+          <div
+            ref={sizerRef}
+            className="workspace-code-sizer"
+            style={{ position: "relative", height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((v) => {
+              const lineNum = v.index + 1;
+              const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
+              const isTarget = highlightLine === lineNum;
+              return (
+                <div
+                  key={v.key}
+                  ref={virtualizer.measureElement}
+                  data-index={v.index}
+                  className="workspace-code-vrow"
+                  style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
+                >
+                  <CodeLine
+                    line={lines[v.index] ?? ""}
+                    lineNum={lineNum}
+                    html={chunkedLines[v.index]}
+                    gutterMark={gutterMark}
+                    isTarget={isTarget}
+                    matchText={isTarget ? highlightMatchText ?? undefined : undefined}
+                    noGutter={noGutter}
+                    gutterWidth={gutterWidth}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          lines.map((line, i) => {
+            const lineNum = i + 1;
+            const gutterMark = !noGutter ? gutterMarks?.get(lineNum) : undefined;
+            const isTarget = highlightLine === lineNum;
+            return (
+              <CodeLine
+                key={i}
+                line={line}
+                lineNum={lineNum}
+                html={highlightedLines?.[i]}
+                gutterMark={gutterMark}
+                isTarget={isTarget}
+                matchText={isTarget ? highlightMatchText ?? undefined : undefined}
+                noGutter={noGutter}
+                gutterWidth={gutterWidth}
               />
             );
-          } else if (wantsMatchMark) {
-            const matchIdx = line.indexOf(highlightMatchText!);
-            content =
-              matchIdx >= 0 ? (
-                <span className="workspace-code-content">
-                  {line.slice(0, matchIdx)}
-                  <mark className="workspace-code-match">{highlightMatchText}</mark>
-                  {line.slice(matchIdx + highlightMatchText!.length)}
-                </span>
-              ) : (
-                <span className="workspace-code-content">{line}</span>
-              );
-          } else {
-            content = <span className="workspace-code-content">{line}</span>;
-          }
-          return (
-            <div key={i} className={`workspace-code-line${modifierClass}`} data-line={lineNum}>
-              {!noGutter && (
-                <span className="workspace-code-gutter" style={{ minWidth: `${gutterWidth + 2}ch` }}>
-                  {lineNum}
-                </span>
-              )}
-              {content}
-            </div>
-          );
-        })}
+          })
+        )}
       </pre>
 
       {pendingCue && (
@@ -1126,4 +1346,4 @@ export function CodeView({
       )}
     </>
   );
-}
+});

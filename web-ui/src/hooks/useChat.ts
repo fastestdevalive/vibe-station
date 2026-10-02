@@ -4,6 +4,12 @@ import type { Attachment, NormalizedEvent, SessionMeta } from "@/api/types";
 import { createChatRepository } from "@/api/repositories/chatRepository";
 import * as chatSnapshotCache from "./chatSnapshotCache";
 
+/** Cap on live (non-load-all) events held in memory. When exceeded, the oldest
+ *  events are trimmed back to `TRIM_TO` (at a `user` turn boundary). */
+const MAX_LIVE_EVENTS = 5000;
+/** Keep this many most-recent events after a live trim. */
+const TRIM_TO = 4000;
+
 /** An optimistic user turn rendered immediately after send, before the daemon's
  *  authoritative `user` event arrives. Deduped by `turnId` (Decision 12). */
 export interface PendingTurn {
@@ -66,6 +72,9 @@ export interface UseChatResult {
   /** Edit an already-answered turn → fork: truncate after it and re-run the
    *  edited message from that point (claude only, R3.1). */
   forkTurn: (turnId: string, message: string, attachmentIds?: string[]) => Promise<void>;
+  /** Enable/disable live-event trimming. Call with the scroller's `atBottom`
+   *  so history is not trimmed out from under a user who scrolled up. */
+  setCanTrim: (v: boolean) => void;
 }
 
 /**
@@ -118,6 +127,14 @@ export function useChat(
    *  re-subscribing. */
   const oldestSeqRef = useRef<number | null>(null);
   const hasMoreRef = useRef(false);
+  /** True once `loadAll` has fetched the WHOLE transcript — never trim after
+   *  that, the full history is intentionally held in memory. */
+  const loadedAllRef = useRef(false);
+  /** False while the scroller is scrolled up — history must not be trimmed out
+   *  from under the user (driven by `setCanTrim` / ChatPane's onAtBottomChange). */
+  const canTrimRef = useRef(true);
+  /** Set by the live-event trim inside the `setEvents` updater; an effect turns it into `hasMore` state. */
+  const trimmedRef = useRef(false);
 
   // Snapshot-cache support refs — synced every render so the effect cleanup
   // always reads the freshest values without needing them in its deps array.
@@ -132,6 +149,12 @@ export function useChat(
 
   // Sync snapshot-relevant refs on every render.
   eventsRef.current = events;
+  useEffect(() => {
+    if (trimmedRef.current) {
+      trimmedRef.current = false;
+      setHasMore(true);
+    }
+  }, [events]);
   isDeltaLoadingRef.current = isDeltaLoading;
 
   const active = enabled && !!sessionId;
@@ -150,6 +173,8 @@ export function useChat(
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
+      loadedAllRef.current = false;
+      canTrimRef.current = true;
       restoredLatestSeqRef.current = null;
       return;
     }
@@ -177,6 +202,8 @@ export function useChat(
       userTurnIdsRef.current = new Set(snapshot.userTurnIds);
       oldestSeqRef.current = snapshot.oldestSeq;
       hasMoreRef.current = snapshot.hasMore;
+      loadedAllRef.current = false;
+      canTrimRef.current = true;
       setLoading(false); // suppress spinner; events already visible
       setIsDeltaLoading(true);
       isDeltaLoadingRef.current = true;
@@ -210,6 +237,8 @@ export function useChat(
       userTurnIdsRef.current = new Set();
       oldestSeqRef.current = null;
       hasMoreRef.current = false;
+      loadedAllRef.current = false;
+      canTrimRef.current = true;
       // Fix 1: explicitly reset delta-loading state so a previous cache-hit
       // session's flag doesn't bleed into this cold-start session.
       setIsDeltaLoading(false);
@@ -301,7 +330,30 @@ export function useChat(
       if (e.type !== "session:message" || e.sessionId !== sessionId) return;
       const ev = e.event;
       noteUserTurn(ev);
-      setEvents((prev) => (ev.id && prev.some((x) => x.id === ev.id) ? prev : [...prev, ev]));
+      // Functional updater so it composes with queued replay/loadEarlier/fork
+      // updates instead of overwriting them with a stale snapshot. Trim side
+      // effects are idempotent ref writes; the `hasMore` state flip is deferred
+      // to an effect (no setState inside an updater).
+      setEvents((prev) => {
+        if (ev.id && prev.some((x) => x.id === ev.id)) return prev;
+        let next = [...prev, ev];
+        // Optional live-event cap (Phase 4): trim the oldest events back to
+        // TRIM_TO when the window grows past MAX_LIVE_EVENTS, cutting at a `user`
+        // turn boundary so a turn is never split. Skipped after `loadAll` and
+        // while the scroller is scrolled up (canTrimRef false).
+        if (!loadedAllRef.current && canTrimRef.current && next.length > MAX_LIVE_EVENTS) {
+          const cut = findTrimIndex(next, TRIM_TO);
+          if (cut > 0) {
+            next = next.slice(cut);
+            const firstSeq = next[0]?.logSeq ?? null;
+            if (firstSeq != null) oldestSeqRef.current = firstSeq;
+            // The trimmed-out history is recoverable via loadEarlier.
+            hasMoreRef.current = true;
+            trimmedRef.current = true;
+          }
+        }
+        return next;
+      });
       // A live event proves the stream is up — clear any replay-loading state.
       setLoading(false);
     });
@@ -537,10 +589,18 @@ export function useChat(
       oldestSeqRef.current = all.length ? (all[0]!.logSeq ?? null) : oldestSeqRef.current;
       hasMoreRef.current = false;
       setHasMore(false);
+      // Never trim once the whole transcript has been fetched and held in memory.
+      loadedAllRef.current = true;
     } finally {
       setLoadingEarlier(false);
     }
   }, [chatRepo, sessionId]);
+
+  /** Enable/disable live-event trimming (Phase 4). Called with the scroller's
+   *  `atBottom` so history isn't trimmed out from under a scrolled-up user. */
+  const setCanTrim = useCallback((v: boolean) => {
+    canTrimRef.current = v;
+  }, []);
 
   return {
     events,
@@ -563,6 +623,7 @@ export function useChat(
     discardEdit,
     sendNow,
     forkTurn,
+    setCanTrim,
   };
 }
 
@@ -593,4 +654,14 @@ function dropKey<T>(obj: Record<string, T>, key: string): Record<string, T> {
   const next = { ...obj };
   delete next[key];
   return next;
+}
+
+/** Index of the first `user` event at/after `events.length - trimTo`, so a live
+ *  trim keeps at least `trimTo` events and never splits a turn mid-way. Returns
+ *  -1 when no `user` event exists in that tail region (nothing to cut at). */
+function findTrimIndex(events: NormalizedEvent[], trimTo: number): number {
+  for (let i = events.length - trimTo; i < events.length; i++) {
+    if (events[i]?.kind === "user") return i;
+  }
+  return -1;
 }

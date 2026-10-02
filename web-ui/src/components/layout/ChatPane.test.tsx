@@ -107,7 +107,7 @@ describe("ChatPane (4.T2)", () => {
     const tray = await screen.findByRole("list", { name: "Queued messages" });
     expect(within(tray).getByText("queued msg")).toBeTruthy();
     expect(within(tray).getByLabelText("Send now")).toBeTruthy();
-    expect(within(screen.getByRole("log")).queryByText("queued msg")).toBeNull();
+    expect(within(screen.getByRole("feed")).queryByText("queued msg")).toBeNull();
   });
 
   it("3.T3 — a queued turn present ONLY in meta.queuedTurns renders its text in the tray", async () => {
@@ -446,7 +446,7 @@ describe("V3g — silent events excluded from lastUserText and edit-prefill (Cha
 
     render(<ChatPane api={api} session={jsonSession("js-v3g-b")} visible />);
 
-    await screen.findByRole("log");
+    await screen.findByRole("feed");
 
     // The tray row for silentTurnId should NOT show "this is the notice text"
     // because silent events are excluded from the userEvents map. The tray would

@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { memo } from "react";
 import { StreamingMarkdown } from "./StreamingMarkdown";
+import { useRowOpen } from "./rowUiState";
 import type { ApiInstance } from "@/api";
 import type { FileScope } from "@/api/types";
 
@@ -7,6 +8,9 @@ interface ThinkingBlockProps {
   text: string;
   /** Collapsed by default; expands on click. */
   defaultOpen?: boolean;
+  /** Stable key for this row within the `MessageList` — used to persist the
+   *  block's open/closed state across virtualized unmount/remount. */
+  rowKey?: string;
   /** `ts` of the first event in this thinking group (always present —
    *  `groupEvents` stamps it when the group opens). */
   startedTs: string;
@@ -50,8 +54,8 @@ function thinkingLabel(startedTs: string, endedTs: string | undefined, hadToolCa
  *  extended by Decision 4). Signature-only / redacted thinking events carry no
  *  text — those render as a plain label with no chevron, since there's
  *  nothing to expand. */
-export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, hadToolCall, api, worktreeId, scope }: ThinkingBlockProps) {
-  const [open, setOpen] = useState(defaultOpen);
+export const ThinkingBlock = memo(function ThinkingBlock({ text, defaultOpen = false, rowKey, startedTs, endedTs, hadToolCall, api, worktreeId, scope }: ThinkingBlockProps) {
+  const [open, setOpen] = useRowOpen(rowKey != null ? `think:${rowKey}` : undefined, defaultOpen);
   const hasContent = text.trim().length > 0;
   const label = thinkingLabel(startedTs, endedTs, hadToolCall);
   if (!hasContent) {
@@ -88,4 +92,4 @@ export function ThinkingBlock({ text, defaultOpen = false, startedTs, endedTs, h
       ) : null}
     </div>
   );
-}
+});

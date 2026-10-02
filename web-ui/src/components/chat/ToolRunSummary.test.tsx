@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { ToolRunSummary } from "./ToolRunSummary";
+import { ToolRunSummary, toolRunSummaryPropsEqual } from "./ToolRunSummary";
 import type { ToolCallEntry } from "./toolFormat";
 
 function tool(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
@@ -326,6 +326,41 @@ describe("ToolRunSummary structured diffs (Decision 3/4, 4.T2)", () => {
     render(<ToolRunSummary tools={tools} live={false} />);
     expect(document.querySelector(".diff-line")).toBeTruthy();
     expect(screen.queryByText(/old_string/)).toBeNull();
+  });
+});
+
+describe("toolRunSummaryPropsEqual (rich-chat-perf Phase 1, 1.T1)", () => {
+  it("returns true for regrouped-but-identical tools", () => {
+    const a = { tools: [tool({ id: "t1", toolName: "Bash", status: "completed" })], live: false, cwd: "/app" };
+    // Regrouping reorders nothing but the array identity; field values unchanged.
+    const b = { tools: [tool({ id: "t1", toolName: "Bash", status: "completed" })], live: false, cwd: "/app" };
+    expect(toolRunSummaryPropsEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when `status` changes", () => {
+    const a = { tools: [tool({ id: "t1", status: "in_progress" })], live: true };
+    const b = { tools: [tool({ id: "t1", status: "completed" })], live: true };
+    expect(toolRunSummaryPropsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when `toolKind` changes", () => {
+    const a = { tools: [tool({ id: "t1", toolKind: "read" })], live: false };
+    const b = { tools: [tool({ id: "t1", toolKind: "edit" })], live: false };
+    expect(toolRunSummaryPropsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when `result.content` changes", () => {
+    const a = { tools: [tool({ id: "t1", result: { content: "old" } })], live: false };
+    const b = { tools: [tool({ id: "t1", result: { content: "new" } })], live: false };
+    expect(toolRunSummaryPropsEqual(a, b)).toBe(false);
+  });
+
+  it("returns false when a nested child's result arrives", () => {
+    const childA: ToolCallEntry = { id: "c1", toolName: "Task" };
+    const childB: ToolCallEntry = { id: "c1", toolName: "Task", result: { content: "done" } };
+    const a = { tools: [tool({ id: "t1", toolName: "Task", children: [childA] })], live: false };
+    const b = { tools: [tool({ id: "t1", toolName: "Task", children: [childB] })], live: false };
+    expect(toolRunSummaryPropsEqual(a, b)).toBe(false);
   });
 });
 

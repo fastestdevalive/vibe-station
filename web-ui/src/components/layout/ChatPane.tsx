@@ -137,6 +137,7 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
     discardEdit,
     sendNow,
     forkTurn,
+    setCanTrim,
   } = useChat(api, sessionId, enabled);
 
   // Salvaged draft from a failed queued-turn Save (A9): remounts the composer
@@ -174,6 +175,12 @@ export function ChatPane({ api, session, visible, focusOnMount = true }: ChatPan
   useEffect(() => {
     setAtBottom(true);
   }, [sessionId, enabled]);
+  // Mirror the scroller's `atBottom` into `useChat` so live-event trimming is
+  // disabled while the user has scrolled up (history must not be cut from under
+  // them). Fires on every scroll-state change; `setCanTrim` is stable.
+  useEffect(() => {
+    setCanTrim(atBottom);
+  }, [atBottom, setCanTrim]);
   const [steerNotice, setSteerNotice] = useState<string | null>(null);
   useEffect(() => {
     setSteerNotice(null);

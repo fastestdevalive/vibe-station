@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { DiffView } from "@/components/preview/DiffView";
+import { useRowOpen } from "./rowUiState";
 import {
   capForDisplay,
   extractToolDiffs,
@@ -27,6 +28,53 @@ interface ToolRunSummaryProps {
   live?: boolean;
   /** Absolute working directory — paths are shown relative to it. */
   cwd?: string;
+  /** Stable key for this row within the `MessageList` — used to persist the
+   *  run's open/closed state across virtualized unmount/remount. */
+  rowKey?: string;
+}
+
+/**
+ * Shallow equality for a single `ToolCallEntry`, recursing the same comparison
+ * over its nested `children` (a Task's bracketed sub-thread). References
+ * (`toolInput`, `diffs`, `locations`) are compared by identity; primitives
+ * (`id`, `toolName`, `toolKind`, `status`, `result?.content`, `result?.isError`)
+ * by value. Callback props are never compared — this is data-only.
+ */
+function toolEqual(a: ToolCallEntry, b: ToolCallEntry): boolean {
+  if (a.id !== b.id) return false;
+  if (a.toolName !== b.toolName) return false;
+  if (a.toolKind !== b.toolKind) return false;
+  if (a.status !== b.status) return false;
+  if (a.toolInput !== b.toolInput) return false;
+  if ((a.result?.content ?? undefined) !== (b.result?.content ?? undefined)) return false;
+  if ((a.result?.isError ?? undefined) !== (b.result?.isError ?? undefined)) return false;
+  if (a.diffs !== b.diffs) return false;
+  if (a.locations !== b.locations) return false;
+  return toolsEqual(a.children, b.children);
+}
+
+function toolsEqual(a: ToolCallEntry[] | undefined, b: ToolCallEntry[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    // `a.length === b.length` above guarantees both indices are in range.
+    if (!toolEqual(a[i]!, b[i]!)) return false;
+  }
+  return true;
+}
+
+/**
+ * Custom `React.memo` comparator for `ToolRunSummary`. Compares `live`, `cwd`,
+ * `tools.length`, and every tool's data fields (recursing into `children`);
+ * ignores callback props. Exported for tests.
+ */
+export function toolRunSummaryPropsEqual(a: ToolRunSummaryProps, b: ToolRunSummaryProps): boolean {
+  if (a.live !== b.live) return false;
+  if (a.cwd !== b.cwd) return false;
+  if (a.rowKey !== b.rowKey) return false;
+  if (!toolsEqual(a.tools, b.tools)) return false;
+  return true;
 }
 
 // Tool names that describe the same kind of action fold into one bucket so
@@ -141,7 +189,7 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
     tool.toolKind === "think" ||
     READ_ONLY_TOOL_NAMES.has(name);
   // Edit/Write/Delete/Move tools start expanded so diffs are immediately visible.
-  const [open, setOpen] = useState(!isBash && !isReadOnly);
+  const [open, setOpen] = useRowOpen(`tool:${tool.id}`, !isBash && !isReadOnly);
   // For bash/execute tools, `locations` holds the cwd directory, not a file —
   // skip it so the cwd path isn't shown inline as if it were the command. No
   // known bash adapter populates locations with anything else today.
@@ -292,12 +340,13 @@ function ToolRunEntryRow({ tool, running, cwd }: { tool: ToolCallEntry; running:
  * under the summary line; each tool's call and result render as ONE
  * element, not a separate card pair.
  */
-export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
+export const ToolRunSummary = memo(
+  function ToolRunSummary({ tools, live, cwd, rowKey }: ToolRunSummaryProps) {
   // A singleton run's summary line is a generic phrase ("Ran 1 shell
   // command") — start it expanded so the actual tool name + inline args
   // (in the entry row below) are visible without a click, matching what a
   // lone tool call used to show directly.
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useRowOpen(rowKey != null ? `run:${rowKey}` : undefined, true);
   const hasError = tools.some((t) => t.result?.isError || t.status === "failed");
   // A result already arrived, or a terminal status was set — never spin, even
   // if an adapter's terminal update omitted a fresh `status` field (per ACP's
@@ -341,4 +390,6 @@ export function ToolRunSummary({ tools, live, cwd }: ToolRunSummaryProps) {
       ) : null}
     </div>
   );
-}
+  },
+  toolRunSummaryPropsEqual,
+);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer, defaultRangeExtractor, type Virtualizer } from "@tanstack/react-virtual";
 import type { ApiInstance } from "@/api";
 import type { Attachment, Command, FileScope, NormalizedEvent } from "@/api/types";
 import type { PendingTurn } from "@/hooks/useChat";
@@ -8,6 +9,7 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { ToolRunSummary } from "./ToolRunSummary";
 import { ErrorCard } from "./ErrorCard";
 import { WorkingDots } from "./WorkingDots";
+import { RowUiStateProvider } from "./rowUiState";
 import { blocksToPlaceholder, type ToolCallEntry } from "./toolFormat";
 
 type RenderItem =
@@ -433,6 +435,35 @@ const LOAD_ALL_WARN_TURNS = 200;
  *  is a guarded escape hatch (R2.5) and stays manual-only. */
 const NEAR_TOP_PX = 80;
 
+/** Minimum loaded item count below which the chat renders every row in normal
+ *  flow (no DOM windowing). Above it, `useVirtualizer` mounts only the rows
+ *  inside the viewport + overscan. Mirrors `VIRTUALIZE_MIN_LINES` for code. */
+const VIRTUALIZE_MIN_ITEMS = 100;
+
+/** Stable, order-independent key for a `RenderItem` — the same key the
+ *  virtualizer's `getItemKey` uses (so the measurement cache and the prepend
+ *  anchor survive an index shift), and the key each `.chat-vrow` carries. */
+function itemKey(item: RenderItem): string {
+  return item.type === "user" ? item.turnId ?? item.id : item.id;
+}
+
+/** Ballpark per-type row height used by `estimateSize`. `measureElement`
+ *  replaces each estimate once the row actually mounts, so these only need to
+ *  be close enough to keep the scrollbar sane before rows measure. */
+function estimateItemSize(item: RenderItem): number {
+  switch (item.type) {
+    case "user":
+      return 80;
+    case "toolRun":
+      return 120;
+    case "assistant":
+    case "thinking":
+      return 100;
+    default:
+      return 48;
+  }
+}
+
 interface MessageListProps {
   events: NormalizedEvent[];
   /** Optimistic user turns that are NOT queued (queued ones live in the tray). */
@@ -526,13 +557,23 @@ export function MessageList({
   }, [events, turnActive]);
   // Queued / editing user turns render in the tray above the composer, not in
   // the log. Filter after grouping so the A7 edited-turn dedupe still applies.
+  // 2.2b — the null-render thinking predicate (see the primary render's old
+  // `thinking` case) is folded in here so hidden items (an unclosed mid-turn
+  // thinking group, or an empty+unclosable group) produce NO row at all rather
+  // than an empty padded `.chat-vrow`. This keeps `live` (below, computed as
+  // `i === items.length - 1`) on the filtered list.
   const items = useMemo(() => {
     const filtered =
       hiddenTurnIds && hiddenTurnIds.size > 0
         ? grouped.filter((it) => it.type !== "user" || !it.turnId || !hiddenTurnIds.has(it.turnId))
         : grouped;
-    return mergeToolRuns(filtered);
-  }, [grouped, hiddenTurnIds]);
+    const merged = mergeToolRuns(filtered);
+    return merged.filter(
+      (it) =>
+        it.type !== "thinking" ||
+        ((it.endedTs || !turnActive || it.turnId !== activeTurnId) && (it.endedTs || it.text.trim().length > 0)),
+    );
+  }, [grouped, hiddenTurnIds, turnActive, activeTurnId]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const prevPendingLenRef = useRef(pending.length);
@@ -587,23 +628,136 @@ export function MessageList({
   // fix in this file: never restore from a stale measurement.
   const prevScrollHeightRef = useRef(0);
 
-  /** Clear the pending-prepend state and re-anchor the read position: whatever
-   *  was on screen now sits `delta` px lower, so adding `delta` to `scrollTop`
-   *  leaves it pixel-identical. Applied in BOTH directions — a prepend can be
-   *  negative overall (a short page that also removes the `.chat-load-earlier`
-   *  row when `hasMore` flips false), and skipping those left the view shifted.
+  // --- DOM windowing (2.2/2.3) ------------------------------------------
+  // Above `VIRTUALIZE_MIN_ITEMS` the list windows its rows through
+  // `useVirtualizer`; below it, every row renders in normal flow through the
+  // same `renderItem` helper. `virtualized` gates BOTH the hook's `enabled`
+  // flag and the render branch, so a short chat (and every short-chat test)
+  // never touches the virtualizer.
+  const virtualized = items.length >= VIRTUALIZE_MIN_ITEMS;
+  // The sizer div that receives `getTotalSize()` — the virtualizer's scroll
+  // origin. `scrollMargin` is the distance from the scroller's content top to
+  // the sizer's top (the header "load earlier" row), re-measured when the
+  // header appears/disappears (`hasMore`/`loadingEarlier`).
+  const sizerRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  // Key-anchor for prepend restore (2.5). While a load-earlier is pending, the
+  // scroll listener keeps refreshing this with the first visible (index >= 1)
+  // item's key + its on-screen offset; a layout effect applies it once the
+  // prepended page lands (`items[0]`'s key changes).
+  const anchorRef = useRef<{ key: string; offset: number } | null>(null);
+  const prevFirstKeyRef = useRef<string | null>(null);
+  // Live refs read by the once-registered scroll listener / restore effect so
+  // they never re-subscribe when the values change.
+  const virtualizerRef = useRef<Virtualizer<HTMLElement, Element> | null>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  // The fork-edited item and the item containing the DOM focus are pinned into
+  // the rendered range via `rangeExtractor`, so their state (a draft, keyboard
+  // focus) survives scrolling away (Decision 5).
+  const forkIndex = useMemo(() => {
+    if (!forkEditingTurnId) return -1;
+    return items.findIndex((it) => it.type === "user" && it.turnId === forkEditingTurnId);
+  }, [items, forkEditingTurnId]);
+  // Track which row holds DOM focus so the rangeExtractor keeps it mounted
+  // even when it scrolls out of the window (virtualizing it away would drop
+  // focus). Driven by focusin/focusout, not by `items` changes.
+  const [focusedIndex, setFocusedIndex] = useState(-1);
+  const onRowFocusIn = useCallback((e: React.FocusEvent) => {
+    const row = (e.target as HTMLElement).closest?.("[data-row-index]") as HTMLElement | null;
+    const idx = row ? Number(row.dataset.rowIndex) : -1;
+    setFocusedIndex(Number.isFinite(idx) ? idx : -1);
+  }, []);
+  // Row indices shift on prepend / live trim: re-derive from the DOM so the pin
+  // follows the focused row instead of pointing at a stale index.
+  useLayoutEffect(() => {
+    const el = document.activeElement as HTMLElement | null;
+    const row = el?.closest?.("[data-row-index]") as HTMLElement | null;
+    const idx = row ? Number(row.dataset.rowIndex) : -1;
+    setFocusedIndex((prev) => (prev === -1 && idx === -1) || prev === idx ? prev : Number.isFinite(idx) ? idx : -1);
+  }, [items]);
+  const onRowFocusOut = useCallback((e: React.FocusEvent) => {
+    const next = e.relatedTarget as HTMLElement | null;
+    if (next?.closest?.("[data-row-index]")) return; // focusin will update it
+    setFocusedIndex(-1);
+  }, []);
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    enabled: virtualized,
+    getScrollElement: () => listRef.current?.parentElement ?? null,
+    getItemKey: (i) => itemKey(items[i]!),
+    estimateSize: (i) => estimateItemSize(items[i]!),
+    overscan: 8,
+    // Lazy: TanStack only calls this when it needs the offset (mount / the
+    // moment virtualization turns on), so there's no per-render O(n) reduce and
+    // it always reflects the CURRENT items.
+    initialOffset: () =>
+      virtualized ? itemsRef.current.reduce((sum, it) => sum + estimateItemSize(it), 0) : 0,
+    scrollMargin,
+    // `useFlushSync` present in this version — disable it so the virtualizer
+    // never forces a synchronous React flush (React 19 warnings).
+    useFlushSync: false,
+    rangeExtractor: (range) => {
+      const idxs = defaultRangeExtractor(range);
+      const set = new Set(idxs);
+      if (forkIndex >= 0) set.add(forkIndex);
+      if (focusedIndex >= 0) set.add(focusedIndex);
+      return Array.from(set).sort((a, b) => a - b);
+    },
+  });
+  virtualizerRef.current = virtualizer;
+
+  // Re-measure `scrollMargin` when the header (which sits above the sizer)
+  // appears or disappears, and once the sizer mounts.
+  useLayoutEffect(() => {
+    if (!virtualized) return;
+    const scroller = listRef.current?.parentElement;
+    const sizer = sizerRef.current;
+    if (!scroller || !sizer) return;
+    setScrollMargin(sizer.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop);
+  }, [hasMore, loadingEarlier, virtualized]);
+
+  // 2.6 — while pinned to the bottom, re-pin whenever the total size changes
+  // (new rows measured at the bottom, an expanding tool card), so streaming
+  // content keeps the live edge in view without waiting on a `scroll` event.
+  useLayoutEffect(() => {
+    if (!atBottomRef.current) return;
+    const container = listRef.current?.parentElement;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [virtualizer.getTotalSize(), virtualized]);
+
+  /** Clear the pending-prepend state and restore the read position.
    *
-   *  Known limit of measuring total `scrollHeight`: if a live bottom-edge
-   *  append (streaming tokens) commits in the SAME React batch as the prepend,
-   *  its height is folded into `delta` and the restore over-shifts by that
-   *  much. The per-render re-capture below keeps every OTHER frame of in-flight
-   *  bottom growth out of `delta`; isolating that single same-batch commit
-   *  would need per-item offset bookkeeping, which isn't worth it here. */
+   *  Key-anchor restore (2.5): if `anchorRef` holds a key that is found in the
+   *  CURRENT `items`, jump `scrollTop` to that item's (now-shifted) start plus
+   *  the captured on-screen offset — pixel-identical, and immune to a
+   *  same-batch bottom append (the offset is per-item, not a total-height
+   *  delta). If the anchor key is no longer present (a turn-merge re-keyed it,
+   *  or the load settled with nothing new), fall back to the old total-height
+   *  `delta` restore. When there is no anchor at all, no restore happens.
+   *
+   *  Used by BOTH the settle-on-promise callback (load never rendered
+   *  in-flight) and the layout effect that owns the in-flight release. */
   const releasePendingPrepend = useCallback(() => {
     prependPendingRef.current = false;
     sawLoadingRef.current = false;
     const container = listRef.current?.parentElement;
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
     if (!container) return;
+    if (anchor && virtualizerRef.current) {
+      const idx = itemsRef.current.findIndex((it) => itemKey(it) === anchor.key);
+      if (idx >= 0) {
+        const [offset] = virtualizerRef.current.getOffsetForIndex(idx, "start") ?? [container.scrollTop];
+        container.scrollTop = offset + anchor.offset;
+        prevScrollHeightRef.current = container.scrollHeight;
+        return;
+      }
+    }
+    // Fallback: total-height delta restore (non-virtualized, or anchor key gone).
     const delta = container.scrollHeight - prevScrollHeightRef.current;
     if (delta !== 0) container.scrollTop += delta;
     prevScrollHeightRef.current = container.scrollHeight;
@@ -654,6 +808,21 @@ export function MessageList({
       const near = distance < 80;
       applyAtBottom(near);
       if (container.scrollTop < NEAR_TOP_PX) startLoadEarlierRef.current();
+      // 2.5 — while a load-earlier is pending, keep the key anchor current (the
+      // user may keep scrolling during the fetch). Anchor on the first visible
+      // item with index >= 1 — index 0 can be re-keyed by a turn merge at a
+      // page boundary. `visible.start` already includes `scrollMargin`, so the
+      // captured offset (`container.scrollTop - visible.start`) is relative to
+      // the sizer, and `sizerTop` is NOT added back at restore time.
+      if (prependPendingRef.current && virtualizerRef.current) {
+        const visible = virtualizerRef.current.getVirtualItems().find((v) => v.index >= 1);
+        if (visible && itemsRef.current[visible.index]) {
+          anchorRef.current = {
+            key: itemKey(itemsRef.current[visible.index]!),
+            offset: container.scrollTop - visible.start,
+          };
+        }
+      }
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => container.removeEventListener("scroll", onScroll);
@@ -715,19 +884,40 @@ export function MessageList({
   useLayoutEffect(() => {
     const container = listRef.current?.parentElement;
     if (!container) return;
+    const firstKey = itemsRef.current.length > 0 ? itemKey(itemsRef.current[0]!) : null;
     if (loadingEarlier) {
       sawLoadingRef.current = true;
-    } else if (prependPendingRef.current && sawLoadingRef.current) {
-      releasePendingPrepend(); // re-captures `prevScrollHeightRef` itself
-      return;
-    } else if (prependPendingRef.current) {
-      // A load is pending but this render is neither "in flight" nor its
-      // release — i.e. a page may already have landed while the parent never
-      // rendered `loadingEarlier === true`. Do NOT re-capture the height
-      // here: that would erase the pre-prepend measurement the settle
-      // callback is about to restore from.
+      prevFirstKeyRef.current = firstKey;
+      // Fall through (no return): capture the pre-prepend `scrollHeight` so a
+      // release sees the height as it was BEFORE the page about to be prepended
+      // existed — the same "re-captured on every render" rule as before.
+      prevScrollHeightRef.current = container.scrollHeight;
       return;
     }
+    if (prependPendingRef.current) {
+      // A page landing shifts every item's index; detect it by the FIRST item's
+      // key changing. When it does, apply the key anchor captured on scroll
+      // (or fall back to the height-delta when the anchor key is gone).
+      const keyChanged = firstKey != null && prevFirstKeyRef.current != null && firstKey !== prevFirstKeyRef.current;
+      if (keyChanged) {
+        prevFirstKeyRef.current = firstKey;
+        releasePendingPrepend();
+        return;
+      }
+      if (sawLoadingRef.current) {
+        // Was in-flight, the parent just released it, but no key change (the
+        // load settled with nothing new) → release with no restore.
+        prevFirstKeyRef.current = firstKey;
+        releasePendingPrepend();
+        return;
+      }
+      // Pending but never rendered in-flight → the settle callback owns the
+      // release. Do NOT re-capture the pre-prepend height here: that would
+      // erase the measurement the settle callback is about to restore from.
+      prevFirstKeyRef.current = firstKey;
+      return;
+    }
+    prevFirstKeyRef.current = firstKey;
     prevScrollHeightRef.current = container.scrollHeight;
   });
 
@@ -777,12 +967,124 @@ export function MessageList({
     return ids.size;
   }, [events]);
 
+  // The per-type row body (2.3). `i` is the index in the FILTERED `items` array
+  // (not the virtual index) — that is what the `live` flag and the fork/focus
+  // range pins are computed against. The wrapper `.chat-vrow` (added by the
+  // caller) carries the row's key, so `renderItem` returns keyless nodes.
+  const renderItem = (item: RenderItem, i: number): React.ReactNode => {
+    switch (item.type) {
+      case "user": {
+        // A cancelled queued turn stays in history but was never processed —
+        // render it muted with a marker, and never fork-editable.
+        if (item.cancelled) {
+          return (
+            <div className="chat-user-turn chat-user-turn--cancelled" data-role="user">
+              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
+              <span className="chat-user-turn__cancelled" title="This message was cancelled before the agent processed it.">
+                Canceled · not sent to agent
+              </span>
+            </div>
+          );
+        }
+        const forkable = canFork && !!item.turnId;
+        if (forkable && forkEditingTurnId === item.turnId) {
+          return (
+            <div className="chat-msg chat-msg--user chat-msg--forking" data-role="user">
+              <QueuedTurnEditor
+                api={api!}
+                sessionId={sessionId!}
+                turnId={item.turnId}
+                initialText={item.text}
+                initialAttachments={item.attachments ?? []}
+                commands={commands}
+                onSave={async (message, attachments) => {
+                  setForkEditingTurnId(null);
+                  await onForkTurn!(item.turnId!, message, attachments.map((a) => a.id));
+                }}
+                onDiscard={() => setForkEditingTurnId(null)}
+              />
+            </div>
+          );
+        } else if (forkable) {
+          return (
+            <div className="chat-user-turn">
+              <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
+              <button
+                type="button"
+                className="chat-user-turn__edit"
+                aria-label="Edit message (fork)"
+                title="Edit this message and re-run from here (fork)"
+                onClick={() => setForkEditingTurnId(item.turnId!)}
+              >
+                ✎
+              </button>
+            </div>
+          );
+        }
+        return <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />;
+      }
+      case "assistant":
+        return <TextMessage role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} />;
+      case "thinking":
+        // The null-render gate for unclosed/empty thinking groups is folded
+        // into the `items` memo (2.2b), so any thinking item that reaches here
+        // renders its block.
+        return (
+          <ThinkingBlock
+            text={item.text}
+            startedTs={item.startedTs}
+            endedTs={item.endedTs}
+            hadToolCall={item.hadToolCall}
+            rowKey={itemKey(item)}
+            api={api}
+            worktreeId={worktreeId}
+            scope={scope}
+          />
+        );
+      case "toolRun":
+        // "Live" means this run is the trailing item of an active turn — any
+        // tool inside it still missing a result is genuinely running (turns can
+        // fire several tool calls before results land), not just the last one.
+        return (
+          <ToolRunSummary
+            tools={item.tools}
+            live={!!turnActive && i === items.length - 1}
+            cwd={cwd}
+            rowKey={itemKey(item)}
+          />
+        );
+      case "error":
+        return <ErrorCard text={item.text} onRetry={onRetry} />;
+      case "status":
+        return (
+          <div className="chat-status-note" role="note">
+            {item.text}
+          </div>
+        );
+      case "system_event":
+        return (
+          <div className="chat-system-event" role="note">
+            {item.agentName ? <span className="chat-system-event__chip">{item.agentName}</span> : null}
+            {item.text}
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
-    <div ref={listRef} className="chat-message-list" role="log" aria-label="Conversation">
-      {/* Older history is loaded AUTOMATICALLY on scrolling near the top (see
-       *  the scroll listener above); this button is kept deliberately as a
-       *  manual fallback, not as the primary path. The auto-trigger rides on
-       *  `scroll` events, so it cannot fire in the two cases where there is
+    <RowUiStateProvider>
+    <div
+      ref={listRef}
+      className={`chat-message-list${virtualized ? " chat-message-list--virtual" : ""}`}
+      role="feed"
+      aria-label="Conversation"
+    >
+      {/* Header — older history is loaded AUTOMATICALLY on scrolling near the
+       *  top (see the scroll listener above); this button is kept deliberately
+       *  as a manual fallback, not as the primary path. The auto-trigger rides
+       *  on `scroll` events, so it cannot fire in the two cases where there is
        *  nothing to scroll: a loaded window shorter than the viewport, and a
        *  container already pinned at scrollTop 0. It also doubles as the
        *  top-of-list loading affordance (reusing this file's existing
@@ -812,134 +1114,53 @@ export function MessageList({
         </div>
       ) : null}
 
-      {items.flatMap((item, i) => {
-        const key = item.type === "user" ? item.turnId ?? item.id : item.id;
-        let node: React.ReactNode;
-        switch (item.type) {
-          case "user": {
-            // A cancelled queued turn stays in history but was never processed —
-            // render it muted with a marker, and never fork-editable.
-            if (item.cancelled) {
-              node = (
-                <div key={key} className="chat-user-turn chat-user-turn--cancelled" data-role="user">
-                  <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
-                  <span className="chat-user-turn__cancelled" title="This message was cancelled before the agent processed it.">
-                    Canceled · not sent to agent
-                  </span>
-                </div>
-              );
-              break;
-            }
-            const forkable = canFork && !!item.turnId;
-            if (forkable && forkEditingTurnId === item.turnId) {
-              node = (
-                <div key={key} className="chat-msg chat-msg--user chat-msg--forking" data-role="user">
-                  <QueuedTurnEditor
-                    api={api!}
-                    sessionId={sessionId!}
-                    turnId={item.turnId}
-                    initialText={item.text}
-                    initialAttachments={item.attachments ?? []}
-                    commands={commands}
-                    onSave={async (message, attachments) => {
-                      setForkEditingTurnId(null);
-                      await onForkTurn!(item.turnId!, message, attachments.map((a) => a.id));
-                    }}
-                    onDiscard={() => setForkEditingTurnId(null)}
-                  />
-                </div>
-              );
-            } else if (forkable) {
-              node = (
-                <div key={key} className="chat-user-turn">
-                  <TextMessage role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />
-                  <button
-                    type="button"
-                    className="chat-user-turn__edit"
-                    aria-label="Edit message (fork)"
-                    title="Edit this message and re-run from here (fork)"
-                    onClick={() => setForkEditingTurnId(item.turnId!)}
-                  >
-                    ✎
-                  </button>
-                </div>
-              );
-            } else {
-              node = <TextMessage key={key} role="user" text={item.text} attachments={item.attachments} api={api} worktreeId={worktreeId} scope={scope} />;
-            }
-            break;
-          }
-          case "assistant":
-            node = <TextMessage key={key} role="assistant" text={item.text} api={api} worktreeId={worktreeId} scope={scope} />;
-            break;
-          case "thinking":
-            // A still-open thinking group renders NOTHING while the turn is
-            // active: its live header is always just "Thinking", which the
-            // trailing `WorkingIndicator`'s "Thinking •••" line already says.
-            // Once `groupEvents` closes the group the block appears in place
-            // (items never reorder) as "Thought for Xs", expandable to the
-            // accumulated reasoning. The second half of the gate compares
-            // against the CURRENTLY RUNNING turn, not the global `turnActive`
-            // flag: a group whose events carry no `turnId` (imported/resumed
-            // transcripts start with `currentTurnId: undefined`) can never be
-            // closed by `closeOpenThinking`, so gating on "any turn is
-            // active" hid such historical reasoning for the whole duration of
-            // every unrelated later turn.
-            //
-            // A group that is BOTH empty and unclosable (no `endedTs` and no
-            // text — e.g. a turnId-less imported event, or a turn whose last
-            // persisted event is a thinking event because the session died
-            // mid-turn) never gets an `endedTs` from `closeOpenThinking`, so
-            // it would otherwise render forever as a bare, non-expandable,
-            // live-looking "Thinking" label over permanently dead content.
-            // There is nothing meaningful to show, so it renders nothing. A
-            // NON-empty unclosable group still renders once the turn ends.
-            node =
-              (item.endedTs || !turnActive || item.turnId !== activeTurnId) &&
-              (item.endedTs || item.text.trim().length > 0) ? (
-              <ThinkingBlock
-                key={key}
-                text={item.text}
-                startedTs={item.startedTs}
-                endedTs={item.endedTs}
-                hadToolCall={item.hadToolCall}
-                api={api}
-                worktreeId={worktreeId}
-                scope={scope}
-              />
-            ) : null;
-            break;
-          case "toolRun":
-            // "Live" means this run is the trailing item of an active turn —
-            // any tool inside it still missing a result is genuinely running
-            // (turns can fire several tool calls before results land), not
-            // just the last one in the run.
-            node = <ToolRunSummary key={key} tools={item.tools} live={!!turnActive && i === items.length - 1} cwd={cwd} />;
-            break;
-          case "error":
-            node = <ErrorCard key={key} text={item.text} onRetry={onRetry} />;
-            break;
-          case "status":
-            node = (
-              <div key={key} className="chat-status-note" role="note">
-                {item.text}
+      {/* Sizer (virtualized) or inline rows (below VIRTUALIZE_MIN_ITEMS). The
+       *  virtualizer is skipped below the threshold, so a short chat renders
+       *  every row in normal flow through the same `renderItem`. */}
+      {virtualized ? (
+        <div
+          ref={sizerRef}
+          className="chat-vrow-sizer"
+          onFocus={onRowFocusIn}
+          onBlur={onRowFocusOut}
+          style={{ position: "relative", height: virtualizer.getTotalSize() }}
+        >
+          {virtualizer.getVirtualItems().map((v) => {
+            const item = items[v.index]!;
+            return (
+              <div
+                key={itemKey(item)}
+                ref={virtualizer.measureElement}
+                data-index={v.index}
+                data-row-index={v.index}
+                className="chat-vrow"
+                style={{ transform: `translateY(${v.start - scrollMargin}px)` }}
+                role="article"
+                aria-setsize={items.length}
+                aria-posinset={v.index + 1}
+              >
+                {renderItem(item, v.index)}
               </div>
             );
-            break;
-          case "system_event":
-            node = (
-              <div key={key} className="chat-system-event" role="note">
-                {item.agentName ? <span className="chat-system-event__chip">{item.agentName}</span> : null}
-                {item.text}
-              </div>
-            );
-            break;
-          default:
-            node = null;
-        }
-        return node;
-      })}
+          })}
+        </div>
+      ) : (
+        items.map((item, i) => (
+          <div
+            key={itemKey(item)}
+            data-row-index={i}
+            className="chat-vrow chat-vrow--flow"
+            role="article"
+            aria-setsize={items.length}
+            aria-posinset={i + 1}
+          >
+            {renderItem(item, i)}
+          </div>
+        ))
+      )}
 
+      {/* Footer — pending optimistic turns, the working indicator, and the
+       *  bottom scroll sentinel. */}
       {pending.map((p) => (
         <div key={p.turnId} className="chat-pending">
           <TextMessage role="user" text={p.message} attachments={p.attachments} pending api={api} worktreeId={worktreeId} scope={scope} />
@@ -972,5 +1193,6 @@ export function MessageList({
         </button>
       ) : null}
     </div>
+    </RowUiStateProvider>
   );
 }
