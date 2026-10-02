@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Mutex, MutexGuard, OnceLock, RwLock};
 
 use vst_types::{Attachment, Command};
 
@@ -467,6 +467,30 @@ pub fn merge_catalogs(
 static PATHS: RwLock<Vec<PathBuf>> = RwLock::new(Vec::new());
 static ENTRIES: RwLock<Vec<SkillCatalogEntry>> = RwLock::new(Vec::new());
 static DIRECTORIES: RwLock<Vec<SkillDirectoryStatus>> = RwLock::new(Vec::new());
+
+// Test-only lock serializing tests that mutate or read the shared singleton
+// catalog. `PATCH /settings` rebuilds it via `set_skill_paths` while another
+// test reads it through `get_skills`, so the two must not run concurrently or
+// one clobbers the other's state mid-assertion. Mirrors the `HOME_LOCK` test
+// seam in `home.rs`.
+static SKILL_CATALOG_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Guard returned by [`with_skill_catalog_test_guard`]; releases the lock on drop.
+pub struct SkillCatalogTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+/// Serialize access to the shared catalog from tests. Only safe to call from
+/// tests; every test that calls `set_skill_paths`/`get_skills`/
+/// `reset_skill_catalog_for_tests` must hold the returned guard for the whole
+/// of its catalog-touching section.
+pub fn with_skill_catalog_test_guard() -> SkillCatalogTestGuard {
+    let lock = SKILL_CATALOG_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    SkillCatalogTestGuard { _lock: lock }
+}
 
 /// Dedup by name (first occurrence, in `skillPaths` order, wins) so a skill
 /// symlinked/present under more than one configured root shows up exactly

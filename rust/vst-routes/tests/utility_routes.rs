@@ -154,6 +154,15 @@ async fn test_ordered_lists_get_put_validation_and_broadcast() {
 #[tokio::test]
 async fn test_settings_get_patch_and_validation() {
     let tmp = tempdir().unwrap();
+    // Hold the process-wide home override for the whole test: get_settings()
+    // resolves the global-default projects/skill dirs via home_dir(), so it
+    // must not run concurrently with another test's with_home() override or it
+    // reads an inconsistent home mid-assertion.
+    let _guard = with_home(tmp.path().to_path_buf());
+    // The valid PATCH below rebuilds the shared skill catalog via
+    // set_skill_paths; hold the catalog test lock so it can't race
+    // test_skills_frontmatter_and_directory_scanning's set+read.
+    let _cat_guard = skill_resolution::with_skill_catalog_test_guard();
     let paths = Paths::with_home(tmp.path().join(".vibe-station"));
     let broadcaster = Broadcaster::new(32);
     let routes = SettingsRoutes::new(paths.clone(), broadcaster);
@@ -672,7 +681,11 @@ async fn test_skills_frontmatter_and_directory_scanning() {
     assert!(m_result.status.missing);
     assert!(m_result.status.error.is_none());
 
-    // SkillsRoutes reads the shared, singleton catalog — seed it here.
+    // SkillsRoutes reads the shared, singleton catalog — seed it here. The
+    // catalog is process-global and PATCH /settings rebuilds it, so hold the
+    // test lock for the whole set+read to avoid racing another test's
+    // set_skill_paths.
+    let _cat_guard = skill_resolution::with_skill_catalog_test_guard();
     skill_resolution::reset_skill_catalog_for_tests();
     skill_resolution::set_skill_paths(&[
         skill_dir.display().to_string(),
