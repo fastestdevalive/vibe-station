@@ -52,6 +52,16 @@ type ActiveQrType = {
   svg: string;
 };
 
+/**
+ * No-auth daemons (dev sandbox) have no tokens, so the sessions route reports
+ * every viewer as the desktop. Don't claim "Desktop" when the page was clearly
+ * opened from another host (LAN/Tailscale IP, public name).
+ */
+function viewedFromLocalhost(): boolean {
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1" || h === "tauri.localhost" || h === "";
+}
+
 function CopyLinkButton({ url, label = "Copy link" }: { url: string; label?: string }) {
   const portalRoot = usePortalRoot();
   const [copied, setCopied] = useState(false);
@@ -104,13 +114,14 @@ function CopyLinkButton({ url, label = "Copy link" }: { url: string; label?: str
   );
 }
 
-type Sentiment = "info" | "warn" | "error" | "busy" | "ok";
+type Sentiment = "info" | "warn" | "error" | "busy" | "ok" | "off";
 
 const SENTIMENT_GLYPH: Record<Sentiment, string> = {
   info: "ℹ",
   warn: "⚠",
   error: "✕",
   ok: "●",
+  off: "●",
   busy: "",
 };
 
@@ -119,6 +130,7 @@ const SENTIMENT_COLOR: Record<Sentiment, string> = {
   warn: "var(--fg-warning)",
   error: "var(--fg-danger)",
   ok: "var(--fg-success)",
+  off: "var(--fg-danger)",
   busy: "var(--fg-muted)",
 };
 
@@ -173,6 +185,23 @@ const CARD_STYLE: React.CSSProperties = {
   flex: 1,
 };
 
+/** Buttons row pinned to the card's bottom-right so all cards line up. */
+function CardActions({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        marginTop: "auto",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: "var(--space-3)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function SameNetworkCard({
   networkEnabled,
   networkLocked,
@@ -180,6 +209,7 @@ function SameNetworkCard({
   toggling,
   onShowQr,
   onToggleNetwork,
+  error,
 }: {
   networkEnabled: boolean | null;
   networkLocked: boolean;
@@ -187,6 +217,7 @@ function SameNetworkCard({
   toggling: boolean;
   onShowQr: () => void;
   onToggleNetwork: () => void;
+  error: string | null;
 }) {
   const enabled = networkEnabled === true;
   return (
@@ -199,94 +230,55 @@ function SameNetworkCard({
       >
         Same network
       </div>
-      {enabled || networkEnabled === null ? (
+      <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+        Works on same WiFi or LAN. No setup.
+      </div>
+      {enabled ? (
         <>
-          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-            Works on same WiFi or LAN. No setup.
-          </div>
-          {enabled ? (
-            <>
-              <StatusBox sentiment="ok">Network access on</StatusBox>
-              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={qrLoading}
-                  onClick={onShowQr}
-                >
-                  {qrLoading ? "Generating…" : "Show QR"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  disabled={toggling}
-                  onClick={onToggleNetwork}
-                  style={{ fontWeight: "normal" }}
-                >
-                  {toggling ? "…" : "Turn off"}
-                </button>
-              </div>
-            </>
-          ) : (
+          <StatusBox sentiment="ok">Network access on</StatusBox>
+          {networkLocked && !error && (
+            <StatusBox sentiment="info">Change this from localhost on the host machine</StatusBox>
+          )}
+          {error && <StatusBox sentiment="error">{error}</StatusBox>}
+          <CardActions>
+            <button
+              type="button"
+              className="btn btn--secondary"
+              disabled={toggling || networkLocked}
+              onClick={onToggleNetwork}
+              style={{ fontWeight: "normal" }}
+            >
+              {toggling ? "…" : "Turn off"}
+            </button>
             <button
               type="button"
               className="btn btn--primary"
-              style={{ alignSelf: "flex-start" }}
+              disabled={qrLoading}
+              onClick={onShowQr}
+            >
+              {qrLoading ? "Generating…" : "Show QR"}
+            </button>
+          </CardActions>
+        </>
+      ) : (
+        <>
+          {networkLocked ? (
+            !error && <StatusBox sentiment="off">Change this from localhost on the host machine</StatusBox>
+          ) : (
+            networkEnabled === false && <StatusBox sentiment="off">Network access off</StatusBox>
+          )}
+          {error && <StatusBox sentiment="error">{error}</StatusBox>}
+          <CardActions>
+            <button
+              type="button"
+              className="btn btn--primary"
               disabled={toggling || networkLocked}
               onClick={onToggleNetwork}
             >
-              {toggling ? "…" : "Allow other devices on my network"}
+              {toggling ? "…" : "Allow access"}
             </button>
-          )}
+          </CardActions>
         </>
-      ) : (
-        <div style={{ position: "relative" }}>
-          <div
-            style={{
-              filter: "blur(2px)",
-              pointerEvents: "none",
-              fontSize: "var(--font-size-xs)",
-              color: "var(--fg-muted)",
-            }}
-          >
-            Works on same WiFi or LAN. No setup.
-          </div>
-          {networkLocked ? (
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "var(--font-size-xs)",
-                color: "var(--fg-muted)",
-                textAlign: "center",
-              }}
-            >
-              Only changeable from this computer
-            </div>
-          ) : (
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={toggling}
-                onClick={onToggleNetwork}
-              >
-                {toggling ? "…" : "Allow other devices on my network"}
-              </button>
-            </div>
-          )}
-        </div>
       )}
     </div>
   );
@@ -300,6 +292,7 @@ function TunnelCard({
   toggling,
   onShowQr,
   onToggle,
+  error,
 }: {
   enabled: boolean;
   tunnelUrl: string | null;
@@ -308,6 +301,7 @@ function TunnelCard({
   toggling: boolean;
   onShowQr: () => void;
   onToggle: () => void;
+  error: string | null;
 }) {
   return (
     <div style={CARD_STYLE}>
@@ -328,15 +322,8 @@ function TunnelCard({
           <StatusBox sentiment="ok">
             tunnel active · {truncatedUrl}
           </StatusBox>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={qrLoading}
-              onClick={onShowQr}
-            >
-              {qrLoading ? "Generating…" : "Show QR"}
-            </button>
+          {error && <StatusBox sentiment="error">{error}</StatusBox>}
+          <CardActions>
             <button
               type="button"
               className="btn btn--secondary"
@@ -346,18 +333,31 @@ function TunnelCard({
             >
               {toggling ? "…" : "Disable"}
             </button>
-          </div>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={qrLoading}
+              onClick={onShowQr}
+            >
+              {qrLoading ? "Generating…" : "Show QR"}
+            </button>
+          </CardActions>
         </>
       ) : (
-        <button
-          type="button"
-          className="btn btn--primary"
-          style={{ alignSelf: "flex-start" }}
-          disabled={toggling}
-          onClick={onToggle}
-        >
-          {toggling ? "…" : "Enable tunnel"}
-        </button>
+        <>
+          <StatusBox sentiment="off">Tunnel off</StatusBox>
+          {error && <StatusBox sentiment="error">{error}</StatusBox>}
+          <CardActions>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={toggling}
+              onClick={onToggle}
+            >
+              {toggling ? "…" : "Enable tunnel"}
+            </button>
+          </CardActions>
+        </>
       )}
     </div>
   );
@@ -531,7 +531,8 @@ function TailscaleCard({
             rel="noreferrer"
             className="btn btn--secondary"
             style={{
-              alignSelf: "flex-start",
+              alignSelf: "flex-end",
+              marginTop: "auto",
               textDecoration: "none",
               textAlign: "center",
             }}
@@ -542,28 +543,21 @@ function TailscaleCard({
       ) : status.state === "connected_no_serve" ? (
         <>
           <StatusBox sentiment="info">Connected. Serve is not enabled yet.</StatusBox>
-          <button
-            type="button"
-            className="btn btn--primary"
-            style={{ alignSelf: "flex-start" }}
-            disabled={busy !== null}
-            onClick={onEnable}
-          >
-            {busy === "enable" ? "Enabling…" : "Enable"}
-          </button>
+          <CardActions>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy !== null}
+              onClick={onEnable}
+            >
+              {busy === "enable" ? "Enabling…" : "Enable"}
+            </button>
+          </CardActions>
         </>
       ) : status.state === "serve_active" ? (
         <>
           <StatusBox sentiment="ok">{status.httpsUrl}</StatusBox>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={qrLoading}
-              onClick={onShowQr}
-            >
-              {qrLoading ? "Generating…" : "Show QR"}
-            </button>
+          <CardActions>
             <button
               type="button"
               className="btn btn--secondary"
@@ -573,22 +567,31 @@ function TailscaleCard({
             >
               {busy === "disable" ? "…" : "Disable"}
             </button>
-          </div>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={qrLoading}
+              onClick={onShowQr}
+            >
+              {qrLoading ? "Generating…" : "Show QR"}
+            </button>
+          </CardActions>
         </>
       ) : status.state === "port_mismatch" ? (
         <>
           <StatusBox sentiment="warn">
             Serve points to port {status.actualPort}, daemon is on {status.expectedPort}.
           </StatusBox>
-          <button
-            type="button"
-            className="btn btn--primary"
-            style={{ alignSelf: "flex-start" }}
-            disabled={busy !== null}
-            onClick={onEnable}
-          >
-            {busy === "enable" ? "Fixing…" : "Fix"}
-          </button>
+          <CardActions>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy !== null}
+              onClick={onEnable}
+            >
+              {busy === "enable" ? "Fixing…" : "Fix"}
+            </button>
+          </CardActions>
         </>
       ) : (
         <StatusBox sentiment="error">{status.message}</StatusBox>
@@ -610,7 +613,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── Network access state ────────────────────────────────────────────────────
   // networkEnabled: null while the initial GET is in flight / unknown.
   // networkLocked: true when a remote (non-loopback) caller can't view or change
-  // it (GET returned 403) — the card shows "Only changeable from this computer".
+  // it (GET returned 403) — the card shows "Change this from localhost on the host machine".
   const [networkEnabled, setNetworkEnabled] = useState<boolean | null>(null);
   const [networkLocked, setNetworkLocked] = useState(false);
   const [networkToggling, setNetworkToggling] = useState(false);
@@ -631,7 +634,8 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   // ── QR overlay state ────────────────────────────────────────────────────────
   const [activeQr, setActiveQr] = useState<ActiveQrType | null>(null);
   const [qrLoading, setQrLoading] = useState<"local" | "tunnel" | "tailscale" | null>(null);
-  const [qrError, setQrError] = useState<string | null>(null);
+  const [qrError, setQrError] = useState<{ type: "local" | "tunnel" | "tailscale"; message: string } | null>(null);
+  const [networkError, setNetworkError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -690,6 +694,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
         // Transient/other failure — leave state unknown (card shows the enable
         // affordance rather than a spurious locked state).
         setNetworkEnabled(null);
+        setNetworkError("Could not read network access state.");
       }
     }
   }, [api]);
@@ -767,6 +772,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   async function openQr(type: "local" | "tunnel" | "tailscale") {
     setQrLoading(type);
     setQrError(null);
+    if (type === "local") setNetworkError(null);
     try {
       const result =
         type === "local"
@@ -777,7 +783,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       const svg = await QRCode.toString(result.qrUrl, { type: "svg", margin: 1 });
       setActiveQr({ type, qr: result, svg });
     } catch (err) {
-      setQrError(errMessage(err, "Failed to generate QR code."));
+      setQrError({ type, message: errMessage(err, "Failed to generate QR code.") });
     } finally {
       setQrLoading(null);
     }
@@ -816,7 +822,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
 
   async function handleSetNetwork(enabled: boolean) {
     setNetworkToggling(true);
-    setError(null);
+    setNetworkError(null);
     setNetworkConfirmOpen(false);
     try {
       const result = await api.setNetworkAccess(enabled);
@@ -824,7 +830,14 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       // Close QR overlay if network access was turned off
       if (!result.enabled) setActiveQr((prev) => (prev?.type === "local" ? null : prev));
     } catch (err) {
-      setError(errMessage(err, "Failed to change network access."));
+      if (err instanceof ApiError && err.status === 403) {
+        // Reached through a non-local origin/peer: the daemon refuses to let a
+        // remote caller change exposure. Lock the card and say so as an error.
+        setNetworkLocked(true);
+        setNetworkError("Open vibe-station on the host machine (localhost) to change this.");
+      } else {
+        setNetworkError(errMessage(err, "Failed to change network access."));
+      }
       // State reverts to the server's answer (unchanged since the PUT failed).
       try {
         const state = await api.getNetworkAccess();
@@ -1157,11 +1170,12 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
         <SameNetworkCard
           networkEnabled={networkEnabled}
-          networkLocked={networkLocked}
+          networkLocked={networkLocked || !viewedFromLocalhost()}
           qrLoading={qrLoading === "local"}
           toggling={networkToggling}
           onShowQr={() => void openQr("local")}
           onToggleNetwork={handleToggleNetworkRequest}
+          error={networkError ?? (qrError?.type === "local" ? qrError.message : null)}
         />
 
         <TunnelCard
@@ -1172,6 +1186,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           toggling={toggling}
           onShowQr={() => void openQr("tunnel")}
           onToggle={() => void handleToggleTunnel()}
+          error={error ?? (qrError?.type === "tunnel" ? qrError.message : null)}
         />
 
         <TailscaleCard
@@ -1179,7 +1194,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           loading={tailscaleLoading}
           refreshing={tailscaleRefreshing}
           busy={tailscaleAction}
-          error={tailscaleError}
+          error={tailscaleError ?? (qrError?.type === "tailscale" ? qrError.message : null)}
           qrLoading={qrLoading === "tailscale"}
           upBusy={tailscaleUpBusy}
           upResult={tailscaleUpResult}
@@ -1190,12 +1205,6 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
           onRunUp={() => void handleTailscaleUp()}
         />
       </div>
-
-      {(error || qrError) && (
-        <div style={{ fontSize: "var(--font-size-sm)", color: "var(--fg-danger)" }}>
-          {error ?? qrError}
-        </div>
-      )}
 
       {/* Active sessions */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
@@ -1245,7 +1254,7 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: 2 }}>
                   <span style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--font-size-sm)" }}>
-                    Desktop
+                    {viewedFromLocalhost() ? "Desktop" : "Browser"}
                   </span>
                   <span style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)", background: "var(--bg-input)", borderRadius: "var(--radius-sm)", padding: "1px 6px" }}>
                     this session

@@ -219,16 +219,17 @@ describe("RemoteAccessSetting", () => {
 
   // ── Same network card ─────────────────────────────────────────────────────────
 
-  it("card is blurred when getNetworkAccess returns enabled:false — enable button in overlay", async () => {
+  it("shows red off status and the enable button when getNetworkAccess returns enabled:false", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
     vi.spyOn(api, "getNetworkAccess").mockResolvedValue({ enabled: false });
     render(<RemoteAccessSetting api={api} />);
 
-    const button = await screen.findByRole("button", { name: "Allow other devices on my network" });
+    const button = await screen.findByRole("button", { name: "Allow access" });
     expect(button).toBeInTheDocument();
     expect(screen.queryByText("Turn off")).not.toBeInTheDocument();
-    expect(screen.queryByText("Only changeable from this computer")).not.toBeInTheDocument();
+    expect(screen.getByText("Network access off")).toBeInTheDocument();
+    expect(screen.queryByText("Change this from localhost on the host machine")).not.toBeInTheDocument();
   });
 
   it("clicking the enable button then confirming calls setNetworkAccess(true)", async () => {
@@ -239,19 +240,19 @@ describe("RemoteAccessSetting", () => {
     const user = userEvent.setup({ delay: null });
     render(<RemoteAccessSetting api={api} />);
 
-    await user.click(await screen.findByRole("button", { name: "Allow other devices on my network" }));
+    await user.click(await screen.findByRole("button", { name: "Allow access" }));
     expect(await screen.findByText("Allow network access?")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Allow" }));
     await waitFor(() => expect(setSpy).toHaveBeenCalledWith(true));
   });
 
-  it("a 403 from getNetworkAccess renders 'Only changeable from this computer'", async () => {
+  it("a 403 from getNetworkAccess renders 'Change this from localhost on the host machine'", async () => {
     const api = createMockApi();
     vi.spyOn(api, "getTunnelStatus").mockResolvedValue({ enabled: false, tunnelUrl: null });
     vi.spyOn(api, "getNetworkAccess").mockRejectedValue(new ApiError("Forbidden.", 403));
     render(<RemoteAccessSetting api={api} />);
 
-    expect(await screen.findByText("Only changeable from this computer")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Allow other devices on my network" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Change this from localhost on the host machine")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allow access" })).toBeDisabled();
   });
 });
