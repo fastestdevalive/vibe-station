@@ -69,6 +69,11 @@ done.
 - `not_started`/`spawning` wins over any PR on the branch (B2, decided): a session
   that has not started has done nothing, so colouring it by a PR that already exists on
   the branch would misleadingly read as "landed and finished" for a session that never ran.
+- A Rich Chat (`json`) session created or reset with **no prompt** never runs a first turn, so it
+  is marked `waiting_for_human` (lifecycle `reason: "ready"`) right away instead of staying
+  `not_started`/spawning — the chat pane shows a composer, not a "Starting…" placeholder. The
+  subagent-notify listener ignores the `ready` transition, so a freshly reset child doesn't wake
+  its parent.
 - `draft` and `closed` **never** drive colour or bucket — they are informational only.
 - `working` beats PR on purpose: if you ask for more work on a branch that already has a PR, the
   in-progress signal is the more current fact.

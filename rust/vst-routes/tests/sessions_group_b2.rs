@@ -19,14 +19,15 @@
 //!   poll up to the bounded timeout)
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tempfile::tempdir;
 use vst_agents::home::with_home;
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_lifecycle::subagent_notify::SubagentNotifyHandle;
 use vst_routes::sessions::{
-    find_session_context, DoneError, DoneResult, HandoffRouteError, ResetError, ResumeError,
-    SessionContext, SessionRoutes,
+    find_session_context, wait_for_handoff_file, DoneError, DoneResult, HandoffRouteError,
+    ResetError, ResumeError, SessionContext, SessionRoutes,
 };
 use vst_routes::settings::load_default_channel_overrides;
 use vst_store::StoreHandle;
@@ -142,6 +143,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         subagent_notify: SubagentNotifyHandle::new(),
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
+        handoff_timeout: Duration::from_secs(120),
     }
 }
 
@@ -518,6 +520,122 @@ async fn reset_persists_handoff_summary_on_archived_row() {
 }
 
 #[tokio::test]
+async fn reset_json_channel_with_handoff_timeout_still_archives_and_spawns() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut w = make_worktree("w1");
+    let mut main = make_session("s-old", "p1");
+    main.is_main = true;
+    main.worktree_id = Some("w1".into());
+    main.channel = Some(Channel::Json);
+    main.use_tmux = false;
+    main.initial_prompt = Some("old".into());
+    w.sessions.push(main);
+    p.worktrees.push(w);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone()).with_handoff_timeout(Duration::from_millis(100));
+    let mut body = reset_body();
+    body.handoff = Some(true);
+    let res = r.reset_session("s-old", &body).await.unwrap();
+    assert_eq!(res.archived_session_id, "s-old");
+    assert!(!res.new_session_id.is_empty());
+
+    let project = store.get_project("p1").await.unwrap();
+    let sessions = &project.worktrees[0].sessions;
+    assert_eq!(sessions.len(), 2);
+    let old = sessions.iter().find(|s| s.id == "s-old").unwrap();
+    assert!(old.archived_at.is_some());
+    assert_eq!(old.handoff_summary, None);
+    let new = sessions
+        .iter()
+        .find(|s| s.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new.initial_prompt, None);
+}
+
+// ---------------------------------------------------------------------------
+// wait_for_handoff_file — the json handoff completion logic
+// ---------------------------------------------------------------------------
+
+const POLL_SLACK: Duration = Duration::from_secs(3);
+
+#[tokio::test]
+async fn wait_for_handoff_file_returns_content_once_written_and_turn_settles() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("h.md");
+    let p2 = path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::fs::write(&p2, "the summary").await.unwrap();
+    });
+    let out = wait_for_handoff_file(
+        &path,
+        POLL_SLACK,
+        Duration::from_secs(1),
+        || false,
+        || async {},
+    )
+    .await;
+    assert_eq!(out.as_deref(), Some("the summary"));
+}
+
+#[tokio::test]
+async fn wait_for_handoff_file_gives_up_as_soon_as_the_turn_ends_without_a_file() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("h.md");
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    // busy on the first look, idle afterwards (turn ended, no file written)
+    let is_settled = || calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0;
+    let started = std::time::Instant::now();
+    let out = wait_for_handoff_file(
+        &path,
+        Duration::from_secs(60),
+        Duration::from_secs(30),
+        is_settled,
+        || async {},
+    )
+    .await;
+    assert_eq!(out, None);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "must not burn the 60s timeout"
+    );
+}
+
+#[tokio::test]
+async fn wait_for_handoff_file_times_out_when_turn_never_settles() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("h.md");
+    let out = wait_for_handoff_file(
+        &path,
+        Duration::from_millis(400),
+        Duration::from_secs(30),
+        || false,
+        || async {},
+    )
+    .await;
+    assert_eq!(out, None);
+}
+
+#[tokio::test]
+async fn wait_for_handoff_file_treats_an_empty_file_as_no_summary() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("h.md");
+    tokio::fs::write(&path, "  \n").await.unwrap();
+    let out = wait_for_handoff_file(
+        &path,
+        POLL_SLACK,
+        Duration::from_secs(1),
+        || true,
+        || async {},
+    )
+    .await;
+    assert_eq!(out, None);
+}
+
+#[tokio::test]
 async fn reset_rejects_unknown_requested_mode_before_teardown() {
     let (_home, _guard) = home_with_mode();
     let (_d, store) = store();
@@ -538,6 +656,85 @@ async fn reset_rejects_unknown_requested_mode_before_teardown() {
     let project = store.get_project("p1").await.unwrap();
     assert_eq!(project.direct_sessions.len(), 1);
     assert!(project.direct_sessions[0].archived_at.is_none());
+}
+
+#[tokio::test]
+async fn reset_json_without_prompt_leaves_replacement_ready_not_stuck_starting() {
+    // A plain reset of a Rich Chat agent starts no turn 1, so nothing would
+    // ever move the replacement off `not_started` (UI: "Starting…" forever,
+    // no composer). It must be marked ready for the user's first message.
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    p.direct_sessions.push(json_session("s1", "p1"));
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let res = r.reset_session("s1", &reset_body()).await.unwrap();
+
+    let mut state = None;
+    for _ in 0..40 {
+        let project = store.get_project("p1").await.unwrap();
+        let new = project
+            .direct_sessions
+            .iter()
+            .find(|x| x.id == res.new_session_id)
+            .unwrap();
+        state = Some(new.lifecycle.state);
+        if new.lifecycle.state != LifecycleState::NotStarted {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, Some(LifecycleState::WaitingForHuman));
+}
+
+#[tokio::test]
+async fn reset_with_deleted_mode_fails_without_replacement() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let err = r.reset_session("s1", &reset_body()).await.unwrap_err();
+    assert!(matches!(err, ResetError::ModeNotFound(_)));
+    let project = store.get_project("p1").await.unwrap();
+    assert_eq!(project.direct_sessions.len(), 1);
+    assert!(project.direct_sessions[0].archived_at.is_none());
+}
+
+#[tokio::test]
+async fn reset_with_deleted_mode_succeeds_with_replacement_mode() {
+    let (_home, _guard) = home_with_mode();
+    let (_d, store) = store();
+    let mut p = make_project("p1");
+    let mut s = make_session("s1", "p1");
+    s.mode_id = Some("deleted-mode".into());
+    p.direct_sessions.push(s);
+    add_project(&store, p).await;
+
+    let r = routes(store.clone());
+    let mut body = reset_body();
+    body.mode_id = Some("my-mode".into());
+    let res = r.reset_session("s1", &body).await.unwrap();
+
+    let project = store.get_project("p1").await.unwrap();
+    let old = project
+        .direct_sessions
+        .iter()
+        .find(|x| x.id == "s1")
+        .unwrap();
+    assert!(old.archived_at.is_some());
+    let new = project
+        .direct_sessions
+        .iter()
+        .find(|x| x.id == res.new_session_id)
+        .unwrap();
+    assert_eq!(new.mode_id.as_deref(), Some("my-mode"));
 }
 
 #[tokio::test]
@@ -635,12 +832,12 @@ async fn reset_returns_both_ids() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn handoff_json_channel_returns_ok_with_no_summary() {
-    // json-channel turns are a documented no-op — returns ok:true with no
-    // summary rather than polling a file nothing will produce.
+async fn handoff_json_enqueue_failure_returns_ok_with_no_summary() {
     let (_d, store) = store();
     let mut p = make_project("p1");
-    p.direct_sessions.push(json_session("s1", "p1"));
+    let mut s = json_session("s1", "p1");
+    s.mode_id = None;
+    p.direct_sessions.push(s);
     add_project(&store, p).await;
 
     let r = routes(store.clone());

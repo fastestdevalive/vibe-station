@@ -703,6 +703,11 @@ impl JsonAgentSession {
         self.dispose();
     }
 
+    /// Whether the queue is idle right now (no turn running or queued).
+    pub fn is_settled(&self) -> bool {
+        *self.0.drain_tx.borrow()
+    }
+
     /// Resolves when the queue has fully drained.
     pub async fn settled(&self) {
         let mut rx = self.0.drain_tx.subscribe();

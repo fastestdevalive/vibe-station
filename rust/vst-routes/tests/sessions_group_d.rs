@@ -145,6 +145,7 @@ fn routes(store: StoreHandle) -> SessionRoutes {
         subagent_notify: SubagentNotifyHandle::new(),
         attachment_registry: AttachmentRegistry::new(),
         model_catalog: Default::default(),
+        handoff_timeout: std::time::Duration::from_secs(120),
     }
 }
 

@@ -139,8 +139,15 @@ impl JsonAgentSession {
         self.persist_lifecycle(LifecycleState::WaitingForHuman)
             .await;
 
-        // Signal idle to any settled() waiter.
-        let _ = self.0.drain_tx.send(true);
+        // Signal idle — but only if no new drain started while we awaited the
+        // persist above (`kick_drain` sets `running` and signals busy under this
+        // same lock); otherwise we'd overwrite its "busy" with a stale "idle".
+        {
+            let s = self.0.state.lock().unwrap();
+            if !s.running {
+                self.0.drain_tx.send_replace(true);
+            }
+        }
 
         // KD-2 race fix: if a notice slot arrived while the finally block was
         // awaiting persistLifecycle, re-kick drain. FIX-G2: only if we did NOT

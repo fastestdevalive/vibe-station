@@ -311,8 +311,16 @@ fn spawn_subagent_notify_listener(
             };
             match event {
                 vst_types::events::ServerEvent::SessionState {
-                    session_id, state, ..
+                    session_id,
+                    state,
+                    reason,
                 } => {
+                    // A never-prompted json session settling into "ready" isn't a
+                    // subagent finishing — record it, but don't wake the parent.
+                    if reason.as_deref() == Some(vst_agents::json_agent_chat::READY_REASON) {
+                        last_states.insert(session_id, state);
+                        continue;
+                    }
                     let prev = last_states
                         .get(&session_id)
                         .copied()
@@ -429,6 +437,7 @@ pub fn build_state(opts: BuildServerOptions) -> AppState {
         subagent_notify,
         attachment_registry: attachment_registry.clone(),
         model_catalog: model_catalog.clone(),
+        handoff_timeout: vst_routes::sessions::DEFAULT_HANDOFF_TIMEOUT,
     };
 
     let attachment_routes =
@@ -3184,12 +3193,19 @@ async fn handle_reset_session(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": m })),
             ),
-            ResetError::NotAgent(m)
-            | ResetError::Archived(m)
-            | ResetError::NoMode(m)
-            | ResetError::ModeNotFound(m) => (
+            ResetError::NotAgent(m) | ResetError::Archived(m) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": m })),
+            ),
+            // Machine-readable `code` so the UI can offer a replacement mode
+            // (retry with `modeId`) instead of just showing the error.
+            ResetError::NoMode(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m, "code": "no_mode" })),
+            ),
+            ResetError::ModeNotFound(m) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": m, "code": "mode_not_found" })),
             ),
             ResetError::Internal(m) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
