@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FileScope } from "@/api/types";
-import { getHover, getLspStatus, type LspAction, type LspSeverity, type LspStatus } from "@/lib/lspApi";
+import {
+  getHover,
+  getLspStatus,
+  restartLsp,
+  type LspAction,
+  type LspFailure,
+  type LspSeverity,
+  type LspStatus,
+} from "@/lib/lspApi";
 
 export interface UseLspStatusResult {
   status: LspStatus | null;
@@ -19,7 +27,21 @@ export interface UseLspStatusResult {
   action: LspAction | null;
   /** Button text for `action` — presentation only, never compared for dispatch. */
   actionLabel: string | null;
+  /** Server is up but reported a health warning (results may be incomplete),
+   *  e.g. rust-analyzer's "Failed to read Cargo metadata…". Warning-level
+   *  only — an info-level note is `info`, and must never read as impaired. */
+  degraded: string | null;
+  /** Info-level note about a healthy server (e.g. "Using TypeScript 5.9.3
+   *  (global) — …"). Shown in the status tooltip/popup only, never as a chip. */
+  info: string | null;
+  /** Why the server is not up, with its remediation actions. */
+  failure: LspFailure | null;
   onClick: () => Promise<void>;
+  /** Clear the daemon's latched failure and respawn, then re-poll. */
+  retry: () => Promise<void>;
+  /** Re-poll now (e.g. right after a query completes, so a status that
+   *  changed since the last 5s tick isn't shown stale). */
+  refresh: () => Promise<void>;
 }
 
 /**
@@ -42,6 +64,9 @@ export function useLspStatus(
   const [text, setText] = useState<string | null>(null);
   const [action, setAction] = useState<LspAction | null>(null);
   const [actionLabel, setActionLabel] = useState<string | null>(null);
+  const [degraded, setDegraded] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [failure, setFailure] = useState<LspFailure | null>(null);
 
   const applyResult = (res: Awaited<ReturnType<typeof getLspStatus>> | null) => {
     setStatus(res?.status ?? null);
@@ -52,15 +77,28 @@ export function useLspStatus(
     setText(res?.detail ?? null);
     setAction(res?.action ?? null);
     setActionLabel(res?.actionLabel ?? null);
+    const isInfo = res?.degraded?.level === "info";
+    setDegraded(isInfo ? null : (res?.degraded?.message ?? null));
+    setInfo(isInfo ? (res?.degraded?.message ?? null) : null);
+    setFailure(res?.failure ?? null);
   };
+
+  // Identity of the file being polled — an on-demand re-poll (retry/refresh)
+  // that resolves after the file changed must not overwrite its status.
+  const targetKey = `${scope}|${worktreeId ?? ""}|${path ?? ""}`;
+  const targetKeyRef = useRef(targetKey);
+  useEffect(() => {
+    targetKeyRef.current = targetKey;
+  }, [targetKey]);
 
   const checkStatus = async () => {
     if (!api || !worktreeId || !path) return;
+    const key = targetKey;
     try {
       const res = await getLspStatus(api, scope, worktreeId, path);
-      applyResult(res);
+      if (targetKeyRef.current === key) applyResult(res);
     } catch {
-      applyResult(null);
+      if (targetKeyRef.current === key) applyResult(null);
     }
   };
 
@@ -94,8 +132,22 @@ export function useLspStatus(
   // text) is rendered on the button only — never compared. The two client calls
   // below are mechanics (which endpoint to hit), not presentation — they stay
   // client-side.
+  const retry = async () => {
+    if (!api || !worktreeId || !language) return;
+    try {
+      await restartLsp(api, scope, worktreeId, language);
+    } catch {
+      // Ignored: the re-poll below reports whatever state the server is in.
+    }
+    await checkStatus();
+  };
+
   const onClick = async () => {
     if (!action || !path || !worktreeId) return;
+    if (action === "retry") {
+      await retry();
+      return;
+    }
     if (action === "enable") {
       try {
         const client = api as {
@@ -122,5 +174,20 @@ export function useLspStatus(
     await checkStatus();
   };
 
-  return { status, language, displayName, label, severity, text, action, actionLabel, onClick };
+  return {
+    status,
+    language,
+    displayName,
+    label,
+    severity,
+    text,
+    action,
+    actionLabel,
+    degraded,
+    info,
+    failure,
+    onClick,
+    retry,
+    refresh: checkStatus,
+  };
 }

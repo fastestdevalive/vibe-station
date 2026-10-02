@@ -184,6 +184,26 @@ describe("ToolPanel", () => {
     expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
   });
 
+  it("R16 — Esc closes a references panel revealed with the tree hidden before exiting fullscreen", () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: { "wt-1": { ...DEFAULT_WORKTREE_LAYOUT, toolPanelTab: "files" } },
+      fileTreeVisible: false,
+      filesLeftPaneMode: { "wt-1": "references" },
+      workspacePaneFullscreen: "tools",
+    });
+    const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
+    const esc = () =>
+      act(() => {
+        const pane = container.querySelector(".tool-panel") as HTMLElement;
+        pane.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+    esc();
+    expect(useWorkspaceStore.getState().filesLeftPaneMode["wt-1"]).toBe("tree");
+    expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBe("tools");
+    esc();
+    expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
+  });
+
   it("rail wrapper height-fits the rail so it ends after the last button", () => {
     const { container } = render(<ToolPanel api={api} worktreeId="wt-1" scope="worktree" />);
     const rail = container.querySelector(".files-left-rail") as HTMLElement;

@@ -317,6 +317,16 @@ export function SearchPanel({ api, worktreeId, scope = "worktree" }: SearchPanel
     }
   }, [filesLeftPaneMode, worktreeId]);
 
+  // One-shot "text search for X" request (References panel's "Text search"
+  // action when the language server couldn't resolve a symbol).
+  const pendingTextSearch = useWorkspaceStore((s) => s.pendingTextSearch);
+  const clearPendingTextSearch = useWorkspaceStore((s) => s.clearPendingTextSearch);
+  useEffect(() => {
+    if (!pendingTextSearch || !worktreeId || pendingTextSearch.contextId !== worktreeId) return;
+    setQuery(pendingTextSearch.text);
+    clearPendingTextSearch();
+  }, [pendingTextSearch, worktreeId, clearPendingTextSearch]);
+
   // Explicit focus request from Mod+Shift+F (Phase 3.7) — focuses the input
   // even when already in search mode (no mode transition fires then).
   useEffect(() => {

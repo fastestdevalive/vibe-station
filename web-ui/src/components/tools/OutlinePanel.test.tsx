@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OutlinePanel, findInnermostSymbol } from "./OutlinePanel";
+import { OutlinePanel, findInnermostSymbol, symbolKindToChip } from "./OutlinePanel";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import * as lspApi from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
@@ -286,7 +286,7 @@ describe("OutlinePanel", () => {
     expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toContain("src/main.rs");
     expect(useWorkspaceStore.getState().activeFilePath).toBe("src/main.rs");
     expect(useWorkspaceStore.getState().peekFile).toBeNull();
-    expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+    expect(useWorkspaceStore.getState().pendingLineTarget).toMatchObject({
       worktreeId: W1,
       path: "src/main.rs",
       line: 43,
@@ -316,6 +316,51 @@ describe("OutlinePanel", () => {
     });
     const rowA = screen.getByText("func_a");
     expect(rowA.closest(".outline-panel__row")).not.toHaveAttribute("data-highlighted", "true");
+  });
+
+  // Bug 3: the click's own programmatic scroll must not re-sync the highlight
+  // to whatever symbol contains the TOP of the viewport.
+  it("a row click's own scroll does not overwrite the clicked row's highlight", async () => {
+    useWorkspaceStore.setState({ activeFilePath: "src/main.rs" });
+    vi.spyOn(lspApi, "getOutline").mockResolvedValue({
+      symbols: [
+        { name: "func_a", kind: "function", line: 1, character: 3, endLine: 5, children: [] },
+        { name: "func_b", kind: "function", line: 10, character: 3, endLine: 15, children: [] },
+      ],
+    });
+
+    // Viewport top sits inside func_a (line 3).
+    const previewContainer = document.createElement("div");
+    previewContainer.className = "preview-body";
+    const lineEl = document.createElement("div");
+    lineEl.setAttribute("data-line", "3");
+    previewContainer.appendChild(lineEl);
+    document.body.appendChild(previewContainer);
+
+    render(<OutlinePanel api={{}} worktreeId={W1} />);
+    const rowB = await screen.findByText("func_b");
+    fireEvent.click(rowB);
+    act(() => {
+      previewContainer.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(rowB.closest(".outline-panel__row")).toHaveAttribute("data-highlighted", "true");
+    expect(useWorkspaceStore.getState().pendingLineTarget).toMatchObject({ line: 11, column: 3 });
+    document.body.removeChild(previewContainer);
+  });
+
+  it("findInnermostSymbol contains doc-comment lines via rangeStartLine (Bug 3)", () => {
+    const documented: OutlineSymbol = {
+      name: "subscribe",
+      kind: "method",
+      line: 85,
+      character: 11,
+      rangeStartLine: 84,
+      endLine: 88,
+      children: [],
+    };
+    expect(findInnermostSymbol([documented], 84)?.name).toBe("subscribe");
+    expect(findInnermostSymbol([documented], 83)).toBeNull();
   });
 
   // Default-collapse: a function/method with nested children starts
@@ -518,7 +563,191 @@ describe("OutlinePanel", () => {
 
     render(<OutlinePanel api={{}} worktreeId={W1} />);
 
-    expect(await screen.findByText("No symbols in this file")).toBeInTheDocument();
+    // …and says so, never the silent "No symbols in this file".
+    expect(await screen.findByText("Couldn't load outline.")).toBeInTheDocument();
+    expect(screen.queryByText("No symbols in this file")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Details"));
+    expect(screen.getByText("boom")).toBeInTheDocument();
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  describe("language server failed (503 LSP_SERVER_FAILED)", () => {
+    const command = 'npm i -D "typescript@<7"';
+    const missing: lspApi.LspFailure = {
+      kind: "missing_dependency",
+      summary: "TypeScript isn't installed for this project — code navigation needs it.",
+      message: "Request initialize failed with message: Could not find a valid TypeScript installation.",
+      remediation: [
+        { kind: "copy_command", label: "Copy install command", command },
+        { kind: "retry", label: "Retry" },
+      ],
+      autoRetry: true,
+    };
+    const failed503 = (failure: lspApi.LspFailure) =>
+      new ApiError(JSON.stringify({ error: failure.summary, code: "LSP_SERVER_FAILED", failure }), 503);
+    const statusOf = (failure: lspApi.LspFailure | null): lspApi.LspStatusResponse => ({
+      status: failure ? "error" : "ready",
+      language: "typescript",
+      displayName: "TypeScript / JavaScript",
+      label: failure ? "Setup needed" : "Ready",
+      severity: failure ? "warn" : "ok",
+      detail: failure?.summary ?? "LSP: ready",
+      action: failure ? "retry" : null,
+      actionLabel: failure ? "Retry" : null,
+      failure,
+    });
+
+    it("dependency kind: 'Outline unavailable — …' + command + Copy/Retry, not 'No symbols'", async () => {
+      useWorkspaceStore.setState({ activeFilePath: "src/a.ts" });
+      const spy = vi.spyOn(lspApi, "getOutline").mockRejectedValue(failed503(missing));
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(statusOf(missing));
+      render(<OutlinePanel api={{}} worktreeId={W1} />);
+
+      expect(
+        await screen.findByText("Outline unavailable — TypeScript isn't installed for this project."),
+      ).toBeInTheDocument();
+      expect(screen.getByText(command, { selector: "code" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy install command" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      expect(screen.queryByText("No symbols in this file")).not.toBeInTheDocument();
+      // A latched failure is not "still starting" — no retry loop.
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("other kinds: names the server binary, Retry + Server output disclosure", async () => {
+      useWorkspaceStore.setState({ activeFilePath: "src/a.ts" });
+      const initFailed: lspApi.LspFailure = {
+        ...missing,
+        kind: "init_failed",
+        summary: "typescript-language-server failed to start: Request initialize failed.",
+        remediation: [{ kind: "retry", label: "Retry" }],
+      };
+      vi.spyOn(lspApi, "getOutline").mockRejectedValue(failed503(initFailed));
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(statusOf(initFailed));
+      render(<OutlinePanel api={{}} worktreeId={W1} />);
+
+      expect(
+        await screen.findByText("Outline unavailable — typescript-language-server failed to start."),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Copy install command" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+      expect(screen.getByText("Server output")).toBeInTheDocument();
+    });
+
+    it("Retry restarts the server and re-fetches the outline", async () => {
+      useWorkspaceStore.setState({ activeFilePath: "src/a.ts" });
+      const spy = vi
+        .spyOn(lspApi, "getOutline")
+        .mockRejectedValueOnce(failed503(missing))
+        .mockResolvedValue({
+          symbols: [{ name: "useStore", kind: "function", line: 1, character: 0, endLine: 3, children: [] }],
+        });
+      vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(statusOf(missing));
+      vi.spyOn(lspApi, "getWorkspaceFile").mockResolvedValue("");
+      const restart = vi.spyOn(lspApi, "restartLsp").mockResolvedValue(statusOf(null));
+      render(<OutlinePanel api={{}} worktreeId={W1} />);
+
+      await screen.findByText("Outline unavailable — TypeScript isn't installed for this project.");
+      await waitFor(() => expect(lspApi.getLspStatus).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await waitFor(() => expect(restart).toHaveBeenCalledWith({}, "worktree", W1, "typescript"));
+      expect(await screen.findByText("useStore")).toBeInTheDocument();
+      expect(spy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Bug 5: Nested outline rows must indent based on depth
+  it("Bug 5: applies depth-based indentation (8 + depth * 12px) to outline rows", async () => {
+    useWorkspaceStore.setState({ activeFilePath: "tree.rs" });
+    vi.spyOn(lspApi, "getOutline").mockResolvedValue({
+      symbols: [
+        {
+          name: "ParentClass",
+          kind: "class",
+          line: 1,
+          character: 0,
+          endLine: 30,
+          children: [
+            {
+              name: "childMethod",
+              kind: "method",
+              line: 5,
+              character: 2,
+              endLine: 20,
+              children: [
+                {
+                  name: "grandchildFunc",
+                  kind: "function",
+                  line: 10,
+                  character: 4,
+                  endLine: 15,
+                  children: [],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<OutlinePanel api={{}} worktreeId={W1} />);
+
+    const parentRow = (await screen.findByText("ParentClass")).closest(".outline-panel__row");
+    const childRow = (await screen.findByText("childMethod")).closest(".outline-panel__row");
+    const grandchildRow = (await screen.findByText("grandchildFunc")).closest(".outline-panel__row");
+
+    expect(parentRow).toHaveStyle({ paddingLeft: "8px" });
+    expect(childRow).toHaveStyle({ paddingLeft: "20px" });
+    expect(grandchildRow).toHaveStyle({ paddingLeft: "32px" });
+  });
+
+  describe("Bug 6 — outline symbol kind chips", () => {
+    it("symbolKindToChip maps LSP kinds to short labels and chip keys", () => {
+      expect(symbolKindToChip("function")).toEqual({ label: "fn", kindKey: "fn" });
+      expect(symbolKindToChip("constructor")).toEqual({ label: "fn", kindKey: "fn" });
+      expect(symbolKindToChip("method")).toEqual({ label: "method", kindKey: "method" });
+      expect(symbolKindToChip("class")).toEqual({ label: "class", kindKey: "class" });
+      expect(symbolKindToChip("struct")).toEqual({ label: "struct", kindKey: "struct" });
+      expect(symbolKindToChip("enum")).toEqual({ label: "enum", kindKey: "enum" });
+      expect(symbolKindToChip("interface")).toEqual({ label: "iface", kindKey: "iface" });
+      expect(symbolKindToChip("variable")).toEqual({ label: "var", kindKey: "var" });
+      expect(symbolKindToChip("constant")).toEqual({ label: "const", kindKey: "const" });
+      expect(symbolKindToChip("property")).toEqual({ label: "prop", kindKey: "prop" });
+      expect(symbolKindToChip("field")).toEqual({ label: "prop", kindKey: "prop" });
+      expect(symbolKindToChip("module")).toEqual({ label: "mod", kindKey: "mod" });
+      expect(symbolKindToChip("namespace")).toEqual({ label: "mod", kindKey: "mod" });
+      expect(symbolKindToChip("package")).toEqual({ label: "mod", kindKey: "mod" });
+      expect(symbolKindToChip("unknown_kind")).toEqual({ label: "unknown_kind", kindKey: "neutral" });
+      expect(symbolKindToChip("object", "rust")).toEqual({ label: "impl", kindKey: "neutral" });
+      expect(symbolKindToChip("object", "typescript")).toEqual({ label: "obj", kindKey: "neutral" });
+    });
+
+    it("renders kind chip element with title and drops redundant icon", async () => {
+      useWorkspaceStore.setState({ activeFilePath: "test.rs" });
+      vi.spyOn(lspApi, "getOutline").mockResolvedValue({
+        symbols: [
+          {
+            name: "testFunction",
+            kind: "function",
+            line: 5,
+            character: 0,
+            endLine: 10,
+            children: [],
+          },
+        ],
+      });
+
+      const { container } = render(<OutlinePanel api={{}} worktreeId={W1} />);
+
+      await screen.findByText("testFunction");
+      const chip = container.querySelector(".outline-panel__chip--fn");
+      expect(chip).toBeInTheDocument();
+      expect(chip?.textContent).toBe("fn");
+      expect(chip?.getAttribute("title")).toBe("function");
+
+      // Verify redundant icon is dropped
+      const icon = container.querySelector(".outline-panel__symbol-icon");
+      expect(icon).toBeNull();
+    });
   });
 });

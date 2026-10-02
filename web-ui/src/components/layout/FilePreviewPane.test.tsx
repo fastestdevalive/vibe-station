@@ -1,9 +1,11 @@
+import { ApiError } from "@/api/errors";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { GutterResult } from "@/api/types";
 import { createMockApi } from "@/api/mock";
 import { FilePreviewPane } from "./FilePreviewPane";
 import { useWorkspaceStore } from "@/hooks/useStore";
+import * as lspApi from "@/lib/lspApi";
 
 describe("FilePreviewPane — Phase 9 (diff-stat/scope-toggle in plain mode)", () => {
   const api = createMockApi();
@@ -291,7 +293,7 @@ describe("FilePreviewPane — 3.T4 (scroll to pendingLineTarget, from search cli
     // user is viewing that exact file, so live-review feedback ("the highlight
     // should show when the file opens") holds true, not just for one frame.
     await waitFor(() =>
-      expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+      expect(useWorkspaceStore.getState().pendingLineTarget).toMatchObject({
         worktreeId: "wt-1",
         path: "src/App.tsx",
         line: 2,
@@ -466,6 +468,161 @@ describe("FilePreviewPane — 5.T3 (git gutter marks on modified files)", () => 
 
     const markedLines = container.querySelectorAll(".workspace-code-line--added, .workspace-code-line--modified, .workspace-code-line--deleted");
     expect(markedLines.length).toBe(0);
+
+    getGutterSpy.mockRestore();
+  });
+
+  it("Bug 7: polls gutter marks so terminal git add/commit is picked up, and follows changed marks", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = createMockApi();
+      const getGutterSpy = vi
+        .spyOn(api, "getGutter")
+        .mockResolvedValueOnce({ added: [2], deleted: [], modified: [] })
+        .mockResolvedValue({ added: [], deleted: [], modified: [] });
+
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        diffScopeByWorktree: {},
+      });
+      const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+
+      await vi.waitFor(() => expect(getGutterSpy).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(container.querySelectorAll(".workspace-code-line--added").length).toBe(1));
+
+      // No WS event at all — advance past the 2s poll (simulates `git commit`
+      // in a terminal).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2500);
+      });
+      await vi.waitFor(() => expect(getGutterSpy.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await vi.waitFor(() => expect(container.querySelectorAll(".workspace-code-line--added").length).toBe(0));
+
+      getGutterSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("L7: stops polling gutter marks after a 404 (file not in this context)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const api = createMockApi();
+      const getGutterSpy = vi
+        .spyOn(api, "getGutter")
+        .mockRejectedValue(new ApiError("not found", 404));
+
+      useWorkspaceStore.setState({
+        activeWorktreeId: "wt-1",
+        activeFilePath: "src/App.tsx",
+        diffScopeByWorktree: {},
+      });
+      render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+      await vi.waitFor(() => expect(getGutterSpy).toHaveBeenCalled());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      const settled = getGutterSpy.mock.calls.length;
+      // Without the stop, the 2s poll would add ~5 more calls here.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(getGutterSpy.mock.calls.length).toBe(settled);
+      getGutterSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Bug 7: CodeView picker state survives the gutter poll's re-render (equal lspFileRef)", async () => {
+    const api = createMockApi();
+    vi.spyOn(lspApi, "getDefinition").mockResolvedValue({
+      locations: [
+        { external: false, path: "/src/alpha.ts", line: 10, character: 0, preview: "fn alpha()", confidence: "lsp" },
+        { external: false, path: "/src/beta.ts", line: 20, character: 0, preview: "fn beta()", confidence: "lsp" },
+      ],
+    });
+
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+    });
+    const { container } = render(<FilePreviewPane api={api} worktreeId="wt-1" />);
+
+    const content = (await vi.waitFor(() => {
+      const el = container.querySelector(".workspace-code-content");
+      if (!el) throw new Error("code content not rendered yet");
+      return el;
+    }))!;
+
+    // Open the definition picker.
+    fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+    fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+    fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+    expect(await screen.findByRole("dialog", { name: "Go to definition" })).toBeInTheDocument();
+
+    // Simulate the 2s gutter poll's re-render (preview font bump re-renders
+    // the pane): the memoized lspFileRef keeps CodeView's file-switch effect
+    // from re-running, so the picker stays open.
+    await act(async () => {
+      useWorkspaceStore.getState().bumpPreviewFont(0.1);
+    });
+
+    expect(screen.getByRole("dialog", { name: "Go to definition" })).toBeInTheDocument();
+    expect(screen.getByText("/src/alpha.ts:11")).toBeInTheDocument();
+    expect(screen.getByText("/src/beta.ts:21")).toBeInTheDocument();
+  });
+
+  it("Bug 8: deleted line mark does not overwrite added/modified mark on the same line", async () => {
+    const api = createMockApi();
+    const gutterResult: GutterResult = {
+      added: [],
+      deleted: [1],
+      modified: [1],
+    };
+    const getGutterSpy = vi.spyOn(api, "getGutter").mockResolvedValue(gutterResult);
+
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+    });
+
+    const { container } = render(<FilePreviewPane worktreeId="wt-1" api={api} />);
+
+    await waitFor(() => {
+      const line1 = container.querySelector(".workspace-code-line");
+      expect(line1).toHaveClass("workspace-code-line--modified");
+      expect(line1).toHaveClass("workspace-code-line--deleted");
+    });
+
+    getGutterSpy.mockRestore();
+  });
+
+  it("Bug 9: deletion before line 1 (sentinel 0) renders deleted-top variant on line 1", async () => {
+    const api = createMockApi();
+    const gutterResult: GutterResult = {
+      added: [],
+      deleted: [0],
+      modified: [],
+    };
+    const getGutterSpy = vi.spyOn(api, "getGutter").mockResolvedValue(gutterResult);
+
+    useWorkspaceStore.setState({
+      activeWorktreeId: "wt-1",
+      activeFilePath: "src/App.tsx",
+      diffScopeByWorktree: {},
+    });
+
+    const { container } = render(<FilePreviewPane worktreeId="wt-1" api={api} />);
+
+    await waitFor(() => {
+      const line1 = container.querySelector(".workspace-code-line");
+      expect(line1).toHaveClass("workspace-code-line--deleted-top");
+      expect(line1).not.toHaveClass("workspace-code-line--deleted");
+    });
 
     getGutterSpy.mockRestore();
   });

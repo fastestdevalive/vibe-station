@@ -859,6 +859,92 @@ describe("useWorkspaceStore - toggleCanvasToolbar", () => {
   });
 });
 
+describe("useWorkspaceStore - revealReferences", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useWorkspaceStore.persist.clearStorage?.();
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeDirectContextId: null,
+      layoutByWorktree: {
+        [W1]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          toolPanelVisible: false,
+          toolPanelTab: "vcs",
+        },
+      },
+      fileTreeVisible: false,
+      filesLeftPaneMode: {},
+      pendingReferencesQuery: null,
+    });
+  });
+
+  it("sets toolPanelVisible, toolPanelTab=files, filesLeftPaneMode=references, and pendingReferencesQuery in classic mode without flipping fileTreeVisible or leaving tools fullscreen", () => {
+    useWorkspaceStore.setState({ workspacePaneFullscreen: "tools" });
+    const query = {
+      worktreeId: W1,
+      path: "/src/main.rs",
+      line: 10,
+      character: 5,
+      symbol: "my_symbol",
+    };
+    useWorkspaceStore.getState().revealReferences(W1, query);
+
+    const state = useWorkspaceStore.getState();
+    const layout = state.layoutByWorktree[W1]!;
+    expect(layout.toolPanelVisible).toBe(true);
+    expect(layout.toolPanelTab).toBe("files");
+    expect(state.fileTreeVisible).toBe(false);
+    // Cmd+click comes from inside the fullscreen tools pane, which already
+    // shows the references panel — the reveal must not kick the user out.
+    expect(state.workspacePaneFullscreen).toBe("tools");
+    expect(state.filesLeftPaneMode[W1]).toBe("references");
+    expect(state.pendingReferencesQuery).toEqual(query);
+  });
+
+  it("drops a terminal/agent pane fullscreen that would cover the references panel", () => {
+    for (const fs of ["terminal", "agent"] as const) {
+      useWorkspaceStore.setState({ workspacePaneFullscreen: fs });
+      useWorkspaceStore.getState().revealReferences(W1, {
+        worktreeId: W1,
+        path: "/src/main.rs",
+        line: 1,
+        character: 1,
+        symbol: "x",
+      });
+      expect(useWorkspaceStore.getState().workspacePaneFullscreen).toBeNull();
+    }
+  });
+
+  it("inserts tools tile into scratchCanvas when in workspace layout mode", () => {
+    useWorkspaceStore.setState({
+      layoutByWorktree: {
+        [W1]: {
+          ...DEFAULT_WORKTREE_LAYOUT,
+          layoutMode: "workspace",
+          scratchCanvas: { mode: "free", tiles: [], tree: null, freeRects: {} },
+        },
+      },
+    });
+
+    const query = {
+      worktreeId: W1,
+      path: "/src/lib.rs",
+      line: 2,
+      character: 3,
+      symbol: "test_fn",
+    };
+    useWorkspaceStore.getState().revealReferences(W1, query);
+
+    const state = useWorkspaceStore.getState();
+    const layout = state.layoutByWorktree[W1]!;
+    expect(layout.scratchCanvas!.tiles.some((t) => t.kind === "tools")).toBe(true);
+    expect(state.fileTreeVisible).toBe(false);
+    expect(state.filesLeftPaneMode[W1]).toBe("references");
+    expect(state.pendingReferencesQuery).toEqual(query);
+  });
+});
+
 // --- syncSessionsFromApi opt-in prune mode (reconnect-stale-state Phase 1) ---
 describe("useWorkspaceStore - syncSessionsFromApi prune mode", () => {
   const mkSess = (id: string, state: Session["state"]): Session => ({
@@ -1062,7 +1148,7 @@ describe("useWorkspaceStore - peekFile slice", () => {
       external: { token: "tok-ext", displayPath: "/ext-def.ts" },
     });
     s = useWorkspaceStore.getState();
-    expect(s.peekFile).toEqual({
+    expect(s.peekFile).toMatchObject({
       worktreeId: W1,
       path: "/ext-def.ts",
       line: 34,
@@ -1100,7 +1186,7 @@ describe("useWorkspaceStore - peekFile slice", () => {
       coalesce: true,
     });
     s = useWorkspaceStore.getState();
-    expect(s.peekFile).toEqual({
+    expect(s.peekFile).toMatchObject({
       worktreeId: W1,
       path: "/search-4t1.ts",
       line: 20,
@@ -1119,7 +1205,7 @@ describe("useWorkspaceStore - peekFile slice", () => {
       external: { token: "tok-outline", displayPath: "/outline-ext.ts" },
     });
     s = useWorkspaceStore.getState();
-    expect(s.peekFile).toEqual({
+    expect(s.peekFile).toMatchObject({
       worktreeId: W1,
       path: "/outline-ext.ts",
       line: 30,
@@ -1146,6 +1232,46 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
     });
   });
 
+  // L7: re-entering the persisted active worktree must not keep a file that
+  // belongs to another context (it isn't one of this worktree's tabs).
+  it("setActiveWorktree on the same worktree drops a foreign activeFilePath", () => {
+    useWorkspaceStore.setState({
+      activeWorktreeId: W1,
+      activeSessionId: "s-1",
+      activeFilePath: "rust/other-context.rs",
+      openFileTabsByWorktree: { [W1]: ["/a.ts", "/b.ts"] },
+      activeFileTabIdxByWorktree: { [W1]: 1 },
+    });
+    useWorkspaceStore.getState().setActiveWorktree("p-1", W1, []);
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/b.ts");
+
+    // An own tab stays put (true idempotency).
+    useWorkspaceStore.setState({ activeFilePath: "/a.ts" });
+    useWorkspaceStore.getState().setActiveWorktree("p-1", W1, []);
+    expect(useWorkspaceStore.getState().activeFilePath).toBe("/a.ts");
+  });
+
+  // Bug 2 + L5: a jump carries its column range, and re-jumping to the SAME
+  // path+line is still a distinct jump (fresh `seq`) so the pane re-scrolls.
+  it("pushJump carries column/endColumn and a fresh seq per jump", () => {
+    const jump = () =>
+      useWorkspaceStore.getState().pushJump({
+        worktreeId: W1,
+        path: "/b.ts",
+        line: 12,
+        matchText: null,
+        column: 8,
+        endColumn: 17,
+        source: "references",
+      });
+    jump();
+    const first = useWorkspaceStore.getState().pendingLineTarget!;
+    expect(first).toMatchObject({ path: "/b.ts", line: 12, column: 8, endColumn: 17 });
+    jump();
+    const second = useWorkspaceStore.getState().pendingLineTarget!;
+    expect(second.seq).toBeGreaterThan(first.seq!);
+  });
+
   // 2.T1 Unit — useStore.ts pushJump branch ordering and coalesce
   it("2.T1 — pushJump pushes to backStack on source switch; coalesce replaces in place; coalesce with open tab still peeks in place", () => {
     const store = useWorkspaceStore.getState();
@@ -1158,7 +1284,7 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
       matchText: "foo",
       source: "search",
     });
-    expect(useWorkspaceStore.getState().peekFile).toEqual({
+    expect(useWorkspaceStore.getState().peekFile).toMatchObject({
       worktreeId: W1,
       path: "/search-result.ts",
       line: 10,
@@ -1167,7 +1293,7 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
     });
     // Recorded prior committed state (/a.ts)
     expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
-    expect(useWorkspaceStore.getState().backStack[W1]![0]).toEqual({
+    expect(useWorkspaceStore.getState().backStack[W1]![0]).toMatchObject({
       kind: "committed",
       worktreeId: W1,
       path: "/a.ts",
@@ -1214,7 +1340,7 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
     expect(useWorkspaceStore.getState().activeFileTabIdxByWorktree[W1]).toBe(2);
     expect(useWorkspaceStore.getState().peekFile).toBeNull();
     expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(2);
-    expect(useWorkspaceStore.getState().backStack[W1]![1]).toEqual({
+    expect(useWorkspaceStore.getState().backStack[W1]![1]).toMatchObject({
       kind: "peek",
       value: {
         worktreeId: W1,
@@ -1308,7 +1434,7 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
 
     // navigateBack restores A into peek slot and pushes B onto forwardStack
     useWorkspaceStore.getState().navigateBack(W1);
-    expect(useWorkspaceStore.getState().peekFile).toEqual({
+    expect(useWorkspaceStore.getState().peekFile).toMatchObject({
       worktreeId: W1,
       path: "/jump-a.ts",
       line: 10,
@@ -1318,7 +1444,7 @@ describe("Phase 2 — Shared preview slot + back/forward history", () => {
     // backStack length must NOT be inflated (must now be 1, having popped jump-a)
     expect(useWorkspaceStore.getState().backStack[W1]).toHaveLength(1);
     expect(useWorkspaceStore.getState().forwardStack[W1]).toHaveLength(1);
-    expect(useWorkspaceStore.getState().forwardStack[W1]![0]).toEqual({
+    expect(useWorkspaceStore.getState().forwardStack[W1]![0]).toMatchObject({
       kind: "committed",
       worktreeId: W1,
       path: "/jump-b.ts",

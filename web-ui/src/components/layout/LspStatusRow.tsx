@@ -4,6 +4,7 @@ import type { FileScope } from "@/api/types";
 import { getLspStatuses, type LspLanguageStatus, type LspSeverity } from "@/lib/lspApi";
 import { usePreviewedPath } from "@/hooks/usePreviewedPath";
 import { useLspStatus } from "@/hooks/useLspStatus";
+import { LspInstallCommand, LspRemediationActions, LspServerOutput } from "./LspRemediation";
 
 interface LspStatusRowProps {
   /** Untyped, like `useLspStatus`'s own `api` param — this component never
@@ -31,7 +32,7 @@ const SEVERITY_DOT_CLASS: Record<LspSeverity, string> = {
 export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusRowProps) {
   const { doc } = useEventTargets();
   const { path } = usePreviewedPath(worktreeId, scope);
-  const { status, language, displayName, label, severity, text, action, actionLabel, onClick } =
+  const { status, language, displayName, label, severity, text, action, actionLabel, info, failure, onClick, retry } =
     useLspStatus(api, worktreeId, scope, path);
   const [open, setOpen] = useState(false);
   const [allStatuses, setAllStatuses] = useState<LspLanguageStatus[] | null>(null);
@@ -85,7 +86,9 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
 
   const detail = text;
   const barLabel = displayName ? `${displayName} LSP: ${label}` : `LSP: ${label}`;
-  const isClickable = action != null;
+  // A failure brings its own remediation row (which includes Retry), so the
+  // generic presentation action would only duplicate it.
+  const isClickable = action != null && !failure;
 
   const handleAction = async () => {
     await onClick();
@@ -98,7 +101,7 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
         className="lsp-status-row__trigger"
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={detail}
+        title={info ? `${detail}\n${info}` : detail}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={`lsp-status-row__dot ${SEVERITY_DOT_CLASS[severity]}`} aria-hidden />
@@ -106,7 +109,22 @@ export function LspStatusRow({ api, worktreeId, scope = "worktree" }: LspStatusR
       </button>
       {open && (
         <div className="lsp-status-row__popup" role="dialog" aria-label="LSP status detail">
-          <div className="lsp-status-row__popup-text">{detail}</div>
+          <div className="lsp-status-row__popup-text">
+            {detail}
+            {failure && <LspInstallCommand failure={failure} className="lsp-status-row__popup-command" />}
+            {info && <div className="lsp-status-row__popup-info">{info}</div>}
+          </div>
+          {failure && failure.remediation.length > 0 && (
+            <div className="lsp-status-row__popup-actions">
+              <LspRemediationActions
+                failure={failure}
+                onRetry={retry}
+                buttonClassName="lsp-status-row__popup-action-btn"
+                primaryClassName="lsp-status-row__popup-action-btn--primary"
+              />
+            </div>
+          )}
+          {failure && <LspServerOutput failure={failure} className="lsp-status-row__popup-output" />}
           {isClickable && (
             <div className="lsp-status-row__popup-actions">
               <button type="button" className="lsp-status-row__popup-action-btn" onClick={handleAction}>

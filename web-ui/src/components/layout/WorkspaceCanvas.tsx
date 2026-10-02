@@ -1041,7 +1041,8 @@ export function WorkspaceCanvas({
     const isUnderFloatingWidget = !toolbarOccupiesTop && !fullscreenTileId && tile.id === topRightTileId;
     const tileInset = isUnderFloatingWidget ? outerInset : ZERO_INSET;
     const tileStyle: CSSProperties = isFullscreen
-      ? { position: "fixed", inset: 0 }
+      ? // Stop above the global status bar, same as `.pane-viewport-fullscreen`.
+        { position: "fixed", inset: "0 0 var(--global-status-bar-h, 24px) 0" }
       : isHiddenForFullscreen
         ? { ...style, display: "none" }
         : (style ?? {});

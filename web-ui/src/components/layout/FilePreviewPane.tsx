@@ -11,7 +11,7 @@ import { DEFAULT_WORKTREE_LAYOUT, useWorkspaceStore } from "@/hooks/useStore";
 import { useFileWatch, useTreeWatch } from "@/hooks/useSubscription";
 import { MarkdownView } from "@/components/preview/MarkdownView";
 import { MermaidView } from "@/components/preview/MermaidView";
-import { CodeView, type CodeViewHandle } from "@/components/preview/CodeView";
+import { CodeView, type CodeViewHandle, type GutterMarkKind } from "@/components/preview/CodeView";
 import { ZoomableMedia } from "@/components/preview/ZoomableMedia";
 import { ImageZoomOverlay } from "@/components/preview/ImageZoomOverlay";
 import { DiffView } from "@/components/preview/DiffView";
@@ -25,6 +25,9 @@ import { parseUnifiedDiff, summarizeDiffLines, syntheticUntrackedHunks } from "@
  *  focus from / clobber whatever the Files tab has open. */
 import { usePreviewedPath, type FilePreviewControlled } from "@/hooks/usePreviewedPath";
 export type { FilePreviewControlled };
+
+/** How often the plain file view re-checks git for gutter changes (terminal `git add`/`commit`). */
+const GUTTER_POLL_MS = 2000;
 
 interface FilePreviewPaneProps {
   api: ApiInstance;
@@ -113,7 +116,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   const [imageBlob, setImageBlob] = useState<{ key: string; url: string } | null>(null);
   const imageBlobUrl = imageBlob && imageBlob.key === imageKey ? imageBlob.url : null;
   const [imageFullscreen, setImageFullscreen] = useState(false);
-  const [gutterMarks, setGutterMarks] = useState<Map<number, "added" | "modified" | "deleted"> | null>(null);
+  const gutterSigRef = useRef<string | null>(null);
+  const [gutterMarks, setGutterMarks] = useState<Map<number, ReadonlySet<GutterMarkKind>> | null>(null);
   const { lastChanged } = useFileWatch(api, worktreeId, isExternalPeek ? null : path, fileScope);
   // Cheap insurance for directory-level rename-replace events (Phase 1's
   // watchFile() watches the parent dir): a tree-level change to this
@@ -156,6 +160,25 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       setReconnectTick((t) => t + 1);
     });
   }, [api]);
+
+  // Bug 7: gutter marks must follow `git add`/`git commit`/`git checkout` run in
+  // a terminal. .git is hard-ignored by the file watcher and no WS event fires
+  // for those operations (vcs:status / worktree:updated only fire on worktree
+  // CRUD), so poll while the plain file view is visible. The fetch effect skips
+  // the state update when the marks are unchanged, so an idle poll is inert.
+  const [vcsTick, setVcsTick] = useState(0);
+  // `fileScope:worktreeId:path` whose gutter fetch 404'd — the file doesn't
+  // exist in this context, so stop polling it until the path changes (L7).
+  const [gutterMissingKey, setGutterMissingKey] = useState<string | null>(null);
+  const gutterKey = worktreeId && path ? `${fileScope}:${worktreeId}:${path}` : null;
+  const gutterMissing = gutterKey != null && gutterMissingKey === gutterKey;
+  useEffect(() => {
+    if (!worktreeId || !path || scope !== "none" || gutterMissing) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") setVcsTick((t) => t + 1);
+    }, GUTTER_POLL_MS);
+    return () => clearInterval(id);
+  }, [worktreeId, path, scope, gutterMissing]);
 
   const [error, setError] = useState<string | null>(null);
   const [tooLarge, setTooLarge] = useState(false);
@@ -284,6 +307,7 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // scopes show a diff view which already has its own add/remove line coloring.
   useEffect(() => {
     if (!worktreeId || !path || scope !== "none") {
+      gutterSigRef.current = null;
       setGutterMarks(null);
       return;
     }
@@ -292,34 +316,53 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
       try {
         const result = await api.getGutter(worktreeId, path, undefined, fileScope);
         if (cancelled) return;
-        const marks = new Map<number, "added" | "modified" | "deleted">();
+        const marks = new Map<number, Set<GutterMarkKind>>();
+        const addMark = (lineNum: number, kind: GutterMarkKind) => {
+          let set = marks.get(lineNum);
+          if (!set) {
+            set = new Set();
+            marks.set(lineNum, set);
+          }
+          set.add(kind);
+        };
         // Added lines: directly map each line number
         for (const lineNum of result.added) {
-          marks.set(lineNum, "added");
+          addMark(lineNum, "added");
         }
         // Modified lines: directly map each line number
         for (const lineNum of result.modified) {
-          marks.set(lineNum, "modified");
+          addMark(lineNum, "modified");
         }
         // Deleted lines: map each line number to the "deleted" wedge. `0` is
         // the backend's sentinel for "deletion occurred before line 1" (see
-        // Decision 3) — CodeView only ever renders lines 1..N, so a bare `0`
-        // would never match any line and the marker would silently vanish.
-        // Fold it onto line 1 so the indicator still renders (not pixel-
-        // perfect against "top edge of line 1", but never dropped).
+        // Decision 3) — CodeView renders lines 1..N, so map `0` to line 1 with
+        // the "deleted-top" variant to render at the top edge of line 1.
         for (const lineNum of result.deleted) {
-          marks.set(lineNum === 0 ? 1 : lineNum, "deleted");
+          if (lineNum === 0) {
+            addMark(1, "deleted-top");
+          } else {
+            addMark(lineNum, "deleted");
+          }
         }
+        // Keep the previous Map when nothing changed so polling doesn't
+        // re-render / re-decorate the code view every tick.
+        const sig = JSON.stringify([result.added, result.modified, result.deleted]);
+        if (sig === gutterSigRef.current) return;
+        gutterSigRef.current = sig;
         setGutterMarks(marks);
-      } catch {
+      } catch (e) {
         // Silently ignore errors (e.g., file not tracked, permission denied)
+        gutterSigRef.current = null;
         setGutterMarks(null);
+        if (!cancelled && e instanceof ApiError && e.status === 404) {
+          setGutterMissingKey(`${fileScope}:${worktreeId}:${path}`);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick]);
+  }, [api, worktreeId, path, scope, fileScope, lastChanged, treeLastChanged, reconnectTick, vcsTick, commitSha]);
 
   // ── Scroll persistence ────────────────────────────────────────────────
   // Why a callback ref instead of useEffect: fullscreen toggling moves the
@@ -398,13 +441,16 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     !!peekFile && peekFile.worktreeId === worktreeId && peekFile.path === path;
   const pendingActive =
     !!pendingLineTarget && pendingLineTarget.worktreeId === worktreeId && pendingLineTarget.path === path;
-  const effectiveLine = peekActive ? peekFile!.line : pendingActive ? pendingLineTarget!.line : null;
-  const effectiveMatchText = peekActive
-    ? peekFile!.matchText
-    : pendingActive
-      ? pendingLineTarget!.matchText
-      : null;
-  const effectiveLineKey = effectiveLine != null ? `${path}#${effectiveLine}` : null;
+  const effectiveTarget = peekActive ? peekFile : pendingActive ? pendingLineTarget : null;
+  const effectiveLine = effectiveTarget ? effectiveTarget.line : null;
+  const effectiveMatchText = effectiveTarget ? effectiveTarget.matchText : null;
+  const effectiveColumn = effectiveTarget?.column ?? null;
+  const effectiveEndColumn = effectiveTarget?.endColumn ?? null;
+  // The jump nonce (`seq`) is part of the key: re-clicking the same
+  // reference/outline row after manually scrolling away is a new jump and
+  // must scroll back, even though path+line are unchanged (L5).
+  const effectiveLineKey =
+    effectiveLine != null ? `${path}#${effectiveLine}#${effectiveTarget?.seq ?? ""}` : null;
   const lineIsConsumed = effectiveLineKey == null || lastScrolledKeyRef.current === effectiveLineKey;
 
   // Restore scroll the instant the body element mounts. Stored value comes
@@ -533,6 +579,11 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         // just work — no fixed pixel math needed here).
         targetElement.scrollIntoView({ block: "center" });
       }
+      // A column-pinned jump marks the exact token (CodeView renders the
+      // mark in the same commit as the target row, in virtual mode too) — bring THAT into view horizontally too, so
+      // a reference far right on a long line isn't left off-screen.
+      const tokenMark = targetElement.querySelector<HTMLElement>(".workspace-code-match");
+      tokenMark?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
       clearHighlight();
       targetElement.classList.add("workspace-line-highlight");
       highlightedElRef.current = targetElement;
@@ -582,6 +633,18 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
     return summarizeDiffLines(hunks);
   }, [diffBody, fileBody]);
 
+  // Memoized so the 2s gutter poll's re-renders don't give CodeView a new
+  // `lspFileRef` object identity every tick — CodeView's file-switch effect
+  // is keyed on it, and a fresh identity every 2s cancels in-flight
+  // go-to-def/hover requests and closes pickers/tooltips every poll.
+  const lspFileRef: LspFileRef = useMemo(
+    () =>
+      external
+        ? { kind: "external", token: external.token }
+        : { kind: "workspace", path: path! },
+    [external, path]
+  );
+
   // No worktree context (e.g. nothing selected yet). The dashboard has its own
   // route now, so this is a plain empty state — never dashboard/kanban content.
   if (!worktreeId) {
@@ -610,11 +673,15 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
   // panes read the same `diffScopeByWorktree` store slice, so a change made
   // there is reflected here automatically without this pane owning any UI
   // for it. File name + panel controls live on the Files bar above.
+  // With the tree closed (or stacked) the tools rail overlays this pane's
+  // left edge — both the info strip AND the body must clear it, or the rail
+  // icons cover the code view's line numbers (L8).
+  const clearsRail = !controlled && (!isPanelOpen || masterDetailVertical);
   const diffInfo = (
     <div
       className="preview-diffinfo"
       style={{
-        paddingLeft: !controlled && (!isPanelOpen || masterDetailVertical) ? "calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))" : undefined,
+        paddingLeft: clearsRail ? "calc(var(--tools-rail-w, 36px) + var(--space-3, 12px))" : undefined,
       }}
     >
       <div className="preview-nav" role="navigation" aria-label="Preview navigation">
@@ -727,9 +794,6 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         </div>
       );
     }
-    const lspFileRef: LspFileRef = external
-      ? { kind: "external", token: external.token }
-      : { kind: "workspace", path: path! };
     return (
       <CodeView
         ref={codeViewRef}
@@ -746,6 +810,8 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         highlightMatchText={effectiveMatchText}
         scrollElRef={scrollElRef}
         onRevealReady={() => setRevealKey((k) => k + 1)}
+        highlightColumn={effectiveColumn}
+        highlightEndColumn={effectiveEndColumn}
       />
     );
   })();
@@ -780,7 +846,10 @@ export function FilePreviewPane({ api, worktreeId, scope: fileScope = "worktree"
         ref={setBodyRef}
         onScroll={handleScroll}
         className={`preview-body${useCodeChrome ? " preview-body--code" : ""}`}
-        style={previewScaleStyle}
+        style={clearsRail ? {
+                ...previewScaleStyle,
+                paddingLeft: `calc(var(--tools-rail-w, 36px) + ${useCodeChrome ? "0px" : "var(--space-3, 12px)"})`,
+              } : previewScaleStyle}
       >
         {body}
       </div>

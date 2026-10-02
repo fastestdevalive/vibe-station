@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { CodeView } from "./CodeView";
+import { CodeView, type GutterMarkKind } from "./CodeView";
 import { useWorkspaceStore } from "@/hooks/useStore";
 import * as lspApi from "@/lib/lspApi";
 import { ApiError } from "@/api/errors";
@@ -8,8 +8,8 @@ import { ApiError } from "@/api/errors";
 describe("CodeView", () => {
   it("5.T1: renders line with added modifier class when gutterMarks contains that line", () => {
     const code = "line 1\nline 2 added\nline 3";
-    const gutterMarks = new Map<number, "added" | "modified" | "deleted">([
-      [2, "added"],
+    const gutterMarks = new Map<number, Set<GutterMarkKind>>([
+      [2, new Set(["added"])],
     ]);
     const { container } = render(
       <CodeView
@@ -26,8 +26,8 @@ describe("CodeView", () => {
 
   it("5.T2: line with no gutterMarks entry renders without modifier class", () => {
     const code = "line 1\nline 2\nline 3";
-    const gutterMarks = new Map<number, "added" | "modified" | "deleted">([
-      [2, "added"],
+    const gutterMarks = new Map<number, Set<GutterMarkKind>>([
+      [2, new Set(["added"])],
     ]);
     const { container } = render(
       <CodeView
@@ -44,9 +44,9 @@ describe("CodeView", () => {
 
   it("5.T2: noGutter={true} suppresses modifier classes even when gutterMarks has entries", () => {
     const code = "line 1\nline 2\nline 3";
-    const gutterMarks = new Map<number, "added" | "modified" | "deleted">([
-      [1, "modified"],
-      [2, "deleted"],
+    const gutterMarks = new Map<number, Set<GutterMarkKind>>([
+      [1, new Set(["modified"])],
+      [2, new Set(["deleted"])],
     ]);
     const { container } = render(
       <CodeView
@@ -66,8 +66,8 @@ describe("CodeView", () => {
 
   it("renders modified marker on the correct line", () => {
     const code = "line 1\nline 2\nline 3 modified";
-    const gutterMarks = new Map<number, "added" | "modified" | "deleted">([
-      [3, "modified"],
+    const gutterMarks = new Map<number, Set<GutterMarkKind>>([
+      [3, new Set(["modified"])],
     ]);
     const { container } = render(
       <CodeView
@@ -83,8 +83,8 @@ describe("CodeView", () => {
 
   it("renders deleted marker on the correct line", () => {
     const code = "line 1 deleted\nline 2\nline 3";
-    const gutterMarks = new Map<number, "added" | "modified" | "deleted">([
-      [1, "deleted"],
+    const gutterMarks = new Map<number, Set<GutterMarkKind>>([
+      [1, new Set(["deleted"])],
     ]);
     const { container } = render(
       <CodeView
@@ -96,6 +96,59 @@ describe("CodeView", () => {
 
     const lines = container.querySelectorAll(".workspace-code-line");
     expect(lines[0]!.className).toContain("workspace-code-line--deleted");
+  });
+
+  it("Bug 8: renders both modified and deleted modifier classes when gutterMarks contains a Set with both", () => {
+    const code = "line 1\nline 2 mod+del\nline 3";
+    const gutterMarks = new Map<number, Set<"added" | "modified" | "deleted">>([
+      [2, new Set(["modified", "deleted"])],
+    ]);
+    const { container } = render(
+      <CodeView
+        code={code}
+        gutterMarks={gutterMarks}
+        filePath="test.txt"
+      />
+    );
+
+    const lines = container.querySelectorAll(".workspace-code-line");
+    expect(lines[1]!.className).toContain("workspace-code-line--modified");
+    expect(lines[1]!.className).toContain("workspace-code-line--deleted");
+  });
+
+  it("Bug 8: renders both added and deleted modifier classes when gutterMarks contains a Set with both", () => {
+    const code = "line 1\nline 2 add+del\nline 3";
+    const gutterMarks = new Map<number, Set<"added" | "modified" | "deleted">>([
+      [2, new Set(["added", "deleted"])],
+    ]);
+    const { container } = render(
+      <CodeView
+        code={code}
+        gutterMarks={gutterMarks}
+        filePath="test.txt"
+      />
+    );
+
+    const lines = container.querySelectorAll(".workspace-code-line");
+    expect(lines[1]!.className).toContain("workspace-code-line--added");
+    expect(lines[1]!.className).toContain("workspace-code-line--deleted");
+  });
+
+  it("Bug 9: renders deleted-top modifier class when gutterMarks contains deleted-top", () => {
+    const code = "line 1\nline 2\nline 3";
+    const gutterMarks = new Map<number, Set<"added" | "modified" | "deleted" | "deleted-top">>([
+      [1, new Set(["deleted-top"])],
+    ]);
+    const { container } = render(
+      <CodeView
+        code={code}
+        gutterMarks={gutterMarks}
+        filePath="test.txt"
+      />
+    );
+
+    const lines = container.querySelectorAll(".workspace-code-line");
+    expect(lines[0]!.className).toContain("workspace-code-line--deleted-top");
   });
 
   it("highlightLine adds the target modifier class to the matching line only", () => {
@@ -150,6 +203,43 @@ describe("CodeView", () => {
     expect(container.querySelector('.workspace-code-content--shiki [style*="color"]')).toBeTruthy();
     const mark = container.querySelector("mark.workspace-code-match");
     expect(mark?.textContent).toBe("hello");
+  });
+
+  // Bug 2 / L6: a column-pinned jump marks the referenced occurrence, not the
+  // first `indexOf` on the line.
+  it("highlightColumn/highlightEndColumn mark the exact occurrence, not the first", async () => {
+    const code = "const a = run(); const b = run();";
+    const second = code.lastIndexOf("run");
+    const { container } = render(
+      <CodeView
+        code={code}
+        filePath="test.ts"
+        highlightLine={1}
+        highlightMatchText="run"
+        highlightColumn={second}
+        highlightEndColumn={second + 3}
+      />,
+    );
+    await waitFor(() => {
+      expect(container.querySelector(".workspace-code-content--shiki mark.workspace-code-match")).toBeTruthy();
+    });
+    const content = container.querySelector(".workspace-code-content")!;
+    const mark = content.querySelector("mark.workspace-code-match")!;
+    expect(mark.textContent).toBe("run");
+    // Everything before the mark is the text up to the SECOND occurrence.
+    const range = document.createRange();
+    range.setStart(content, 0);
+    range.setEndBefore(mark);
+    expect(range.toString()).toBe(code.slice(0, second));
+  });
+
+  it("highlightColumn without endColumn marks the identifier starting at that column", () => {
+    const code = "let x = foo.barBaz(1);";
+    const col = code.indexOf("barBaz");
+    const { container } = render(
+      <CodeView code={code} filePath="test.txt" highlightLine={1} highlightColumn={col} />,
+    );
+    expect(container.querySelector("mark.workspace-code-match")?.textContent).toBe("barBaz");
   });
 
   it("preserves Shiki syntax-highlighting when a match spans multiple tokens", async () => {
@@ -471,6 +561,52 @@ describe("CodeView", () => {
 
       expect(await screen.findByRole("dialog", { name: "Go to definition" })).toBeInTheDocument();
       expect(screen.getByText("(text match)")).toBeInTheDocument();
+      expect(screen.queryByTestId("lsp-picker-reason")).toBeNull();
+    });
+
+    // Bug 6: a text-search fallback says WHY in the header, drops the
+    // per-row badges, trims raw previews, and still shows the picker for a
+    // single hit (never a silent jump to a grep match).
+    it("text-fallback answer: reason line, no per-row badges, trimmed preview, picker even for one hit", async () => {
+      const locations: lspApi.Location[] = [
+        {
+          external: false,
+          path: "/src/alpha.ts",
+          line: 10,
+          character: 9,
+          endCharacter: 14,
+          preview: "export function alpha() {",
+          confidence: "text",
+        },
+      ];
+      vi.spyOn(lspApi, "getDefinition").mockResolvedValue({ locations, fallback: { reason: "starting" } });
+      // Indented raw preview to prove client-side trimming.
+      locations[0]!.preview = "    export function alpha() {";
+
+      const code = "alpha();\nconst y = 2;";
+      const { container } = render(
+        <CodeView
+          code={code}
+          filePath="/main.ts"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/main.ts" }}
+        />
+      );
+      const content = container.querySelector(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+
+      expect(await screen.findByRole("dialog", { name: "Go to definition" })).toBeInTheDocument();
+      expect(screen.getByTestId("lsp-picker-reason")).toHaveTextContent(
+        "Language server starting — text matches",
+      );
+      expect(screen.getByText("Go to definition · 1")).toBeInTheDocument();
+      expect(screen.queryByText("(text match)")).toBeNull();
+      expect(screen.getByText("export function alpha() {")).toBeInTheDocument();
+      // No silent navigation happened.
+      expect(useWorkspaceStore.getState().activeFilePath).toBe("/main.ts");
     });
 
     // 3.T5 Integration — stale-response discard
@@ -521,6 +657,45 @@ describe("CodeView", () => {
       expect(useWorkspaceStore.getState().peekFile).toBeNull();
       expect(useWorkspaceStore.getState().activeFilePath).toBe("/main.ts");
       expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/main.ts"]);
+    });
+
+    it("3.T5b: a superseded request's late error does not open the references panel", async () => {
+      let rejectDef!: (err: unknown) => void;
+      vi.spyOn(lspApi, "getDefinition").mockReturnValue(
+        new Promise<lspApi.LspDefinitionResponse>((_res, rej) => {
+          rejectDef = rej;
+        }),
+      );
+
+      const { container, rerender } = render(
+        <CodeView
+          code={"const x = 1;\nconst y = 2;"}
+          filePath="/main.ts"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/main.ts" }}
+        />
+      );
+      const content = container.querySelector(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+
+      // File switch supersedes the in-flight request.
+      rerender(
+        <CodeView
+          code="different content"
+          filePath="/other.ts"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/other.ts" }}
+        />
+      );
+      rejectDef(new ApiError("boom", 500));
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(useWorkspaceStore.getState().pendingReferencesQuery).toBeNull();
+      expect(useWorkspaceStore.getState().filesLeftPaneMode[W1]).not.toBe("references");
     });
 
     // 3.T6 Regression — plain click still performs native text selection
@@ -642,8 +817,8 @@ describe("CodeView", () => {
       expect(useWorkspaceStore.getState().peekFile).toBeNull();
     });
 
-    // 3.3: 409 failing twice shows "still starting — click again"
-    it("3.3: 409 failing twice shows 'still starting — click again'", async () => {
+    // Bug 11: 409 failing twice opens References panel via revealReferences (replacing tooltip-only feedback)
+    it("Bug 11: 409 failing twice opens References panel via revealReferences", async () => {
       vi.spyOn(lspApi, "getDefinition").mockRejectedValue(new ApiError("LSP_NOT_READY", 409));
 
       const code = "const x = 1;\nconst y = 2;";
@@ -663,14 +838,38 @@ describe("CodeView", () => {
       fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
       fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
 
-      expect(await screen.findByText("still starting — click again")).toBeInTheDocument();
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().filesLeftPaneMode[W1]).toBe("references");
+      });
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.symbol).toBe("const");
       expect(useWorkspaceStore.getState().peekFile).toBeNull();
       expect(useWorkspaceStore.getState().activeFilePath).toBe("/main.ts");
       expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/main.ts"]);
     });
 
-    // 3.8: Zero results -> silent no-op
-    it("3.8: zero results (locations: []) is a silent no-op", async () => {
+    it("3.8b: zero text-fallback hits while the server never ran (starting) opens a references query, not no-definition", async () => {
+      vi.spyOn(lspApi, "getDefinition").mockResolvedValue({ locations: [], fallback: { reason: "starting" } });
+      const { container } = render(
+        <CodeView
+          code={"const x = 1;\nconst y = 2;"}
+          filePath="/main.ts"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/main.ts" }}
+        />
+      );
+      const content = container.querySelector(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+
+      await waitFor(() => expect(useWorkspaceStore.getState().pendingReferencesQuery?.symbol).toBe("const"));
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.intent).toBe("references");
+    });
+
+    // 3.8 (round-2 Bug 1): zero results -> References panel in its
+    // "Couldn't resolve" (no-definition) state, NOT a references query.
+    it("3.8: zero results (locations: []) opens the panel with intent no-definition", async () => {
       const spy = vi.spyOn(lspApi, "getDefinition").mockResolvedValue({ locations: [] });
 
       const code = "const x = 1;\nconst y = 2;";
@@ -691,13 +890,155 @@ describe("CodeView", () => {
 
       await waitFor(() => {
         expect(spy).toHaveBeenCalled();
+        expect(useWorkspaceStore.getState().filesLeftPaneMode[W1]).toBe("references");
       });
-
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.symbol).toBe("const");
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.intent).toBe("no-definition");
       expect(useWorkspaceStore.getState().peekFile).toBeNull();
       expect(useWorkspaceStore.getState().activeFilePath).toBe("/main.ts");
       expect(useWorkspaceStore.getState().openFileTabsByWorktree[W1]).toEqual(["/main.ts"]);
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    describe("server_failed (latched language-server failure)", () => {
+      const failure: lspApi.LspFailure = {
+        kind: "missing_dependency",
+        summary: "TypeScript isn't installed for this project — code navigation needs it.",
+        message: null,
+        remediation: [{ kind: "retry", label: "Retry" }],
+        autoRetry: true,
+      };
+      const failedStatus: lspApi.LspStatusResponse = {
+        status: "error",
+        language: "typescript",
+        displayName: "TypeScript / JavaScript",
+        label: "Setup needed",
+        severity: "warn",
+        detail: failure.summary,
+        action: "retry",
+        actionLabel: "Retry",
+        failure,
+      };
+      const clickAt = (container: HTMLElement) => {
+        const content = container.querySelector(".workspace-code-content")!;
+        fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+        fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+        fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      };
+      const renderView = () =>
+        render(
+          <CodeView
+            code={"alpha();\nconst y = 2;"}
+            filePath="/main.ts"
+            api={{}}
+            worktreeId={W1}
+            lspFileRef={{ kind: "workspace", path: "/main.ts" }}
+          />
+        );
+
+      it("text hits: picker header names the missing thing from the failure summary", async () => {
+        vi.spyOn(lspApi, "getDefinition").mockResolvedValue({
+          locations: [
+            {
+              external: false,
+              path: "/src/alpha.ts",
+              line: 10,
+              character: 16,
+              endCharacter: 21,
+              preview: "export function alpha() {",
+              confidence: "text",
+            },
+          ],
+          fallback: { reason: "server_failed" },
+        });
+        vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failedStatus);
+        const { container } = renderView();
+        clickAt(container);
+        expect(await screen.findByRole("dialog", { name: "Go to definition" })).toBeInTheDocument();
+        expect(screen.getByTestId("lsp-picker-reason")).toHaveTextContent(
+          "TypeScript isn't installed for this project — text matches",
+        );
+      });
+
+      it("zero text hits: opens References carrying the failure (S17), not plain no-definition", async () => {
+        vi.spyOn(lspApi, "getDefinition").mockResolvedValue({ locations: [], fallback: { reason: "server_failed" } });
+        vi.spyOn(lspApi, "getLspStatus").mockResolvedValue(failedStatus);
+        const { container } = renderView();
+        clickAt(container);
+        await waitFor(() => expect(useWorkspaceStore.getState().pendingReferencesQuery?.failure).toEqual(failure));
+        expect(useWorkspaceStore.getState().pendingReferencesQuery?.intent).toBe("no-definition");
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+
+      it("a 503 LSP_SERVER_FAILED opens References with the failure, without retrying as 'starting'", async () => {
+        const spy = vi.spyOn(lspApi, "getDefinition").mockRejectedValue(
+          new ApiError(JSON.stringify({ error: failure.summary, code: "LSP_SERVER_FAILED", failure }), 503),
+        );
+        const { container } = renderView();
+        clickAt(container);
+        await waitFor(() => expect(useWorkspaceStore.getState().pendingReferencesQuery?.failure).toEqual(failure));
+        expect(useWorkspaceStore.getState().pendingReferencesQuery?.intent).toBe("no-definition");
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(screen.queryByText("waiting for language server…")).toBeNull();
+      });
+    });
+
+    it("Bug 11: 409 LSP_DISABLED is not retried and directly opens references panel", async () => {
+      const defSpy = vi.spyOn(lspApi, "getDefinition").mockRejectedValue(
+        new ApiError(JSON.stringify({ error: "Code navigation is disabled", code: "LSP_DISABLED" }), 409)
+      );
+
+      const code = "const x = 1;\nconst y = 2;";
+      const { container } = render(
+        <CodeView
+          code={code}
+          filePath="/main.ts"
+          api={{}}
+          worktreeId={W1}
+          retryDelayMs={10}
+          lspFileRef={{ kind: "workspace", path: "/main.ts" }}
+        />
+      );
+
+      const content = container.querySelector(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+
+      await waitFor(() => {
+        expect(defSpy).toHaveBeenCalledTimes(1);
+        expect(useWorkspaceStore.getState().filesLeftPaneMode[W1]).toBe("references");
+      });
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.symbol).toBe("const");
+    });
+
+    it("Bug 11: 422 LSP_UNSUPPORTED opens references panel without retry", async () => {
+      const defSpy = vi.spyOn(lspApi, "getDefinition").mockRejectedValue(
+        new ApiError(JSON.stringify({ error: "unsupported", code: "LSP_UNSUPPORTED" }), 422)
+      );
+
+      const code = "const x = 1;\nconst y = 2;";
+      const { container } = render(
+        <CodeView
+          code={code}
+          filePath="/main.txt"
+          api={{}}
+          worktreeId={W1}
+          lspFileRef={{ kind: "workspace", path: "/main.txt" }}
+        />
+      );
+
+      const content = container.querySelector(".workspace-code-content")!;
+      fireEvent.mouseDown(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.mouseUp(content, { clientX: 50, clientY: 50, ctrlKey: true });
+      fireEvent.click(content, { clientX: 50, clientY: 50, ctrlKey: true });
+
+      await waitFor(() => {
+        expect(defSpy).toHaveBeenCalledTimes(1);
+        expect(useWorkspaceStore.getState().filesLeftPaneMode[W1]).toBe("references");
+      });
+      expect(useWorkspaceStore.getState().pendingReferencesQuery?.symbol).toBe("const");
     });
 
     // Follow-up: definition-vs-usage distinction. A cmd-click whose single
@@ -745,6 +1086,8 @@ describe("CodeView", () => {
         line: 0,
         character: 0,
         symbol: "myFunc",
+        // Self-definition is the ONE case that becomes a references query.
+        intent: "references",
       });
     });
 
@@ -775,7 +1118,7 @@ describe("CodeView", () => {
       fireEvent.click(content, { clientX: 10, clientY: 10, ctrlKey: true });
 
       await waitFor(() => {
-        expect(useWorkspaceStore.getState().pendingLineTarget).toEqual({
+        expect(useWorkspaceStore.getState().pendingLineTarget).toMatchObject({
           worktreeId: W1,
           path: "/main.ts",
           line: 6,
@@ -940,9 +1283,14 @@ describe("CodeView", () => {
       expect(tooltip).toBeInTheDocument();
 
       const findRefsBtn = screen.getByRole("button", { name: "Find references" });
+      // The reveal must not flip the persisted fileTreeVisible preference.
+      useWorkspaceStore.setState({ fileTreeVisible: false });
       fireEvent.click(findRefsBtn);
 
       const store = useWorkspaceStore.getState();
+      expect(store.layoutByWorktree[W1]?.toolPanelVisible).toBe(true);
+      expect(store.layoutByWorktree[W1]?.toolPanelTab).toBe("files");
+      expect(store.fileTreeVisible).toBe(false);
       expect(store.filesLeftPaneMode[W1]).toBe("references");
       expect(store.pendingReferencesQuery).toEqual({
         worktreeId: W1,
@@ -950,6 +1298,7 @@ describe("CodeView", () => {
         line: 0,
         character: 0,
         symbol: "hello",
+        intent: "references",
       });
 
       // Tooltip dismissed
@@ -1016,6 +1365,28 @@ describe("CodeView", () => {
       // `onRevealReady` is called by CodeView right after `scrollToIndex(...,
       // { align: "center" })`, so this asserts the scroll-to-line path ran.
       expect(onRevealReady).toHaveBeenCalled();
+    });
+
+    it("column-pinned jump to a windowed-out row marks exactly that column range once mounted", async () => {
+      const scroller = makeScroller();
+      const onRevealReady = vi.fn();
+      const { container } = render(
+        <CodeView
+          code={bigCode(40_000)}
+          scrollElRef={{ current: scroller }}
+          highlightLine={31204}
+          highlightColumn={6}
+          highlightEndColumn={15}
+          onRevealReady={onRevealReady}
+        />,
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(onRevealReady).toHaveBeenCalled();
+      const marks = container.querySelectorAll('[data-line="31204"] mark.workspace-code-match');
+      expect(marks).toHaveLength(1);
+      expect(marks[0]!.textContent).toBe("line31203");
     });
 
     it("3.T5 — LSP ctrl-click on a mounted row in virtual mode resolves the correct 0-indexed line", async () => {
@@ -1089,6 +1460,173 @@ describe("CodeView", () => {
 
       expect(copyEvent.defaultPrevented).toBe(true);
       expect(clipData["text/plain"]).toBe(code);
+    });
+  });
+
+  describe("Bug 10: Cmd+hover underline flicker fix", () => {
+    const W1 = "wt-1";
+
+    it("same-word moves cause zero DOM writes on code lines", () => {
+      const code = "myFunc();\nconst y = 2;";
+      const { container } = render(
+        <CodeView code={code} api={{}} worktreeId={W1} filePath="/main.rs" />
+      );
+
+      const content = container.querySelector(".workspace-code-content")!;
+      const doc = document as unknown as {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      doc.caretRangeFromPoint = () => {
+        const textNode = Array.from(content.childNodes).find(
+          (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.includes("myFunc")
+        );
+        if (!textNode) return null;
+        const range = document.createRange();
+        range.setStart(textNode, 2);
+        range.setEnd(textNode, 2);
+        return range;
+      };
+
+      try {
+        // Initial move to highlight myFunc
+        act(() => {
+          fireEvent.mouseMove(content, { clientX: 10, clientY: 10, ctrlKey: true });
+        });
+        const underline = container.querySelector(".workspace-code-symbol-hover");
+        expect(underline?.textContent).toBe("myFunc");
+
+        // Observe any DOM mutations on the code line content
+        const mutations: MutationRecord[] = [];
+        const observer = new MutationObserver((records) => {
+          mutations.push(...records);
+        });
+        observer.observe(content, { childList: true, subtree: true, characterData: true });
+
+        // Fire 5 more moves over the same word
+        act(() => {
+          for (let i = 0; i < 5; i++) {
+            fireEvent.mouseMove(content, { clientX: 10 + i, clientY: 10, ctrlKey: true });
+          }
+        });
+
+        observer.disconnect();
+        expect(mutations.length).toBe(0);
+      } finally {
+        delete doc.caretRangeFromPoint;
+      }
+    });
+
+    it("cue survives a React re-render", () => {
+      const code = "myFunc();\nconst y = 2;";
+      const { container, rerender } = render(
+        <CodeView code={code} api={{}} worktreeId={W1} filePath="/main.rs" />
+      );
+
+      const content = container.querySelector(".workspace-code-content")!;
+      const doc = document as unknown as {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      doc.caretRangeFromPoint = () => {
+        const textNode = Array.from(content.childNodes).find(
+          (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.includes("myFunc")
+        );
+        if (!textNode) return null;
+        const range = document.createRange();
+        range.setStart(textNode, 2);
+        range.setEnd(textNode, 2);
+        return range;
+      };
+
+      try {
+        act(() => {
+          fireEvent.mouseMove(content, { clientX: 10, clientY: 10, ctrlKey: true });
+        });
+        const underline = container.querySelector(".workspace-code-symbol-hover");
+        expect(underline?.textContent).toBe("myFunc");
+
+        // Force a re-render of CodeView with updated props
+        act(() => {
+          rerender(
+            <CodeView code={code} api={{}} worktreeId={W1} filePath="/main.rs" highlightLine={2} />
+          );
+        });
+
+        // Cue must survive re-render
+        const underlineAfter = container.querySelector(".workspace-code-symbol-hover");
+        expect(underlineAfter?.textContent).toBe("myFunc");
+      } finally {
+        delete doc.caretRangeFromPoint;
+      }
+    });
+
+    it("uses CSS Custom Highlight API when available", () => {
+      const code = "myFunc();\nconst y = 2;";
+      const setMock = vi.fn();
+      const deleteMock = vi.fn();
+
+      const originalCSS = globalThis.CSS;
+      const g = globalThis as unknown as Record<string, unknown>;
+      const originalHighlight = g.Highlight;
+
+      g.Highlight = class MockHighlight {
+        ranges: Range[];
+        constructor(...ranges: Range[]) {
+          this.ranges = ranges;
+        }
+      };
+
+      g.CSS = {
+        ...originalCSS,
+        highlights: {
+          set: setMock,
+          delete: deleteMock,
+        },
+      };
+
+      const { container } = render(
+        <CodeView code={code} api={{}} worktreeId={W1} filePath="/main.rs" />
+      );
+
+      const content = container.querySelector(".workspace-code-content")!;
+      const doc = document as unknown as {
+        caretRangeFromPoint?: (x: number, y: number) => Range | null;
+      };
+      doc.caretRangeFromPoint = () => {
+        const textNode = Array.from(content.childNodes).find(
+          (n) => n.nodeType === Node.TEXT_NODE && n.textContent?.includes("myFunc")
+        );
+        if (!textNode) return null;
+        const range = document.createRange();
+        range.setStart(textNode, 2);
+        range.setEnd(textNode, 2);
+        return range;
+      };
+
+      try {
+        act(() => {
+          fireEvent.mouseMove(content, { clientX: 10, clientY: 10, ctrlKey: true });
+        });
+
+        expect(setMock).toHaveBeenCalledWith("lsp-cue", expect.any(g.Highlight as new (...r: Range[]) => object));
+
+        // Release modifier clears highlight
+        act(() => {
+          fireEvent.keyUp(window, { key: "Control", ctrlKey: false, metaKey: false });
+        });
+        expect(deleteMock).toHaveBeenCalledWith("lsp-cue");
+      } finally {
+        delete doc.caretRangeFromPoint;
+        if (originalCSS) {
+          g.CSS = originalCSS;
+        } else {
+          delete g.CSS;
+        }
+        if (originalHighlight) {
+          g.Highlight = originalHighlight;
+        } else {
+          delete g.Highlight;
+        }
+      }
     });
   });
 });

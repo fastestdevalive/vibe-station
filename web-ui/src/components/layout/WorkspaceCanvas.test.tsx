@@ -514,6 +514,10 @@ describe("WorkspaceCanvas - fullscreen reconciliation", () => {
     expect(screen.getByTitle("Click to exit fullscreen")).toBeInTheDocument();
     const tileB = screen.getByText("agent").closest(".workspace-canvas__tile") as HTMLElement;
     expect(tileB.style.display).toBe("none");
+    // Round-2 Bug 4: the fullscreen tile stops above the global status bar.
+    const tileA = screen.getByTitle("Click to exit fullscreen").closest(".workspace-canvas__tile") as HTMLElement;
+    expect(tileA.style.position).toBe("fixed");
+    expect(tileA.getAttribute("style")).toContain("var(--global-status-bar-h");
 
     // Externally remove the (fullscreen) tile-a via the store, as
     // toggleWorktreeToolsTile does from TopBar — WorkspaceCanvas has no
