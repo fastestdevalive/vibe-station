@@ -22,6 +22,7 @@ use vst_types::events::Broadcaster;
 use vst_types::rest::shared::Mode;
 use vst_types::{CliId, ProjectRecord};
 
+use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
@@ -29,7 +30,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state: None,
         no_auth: true,

@@ -33,6 +33,7 @@ import type {
   FsCompleteResponse,
   HealthResponse,
   Mode,
+  NetworkAccess,
   Project,
   ProjectBranchesResponse,
   SendChatResponse,
@@ -479,6 +480,12 @@ export function createClientApi() {
         // Instead emit an auth:expired event so the UI can show the LoginScreen.
         if (ev.code === 4401) {
           emit({ type: "auth:expired" } as unknown as WSEvent);
+          resolve();
+          return;
+        }
+        // Code 4403 = daemon closed the socket because network access was
+        // disabled (a remote/LAN peer). Stay offline and do NOT reconnect.
+        if (ev.code === 4403) {
           resolve();
           return;
         }
@@ -1713,6 +1720,20 @@ export function createClientApi() {
     async getLocalQr(): Promise<LocalQrResponse> {
       const res = await apiFetch(`${baseUrl()}/auth/local-qr`, { method: "POST" });
       return parseJson<LocalQrResponse>(res);
+    },
+
+    async getNetworkAccess(): Promise<NetworkAccess> {
+      const res = await apiFetch(`${baseUrl()}/auth/network`);
+      return parseJson<NetworkAccess>(res);
+    },
+
+    async setNetworkAccess(enabled: boolean): Promise<NetworkAccess> {
+      const res = await apiFetch(`${baseUrl()}/auth/network`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      return parseJson<NetworkAccess>(res);
     },
 
     async listAuthSessions(): Promise<{ sessions: AuthSession[]; isDesktop: boolean; currentScope?: string; currentTokenId?: string }> {

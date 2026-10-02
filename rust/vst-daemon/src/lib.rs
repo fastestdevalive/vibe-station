@@ -3,6 +3,7 @@
 pub mod doctor;
 pub mod env_setup;
 pub mod lock;
+pub mod network;
 pub mod origin_policy;
 pub mod port;
 pub mod run;

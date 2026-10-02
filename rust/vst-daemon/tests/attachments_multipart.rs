@@ -24,6 +24,7 @@ use tower::ServiceExt;
 
 use vst_agents::json_agent_registry::JsonAgentRegistry;
 use vst_agents::json_agent_session::JsonAgentSession;
+use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 use vst_git::paths::Paths;
 use vst_proc::tmux::Tmux;
@@ -39,7 +40,7 @@ fn make_opts(tmp: &std::path::Path, store: StoreHandle) -> BuildServerOptions {
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state: None,
         no_auth: true,

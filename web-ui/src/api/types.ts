@@ -18,6 +18,11 @@ export interface LocalQrResponse {
   connectionType: "tailscale" | "lan";
 }
 
+/** Response from GET/PUT /auth/network — live LAN listening state. */
+export interface NetworkAccess {
+  enabled: boolean;
+}
+
 /** Mirrors daemon `TailscaleStatus` (services/tailscaleServe.ts). */
 export type TailscaleStatus =
   | { state: "not_installed" }

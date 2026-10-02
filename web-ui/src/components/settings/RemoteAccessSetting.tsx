@@ -13,6 +13,7 @@ import type {
   TailscaleUpResponse,
 } from "@/api/types";
 import { ApiError } from "@/api/errors";
+import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 import { ShellBlock } from "@/components/preview/ShellBlock";
 
 interface RemoteAccessSettingProps {
@@ -173,12 +174,21 @@ const CARD_STYLE: React.CSSProperties = {
 };
 
 function SameNetworkCard({
+  networkEnabled,
+  networkLocked,
   qrLoading,
+  toggling,
   onShowQr,
+  onToggleNetwork,
 }: {
+  networkEnabled: boolean | null;
+  networkLocked: boolean;
   qrLoading: boolean;
+  toggling: boolean;
   onShowQr: () => void;
+  onToggleNetwork: () => void;
 }) {
+  const enabled = networkEnabled === true;
   return (
     <div style={CARD_STYLE}>
       <div
@@ -189,18 +199,95 @@ function SameNetworkCard({
       >
         Same network
       </div>
-      <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
-        Works on same WiFi or LAN. No setup.
-      </div>
-      <button
-        type="button"
-        className="btn btn--primary"
-        style={{ alignSelf: "flex-start" }}
-        disabled={qrLoading}
-        onClick={onShowQr}
-      >
-        {qrLoading ? "Generating…" : "Show QR"}
-      </button>
+      {enabled || networkEnabled === null ? (
+        <>
+          <div style={{ fontSize: "var(--font-size-xs)", color: "var(--fg-muted)" }}>
+            Works on same WiFi or LAN. No setup.
+          </div>
+          {enabled ? (
+            <>
+              <StatusBox sentiment="ok">Network access on</StatusBox>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  disabled={qrLoading}
+                  onClick={onShowQr}
+                >
+                  {qrLoading ? "Generating…" : "Show QR"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--secondary"
+                  disabled={toggling}
+                  onClick={onToggleNetwork}
+                  style={{ fontWeight: "normal" }}
+                >
+                  {toggling ? "…" : "Turn off"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--primary"
+              style={{ alignSelf: "flex-start" }}
+              disabled={toggling || networkLocked}
+              onClick={onToggleNetwork}
+            >
+              {toggling ? "…" : "Allow other devices on my network"}
+            </button>
+          )}
+        </>
+      ) : (
+        <div style={{ position: "relative" }}>
+          <div
+            style={{
+              filter: "blur(2px)",
+              pointerEvents: "none",
+              fontSize: "var(--font-size-xs)",
+              color: "var(--fg-muted)",
+            }}
+          >
+            Works on same WiFi or LAN. No setup.
+          </div>
+          {networkLocked ? (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "var(--font-size-xs)",
+                color: "var(--fg-muted)",
+                textAlign: "center",
+              }}
+            >
+              Only changeable from this computer
+            </div>
+          ) : (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={toggling}
+                onClick={onToggleNetwork}
+              >
+                {toggling ? "…" : "Allow other devices on my network"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -520,6 +607,15 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
   const [toggling, setToggling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Network access state ────────────────────────────────────────────────────
+  // networkEnabled: null while the initial GET is in flight / unknown.
+  // networkLocked: true when a remote (non-loopback) caller can't view or change
+  // it (GET returned 403) — the card shows "Only changeable from this computer".
+  const [networkEnabled, setNetworkEnabled] = useState<boolean | null>(null);
+  const [networkLocked, setNetworkLocked] = useState(false);
+  const [networkToggling, setNetworkToggling] = useState(false);
+  const [networkConfirmOpen, setNetworkConfirmOpen] = useState(false);
+
   // ── Remote sessions ─────────────────────────────────────────────────────────
   const [sessions, setSessions] = useState<AuthSession[]>([]);
   // isDesktop: true when viewing from the desktop app (loopback), false for browser sessions.
@@ -579,10 +675,30 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     }
   }, [api]);
 
+  // ── Fetch network access state ──────────────────────────────────────────────
+  const fetchNetwork = useCallback(async () => {
+    try {
+      const state = await api.getNetworkAccess();
+      setNetworkEnabled(state.enabled);
+      setNetworkLocked(false);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        // Remote caller — can't view or change; show the locked overlay.
+        setNetworkLocked(true);
+        setNetworkEnabled(false);
+      } else {
+        // Transient/other failure — leave state unknown (card shows the enable
+        // affordance rather than a spurious locked state).
+        setNetworkEnabled(null);
+      }
+    }
+  }, [api]);
+
   useEffect(() => {
     void fetchStatus();
     void fetchSessions();
-  }, [fetchStatus, fetchSessions]);
+    void fetchNetwork();
+  }, [fetchStatus, fetchSessions, fetchNetwork]);
 
   // ── Refresh lastSeenAt periodically ────────────────────────────────────────
   useEffect(() => {
@@ -685,6 +801,39 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
       setError(errMessage(err, "Failed to toggle tunnel."));
     } finally {
       setToggling(false);
+    }
+  }
+
+  // ── Network access toggle ───────────────────────────────────────────────────
+  // Enabling (off → on) goes through a confirm dialog; disabling needs none.
+  function handleToggleNetworkRequest() {
+    if (networkEnabled !== true) {
+      setNetworkConfirmOpen(true);
+    } else {
+      void handleSetNetwork(false);
+    }
+  }
+
+  async function handleSetNetwork(enabled: boolean) {
+    setNetworkToggling(true);
+    setError(null);
+    setNetworkConfirmOpen(false);
+    try {
+      const result = await api.setNetworkAccess(enabled);
+      setNetworkEnabled(result.enabled);
+      // Close QR overlay if network access was turned off
+      if (!result.enabled) setActiveQr((prev) => (prev?.type === "local" ? null : prev));
+    } catch (err) {
+      setError(errMessage(err, "Failed to change network access."));
+      // State reverts to the server's answer (unchanged since the PUT failed).
+      try {
+        const state = await api.getNetworkAccess();
+        setNetworkEnabled(state.enabled);
+      } catch {
+        // leave as-is
+      }
+    } finally {
+      setNetworkToggling(false);
     }
   }
 
@@ -995,11 +1144,24 @@ export function RemoteAccessSetting({ api }: RemoteAccessSettingProps) {
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       {renderQrOverlay()}
 
+      <ConfirmDialog
+        open={networkConfirmOpen}
+        title="Allow network access?"
+        message="Plain HTTP on your network. Anyone on it can reach the login page. Only enable on networks you trust."
+        confirmLabel="Allow"
+        onConfirm={() => void handleSetNetwork(true)}
+        onCancel={() => setNetworkConfirmOpen(false)}
+      />
+
       {/* Two cards side by side */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-3)" }}>
         <SameNetworkCard
+          networkEnabled={networkEnabled}
+          networkLocked={networkLocked}
           qrLoading={qrLoading === "local"}
+          toggling={networkToggling}
           onShowQr={() => void openQr("local")}
+          onToggleNetwork={handleToggleNetworkRequest}
         />
 
         <TunnelCard

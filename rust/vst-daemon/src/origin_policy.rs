@@ -27,8 +27,8 @@ const FIXED_EXTRA_ORIGINS: &[&str] = &[
 ];
 
 /// Env var: comma-separated extra exact origins, e.g. `http://localhost:5173`
-/// when the web UI runs on the Vite dev server (its proxy rewrites `Host`, so
-/// the origin is not same-origin from the daemon's point of view).
+/// when the web UI is not served through a proxy that preserves `Host` (Tauri
+/// dev, or Vite opened on a different host/port than the daemon sees).
 pub const ALLOWED_ORIGINS_ENV: &str = "VST_ALLOWED_ORIGINS";
 
 #[derive(Clone, Debug, Default)]
@@ -56,8 +56,8 @@ impl OriginPolicy {
         Self::new(extra)
     }
 
-    /// Host-name-only variant for `VST_NO_AUTH` sandbox builds, where the Vite
-    /// proxy rewrites `Host` and there is no token to fall back on: accept an
+    /// Host-name-only variant for `VST_NO_AUTH` sandbox builds, where there is
+    /// no token to fall back on: accept an
     /// exact extra or any origin whose host is one we expect (loopback, LAN,
     /// tailnet, tunnel) on any port — but never an arbitrary website.
     pub fn origin_host_allowed(&self, origin: &str) -> bool {
@@ -201,6 +201,23 @@ mod tests {
         assert!(p().origin_host_allowed("http://192.168.1.5:5174"));
         assert!(!p().origin_host_allowed("https://evil.com"));
         assert!(!p().origin_host_allowed("null"));
+    }
+
+    #[test]
+    fn extra_origins_are_normalized_and_skip_the_host_check() {
+        let policy = OriginPolicy::new([" HTTP://localhost:5173/ ".to_string()]);
+        assert!(policy.origin_allowed("http://localhost:5173", Some("127.0.0.1:7421")));
+        let custom = OriginPolicy::new(["https://my.example.com".to_string()]);
+        assert!(custom.origin_allowed("https://my.example.com", Some("my.example.com")));
+        assert!(!p().origin_allowed("https://my.example.com", Some("my.example.com")));
+    }
+
+    #[test]
+    fn host_allowlist_edges() {
+        assert!(!host_name_allowed("0.0.0.0:7421"));
+        assert!(!host_name_allowed("mybox.local:7421"));
+        assert!(!host_name_allowed("box:7421"));
+        assert!(host_name_allowed("box.tail1.ts.net:7421"));
     }
 
     #[test]

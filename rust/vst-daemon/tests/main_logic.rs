@@ -16,6 +16,7 @@ use vst_store::StoreHandle;
 use vst_types::events::Broadcaster;
 
 use vst_daemon::lock::{acquire_lock, release_lock};
+use vst_daemon::network::NetworkControl;
 use vst_daemon::port::{find_free_port, port_is_free, PORT_SEARCH_RANGE};
 use vst_daemon::server::{build_state, BuildServerOptions};
 
@@ -187,7 +188,7 @@ fn make_opts(tmp: &std::path::Path) -> BuildServerOptions {
     let broadcaster = Broadcaster::new(16);
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state: None,
         no_auth: true,

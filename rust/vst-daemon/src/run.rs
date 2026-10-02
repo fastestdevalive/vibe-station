@@ -473,17 +473,18 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     >::new());
 
     // `persistEpoch` callback: re-writes config.json when the browser epoch
-    // bumps (e.g. POST /auth/logout/all).
+    // bumps (e.g. POST /auth/logout/all). It RE-READS the file at call time
+    // (not the boot snapshot) so an epoch bump can never revert a concurrent
+    // `allowNetworkAccess` toggle or a `PATCH /settings` write (Risks #2/#4).
     let persist_epoch_config_path = config_path.clone();
     let persist_epoch_cli_token = cli_token.clone();
     let persist_epoch_tauri_token = tauri_token.clone();
-    let persist_epoch_existing = existing_config.clone();
     let persist_epoch_fn: vst_routes::auth::PersistEpochFn = Arc::new(move |new_epoch| {
         let config_path = persist_epoch_config_path.clone();
         let cli_token = persist_epoch_cli_token.clone();
         let tauri_token = persist_epoch_tauri_token.clone();
-        let existing = persist_epoch_existing.clone();
         Box::pin(async move {
+            let existing = read_raw_config(&config_path).await;
             write_config(
                 &config_path,
                 port,
@@ -522,8 +523,13 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let stop_requested_for_signal_task = stop_requested.clone();
 
     let bind_host = resolve_bind_host(no_auth, &existing_config);
+    let initial = bind_host == "0.0.0.0";
+    // Live network control: swaps the listener (over `swap_tx`) and persists
+    // `allowNetworkAccess`. `swap_rx` is consumed by the supervisor below.
+    let (swap_tx, swap_rx) = tokio::sync::mpsc::channel(4);
+    let network = crate::network::NetworkControl::new(initial, swap_tx, config_path.clone());
     let router = build_app(BuildServerOptions {
-        network_access: bind_host != "127.0.0.1",
+        network,
         port,
         auth_state: Some(auth_state.clone()),
         no_auth,
@@ -550,9 +556,13 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
     let pr_handle = pr_poller.clone().start();
 
     // ── Graceful shutdown ─────────────────────────────────────────────────────
+    // A `watch` (not a one-shot `Notify`) so every waiter — the supervisor's
+    // `axum::serve` graceful-shutdown futures and the `NetworkControl::set`
+    // swaps — can observe the flag independently; `notify_one` would wake only
+    // one waiter (and `tokio-util` is not a dependency).
     let store_for_shutdown = store.clone();
-    let shutdown = Arc::new(tokio::sync::Notify::new());
-    let shutdown_notify = shutdown.clone();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown_tx_for_signal = shutdown_tx.clone();
 
     // Register SIGINT + SIGTERM + the API-triggered stop signal. `lock_file`
     // moves into this task — it MUST stay alive until cleanup releases it
@@ -574,16 +584,20 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         // can re-launch it on next restart (Decision 3 / tunnel-persistence).
         let _ = cloudflared::shutdown_kill(&store_for_shutdown).await;
         release_lock(lock_file).await;
-        shutdown_notify.notify_one();
+        // Broadcast shutdown to every waiter (the supervisor's serve tasks).
+        let _ = shutdown_tx_for_signal.send(true);
     });
 
     // ── Bind and serve ────────────────────────────────────────────────────────
-    if bind_host == "0.0.0.0" && !no_auth {
+    if initial && !no_auth {
         tracing::warn!(
             "⚠  Network access is ON — the daemon listens on all interfaces. \
              Anyone on this network who obtains a token can reach it."
         );
     }
+
+    // Bind here (not inside the supervisor) so a port conflict is a startup error
+    // with a non-zero exit, and "listening" is only printed once we really are.
     let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{port}"))
         .await
         .with_context(|| format!("bind {bind_host}:{port}"))?;
@@ -606,19 +620,17 @@ pub async fn run_daemon(_opts: DaemonOptions) -> Result<()> {
         );
     }
 
-    axum::serve(
-        listener,
-        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(async move {
-        shutdown.notified().await;
-    })
-    .await
-    .context("axum serve")?;
+    // The listener supervisor owns the accept loop; it swaps `127.0.0.1` ↔
+    // `0.0.0.0` on a `NetworkControl::set` and drains on shutdown. Await it to
+    // the end, same as the old `axum::serve(...).with_graceful_shutdown(...)`
+    // block it replaces — it only returns after the shutdown task above ran.
+    let supervisor =
+        crate::network::spawn_supervisor_with_listener(router, listener, shutdown_rx, swap_rx);
+    let _ = supervisor.await;
 
     // Lock release + all other cleanup already happened inside the
-    // SIGINT/SIGTERM/stop-requested task above, before it notified
-    // `shutdown` — `axum::serve` only returns after that already ran.
+    // SIGINT/SIGTERM/stop-requested task above, before it broadcast shutdown —
+    // the supervisor only returns after that already ran.
     Ok(())
 }
 

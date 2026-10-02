@@ -20,6 +20,7 @@ use vst_store::StoreHandle;
 use vst_types::domain::TokenScope;
 use vst_types::events::Broadcaster;
 
+use vst_daemon::network::NetworkControl;
 use vst_daemon::server::{build_app, BuildServerOptions};
 
 fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServerOptions {
@@ -29,7 +30,7 @@ fn make_opts(tmp: &std::path::Path, auth_state: Option<AuthState>) -> BuildServe
     let json_registry = Arc::new(JsonAgentRegistry::<JsonAgentSession>::new());
     let paths = Paths::with_home(tmp.to_path_buf());
     BuildServerOptions {
-        network_access: false,
+        network: NetworkControl::fixed(false),
         port: 0,
         auth_state,
         no_auth: false,
@@ -272,7 +273,11 @@ async fn redeem_is_blocked_with_remote_peer_ip() {
     let tmp = tempdir().unwrap();
     let auth_state = AuthState::new("super-secret-token", 0);
     let cli_token = mint_token(TokenScope::Cli, &auth_state, None);
-    let router = build_app(make_opts(tmp.path(), Some(auth_state)));
+    // Network access ON so the peer-gate middleware passes this LAN peer through
+    // and the continue handler's own remote-peer check (410) is what fires.
+    let mut opts = make_opts(tmp.path(), Some(auth_state));
+    opts.network = NetworkControl::fixed(true);
+    let router = build_app(opts);
 
     let mint_resp = router
         .clone()
