@@ -459,7 +459,7 @@ mod tests {
         let target = tmp.path().join("vibe").join("skill").join("vst");
         let harness = tmp.path().join("claude").join("skills");
 
-        install_harness_links(&[harness.clone()], &target);
+        install_harness_links(std::slice::from_ref(&harness), &target);
 
         assert!(!harness.join("vst").exists());
     }
