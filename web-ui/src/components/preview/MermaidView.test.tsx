@@ -1,7 +1,7 @@
 import { render, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, type Mock } from "vitest";
 import mermaid from "mermaid";
-import { MermaidView } from "./MermaidView";
+import { MermaidView, sanitizeSvg } from "./MermaidView";
 
 vi.mock("mermaid", () => ({
   default: {
@@ -94,6 +94,31 @@ describe("MermaidView fullscreen (4.T1)", () => {
     await waitFor(() => expect(container.querySelector(".mermaid-fallback")).toBeTruthy());
     expect(container.querySelector(".mermaid-view--clickable")).toBeNull();
     expect(document.body.querySelector(".image-zoom-overlay")).toBeNull();
+  });
+});
+
+describe("MermaidView sanitizeSvg (2.4)", () => {
+  it("strips script and onerror while keeping foreignObject labels", () => {
+    const out = sanitizeSvg(
+      '<svg><foreignObject><div class="label">Hi</div></foreignObject><script>alert(1)</script><img src=x onerror=alert(1)></svg>',
+    );
+    expect(out).toContain("Hi");
+    expect(out).not.toContain("<script");
+    expect(out).not.toContain("onerror");
+  });
+
+  it("keeps dominant-baseline on text", () => {
+    const out = sanitizeSvg('<svg><text dominant-baseline="middle">x</text></svg>');
+    expect(out).toContain('dominant-baseline="middle"');
+  });
+
+  it("does not put an onerror element into the rendered container", async () => {
+    mockedMermaid.render.mockResolvedValueOnce({
+      svg: '<svg><img src=x onerror=alert(1)></svg>',
+    });
+    const { container } = render(<MermaidView chart="graph TD; A-->B" theme="dark" />);
+    await waitFor(() => expect(container.querySelector(".mermaid-view")?.innerHTML).toContain("svg"));
+    expect(container.querySelector(".mermaid-view [onerror]")).toBeNull();
   });
 });
 
