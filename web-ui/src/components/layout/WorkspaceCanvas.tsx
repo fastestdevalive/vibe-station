@@ -33,6 +33,7 @@ import { resolveStatusClass, worktreePrStatus } from "@/lib/statusColor";
 import { sessionLabel } from "@/lib/sessionLabel";
 import { randomId } from "@/lib/uuid";
 import { api } from "@/api";
+import { useSessionReset } from "@/hooks/useSessionReset";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
 
 const ZERO_INSET = { width: 0, height: 0 };
@@ -240,6 +241,7 @@ export function WorkspaceCanvas({
   const [tileMenu, setTileMenu] = useState<{ tileId: string; x: number; y: number } | null>(null);
   const [resetTarget, setResetTarget] = useState<Session | null>(null);
   const [resetHandoff, setResetHandoff] = useState(false);
+  const { reset, modeDialog } = useSessionReset(api);
   const [terminateTarget, setTerminateTarget] = useState<{ tileId: string; session: Session } | null>(null);
   const [savePromptOpen, setSavePromptOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
@@ -1625,13 +1627,10 @@ export function WorkspaceCanvas({
           const target = resetTarget;
           const handoff = resetHandoff;
           setResetTarget(null);
-          if (target) {
-            void api.resetSession(target.id, { handoff }).catch(() => {
-              /* surface errors later */
-            });
-          }
+          if (target) reset(target, handoff);
         }}
       />
+      {modeDialog}
       {/* Mirrors the agent tab bar's "×" close — same confirm copy, same
           `terminateSession` call. Also drops the tile from THIS canvas (the tab
           bar has no canvas to reconcile) so a terminated session doesn't

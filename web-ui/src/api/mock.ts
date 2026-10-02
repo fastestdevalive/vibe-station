@@ -930,7 +930,7 @@ export function createMockApi(seed: MockSeed = {}) {
 
     async resetSession(
       id: string,
-      body?: { handoff?: boolean; prompt?: string },
+      body?: { handoff?: boolean; prompt?: string; modeId?: string },
     ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
       const s = sessions.find((x) => x.id === id);
       if (!s) throw new ApiError("not found", 404);

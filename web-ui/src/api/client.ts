@@ -112,7 +112,14 @@ export function fileBase(scope: FileScope, id: string): string {
 export async function parseJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await res.text();
-    throw new ApiError(text || res.statusText, res.status);
+    let code: string | undefined;
+    try {
+      const body = JSON.parse(text) as { code?: unknown };
+      if (typeof body.code === "string") code = body.code;
+    } catch {
+      /* non-JSON body — keep the raw text as the message */
+    }
+    throw new ApiError(text || res.statusText, res.status, code);
   }
   return res.json() as Promise<T>;
 }
@@ -878,7 +885,7 @@ export function createClientApi() {
     /** Archive the current session and spawn a fresh one in its place. */
     async resetSession(
       id: string,
-      body?: { handoff?: boolean; prompt?: string },
+      body?: { handoff?: boolean; prompt?: string; modeId?: string },
     ): Promise<{ ok: true; archivedSessionId: string; newSessionId: string }> {
       const root = baseUrl();
       const res = await apiFetch(`${root}/sessions/${encodeURIComponent(id)}/reset`, {

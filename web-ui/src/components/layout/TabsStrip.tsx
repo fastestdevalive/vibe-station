@@ -27,6 +27,7 @@ import { useModeIcon } from "@/store/modesStore";
 import { sessionModeId } from "@/lib/modeIcon";
 import { computeNewSortOrder, useWorkspaceStore, type WorkspacePaneFullscreen } from "@/hooks/useStore";
 import { useServerStore } from "@/hooks/useServerStore";
+import { useSessionReset } from "@/hooks/useSessionReset";
 import { useDragClickGuard } from "@/hooks/useDragClickGuard";
 import { NewTerminalDialog } from "@/components/dialogs/NewTerminalDialog";
 import { ConfirmDialog } from "@/components/dialogs/ConfirmDialog";
@@ -201,6 +202,7 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
   const [resetMenu, setResetMenu] = useState<{ session: Session; x: number; y: number } | null>(null);
   const [resetTarget, setResetTarget] = useState<Session | null>(null);
   const [resetHandoff, setResetHandoff] = useState(false);
+  const { reset, modeDialog } = useSessionReset(api, () => void refreshTabs());
 
   useEffect(() => {
     if (!resetMenu) return undefined;
@@ -1188,16 +1190,10 @@ export function TabsStrip({ api, worktreeId, kind, scope = "worktree" }: TabsStr
           const target = resetTarget;
           const handoff = resetHandoff;
           setResetTarget(null);
-          if (target) {
-            void api
-              .resetSession(target.id, { handoff })
-              .catch(() => {
-                /* surface errors later */
-              })
-              .then(() => refreshTabs());
-          }
+          if (target) reset(target, handoff);
         }}
       />
+      {modeDialog}
     </div>
   );
 }

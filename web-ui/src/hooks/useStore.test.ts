@@ -493,6 +493,50 @@ describe("relinkSessionInCanvas", () => {
   });
 });
 
+describe("useWorkspaceStore - relinkSessionTiles open direct-agent tabs", () => {
+  it("swaps the superseded id for its replacement in the open-tab set and follows activeSessionId", () => {
+    useWorkspaceStore.setState({
+      openDirectAgentTabsByProject: { p1: ["a", "sess-old", "b"], p2: ["c"] },
+      activeSessionId: "sess-old",
+    });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    const st = useWorkspaceStore.getState();
+    expect(st.openDirectAgentTabsByProject.p1).toEqual(["a", "sess-new", "b"]);
+    expect(st.openDirectAgentTabsByProject.p2).toEqual(["c"]);
+    expect(st.activeSessionId).toBe("sess-new");
+  });
+
+  it("followSelection:false (reconnect refresh) swaps tabs but leaves the user's selection alone", () => {
+    useWorkspaceStore.setState({
+      openDirectAgentTabsByProject: { p1: ["sess-old"] },
+      activeSessionId: "sess-old",
+      lastSessionByWorktree: { w: "sess-old" },
+    });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new", { followSelection: false });
+    const st = useWorkspaceStore.getState();
+    expect(st.openDirectAgentTabsByProject.p1).toEqual(["sess-new"]);
+    expect(st.activeSessionId).toBe("sess-old");
+    expect(st.lastSessionByWorktree.w).toBe("sess-old");
+  });
+
+  it("repoints lastSessionByWorktree when following", () => {
+    useWorkspaceStore.setState({ lastSessionByWorktree: { w: "sess-old", x: "other" } });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    expect(useWorkspaceStore.getState().lastSessionByWorktree).toEqual({ w: "sess-new", x: "other" });
+  });
+
+  it("does not open a replacement for a session that had no open tab", () => {
+    useWorkspaceStore.setState({
+      openDirectAgentTabsByProject: { p1: ["a"] },
+      activeSessionId: "a",
+    });
+    useWorkspaceStore.getState().relinkSessionTiles("sess-old", "sess-new");
+    const st = useWorkspaceStore.getState();
+    expect(st.openDirectAgentTabsByProject.p1).toEqual(["a"]);
+    expect(st.activeSessionId).toBe("a");
+  });
+});
+
 describe("useWorkspaceStore - relinkSessionTiles", () => {
   beforeEach(() => {
     localStorage.clear();

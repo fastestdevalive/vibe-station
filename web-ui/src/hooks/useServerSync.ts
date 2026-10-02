@@ -162,7 +162,7 @@ export function useServerSync(api: ApiInstance): void {
           // no browser connected). Keeps using the ORIGINAL `sessions`, not
           // `mergedSessions`.
           for (const { oldId, finalId } of resolveSupersededChains(sessions)) {
-            useWorkspaceStore.getState().relinkSessionTiles(oldId, finalId);
+            useWorkspaceStore.getState().relinkSessionTiles(oldId, finalId, { followSelection: false });
           }
         } finally {
           inFlightRefresh = null;

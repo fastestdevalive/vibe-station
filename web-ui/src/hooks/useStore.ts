@@ -530,9 +530,16 @@ export interface WorkspaceState {
    * Repoint every tile (scratch canvas + every saved workspace doc)
    * referencing `fromSessionId` to `toSessionId` — a reset's replacement
    * taking the archived session's exact place, same tile id/position.
-   * A no-op (identity-preserving) for canvases with no matching tile.
+   * Also swaps the id in every project's open direct-agent tab set and, unless
+   * `followSelection` is false (a reconnect refresh resolving an old chain —
+   * the user may be deliberately viewing the archived session), follows
+   * `activeSessionId`/`lastSessionByWorktree`. A no-op (identity-preserving) for canvases with no matching tile.
    */
-  relinkSessionTiles: (fromSessionId: string, toSessionId: string) => void;
+  relinkSessionTiles: (
+    fromSessionId: string,
+    toSessionId: string,
+    opts?: { followSelection?: boolean },
+  ) => void;
   /**
    * Removes every tile (scratch canvas + every saved workspace doc)
    * referencing `sessionId` — the explicit-deletion counterpart to
@@ -1799,8 +1806,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
               ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
             };
           }),
-        relinkSessionTiles: (fromSessionId, toSessionId) =>
+        relinkSessionTiles: (fromSessionId, toSessionId, opts) =>
           set((s) => {
+            const follow = opts?.followSelection !== false;
             let layoutChanged = false;
             const nextLayoutByWorktree = { ...s.layoutByWorktree };
             for (const [worktreeId, layout] of Object.entries(s.layoutByWorktree)) {
@@ -1820,10 +1828,41 @@ export const useWorkspaceStore = create<WorkspaceState>()(
                 docsChanged = true;
               }
             }
-            if (!layoutChanged && !docsChanged) return s;
+            // Project-scope direct-agent tabs render only ids in the open-tab
+            // set, so the replacement must take the archived session's slot
+            // there too — otherwise the tab vanishes on reset (the old id is
+            // filtered out as superseded) while the sidebar still lists it.
+            let openTabsChanged = false;
+            const nextOpenTabs = { ...s.openDirectAgentTabsByProject };
+            for (const [projectId, ids] of Object.entries(s.openDirectAgentTabsByProject)) {
+              if (!ids.includes(fromSessionId)) continue;
+              nextOpenTabs[projectId] = ids.includes(toSessionId)
+                ? ids.filter((id) => id !== fromSessionId)
+                : ids.map((id) => (id === fromSessionId ? toSessionId : id));
+              openTabsChanged = true;
+            }
+            const activeChanged = follow && s.activeSessionId === fromSessionId;
+            // Restoring the per-worktree last-selected session after a context switch
+            // must not resurrect the archived id either.
+            let lastChanged = false;
+            const nextLast = { ...s.lastSessionByWorktree };
+            if (follow) {
+              for (const [key, id] of Object.entries(s.lastSessionByWorktree)) {
+                if (id === fromSessionId) {
+                  nextLast[key] = toSessionId;
+                  lastChanged = true;
+                }
+              }
+            }
+            if (!layoutChanged && !docsChanged && !openTabsChanged && !activeChanged && !lastChanged) {
+              return s;
+            }
             return {
               ...(layoutChanged ? { layoutByWorktree: nextLayoutByWorktree } : {}),
               ...(docsChanged ? { workspaceDocs: nextWorkspaceDocs } : {}),
+              ...(openTabsChanged ? { openDirectAgentTabsByProject: nextOpenTabs } : {}),
+              ...(activeChanged ? { activeSessionId: toSessionId } : {}),
+              ...(lastChanged ? { lastSessionByWorktree: nextLast } : {}),
             };
           }),
         removeTilesForSession: (sessionId, remainingSessions) =>
