@@ -1,0 +1,13 @@
+feature: rich-chat-perf
+worktree: /home/gb/.vibe-station/projects/vibe-station/worktrees/vs-198
+master: {prd: skipped, plan: complete}
+current_subfeature: root
+subfeatures:
+  - id: root
+    origin: planned
+    mode: implementing
+    last_completed: "3.9"
+    phase_chain: [plan, turn-implement]
+    awaiting_phase: implement
+    awaiting_artifact: ".vibekit/feature-plans/pending/rich-chat-perf/plan-rich-chat-perf.md"
+    impl_turn: {phase: 3, of: 4}
