@@ -1123,3 +1123,43 @@ async fn no_auth_rest_refuses_foreign_websites_but_not_known_hosts() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn tauri_token_is_refused_off_machine_but_works_on_loopback() {
+    let tmp = tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let token = mint_token(TokenScope::Tauri, &auth_state, None);
+    let router = build_app(make_opts(tmp.path(), Some(auth_state), false));
+
+    // Tunnel header, forwarded-for header, and a non-loopback peer are all refused.
+    for req in [
+        remote_get_with_auth("/api/sessions", &token),
+        Request::builder()
+            .uri("/api/sessions")
+            .header("authorization", format!("Bearer {token}"))
+            .header("x-forwarded-for", "10.1.2.3")
+            .body(axum::body::Body::empty())
+            .unwrap(),
+        Request::builder()
+            .uri("/api/sessions")
+            .header("authorization", format!("Bearer {token}"))
+            .extension(ConnectInfo(
+                "192.168.1.9:5000".parse::<SocketAddr>().unwrap(),
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    ] {
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    let loopback = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {token}"))
+        .extension(ConnectInfo("127.0.0.1:5000".parse::<SocketAddr>().unwrap()))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = router.oneshot(loopback).await.unwrap();
+    assert_ne!(resp.status(), StatusCode::FORBIDDEN);
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}

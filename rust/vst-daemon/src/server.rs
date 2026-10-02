@@ -928,6 +928,19 @@ fn csrf_blocked(method: &Method, headers: &HeaderMap) -> bool {
         && !headers.contains_key(CSRF_HEADER)
 }
 
+/// The desktop (`Tauri`-scope) token is only ever used by the local desktop
+/// window, which talks to the daemon directly over loopback. Refuse it when the
+/// request came through a tunnel/reverse proxy (`cf-connecting-ip`,
+/// `x-forwarded-*`) or from a non-loopback peer, so a copy of it that leaks off
+/// the machine is useless. A missing `ConnectInfo` (tests) counts as loopback.
+fn tauri_token_off_machine(scope: TokenScope, headers: &HeaderMap, peer: Option<IpAddr>) -> bool {
+    scope == TokenScope::Tauri
+        && (headers.contains_key("cf-connecting-ip")
+            || headers.contains_key("x-forwarded-for")
+            || headers.contains_key("x-forwarded-host")
+            || peer.is_some_and(|ip| !ip.is_loopback()))
+}
+
 /// Check if an origin is local (tauri:// or localhost/loopback).
 pub fn is_local_origin(origin: &str) -> bool {
     let Some((scheme, rest)) = origin.split_once("://") else {
@@ -1174,7 +1187,16 @@ async fn auth_middleware(
         }
     };
 
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
     match verify_token(&raw_token, auth_state) {
+        VerifyResult::Ok { payload } if tauri_token_off_machine(payload.scope, &headers, peer) => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Forbidden." })),
+        )
+            .into_response(),
         VerifyResult::Ok { .. } if csrf_blocked(&method, &headers) => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": "Missing CSRF header." })),
@@ -1247,6 +1269,13 @@ async fn handle_ws_upgrade(
         if !no_auth {
             if let Some(raw_token) = authenticate(&headers, query.token.as_deref()) {
                 if let VerifyResult::Ok { payload } = verify_token(&raw_token, auth_state) {
+                    if tauri_token_off_machine(
+                        payload.scope,
+                        &headers,
+                        connect_info.as_ref().map(|ci| ci.0.ip()),
+                    ) {
+                        auth_rejected = true;
+                    }
                     scope = Some(payload.scope);
                     token_issued_at = Some(payload.iat);
                     token_expires_at = payload.exp;

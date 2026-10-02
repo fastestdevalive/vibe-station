@@ -335,3 +335,24 @@ async fn no_auth_sandbox_still_refuses_foreign_websites_on_ws() {
         Ok(())
     );
 }
+
+#[tokio::test]
+async fn tauri_token_through_a_tunnel_is_closed_with_4401() {
+    let tmp = tempfile::tempdir().unwrap();
+    let auth_state = AuthState::new("super-secret-token", 0);
+    let base = serve(tmp.path(), auth_state.clone()).await;
+    let token = mint_token(TokenScope::Tauri, &auth_state, None);
+
+    // `connect_remote` tags the upgrade with `cf-connecting-ip`.
+    let mut ws = connect_remote(&base, &token).await;
+
+    match tokio::time::timeout(Duration::from_secs(5), ws.next())
+        .await
+        .expect("server should close within 5s")
+    {
+        Some(Ok(Message::Close(Some(CloseFrame { code, .. })))) => {
+            assert_eq!(u16::from(code), 4401);
+        }
+        other => panic!("expected a 4401 close frame, got {other:?}"),
+    }
+}
