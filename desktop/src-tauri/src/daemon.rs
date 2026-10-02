@@ -105,10 +105,11 @@ pub fn spawn_daemon(
         .env("VST_CLOUDFLARED_BIN", cloudflared_str)
         .env("VST_CLI_BIN", vst_bin_str);
 
-    // NOTE: SKILL.md and web-ui/dist are compiled into the `vst` binary
-    // itself (the `embed-ui` Cargo feature, always on for this sidecar build
-    // — see scripts/prep-sidecar.sh) — no VST_SKILL_PATH/VST_DIST_PATH env
-    // plumbing needed anymore; the daemon serves its own embedded copies.
+    // NOTE: web-ui/dist is compiled into the `vst` binary via the `embed-ui`
+    // Cargo feature (always on for this sidecar build — see
+    // scripts/prep-sidecar.sh), and SKILL.md is embedded into every build —
+    // no VST_SKILL_PATH/VST_DIST_PATH env plumbing needed; the daemon serves
+    // its own embedded copies.
 
     // Point the daemon at the bundled claude-agent-acp adapter (Claude's Rich
     // Chat / ACP path runs it as `bun <entry.js>` — see

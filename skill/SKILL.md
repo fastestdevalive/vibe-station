@@ -1,4 +1,3 @@
-<!-- vst-skill-version: 1.0.0 -->
 ---
 name: vst
 version: 1.0.0

@@ -131,13 +131,6 @@ pub fn build_vst_env(opts: &BuildVstEnvOptions) -> HashMap<String, String> {
         .join("bin")
         .display()
         .to_string();
-    let vst_skill_path = home_dir()
-        .join(".vibe-station")
-        .join("skill")
-        .join("vst")
-        .join("SKILL.md")
-        .display()
-        .to_string();
     let vst_data_dir = format!(
         "{}/.vibe-station/projects/{}",
         home_dir().display(),
@@ -167,6 +160,5 @@ pub fn build_vst_env(opts: &BuildVstEnvOptions) -> HashMap<String, String> {
         );
     }
     env.insert("PATH".to_string(), path_env);
-    env.insert("VST_SKILL_PATH".to_string(), vst_skill_path);
     env
 }
