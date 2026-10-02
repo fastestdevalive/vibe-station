@@ -1,6 +1,8 @@
 pub use vst_types::rest::lsp::LspStatus;
 
-use vst_types::rest::lsp::{LspAction, LspSeverity, LspStatusPresentation};
+use vst_types::rest::lsp::{
+    LspAction, LspFailure, LspFailureKind, LspSeverity, LspStatusPresentation,
+};
 
 use crate::registry;
 
@@ -106,9 +108,99 @@ pub fn describe(status: LspStatus, language: Option<&str>) -> LspStatusPresentat
     }
 }
 
+/// Presentation for a latched start failure (`status == Error` with a
+/// `failure`). Dependency kinds are a steady, user-fixable setup fact → yellow
+/// "Setup needed", not red; a crash the daemon is still auto-restarting reads
+/// "Restarting". `detail` is always the failure's own summary.
+pub fn describe_failure(failure: &LspFailure, language: Option<&str>) -> LspStatusPresentation {
+    let base = describe(LspStatus::Error, language);
+    let retry = (Some(LspAction::Retry), Some("Retry".to_string()));
+    let (label, severity, (action, action_label)) = match failure.kind {
+        LspFailureKind::MissingDependency | LspFailureKind::IncompatibleDependency => {
+            ("Setup needed", LspSeverity::Warn, retry)
+        }
+        LspFailureKind::Crashed if failure.auto_retry => {
+            ("Restarting", LspSeverity::Warn, (None, None))
+        }
+        _ => ("Error", LspSeverity::Error, retry),
+    };
+    LspStatusPresentation {
+        label: label.to_string(),
+        severity,
+        detail: failure.summary.clone(),
+        action,
+        action_label,
+        ..base
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vst_types::rest::lsp::{LspRemediation, LspRemediationKind};
+
+    const ALL_FAILURE_KINDS: [LspFailureKind; 7] = [
+        LspFailureKind::MissingDependency,
+        LspFailureKind::IncompatibleDependency,
+        LspFailureKind::InitFailed,
+        LspFailureKind::ExitedOnStart,
+        LspFailureKind::InitTimeout,
+        LspFailureKind::Crashed,
+        LspFailureKind::SpawnFailed,
+    ];
+
+    fn failure(kind: LspFailureKind, auto_retry: bool) -> LspFailure {
+        LspFailure {
+            kind,
+            summary: format!("summary for {kind:?}"),
+            message: None,
+            exit_code: None,
+            remediation: vec![LspRemediation {
+                kind: LspRemediationKind::Retry,
+                label: "Retry".into(),
+                command: None,
+            }],
+            auto_retry,
+        }
+    }
+
+    #[test]
+    fn failure_presentation_labels_severities_and_actions() {
+        for kind in ALL_FAILURE_KINDS {
+            let f = failure(kind, false);
+            let p = describe_failure(&f, Some("typescript"));
+            assert_eq!(p.detail, f.summary, "{kind:?}: detail == summary");
+            assert_eq!(p.display_name.as_deref(), Some("TypeScript / JavaScript"));
+            let (label, severity) = match kind {
+                LspFailureKind::MissingDependency | LspFailureKind::IncompatibleDependency => {
+                    ("Setup needed", LspSeverity::Warn)
+                }
+                _ => ("Error", LspSeverity::Error),
+            };
+            assert_eq!(p.label, label, "{kind:?}");
+            assert_eq!(p.severity, severity, "{kind:?}");
+            assert_eq!(p.action, Some(LspAction::Retry), "{kind:?}");
+            assert_eq!(p.action_label.as_deref(), Some("Retry"));
+        }
+        let p = describe_failure(&failure(LspFailureKind::Crashed, true), Some("rust"));
+        assert_eq!(
+            (p.label.as_str(), p.severity, p.action),
+            ("Restarting", LspSeverity::Warn, None)
+        );
+        // Re-probing dependency failures are also `auto_retry` — still Setup needed.
+        let p = describe_failure(&failure(LspFailureKind::MissingDependency, true), None);
+        assert_eq!(p.label, "Setup needed");
+        assert_eq!(p.action, Some(LspAction::Retry));
+    }
+
+    #[test]
+    fn failure_presentation_serializes_retry_action() {
+        let p = describe_failure(&failure(LspFailureKind::InitFailed, false), Some("rust"));
+        let v = serde_json::to_value(&p).unwrap();
+        assert_eq!(v["action"], "retry");
+        assert_eq!(v["actionLabel"], "Retry");
+        assert_eq!(v["severity"], "error");
+    }
 
     const ALL_STATUSES: [LspStatus; 9] = [
         LspStatus::Unsupported,

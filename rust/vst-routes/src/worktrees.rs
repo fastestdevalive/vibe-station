@@ -2058,95 +2058,13 @@ impl WorktreeRoutes {
             .to_string_lossy()
             .to_string();
 
-        // Run `git diff HEAD` FIRST, before checking trackedness — this alone
-        // correctly resolves the common, latency-sensitive case (a TRACKED
-        // file with actual uncommitted changes, re-fetched on every
-        // debounced edit while the user is actively typing) with a single
-        // subprocess spawn instead of two sequential ones. `git diff HEAD`
-        // silently produces no output for an untracked path (it only
-        // compares tracked content against HEAD), so an empty result here is
-        // ambiguous between "tracked, no changes" and "untracked" — that
-        // ambiguity is the ONLY case that pays for a second subprocess call
-        // below, via `git ls-files --error-unmatch`.
-        let diff_output = Command::new("git")
-            .current_dir(&wt_path)
-            .args([
-                "-c",
-                "color.diff=false",
-                "-c",
-                "core.quotepath=false",
-                "diff",
-                "--no-color",
-                "HEAD",
-                "--",
-                &rel_path,
-            ])
-            .output()
+        compute_git_gutter(&wt_path, &rel_path, &abs_path, file_path)
             .await
-            .map_err(|e| WorktreeRouteError::Internal(format!("Failed to run git diff: {e}")))?;
-
-        if !diff_output.status.success() && diff_output.status.code() != Some(1) {
-            return Err(WorktreeRouteError::Internal("git diff failed".to_string()));
-        }
-
-        let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
-        if stdout_for_ambiguity_check.trim().is_empty() {
-            // Disambiguate: tracked-with-no-changes (truly empty gutter) vs.
-            // untracked (whole file should render as added).
-            let check_tracked = Command::new("git")
-                .args(["ls-files", "--error-unmatch", "--", &rel_path])
-                .current_dir(&wt_path)
-                .output()
-                .await
-                .map_err(|e| {
-                    WorktreeRouteError::Internal(format!("Failed to run git ls-files: {e}"))
-                })?;
-
-            if !check_tracked.status.success() {
-                // File is untracked — read its contents.
-                return match tokio::fs::read(&abs_path).await {
-                    Ok(content) => {
-                        // Try to decode as UTF-8.
-                        if let Ok(text) = String::from_utf8(content) {
-                            let line_count = text.lines().count() as u32;
-                            if line_count > 0 {
-                                // Capped — unlike search()'s explicit match
-                                // limit, this endpoint had no cap at all, so
-                                // a large untracked (e.g. vendored/generated)
-                                // file produced an unbounded response on
-                                // every open or debounced re-fetch.
-                                let capped = line_count.min(GUTTER_MAX_LINES);
-                                let added = (1..=capped).collect();
-                                Ok(GutterResult {
-                                    added,
-                                    deleted: vec![],
-                                    modified: vec![],
-                                })
-                            } else {
-                                // Empty file.
-                                Ok(GutterResult::default())
-                            }
-                        } else {
-                            // Binary file — return empty gutter.
-                            Ok(GutterResult::default())
-                        }
-                    }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::NotFound {
-                            Err(WorktreeRouteError::NotFound(format!(
-                                "File not found: {file_path}"
-                            )))
-                        } else {
-                            Err(WorktreeRouteError::Unprocessable(e.to_string()))
-                        }
-                    }
-                };
-            }
-            // Tracked, genuinely no changes.
-            return Ok(GutterResult::default());
-        }
-
-        Ok(parse_diff_hunk(&stdout_for_ambiguity_check))
+            .map_err(|e| match e {
+                GutterError::NotFound(msg) => WorktreeRouteError::NotFound(msg),
+                GutterError::Unprocessable(msg) => WorktreeRouteError::Unprocessable(msg),
+                GutterError::Internal(msg) => WorktreeRouteError::Internal(msg),
+            })
     }
 
     // Helper: locate project containing worktree
@@ -2172,6 +2090,227 @@ impl WorktreeRoutes {
             .env("GIT_TERMINAL_PROMPT", "0");
         let _ = cmd.output().await;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum GutterError {
+    NotFound(String),
+    Unprocessable(String),
+    Internal(String),
+}
+
+/// `git diff --no-color --find-renames HEAD -- <pathspecs>` in `root`.
+async fn git_diff_head(root: &Path, pathspecs: &[String]) -> std::io::Result<std::process::Output> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root).args([
+        "-c",
+        "color.diff=false",
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--no-color",
+        "--find-renames",
+        "HEAD",
+        "--",
+    ]);
+    for p in pathspecs {
+        cmd.arg(p);
+    }
+    cmd.output().await
+}
+
+/// Find the old path `rel_path` was renamed from, via `git status --porcelain`.
+/// `--untracked-files=no` skips the untracked-file scan (the expensive part of
+/// a repo-wide `git status`) — the rename pairing is preserved.
+async fn find_rename_source(root: &Path, rel_path: &str) -> Option<String> {
+    let status_output = Command::new("git")
+        // Polled every ~2 s by the gutter: never take `index.lock` (an
+        // agent's concurrent `git add`/`commit` would hit "index.lock exists").
+        .args([
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=no",
+        ])
+        .current_dir(root)
+        .output()
+        .await
+        .ok()?;
+    if !status_output.status.success() {
+        return None;
+    }
+    let bytes = status_output.stdout;
+    let mut iter = bytes.split(|&b| b == 0);
+    while let Some(item) = iter.next() {
+        // Rename/copy entries carry a second null-terminated path; consume it
+        // either way so it isn't misparsed as a standalone entry below.
+        if item.len() > 3
+            && (item[0] == b'R' || item[1] == b'R' || item[0] == b'C' || item[1] == b'C')
+        {
+            let new_p = String::from_utf8_lossy(&item[3..]);
+            if let Some(old_item) = iter.next() {
+                let old_p = String::from_utf8_lossy(old_item);
+                // Only a rename's old path belongs in the diff pathspecs — a
+                // copy's second path is the copy target, not a rename source.
+                if (item[0] == b'R' || item[1] == b'R') && new_p == rel_path {
+                    return Some(old_p.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// True when the diff output adds every line of the file (single hunk starting
+/// at `-0,0` with only `+` lines) — a staged new file or a staged rename, where
+/// HEAD may still hold the old path.
+fn is_whole_file_added(diff_stdout: &str) -> bool {
+    let mut in_hunk = false;
+    for line in diff_stdout.lines() {
+        if line.starts_with("@@") {
+            if in_hunk {
+                return false; // second hunk → not a pure full-add
+            }
+            in_hunk = true;
+            if !line.contains("-0,0") {
+                return false;
+            }
+        } else if in_hunk && (line.starts_with('-') || line.starts_with(' ')) {
+            return false;
+        }
+    }
+    in_hunk
+}
+
+/// Shared git gutter calculation for worktrees and projects.
+pub async fn compute_git_gutter(
+    root: &Path,
+    rel_path: &str,
+    abs_path: &Path,
+    file_path: &str,
+) -> Result<GutterResult, GutterError> {
+    // Explicit unborn-HEAD check: exit 128 from `git diff` is git's generic
+    // fatal code (dubious ownership, a corrupt index, a bad pathspec) —
+    // treating it as "unborn" paints the whole file as added even when HEAD
+    // exists. `rev-parse --verify` fails only when there is no HEAD to diff
+    // against.
+    let head_check = Command::new("git")
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .current_dir(root)
+        .output()
+        .await
+        .map_err(|e| GutterError::Internal(format!("Failed to run git rev-parse: {e}")))?;
+    if !head_check.status.success() {
+        // Only an unborn HEAD in a real repo means "everything is added". A
+        // non-repo or an unreadable one (dubious ownership) fails `--git-dir`
+        // too — that's an error, not a whole-file green gutter.
+        let git_dir = Command::new("git")
+            .args(["rev-parse", "--git-dir"])
+            .current_dir(root)
+            .output()
+            .await
+            .map_err(|e| GutterError::Internal(format!("Failed to run git rev-parse: {e}")))?;
+        if !git_dir.status.success() {
+            return Err(GutterError::Internal(
+                "not a readable git repository".to_string(),
+            ));
+        }
+        return read_all_added(abs_path, file_path).await;
+    }
+
+    let diff_output = git_diff_head(root, &[rel_path.to_string()])
+        .await
+        .map_err(|e| GutterError::Internal(format!("Failed to run git diff: {e}")))?;
+
+    if !diff_output.status.success() && diff_output.status.code() != Some(1) {
+        return Err(GutterError::Internal("git diff failed".to_string()));
+    }
+
+    let stdout_for_ambiguity_check = String::from_utf8_lossy(&diff_output.stdout);
+
+    // Common case: a modified file with a real diff — parse it directly. The
+    // rename lookup below (`git status`) is only needed when the diff can't be
+    // the whole story: empty (file not at this path in HEAD — renamed or
+    // untracked) or a whole-file add (staged rename: HEAD still has the old
+    // path). Running `git status` on every request would cost a repo-wide
+    // status per gutter poll (every 2s per open file).
+    if !stdout_for_ambiguity_check.trim().is_empty()
+        && !is_whole_file_added(&stdout_for_ambiguity_check)
+    {
+        return Ok(parse_diff_hunk(&stdout_for_ambiguity_check));
+    }
+
+    // Empty diff: a tracked file at this path has no changes; an untracked
+    // one is either brand-new or a rename target (checked below).
+    if stdout_for_ambiguity_check.trim().is_empty() {
+        let check_tracked = Command::new("git")
+            .args(["ls-files", "--error-unmatch", "--", rel_path])
+            .current_dir(root)
+            .output()
+            .await
+            .map_err(|e| GutterError::Internal(format!("Failed to run git ls-files: {e}")))?;
+
+        if check_tracked.status.success() {
+            return Ok(GutterResult::default());
+        }
+    }
+
+    // Rename lookup: find the old path `rel_path` was renamed from and re-run
+    // the diff with both paths so the rename's edits show as modifications
+    // instead of a full add+delete.
+    if let Some(old_p) = find_rename_source(root, rel_path).await {
+        let both = git_diff_head(root, &[rel_path.to_string(), old_p])
+            .await
+            .map_err(|e| GutterError::Internal(format!("Failed to run git diff: {e}")))?;
+        if !both.status.success() && both.status.code() != Some(1) {
+            return Err(GutterError::Internal("git diff failed".to_string()));
+        }
+        let both_stdout = String::from_utf8_lossy(&both.stdout);
+        if both_stdout.trim().is_empty() {
+            // 100%-similarity rename: content unchanged → no marks.
+            return Ok(GutterResult::default());
+        }
+        return Ok(parse_diff_hunk(&both_stdout));
+    }
+
+    // Untracked file (or a whole-file add with no rename): brand-new content.
+    if stdout_for_ambiguity_check.trim().is_empty() {
+        return read_all_added(abs_path, file_path).await;
+    }
+    Ok(parse_diff_hunk(&stdout_for_ambiguity_check))
+}
+
+pub async fn read_all_added(abs_path: &Path, file_path: &str) -> Result<GutterResult, GutterError> {
+    match tokio::fs::read(abs_path).await {
+        Ok(content) => {
+            if let Ok(text) = String::from_utf8(content) {
+                let line_count = text.lines().count() as u32;
+                if line_count > 0 {
+                    let capped = line_count.min(GUTTER_MAX_LINES);
+                    let added = (1..=capped).collect();
+                    Ok(GutterResult {
+                        added,
+                        deleted: vec![],
+                        modified: vec![],
+                    })
+                } else {
+                    Ok(GutterResult::default())
+                }
+            } else {
+                Ok(GutterResult::default())
+            }
+        }
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Err(GutterError::NotFound(format!(
+                    "File not found: {file_path}"
+                )))
+            } else {
+                Err(GutterError::Unprocessable(e.to_string()))
+            }
+        }
     }
 }
 

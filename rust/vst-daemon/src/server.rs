@@ -66,7 +66,8 @@ use vst_types::rest::auth::{AuthSessionsResult, OkResult, RevokeBrowserResult};
 use vst_types::rest::doctor::DoctorReport;
 use vst_types::rest::lsp::{
     LspDefinitionResponse, LspHoverResponse, LspLanguageSurveyResponse, LspOutlineResponse,
-    LspPositionRequest, LspReferencesResponse, LspStatusResponse, LspStatusesResponse,
+    LspPositionRequest, LspReferencesResponse, LspRestartRequest, LspStatusResponse,
+    LspStatusesResponse,
 };
 use vst_types::rest::modes::{
     CliModels, CreateModeBody, DeleteModeResult, SupportedCli, UpdateModeBody,
@@ -630,6 +631,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
         .route("/projects/:id/submodules", get(handle_project_submodules))
         .route("/projects/:id/lsp/status", get(handle_project_lsp_status))
         .route(
+            "/projects/:id/lsp/restart",
+            post(handle_project_lsp_restart),
+        )
+        .route(
             "/projects/:id/lsp/statuses",
             get(handle_project_lsp_statuses),
         )
@@ -695,6 +700,10 @@ pub fn build_app(opts: BuildServerOptions) -> Router {
                 .delete(handle_worktree_delete_pending_file_opens),
         )
         .route("/worktrees/:id/lsp/status", get(handle_worktree_lsp_status))
+        .route(
+            "/worktrees/:id/lsp/restart",
+            post(handle_worktree_lsp_restart),
+        )
         .route(
             "/worktrees/:id/lsp/statuses",
             get(handle_worktree_lsp_statuses),
@@ -2530,6 +2539,19 @@ async fn handle_project_lsp_status(
         .map_err(lsp_err_to_response)
 }
 
+async fn handle_project_lsp_restart(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspRestartRequest>,
+) -> Result<Json<LspStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .restart(WorkspaceKey::Project { project_id: id }, &body.language)
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
 async fn handle_project_lsp_statuses(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
@@ -2625,6 +2647,25 @@ async fn handle_worktree_lsp_status(
                 worktree_id: id,
             },
             &path,
+        )
+        .await
+        .map(Json)
+        .map_err(lsp_err_to_response)
+}
+
+async fn handle_worktree_lsp_restart(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<LspRestartRequest>,
+) -> Result<Json<LspStatusResponse>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .lsp_routes
+        .restart(
+            WorkspaceKey::Worktree {
+                project_id: String::new(),
+                worktree_id: id,
+            },
+            &body.language,
         )
         .await
         .map(Json)

@@ -72,6 +72,7 @@ async fn test_manager_status_transitions_and_handle_reuse() {
         // Pre-initialized so request() proceeds past the handshake latch and
         // exercises the status transitions this test asserts.
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
 
     let ws_key = WorkspaceKey::Worktree {
@@ -254,6 +255,7 @@ async fn test_manager_document_sync_via_owned_watcher() {
         file_versions: file_versions.clone(),
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
 
     let ws_key = WorkspaceKey::Worktree {
@@ -577,6 +579,7 @@ async fn test_manager_ever_ready_latch() {
         file_versions,
         language: "rust".to_string(),
         initialized: tokio::sync::watch::channel(true).1,
+        health: Default::default(),
     };
 
     let ws_key = WorkspaceKey::Worktree {
@@ -712,6 +715,7 @@ fn handle_not_initialized() -> (ServerHandle, tokio::sync::watch::Sender<bool>) 
         file_versions,
         language: "rust".to_string(),
         initialized: init_rx,
+        health: Default::default(),
     };
     (handle, init_tx)
 }
@@ -868,9 +872,90 @@ async fn test_server_settles_to_ready_without_progress() {
     let _ = std::env::remove_var("FAKE_LSP_LOG");
 }
 
-/// Item 6: when a server process dies, its handle's status becomes `Error`, and
-/// a subsequent request for the same (workspace, lang) spawns a genuinely NEW
-/// handle rather than reusing/hanging on the dead one.
+/// Bug 1 / L1: a server that sends `experimental/serverStatus` drives readiness
+/// from `quiescent`, and a health warning is exposed via `degraded()` while the
+/// status stays `Ready`. The fake only sends the notification when the client
+/// advertised `experimental.serverStatusNotification`, so this also pins the
+/// capability.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)] // ENV_LOCK guards process-global env vars, not an async resource
+async fn test_server_status_drives_ready_and_degraded() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+
+    let temp_vst = tempfile::tempdir().expect("tempdir");
+    let temp_bin = tempfile::tempdir().expect("temp_bin");
+
+    let fake = temp_bin.path().join("typescript-language-server");
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_lsp.py"),
+        &fake,
+    )
+    .expect("copy fake lsp");
+    let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake, perms).unwrap();
+
+    let orig_path = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var(
+        "PATH",
+        format!("{}:{}", temp_bin.path().display(), orig_path),
+    );
+    std::env::set_var("FAKE_LSP_MODE", "server-status-degraded");
+
+    let manager = LspManager::new(temp_vst.path().to_path_buf());
+    let ws = WorkspaceKey::Worktree {
+        project_id: "test-proj".to_string(),
+        worktree_id: "test-wt".to_string(),
+    };
+    let root = tempfile::tempdir().expect("root");
+    let file = root.path().join("src/main.ts");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "const x = 1;").unwrap();
+
+    let _ = manager
+        .request(
+            ws.clone(),
+            root.path(),
+            "typescript",
+            LspFileRef::Workspace {
+                path: "src/main.ts".to_string(),
+            },
+            LspRequestKind::Definition,
+            Some((0, 0)),
+            true,
+        )
+        .await;
+
+    let handle = manager
+        .get_server_handle(&ws, "typescript")
+        .await
+        .expect("handle exists");
+    let mut degraded = None;
+    for _ in 0..30 {
+        degraded = manager.degraded(&ws, "src/main.ts").await;
+        if degraded.is_some() && *handle.status.read().await == LspStatus::Ready {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    // Ready well before the 2s no-progress settle could have fired.
+    assert_eq!(*handle.status.read().await, LspStatus::Ready);
+    assert_eq!(
+        degraded.as_deref(),
+        Some("Failed to read Cargo metadata: Permission denied")
+    );
+    // Other languages / no live server: nothing to report.
+    assert_eq!(manager.degraded(&ws, "src/main.py").await, None);
+
+    std::env::set_var("PATH", &orig_path);
+    let _ = std::env::remove_var("FAKE_LSP_MODE");
+}
+
+/// Item 6: when a server process dies, its handle's status becomes `Error`,
+/// and the crash-backoff restart (2 s for the first crash) spawns a genuinely
+/// NEW process rather than reusing/hanging on the dead one. Requests in the
+/// meantime get the latched `Crashed` failure instead of respawning per call.
 #[tokio::test]
 #[allow(clippy::await_holding_lock)] // ENV_LOCK guards process-global env vars, not an async resource
 async fn test_dead_server_becomes_error_and_respawns() {
@@ -935,7 +1020,8 @@ async fn test_dead_server_becomes_error_and_respawns() {
     }
     assert!(became_error, "dead server's handle should become Error");
 
-    // Second request must spawn a NEW process (the dead one is replaced).
+    // Second request during the backoff: answered from the latch. The
+    // backoff restart then spawns a NEW process (the dead one is replaced).
     let _ = manager
         .request(
             ws.clone(),
