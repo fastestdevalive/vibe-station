@@ -1,4 +1,4 @@
-import { useViewportWidth, usePortalRoot, useEventTargets } from "../../context/DemoEnv";
+import { useViewportWidth, usePortalRoot, useEventTargets, useDemoEnv } from "../../context/DemoEnv";
 import { Bot, Check, ChevronDown, ChevronRight, Eye, EyeOff, Filter, Folder, FolderOpen, FolderPlus, FolderTree, Github, Home, Keyboard, MoreHorizontal, Pin, Plus, Search, Settings, Stethoscope, Trash2, Type, X } from "lucide-react";
 import { ThemeQuickPicker } from "@/components/layout/ThemeQuickPicker";
 import { useTheme } from "@/hooks/useTheme";
@@ -241,6 +241,8 @@ export function LeftSidebar({
   header,
 }: LeftSidebarProps) {
   const envWidth = useViewportWidth();
+  const demoEnv = useDemoEnv();
+  const envHeight = demoEnv.viewport?.h ?? (typeof window !== "undefined" ? window.innerHeight : 800);
   const portalRoot = usePortalRoot();
   const { doc } = useEventTargets();
   const location = useLocation();
@@ -852,6 +854,7 @@ export function LeftSidebar({
   /** Id of the project whose "Hidden worktrees" dialog is open, or null when closed. */
   const [hiddenWtDialogProjectId, setHiddenWtDialogProjectId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Worktree | null>(null);
+  const [pendingHideProject, setPendingHideProject] = useState<{ project: Project; rect: DOMRect } | null>(null);
   const [pendingTerminateSession, setPendingTerminateSession] = useState<Session | null>(null);
   const [pendingDeleteWorkspace, setPendingDeleteWorkspace] = useState<WorkspaceDoc | null>(null);
   const [pendingDiscardDraft, setPendingDiscardDraft] = useState<
@@ -944,6 +947,31 @@ export function LeftSidebar({
     };
   }, [projMenu]);
 
+  useEffect(() => {
+    if (!pendingHideProject) return undefined;
+    let removeListeners: (() => void) | undefined;
+    const timer = window.setTimeout(() => {
+      function onDocClick(ev: MouseEvent) {
+        const t = ev.target as HTMLElement;
+        if (t.closest("[data-hide-project-popup]") || t.closest("[data-proj-menu-trigger]")) return;
+        setPendingHideProject(null);
+      }
+      function onKey(ev: KeyboardEvent) {
+        if (ev.key === "Escape") setPendingHideProject(null);
+      }
+      doc.addEventListener("click", onDocClick);
+      doc.addEventListener("keydown", onKey);
+      removeListeners = () => {
+        doc.removeEventListener("click", onDocClick);
+        doc.removeEventListener("keydown", onKey);
+      };
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      removeListeners?.();
+    };
+  }, [pendingHideProject]);
+
   // Close plus menu on outside click
   useEffect(() => {
     if (!plusMenu) return undefined;
@@ -1016,6 +1044,19 @@ export function LeftSidebar({
       // `confirmTerminateSession` below — web-ui still has no toast/banner
       // infra, so this uses the browser-native alert rather than inventing it.
       window.alert(err instanceof Error ? err.message : "Failed to remove worktree.");
+    }
+  }
+
+  async function confirmHideProject() {
+    if (!pendingHideProject) return;
+    const project = pendingHideProject.project;
+    setPendingHideProject(null);
+    try {
+      await api.hideProject(project.id);
+      // Store stays current via the `project:updated` WS event;
+      // the active-project redirect is handled in Workspace.
+    } catch {
+      /* surface errors later */
     }
   }
 
@@ -2941,6 +2982,7 @@ export function LeftSidebar({
         onCancel={() => setPendingDelete(null)}
       />
 
+
       <ConfirmDialog
         open={pendingTerminateSession !== null}
         title="Terminate agent?"
@@ -3207,17 +3249,10 @@ export function LeftSidebar({
                 className="menu-pop__item menu-pop__item--icon"
                 onClick={(e) => {
                   e.stopPropagation();
-                  const projectId = projMenu.project.id;
+                  const project = projMenu.project;
+                  const rect = projMenu.rect;
                   setProjMenu(null);
-                  void (async () => {
-                    try {
-                      await api.hideProject(projectId);
-                      // Store stays current via the `project:updated` WS event;
-                      // the active-project redirect is handled in Workspace.
-                    } catch {
-                      /* surface errors later */
-                    }
-                  })();
+                  setPendingHideProject({ project, rect });
                 }}
               >
                 <EyeOff size={13} aria-hidden />
@@ -3245,6 +3280,117 @@ export function LeftSidebar({
             </div>,
             portalRoot,
           )
+        : null}
+      {pendingHideProject
+        ? (() => {
+            const popupWidth = 240;
+            const popupHeight = 135;
+            // Screen boundaries check: ensure it does not overflow viewport horizontally
+            let left = pendingHideProject.rect.right - popupWidth;
+            if (left + popupWidth > envWidth - 8) {
+              left = envWidth - popupWidth - 8;
+            }
+            if (left < 8) {
+              left = 8;
+            }
+
+            // Screen boundaries check: ensure it does not overflow viewport vertically
+            let top = pendingHideProject.rect.bottom + 6;
+            if (top + popupHeight > envHeight - 8) {
+              top = Math.max(8, pendingHideProject.rect.top - popupHeight - 6);
+            }
+
+            return createPortal(
+              <div
+                className="menu-pop"
+                data-hide-project-popup
+                role="dialog"
+                aria-modal="true"
+                aria-label="Hide project?"
+                style={{
+                  position: "fixed",
+                  top,
+                  left,
+                  width: popupWidth,
+                  padding: "var(--space-3)",
+                  zIndex: 4000,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "var(--space-2)",
+                  boxShadow: "var(--shadow-lg, var(--shadow-md))",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: "var(--font-size-sm)",
+                    fontWeight: "var(--font-weight-medium)",
+                    color: "var(--fg-primary)",
+                  }}
+                >
+                  Hide project?
+                </div>
+                <div
+                  style={{
+                    fontSize: "var(--font-size-xs)",
+                    color: "var(--fg-secondary)",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {`Hide “${pendingHideProject.project.name}”? Hidden projects can be managed in settings later.`}
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "flex-end",
+                    gap: "var(--space-2)",
+                    marginTop: "var(--space-1)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setPendingHideProject(null)}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "var(--space-1) var(--space-2-5, 10px)",
+                      fontSize: "var(--font-size-xs)",
+                      borderRadius: "var(--radius-md)",
+                      border: "var(--border-width) solid var(--border-default)",
+                      background: "transparent",
+                      color: "var(--fg-primary)",
+                      cursor: "pointer",
+                      width: "auto",
+                      textAlign: "center",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmHideProject()}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: "var(--space-1) var(--space-2-5, 10px)",
+                      fontSize: "var(--font-size-xs)",
+                      borderRadius: "var(--radius-md)",
+                      border: "var(--border-width) solid var(--destructive)",
+                      background: "transparent",
+                      color: "var(--destructive)",
+                      cursor: "pointer",
+                      width: "auto",
+                      textAlign: "center",
+                    }}
+                  >
+                    Hide
+                  </button>
+                </div>
+              </div>,
+              portalRoot,
+            );
+          })()
         : null}
       {filterMenuRect
         ? createPortal(

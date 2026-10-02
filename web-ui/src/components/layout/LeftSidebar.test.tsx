@@ -838,7 +838,7 @@ describe("LeftSidebar", () => {
       expect(screen.queryByRole("menuitem", { name: /New worktree/i })).not.toBeInTheDocument();
     });
 
-    it("clicking Hide project calls api.hideProject", async () => {
+    it("clicking Hide project opens confirmation dialog and confirming calls api.hideProject", async () => {
       const user = userEvent.setup();
       const localApi = createMockApi();
       const spy = vi.spyOn(localApi, "hideProject");
@@ -852,7 +852,36 @@ describe("LeftSidebar", () => {
       await screen.findByText("Proj A");
       await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
       await user.click(await screen.findByRole("menuitem", { name: /Hide project/i }));
+      expect(spy).not.toHaveBeenCalled();
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByText("Hide project?")).toBeInTheDocument();
+      expect(
+        screen.getByText(/Hide “Proj A”\? Hidden projects can be managed in settings later\./i),
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /^Hide$/i }));
       expect(spy).toHaveBeenCalledWith("proj-a");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("cancelling Hide project confirmation dialog does not call api.hideProject", async () => {
+      const user = userEvent.setup();
+      const localApi = createMockApi();
+      const spy = vi.spyOn(localApi, "hideProject");
+      render(
+        <MemoryRouter>
+          <Harness api={localApi}>
+            <LeftSidebar api={localApi} />
+          </Harness>
+        </MemoryRouter>,
+      );
+      await screen.findByText("Proj A");
+      await user.click(screen.getAllByRole("button", { name: /Project actions for Proj A/i })[0]!);
+      await user.click(await screen.findByRole("menuitem", { name: /Hide project/i }));
+      expect(spy).not.toHaveBeenCalled();
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /Cancel/i }));
+      expect(spy).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
     it("a hidden project (and its worktrees) is filtered out of the sidebar", async () => {
