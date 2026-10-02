@@ -151,7 +151,7 @@ Requests arriving via the Cloudflare tunnel (`CF-Connecting-IP` header present) 
 
 ## Token lifecycle (how POST /auth/login works)
 
-`daemonToken` is the master secret — a 32-byte hex string generated once at daemon startup and persisted in `~/.vibe-station/config.json` (mode 0600). It never leaves the server.
+`daemonToken` is the master secret — a 32-byte hex string generated at every daemon startup and held in memory only — it is never written to disk. It never leaves the server.
 
 `POST /auth/login` does **not** issue a new bearer token. It uses `daemonToken` as the HMAC signing key:
 
